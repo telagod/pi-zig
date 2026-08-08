@@ -151,7 +151,7 @@ sequenceDiagram
 |------|---------|
 | 工具执行 | `std.Thread` + 信号量限流，同时在跑上限 8，流水线调度 |
 | Web 会话 | 每会话独立 Agent + arena + worker 线程，池上限 4 |
-| Web 连接 | 每连接一个 detach 线程 |
+| Web 连接 | 每连接一个 detach 线程，上限 64，30 秒读超时 |
 | 事件命令 | spawn 后 detach，不等待 |
 | TUI 渲染 | 主线程轮询 stdin，worker 线程跑 agent |
 
@@ -162,6 +162,16 @@ sequenceDiagram
 3. **写类工具按路径互斥。** `write`/`edit`/`multi_edit` 对同一 `path` 加锁，否则两个工具各读旧内容、后写覆盖前写，丢掉一次修改。`multi_edit` 锁住 `files[]` 的每个路径（按字典序获取以避免死锁，重复路径先去重），只在超过 16 个文件时才退化为全局锁。
 
 `before_turn` 钩子会改 `messages`，**不在并行区调用**。`on_tool_before` / `on_tool_result` 在串行阶段，可安全触碰共享状态。
+
+**Web 会话销毁的顺序是硬约束**（`SessionPool.detachAndDestroy`）：
+
+1. 持池锁 `swapRemove`，摘除后新请求再也拿不到这个会话
+2. **锁外** 置 `stopping` + `aborted`，然后 `join` worker —— 进行中的一轮可能持续几十秒，持锁等它会把整个 web 服务卡住
+3. 取出 arena 指针再 `deinit` —— `WebSession` 自己、`name`、`cwd`、`agent`、全部消息都在那个 arena 里，先 deinit 就是拿悬垂指针
+
+`ChatQueue.dequeue` 必须同时看全局 shutdown 和 per-session 的 `stopping`。只看全局的话
+worker 会在队列上 100ms 轮询到进程结束：实测 24 个会话建删留下 26 个空转线程、10MB
+不回收的 arena。
 
 插件若需跨调用状态，按 Agent 指针地址隔离并自己加锁（参考 `todo` 插件）。
 
@@ -397,7 +407,7 @@ piz 保留「置前」，理由是两者的压缩语义不同：codex 保留 use
 ## 测试
 
 ```bash
-zig build test          # 123 个测试，core 105 + app 18
+zig build test          # 124 个测试，core 105 + app 19
 ```
 
 两个测试目标：`core.zig` 为根（收集全部 core 模块的 test 块）、`main.zig` 为根（含 `e2e.zig`）。Zig 的 `zig test` 只收集根模块的测试，所以要分两个目标。
@@ -471,6 +481,7 @@ zig build test          # 123 个测试，core 105 + app 18
 | `util.zig` | `clampUtf8` 永不切在码点中间（中文、emoji 全长度扫一遍） |
 | `session.zig` | 落盘标题裁到 256 字节且是合法 UTF-8 |
 | `webui.zig` | SSE 槽位满员时拒绝、正常注销复用同号、僵死槽位被回收 |
+| `webui.zig` | `dequeue` 认 per-session stop，不只认全局 shutdown（否则 worker 永不退出） |
 
 ## Zig 0.16 注意事项
 

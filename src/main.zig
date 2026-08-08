@@ -562,6 +562,13 @@ const WebSession = struct {
     worker: std.Thread,
     /// 审批模式:true=自动放行,false=浏览器确认(per-tab)
     mode: std.atomic.Value(bool) = std.atomic.Value(bool).init(true),
+    /// 本会话的 arena(agent、消息、name/cwd 全在里面)。销毁时要 deinit,
+    /// 否则删一个会话就漏掉它的全部历史 —— 而 name/cwd/agent 本身也在这里,
+    /// 所以必须先 join worker 再 deinit。
+    arena: *util.Arena,
+    /// 请 worker 退出。没有它,worker 在 ChatQueue 上永久 100ms 轮询 ——
+    /// 会话从池里摘掉了,线程还在,实测建删三轮 3 个会话涨到 9 个空转线程。
+    stopping: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 };
 
 const SessionPool = struct {
@@ -619,6 +626,7 @@ const SessionPool = struct {
             .updated_ns = restored_updated,
             .worker = undefined,
             .mode = std.atomic.Value(bool).init(restored_auto),
+            .arena = ses_arena,
         };
         agent.cbs = .{
             .ctx = ses,
@@ -634,6 +642,31 @@ const SessionPool = struct {
         ses.worker = std.Thread.spawn(.{}, webWorker, .{ses}) catch return null;
         self.sessions.append(ses) catch return null;
         return ses;
+    }
+
+    /// 从池中摘除并销毁会话。找不到就什么都不做。
+    ///
+    /// join 放在锁外:worker 正在跑的一轮可能持续几十秒,持 pool 锁等它
+    /// 会把整个 web 服务卡住。摘除之后 ses 已经从池里不可达,锁外安全。
+    fn detachAndDestroy(self: *SessionPool, name: []const u8, cwd: []const u8) void {
+        var victim: ?*WebSession = null;
+        self.mutex.lock(util.io) catch return;
+        for (self.sessions.items, 0..) |ses, i| {
+            if (std.mem.eql(u8, ses.name, name) and std.mem.eql(u8, ses.cwd, cwd)) {
+                victim = self.sessions.swapRemove(i);
+                break;
+            }
+        }
+        self.mutex.unlock(util.io);
+        const ses = victim orelse return;
+        // 顺序不能换:worker 跑在 arena 上的 agent 里,先 deinit 就是 UAF。
+        // ses 自己也在那个 arena 里,所以 arena 指针要先取出来。
+        ses.stopping.store(true, .release);
+        ses.agent.aborted.store(true, .release); // 打断进行中的一轮,否则 join 要等它跑完
+        ses.worker.join();
+        const arena = ses.arena;
+        arena.deinit();
+        self.alloc.destroy(arena);
     }
 };
 
@@ -792,7 +825,7 @@ fn poolStateHook(ctx: ?*anyopaque, cwd: []const u8, session: []const u8, alloc: 
 
 fn webWorker(ses: *WebSession) void {
     while (true) {
-        const item = webui_mod.ChatQueue.dequeue(ses.qkey) orelse break;
+        const item = webui_mod.ChatQueue.dequeue(ses.qkey, &ses.stopping) orelse break;
         // 新消息清除上一轮残留的中断标志
         ses.agent.aborted.store(false, .release);
         ses.updated_ns = std.Io.Clock.now(.real, util.io).nanoseconds;
@@ -1131,15 +1164,7 @@ fn poolActionHook(ctx: ?*anyopaque, cwd: []const u8, session: []const u8, act: [
     const alloc = pool.alloc;
     const cwd2 = if (cwd.len > 0) cwd else (if (pool.workspaces.items.len > 0) pool.workspaces.items[0] else "");
     if (std.mem.eql(u8, act, "archive")) {
-        // 从内存摘除 + 文件移入 archive/
-        pool.mutex.lock(util.io) catch return null;
-        for (pool.sessions.items, 0..) |ses, i| {
-            if (std.mem.eql(u8, ses.name, session) and std.mem.eql(u8, ses.cwd, cwd2)) {
-                _ = pool.sessions.swapRemove(i);
-                break;
-            }
-        }
-        pool.mutex.unlock(util.io);
+        pool.detachAndDestroy(session, cwd2);
         sessionmod.archiveWeb(alloc, cwd2, session) catch {};
         return "{\"ok\":true,\"act\":\"archive\"}";
     }
@@ -1148,14 +1173,7 @@ fn poolActionHook(ctx: ?*anyopaque, cwd: []const u8, session: []const u8, act: [
         return "{\"ok\":true,\"act\":\"restore\"}";
     }
     if (std.mem.eql(u8, act, "delete")) {
-        pool.mutex.lock(util.io) catch return null;
-        for (pool.sessions.items, 0..) |ses, i| {
-            if (std.mem.eql(u8, ses.name, session) and std.mem.eql(u8, ses.cwd, cwd2)) {
-                _ = pool.sessions.swapRemove(i);
-                break;
-            }
-        }
-        pool.mutex.unlock(util.io);
+        pool.detachAndDestroy(session, cwd2);
         sessionmod.deleteWeb(alloc, cwd2, session) catch {};
         return "{\"ok\":true,\"act\":\"delete\"}";
     }

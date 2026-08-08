@@ -840,9 +840,12 @@ pub const ChatQueue = struct {
         };
         global.mutex.unlock(util.io);
     }
-    /// 轮询取本 session 消息(100ms);shutdown 后返回 null。
-    pub fn dequeue(session: []const u8) ?Item {
-        while (!global.shutting_down) {
+    /// 轮询取本 session 消息(100ms);全局 shutdown 或本会话 `stop` 置位后返回 null。
+    ///
+    /// `stop` 不可省:会话被删除时 worker 必须能退出。只看全局标志的话线程会在
+    /// 队列上空转到进程结束 —— 实测建删三轮 3 个会话就留下 9 个空转线程。
+    pub fn dequeue(session: []const u8, stop: *std.atomic.Value(bool)) ?Item {
+        while (!global.shutting_down and !stop.load(.acquire)) {
             global.mutex.lock(util.io) catch return null;
             for (global.items.items, 0..) |it, i| {
                 if (std.mem.eql(u8, it.session, session)) {
@@ -862,6 +865,31 @@ pub const ChatQueue = struct {
         global.mutex.unlock(util.io);
     }
 };
+
+test "dequeue returns on per-session stop, not just global shutdown" {
+    const t = std.testing;
+    try util.testInit();
+
+    // stop 已置位:必须立刻返回 null,不能进 100ms 轮询循环。
+    // 没有这条,会话删除后 worker 会在队列上空转到进程结束 ——
+    // 实测 24 个会话建删留下 26 个空转线程。
+    var stop = std.atomic.Value(bool).init(true);
+    const t0 = std.Io.Clock.now(.real, util.io).nanoseconds;
+    try t.expect(ChatQueue.dequeue("no-such-session", &stop) == null);
+    const spent = std.Io.Clock.now(.real, util.io).nanoseconds - t0;
+    try t.expect(spent < 50 * std.time.ns_per_ms);
+
+    // 队列里有本会话的消息时,stop 置位也照样先返回 null ——
+    // 已删除的会话不该再消费消息(否则和重建的同名会话抢队列)
+    ChatQueue.enqueue("stopped-session", "pending");
+    try t.expect(ChatQueue.dequeue("stopped-session", &stop) == null);
+
+    // stop 未置位时正常取到
+    var go = std.atomic.Value(bool).init(false);
+    const item = ChatQueue.dequeue("stopped-session", &go);
+    try t.expect(item != null);
+    try t.expectEqualStrings("pending", item.?.text);
+}
 
 var global: ChatQueue = .{ .items = std.array_list.Managed(ChatQueue.Item).init(std.heap.page_allocator) };
 
