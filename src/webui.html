@@ -1,0 +1,3362 @@
+<!doctype html>
+<html lang="zh" data-color-scheme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover,interactive-widget=resizes-content"
+    />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="theme-color" content="#0d1117" />
+    <title>piz</title>
+    <style>
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+      :root {
+        --dim: #595959;
+        --muted: #8a8a8a;
+        --faint: #b5b5b5;
+        --line: #e9edf3;
+        --line2: #f1f4f8;
+        --canvas: #f4f6fa;
+        --sh:
+          0 1px 3px rgba(28, 40, 66, 0.05), 0 6px 18px rgba(28, 40, 66, 0.06);
+        --shc: 0 1px 2px rgba(28, 40, 66, 0.05);
+        --panel: #fafbfc;
+        --panel2: #f3f5f8;
+        --bg: #ffffff;
+        --blue: #1783ff;
+        --blue2: #0f6fe0;
+        --soft: #e8f3ff;
+        --bd: #cfe6ff;
+        --logo: #1783ff;
+        --bluebg: #e8f3ff;
+        --blueln: #cfe6ff;
+        --ok: #0e7a38;
+        --warn: #a9610a;
+        --star: #eab308;
+        --err: #c0392b;
+        --hover: rgba(0, 0, 0, 0.05);
+        --ui-font-size: 14px;
+        --content-font-size: 15px;
+        --mono:
+          "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, "SF Mono",
+          Menlo, Consolas, monospace;
+        --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+        --accent-primary: #1783ff;
+        --accent-secondary: #6b7280;
+        --color-bg: #ffffff;
+        --color-surface: #fafbfc;
+        --color-surface-raised: #ffffff;
+        --color-surface-sunken: #f3f5f8;
+        --color-text: rgba(0, 0, 0, 0.9);
+        --color-text-muted: #6b7280;
+        --color-text-faint: #9aa3af;
+        --color-text-on-accent: #fff;
+        --color-line: #e7eaee;
+        --color-line-strong: #d4d9e0;
+        --color-accent: var(--accent-primary);
+        --color-accent-hover: #0f6fe0;
+        --color-accent-soft: #e8f3ff;
+        --color-accent-bd: #cfe6ff;
+        --color-success: #0e7a38;
+        --color-success-soft: #e7f6ee;
+        --color-success-bd: #bfe3cc;
+        --color-warning: #a9610a;
+        --color-warning-soft: #fbf1e0;
+        --color-warning-bd: #f0d9b8;
+        --color-danger: #c0392b;
+        --color-danger-soft: #fbeaea;
+        --color-danger-bd: #f0cccc;
+        --color-done: #8250df;
+        --color-done-soft: #f3e8ff;
+        --color-done-bd: #e0ccff;
+        --space-1: 4px;
+        --space-2: 8px;
+        --space-3: 12px;
+        --space-4: 16px;
+        --space-5: 20px;
+        --space-6: 24px;
+        --space-8: 32px;
+        --radius-xs: 4px;
+        --radius-sm: 6px;
+        --radius-md: 8px;
+        --radius-lg: 12px;
+        --radius-xl: 16px;
+        --radius-2xl: 20px;
+        --radius-full: 999px;
+        --shadow-xs: 0 1px 2px rgba(28, 40, 66, 0.05);
+        --shadow-sm:
+          0 1px 2px rgba(28, 40, 66, 0.06), 0 2px 6px rgba(28, 40, 66, 0.06);
+        --shadow-md:
+          0 2px 4px rgba(28, 40, 66, 0.06), 0 8px 24px rgba(28, 40, 66, 0.08);
+        --shadow-lg:
+          0 4px 8px rgba(28, 40, 66, 0.08), 0 16px 40px rgba(28, 40, 66, 0.14);
+        --z-sticky: 100;
+        --z-dropdown: 200;
+        --z-modal: 300;
+        --z-toast: 400;
+        --weight-regular: 400;
+        --weight-medium: 500;
+        --weight-semibold: 600;
+        --weight-bold: 700;
+        --leading-normal: 1.5;
+        --leading-relaxed: 1.7;
+        --p-sidebar-w: 248px;
+        --p-content-max: 760px;
+        --text-xs: 12px;
+        --text-sm: 13px;
+        --text-base: 14px;
+        --text-lg: 15px;
+        --text-xl: 17px;
+        color-scheme: light dark;
+      }
+      html[data-color-scheme="dark"] {
+        color-scheme: dark;
+        --dim: #9aa0a8;
+        --muted: #727983;
+        --faint: #525960;
+        --line: #2d333b;
+        --line2: #22272e;
+        --panel: #1c2128;
+        --panel2: #161b22;
+        --bg: #0d1117;
+        --blue: #58a6ff;
+        --blue2: #79b8ff;
+        --soft: #1f2937;
+        --bd: #1f6feb;
+        --logo: #58a6ff;
+        --bluebg: #1c2a3a;
+        --blueln: #1f4f7a;
+        --ok: #3fb950;
+        --warn: #d29922;
+        --star: #facc15;
+        --err: #f85149;
+        --hover: rgba(255, 255, 255, 0.07);
+        --canvas: #161b22;
+        --sh: 0 1px 3px rgba(0, 0, 0, 0.35), 0 6px 18px rgba(0, 0, 0, 0.4);
+        --shc: 0 1px 2px rgba(0, 0, 0, 0.35);
+        --accent-primary: #58a6ff;
+        --color-bg: #0d1117;
+        --color-surface: #1c2128;
+        --color-surface-raised: #22272e;
+        --color-surface-sunken: #161b22;
+        --color-text: rgba(255, 255, 255, 0.88);
+        --color-text-muted: #9aa0a8;
+        --color-text-faint: #525960;
+        --color-text-on-accent: #fff;
+        --color-line: #2d333b;
+        --color-line-strong: #3d454e;
+        --color-accent: #58a6ff;
+        --color-accent-hover: #79b8ff;
+        --color-accent-soft: #1f2937;
+        --color-accent-bd: #1f6feb;
+        --color-success: #3fb950;
+        --color-success-soft: #1c2a3a;
+        --color-success-bd: #1f4f7a;
+        --color-warning: #d29922;
+        --color-warning-soft: #2d2a1c;
+        --color-warning-bd: #5a4a1f;
+        --color-danger: #f85149;
+        --color-danger-soft: #2a1c1c;
+        --color-danger-bd: #6e2424;
+        --color-done: #a371f7;
+        --color-done-soft: #241c2a;
+        --color-done-bd: #5a3a6e;
+        --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.35);
+        --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4), 0 2px 6px rgba(0, 0, 0, 0.4);
+        --shadow-md:
+          0 2px 4px rgba(0, 0, 0, 0.45), 0 8px 24px rgba(0, 0, 0, 0.5);
+        --shadow-lg:
+          0 4px 8px rgba(0, 0, 0, 0.5), 0 16px 40px rgba(0, 0, 0, 0.6);
+      }
+      @media (prefers-color-scheme: dark) {
+        html[data-color-scheme="system"] {
+          --dim: #9aa0a8;
+          --muted: #727983;
+          --faint: #525960;
+          --line: #2d333b;
+          --line2: #22272e;
+          --panel: #1c2128;
+          --panel2: #161b22;
+          --bg: #0d1117;
+          --blue: #58a6ff;
+          --blue2: #79b8ff;
+          --soft: #1f2937;
+          --bd: #1f6feb;
+          --logo: #58a6ff;
+          --bluebg: #1c2a3a;
+          --blueln: #1f4f7a;
+          --ok: #3fb950;
+          --warn: #d29922;
+          --star: #facc15;
+          --err: #f85149;
+          --hover: rgba(255, 255, 255, 0.07);
+          --canvas: #161b22;
+          --sh: 0 1px 3px rgba(0, 0, 0, 0.35), 0 6px 18px rgba(0, 0, 0, 0.4);
+          --shc: 0 1px 2px rgba(0, 0, 0, 0.35);
+          --accent-primary: #58a6ff;
+          --color-bg: #0d1117;
+          --color-surface: #1c2128;
+          --color-surface-raised: #22272e;
+          --color-surface-sunken: #161b22;
+          --color-text: rgba(255, 255, 255, 0.88);
+          --color-text-muted: #9aa0a8;
+          --color-text-faint: #525960;
+          --color-text-on-accent: #fff;
+          --color-line: #2d333b;
+          --color-line-strong: #3d454e;
+          --color-accent: #58a6ff;
+          --color-accent-hover: #79b8ff;
+          --color-accent-soft: #1f2937;
+          --color-accent-bd: #1f6feb;
+          --color-success: #3fb950;
+          --color-success-soft: #1c2a3a;
+          --color-success-bd: #1f4f7a;
+          --color-warning: #d29922;
+          --color-warning-soft: #2d2a1c;
+          --color-warning-bd: #5a4a1f;
+          --color-danger: #f85149;
+          --color-danger-soft: #2a1c1c;
+          --color-danger-bd: #6e2424;
+          --color-done: #a371f7;
+          --color-done-soft: #241c2a;
+          --color-done-bd: #5a3a6e;
+          --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.35);
+          --shadow-sm:
+            0 1px 2px rgba(0, 0, 0, 0.4), 0 2px 6px rgba(0, 0, 0, 0.4);
+          --shadow-md:
+            0 2px 4px rgba(0, 0, 0, 0.45), 0 8px 24px rgba(0, 0, 0, 0.5);
+          --shadow-lg:
+            0 4px 8px rgba(0, 0, 0, 0.5), 0 16px 40px rgba(0, 0, 0, 0.6);
+        }
+      }
+      html,
+      body {
+        height: 100%;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--color-text);
+        font: var(--text-base)/var(--leading-normal) var(--sans);
+        -webkit-font-smoothing: antialiased;
+      }
+      button,
+      input,
+      textarea {
+        font-family: inherit;
+        font-size: inherit;
+        color: inherit;
+      }
+      button {
+        cursor: pointer;
+        background: transparent;
+        border: none;
+      }
+      ::-webkit-scrollbar {
+        width: 4px;
+        height: 4px;
+      }
+      ::-webkit-scrollbar-track {
+        background: transparent;
+      }
+      ::-webkit-scrollbar-thumb {
+        background: var(--color-line-strong);
+        border-radius: 2px;
+      }
+      ::-webkit-scrollbar-thumb:hover {
+        background: var(--color-accent-bd);
+      }
+      @keyframes kimi-bubble-in {
+        from {
+          opacity: 0;
+          transform: translateY(6px);
+        }
+        to {
+          opacity: 1;
+          transform: none;
+        }
+      }
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+      @keyframes fadein {
+        from {
+          opacity: 0;
+        }
+        to {
+          opacity: 1;
+        }
+      }
+      /* ==== 连接 splash(kimi GlobalLoading) ==== */
+      .gload {
+        position: fixed;
+        inset: 0;
+        z-index: 500;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: var(--bg);
+        transition: opacity 0.3s;
+      }
+      .gload.hide {
+        opacity: 0;
+        pointer-events: none;
+      }
+      .gload-box {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 14px;
+      }
+      .gload-logo {
+        width: 96px;
+        height: 66px;
+        color: var(--logo);
+        animation: fadein 0.4s ease-out;
+      }
+      .gload-text {
+        font-size: 13px;
+        color: var(--color-text-muted);
+      }
+      /* ==== 登录页(kimi auth-page) ==== */
+      .auth-page {
+        position: fixed;
+        inset: 0;
+        z-index: 500;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: var(--bg);
+        animation: fadein 0.3s ease-out;
+      }
+      .auth-page.show {
+        display: flex;
+      }
+      .auth-page-inner {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 14px;
+        max-width: 340px;
+        text-align: center;
+        padding: 24px;
+      }
+      .auth-page-logo {
+        width: 48px;
+        height: 33px;
+        color: var(--logo);
+      }
+      .auth-page h1 {
+        font-size: 19px;
+        font-weight: var(--weight-semibold);
+      }
+      .auth-page p {
+        font-size: 13px;
+        color: var(--color-text-muted);
+        line-height: 1.6;
+      }
+      .auth-page input {
+        width: 100%;
+        padding: 10px 14px;
+        border: 1px solid var(--color-line);
+        border-radius: var(--radius-md);
+        background: var(--color-surface);
+        color: var(--color-text);
+        font-size: 14px;
+        outline: none;
+        transition: border-color 0.15s;
+      }
+      .auth-page input:focus {
+        border-color: var(--color-accent);
+        box-shadow: 0 0 0 3px var(--color-accent-soft);
+      }
+      .auth-page button {
+        width: 100%;
+        height: 36px;
+        border-radius: var(--radius-md);
+        background: var(--color-accent);
+        color: var(--color-text-on-accent);
+        font-weight: var(--weight-medium);
+        font-size: 14px;
+        cursor: pointer;
+        transition: background 0.15s;
+      }
+      .auth-page button:hover {
+        background: var(--color-accent-hover);
+      }
+      .auth-page button:disabled {
+        opacity: 0.5;
+        cursor: default;
+      }
+      .auth-err {
+        font-size: 12px;
+        color: var(--color-danger);
+      }
+      /* ==== 布局 ==== */
+      .app {
+        --side-w: 248px;
+        flex: 1;
+        min-height: 0;
+        display: grid;
+        grid-template-columns: var(--side-w) minmax(0, 1fr);
+        background: var(--bg);
+        color: var(--color-text);
+        overflow: hidden;
+        height: 100vh;
+      }
+      #side {
+        border-right: 1px solid var(--color-line);
+        background: var(--panel);
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+        min-width: 0;
+      }
+      .side-rail {
+        display: none;
+        align-items: flex-start;
+        justify-content: center;
+        padding-top: 8px;
+        border-right: 1px solid var(--color-line);
+        background: var(--panel);
+      }
+      body.collapsed .app {
+        grid-template-columns: 44px minmax(0, 1fr);
+      }
+      body.collapsed .side-rail {
+        display: flex;
+      }
+      body.collapsed #side {
+        display: none;
+      }
+      #main {
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+        min-width: 0;
+        position: relative;
+      }
+      /* ==== 侧栏 ==== */
+      .ch {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        padding: 12px 12px 8px;
+      }
+      .ch-brand {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-width: 0;
+      }
+      .ch-logo {
+        width: 24px;
+        height: 17px;
+        flex: none;
+        cursor: pointer;
+      }
+      .ch-name {
+        font-size: 15px;
+        font-weight: var(--weight-semibold);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .ch-ib {
+        width: 26px;
+        height: 26px;
+        border-radius: 6px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--color-text-muted);
+        flex: none;
+      }
+      .ch-ib:hover {
+        background: var(--color-surface-sunken);
+        color: var(--color-text);
+      }
+      .search {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        min-height: 26px;
+        margin: 0 8px 8px;
+        padding: 4px 8px;
+        border-radius: var(--radius-sm);
+        color: var(--color-text-muted);
+        background: var(--color-surface);
+      }
+      .search:hover {
+        background: var(--color-surface-sunken);
+      }
+      .search-ic {
+        flex: none;
+        font-size: 12px;
+        opacity: 0.8;
+      }
+      .search-t {
+        font-size: 13px;
+        color: var(--color-text-faint);
+      }
+      .btn-new-chat {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        min-height: 26px;
+        margin: 0 8px 4px;
+        padding: 4px 8px;
+        border-radius: var(--radius-sm);
+        color: var(--color-text);
+        font-size: 13px;
+      }
+      .btn-new-chat:hover {
+        background: var(--color-surface-sunken);
+      }
+      .btn-new-chat .pl {
+        color: var(--color-accent);
+        font-size: 14px;
+      }
+      .sessions {
+        flex: 1;
+        overflow-y: auto;
+        padding: 0 8px 8px;
+        min-height: 0;
+      }
+      .sg-head {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        padding: 6px 4px 2px;
+        cursor: pointer;
+        user-select: none;
+      }
+      .sg-chev {
+        font-size: 9px;
+        color: var(--color-text-faint);
+        transition: transform 0.15s;
+        flex: none;
+      }
+      .sg-chev.open {
+        transform: rotate(90deg);
+      }
+      .sg-name {
+        flex: 1;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-size: 12px;
+        font-weight: var(--weight-medium);
+        color: var(--color-text-muted);
+      }
+      .sg-cnt {
+        font-size: 11px;
+        color: var(--color-text-faint);
+      }
+      .sg-ib {
+        width: 22px;
+        height: 22px;
+        border-radius: 5px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--color-text-faint);
+        font-size: 12px;
+        opacity: 0;
+      }
+      .sg-head:hover .sg-ib,
+      .sg-ib.open {
+        opacity: 1;
+      }
+      .sg-ib:hover {
+        background: var(--color-surface-sunken);
+        color: var(--color-text);
+      }
+      .se {
+        display: block;
+        padding: 4px 8px;
+        border-radius: var(--radius-md);
+        cursor: pointer;
+      }
+      .se:hover {
+        background: var(--color-surface-sunken);
+        color: var(--color-text);
+      }
+      .se.on {
+        background: var(--color-accent-soft);
+        color: var(--color-accent-hover);
+        box-shadow: inset 0 0 0 1px var(--color-accent-bd);
+      }
+      .srow {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        min-width: 0;
+        min-height: 26px;
+      }
+      .lead {
+        width: 16px;
+        flex: none;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .unread-dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: var(--color-accent);
+      }
+      .spin {
+        width: 12px;
+        height: 12px;
+        border: 2px solid var(--color-accent-bd);
+        border-top-color: var(--color-accent);
+        border-radius: 50%;
+        animation: spin 0.8s linear infinite;
+      }
+      .st {
+        flex: 1;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-size: 14px;
+        color: inherit;
+      }
+      .sts {
+        font-size: 11px;
+        color: var(--color-text-faint);
+        flex: none;
+        display: none;
+      }
+      .se:hover .sts {
+        display: inline;
+      }
+      .tag {
+        font-size: 10px;
+        padding: 1px 6px;
+        border-radius: var(--radius-full);
+        font-weight: var(--weight-medium);
+        flex: none;
+        display: none;
+      }
+      .se:hover .tag {
+        display: inline;
+      }
+      .tag.warn {
+        background: var(--color-warning-soft);
+        color: var(--color-warning);
+        border: 1px solid var(--color-warning-bd);
+      }
+      .tag.info {
+        background: var(--color-accent-soft);
+        color: var(--color-accent-hover);
+        border: 1px solid var(--color-accent-bd);
+      }
+      .tag.danger {
+        background: var(--color-danger-soft);
+        color: var(--color-danger);
+        border: 1px solid var(--color-danger-bd);
+      }
+      .se .kebab {
+        width: 20px;
+        height: 20px;
+        border-radius: 4px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--color-text-muted);
+        font-size: 13px;
+        flex: none;
+        visibility: hidden;
+      }
+      .se:hover .kebab,
+      .kebab.open {
+        visibility: visible;
+      }
+      .se .kebab:hover {
+        background: var(--color-surface-raised);
+        color: var(--color-text);
+      }
+      .sg-arch {
+        font-size: 10px;
+        letter-spacing: 0.5px;
+        color: var(--color-text-faint);
+        padding: 6px 8px 2px;
+        text-transform: uppercase;
+      }
+      .se.arch .st {
+        color: var(--color-text-faint);
+      }
+      /* ==== 聊天头 ==== */
+      .chat-header {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        height: 48px;
+        padding: 0 16px;
+        border-bottom: 1px solid var(--color-line);
+        flex: none;
+        min-width: 0;
+      }
+      .ch-id {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        min-width: 0;
+        flex: none;
+        max-width: 46%;
+      }
+      .ch-ws {
+        color: var(--color-text-muted);
+        font-size: 14px;
+        font-weight: var(--weight-medium);
+        flex: none;
+        max-width: 140px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .ch-sep {
+        color: var(--color-text-faint);
+        flex: none;
+      }
+      .ch-ses {
+        font-size: 14px;
+        font-weight: var(--weight-semibold);
+        flex: none;
+        max-width: 220px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        cursor: pointer;
+      }
+      .ch-ses:hover {
+        color: var(--color-accent);
+      }
+      .ch-git {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        min-width: 0;
+        overflow: hidden;
+      }
+      .ch-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        padding: 2px 8px;
+        border: 1px solid var(--color-line);
+        border-radius: var(--radius-full);
+        font-size: 11.5px;
+        color: var(--color-text-muted);
+        white-space: nowrap;
+        flex: none;
+      }
+      .ch-pill b {
+        font-weight: var(--weight-semibold);
+      }
+      .ch-ahead {
+        color: var(--color-warning);
+        flex: none;
+        font-size: 11.5px;
+      }
+      .ch-behind {
+        color: var(--color-accent-hover);
+        flex: none;
+        font-size: 11.5px;
+      }
+      .ch-spacer {
+        flex: 1;
+        min-width: 0;
+      }
+      .ib {
+        width: 28px;
+        height: 28px;
+        border-radius: 6px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--color-text-muted);
+        flex: none;
+      }
+      .ib:hover {
+        background: var(--color-surface-sunken);
+        color: var(--color-text);
+      }
+      .ib.open {
+        background: var(--color-surface-sunken);
+        color: var(--color-text);
+      }
+      /* ==== 聊天区 ==== */
+      #panes {
+        flex: 1;
+        min-height: 0;
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        position: relative;
+      }
+      #wrap {
+        width: 100%;
+        max-width: var(--p-content-max);
+        min-height: 100%;
+        display: flex;
+        flex-direction: column;
+        margin: 0 auto;
+        padding: 24px 20px 24px;
+      }
+      #wrap.mobile {
+        max-width: none;
+        padding: 14px 12px 24px;
+      }
+      #thread {
+        display: flex;
+        flex-direction: column;
+        gap: 20px;
+      }
+      .empty-spacer {
+        flex: 1;
+      }
+      .empty-hint {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 6px;
+        padding: 40px 0;
+        text-align: center;
+      }
+      .empty-hint-title {
+        font-size: 17px;
+        font-weight: var(--weight-semibold);
+      }
+      .empty-hint-text {
+        font-size: 13px;
+        color: var(--color-text-muted);
+      }
+      .ws-pick {
+        margin-top: 12px;
+      }
+      .ws-pick-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 12px;
+        border: 1px solid var(--color-line);
+        border-radius: var(--radius-md);
+        background: var(--color-surface);
+        color: var(--color-text);
+        font-size: 13px;
+      }
+      .ws-pick-btn:hover {
+        border-color: var(--color-accent-bd);
+      }
+      .ws-pick-chev {
+        font-size: 9px;
+        color: var(--color-text-faint);
+      }
+      /* 气泡 */
+      .u-turn {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-end;
+        gap: 2px;
+      }
+      .u-bub {
+        align-self: flex-end;
+        max-width: 78%;
+        background: var(--color-accent-soft);
+        border: 1px solid var(--color-accent-bd);
+        color: var(--color-text);
+        border-radius: var(--radius-xl) var(--radius-xl) var(--radius-sm)
+          var(--radius-xl);
+        padding: 11px 15px;
+        font-size: var(--content-font-size);
+        line-height: var(--leading-normal);
+        box-shadow: var(--shadow-xs);
+        white-space: pre-wrap;
+        word-break: break-word;
+        animation: kimi-bubble-in 0.24s ease-out both;
+      }
+      .undo-chip {
+        margin-top: 4px;
+        font-size: 11px;
+        color: var(--color-text-faint);
+        cursor: pointer;
+        opacity: 0;
+        transition: opacity 0.15s;
+      }
+      .u-turn:hover .undo-chip {
+        opacity: 1;
+      }
+      .undo-chip:hover {
+        color: var(--color-accent);
+      }
+      .a-turn {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        width: 100%;
+      }
+      .a-msg {
+        width: 100%;
+        font-size: var(--content-font-size);
+        line-height: var(--leading-relaxed);
+      }
+      .a-msg .md {
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+      .a-msg pre {
+        background: var(--color-surface);
+        border: 1px solid var(--color-line);
+        border-radius: var(--radius-md);
+        padding: 10px 12px;
+        overflow-x: auto;
+        font: 12.5px/1.6 var(--mono);
+        margin: 8px 0;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+      .a-msg code {
+        font: 12.5px var(--mono);
+        background: var(--color-surface);
+        border-radius: 4px;
+        padding: 1px 5px;
+        color: var(--color-accent);
+      }
+      .a-msg pre code {
+        background: none;
+        padding: 0;
+        color: var(--color-text);
+      }
+      /* 思考块 */
+      .think {
+        margin: 0;
+      }
+      .tc-wrap {
+        display: grid;
+        grid-template-rows: 1fr 0fr;
+        transition: grid-template-rows 0.3s ease-out;
+        cursor: pointer;
+        border-left: 2px solid var(--color-line);
+        padding-left: 12px;
+      }
+      .tc-wrap.collapsed {
+        grid-template-rows: 0fr 1fr;
+      }
+      .tc-anim,
+      .prev-anim {
+        overflow: hidden;
+      }
+      .tk {
+        font: 13px/1.6 var(--mono);
+        color: var(--color-text-muted);
+        white-space: pre-wrap;
+        word-break: break-word;
+        max-height: 140px;
+        overflow: hidden;
+        position: relative;
+      }
+      .tc-wrap:not(.collapsed) .tk {
+        max-height: none;
+      }
+      .tc-wrap:hover .tc,
+      .tc-wrap:hover .prev {
+        color: var(--color-text);
+      }
+      .prev {
+        font: 13px var(--mono);
+        color: var(--color-text-faint);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        display: block;
+        margin: 2px 0 4px;
+      }
+      .tc-hint {
+        font-size: 10px;
+        letter-spacing: 0.5px;
+        text-transform: uppercase;
+        color: var(--color-text-faint);
+      }
+      /* 工具卡 */
+      .tcall {
+        margin: 0;
+        background: var(--color-surface);
+        border: 1px solid var(--color-line);
+        border-radius: var(--radius-md);
+        overflow: hidden;
+        transition: border-color 0.15s;
+      }
+      .tcall.err {
+        border-color: color-mix(in srgb, var(--color-danger) 25%, var(--bg));
+      }
+      .tcall.stacked {
+        border: none;
+        border-radius: 0;
+      }
+      .tcall.stacked + .tcall.stacked {
+        border-top: 1px solid var(--color-line);
+      }
+      .tcall .bh {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-height: 30px;
+        padding: 0 11px;
+        cursor: pointer;
+        font: var(--text-sm) var(--mono);
+        color: var(--color-text);
+      }
+      .tcall.open .bh,
+      .tcall .bh:hover {
+        background: var(--color-surface-sunken);
+      }
+      .tcall.err .bh {
+        background: color-mix(in srgb, var(--color-danger) 4%, var(--bg));
+      }
+      .tcall .gl {
+        display: inline-flex;
+        align-items: center;
+        color: var(--color-text-faint);
+        flex: none;
+        font-size: 13px;
+        width: 16px;
+      }
+      .tcall .a {
+        color: var(--color-text);
+        font-weight: var(--weight-medium);
+        flex: none;
+      }
+      .tcall .p {
+        color: var(--color-text-muted);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        flex: 1;
+        min-width: 0;
+        font-size: 12px;
+      }
+      .tcall .rt {
+        margin-left: auto;
+        color: var(--color-text-muted);
+        font-size: 12px;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        flex: none;
+      }
+      .tcall .tm {
+        color: var(--color-text-faint);
+        font-size: 11px;
+      }
+      .st-glyph {
+        width: 14px;
+        height: 14px;
+        border-radius: 50%;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 9px;
+        flex: none;
+      }
+      .st-glyph.run {
+        border: 2px solid var(--color-accent-bd);
+        border-top-color: var(--color-accent);
+        animation: spin 0.8s linear infinite;
+      }
+      .st-glyph.ok {
+        color: var(--color-success);
+        border: 1px solid var(--color-success);
+      }
+      .st-glyph.err {
+        color: var(--color-danger);
+        border: 1px solid var(--color-danger);
+      }
+      .st-glyph.sus {
+        background: var(--color-warning);
+        border-radius: 2px;
+        width: 8px;
+        height: 8px;
+      }
+      .tcall .car {
+        color: var(--color-text-faint);
+        font-size: 10px;
+        transition: transform 0.15s;
+        flex: none;
+      }
+      .tcall.open .car {
+        transform: rotate(90deg);
+      }
+      .tcall .bb {
+        display: none;
+        border-top: 1px solid var(--color-line);
+      }
+      .tcall.open .bb {
+        display: block;
+      }
+      .tcall .bb-pad {
+        padding: 0;
+      }
+      .tcall pre {
+        margin: 0;
+        padding: 10px 12px;
+        overflow-x: auto;
+        font: 12px/1.55 var(--mono);
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+      .tcall pre.term {
+        background: #010409;
+        color: #c9d1d9;
+      }
+      .diff .ad {
+        color: var(--color-text-faint);
+      }
+      .diff .ap {
+        color: var(--color-success);
+      }
+      .diff .am {
+        color: var(--color-danger);
+      }
+      .diff .ah {
+        color: var(--color-accent);
+      }
+      /* 审批卡 */
+      #dock {
+        flex: none;
+        width: 100%;
+        max-width: var(--p-content-max);
+        margin: 0 auto;
+        padding: 0 20px;
+      }
+      #dock .pc {
+        margin: 6px 0;
+      }
+      .pc {
+        border: 1px solid var(--color-accent-bd);
+        border-radius: var(--radius-lg);
+        overflow: hidden;
+        background: var(--color-surface);
+        font-size: 13px;
+      }
+      .pc .ah {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 14px;
+        background: var(--color-surface);
+      }
+      .pc .ah-ic {
+        width: 20px;
+        height: 20px;
+        border-radius: 50%;
+        background: var(--color-accent-soft);
+        color: var(--color-accent);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: var(--weight-bold);
+        flex: none;
+      }
+      .pc .akind {
+        font-weight: var(--weight-semibold);
+        color: var(--color-text);
+      }
+      .pc .apath {
+        color: var(--color-text-muted);
+        font: 12px var(--mono);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .pc .aw {
+        flex: 1;
+        color: var(--color-warning);
+        font-size: 12px;
+        text-align: right;
+      }
+      .pc .body {
+        padding: 0 14px;
+      }
+      .pc .shell-cmd {
+        font: 13px/1.6 var(--mono);
+        color: var(--color-text);
+        padding: 8px 0;
+        white-space: pre-wrap;
+        word-break: break-all;
+      }
+      .pc .shell-dollar {
+        color: var(--color-accent);
+        font-weight: var(--weight-medium);
+        margin-right: 8px;
+      }
+      .pc .shell-cwd {
+        font: 12px var(--mono);
+        color: var(--color-text-muted);
+        margin: 2px 0 8px;
+      }
+      .pc .diff {
+        max-height: 220px;
+        overflow: auto;
+        font: 12px/1.5 var(--mono);
+        border-top: 1px solid var(--color-line);
+        border-bottom: 1px solid var(--color-line);
+      }
+      .pc .dl {
+        display: flex;
+        padding: 0 12px;
+      }
+      .pc .dl.add {
+        background: var(--color-success-soft);
+      }
+      .pc .dl.del {
+        background: var(--color-danger-soft);
+      }
+      .pc .dg {
+        width: 30px;
+        color: var(--color-text-muted);
+        text-align: right;
+        padding-right: 8px;
+        user-select: none;
+        flex: none;
+      }
+      .pc .dc {
+        white-space: pre;
+      }
+      .pc .file-line {
+        display: flex;
+        padding: 0 12px;
+        font: 12px/1.5 var(--mono);
+      }
+      .pc .file-ln {
+        width: 30px;
+        color: var(--color-text-muted);
+        text-align: right;
+        padding-right: 8px;
+        user-select: none;
+        flex: none;
+      }
+      .pc .file-text {
+        white-space: pre;
+      }
+      .pc .pb {
+        display: flex;
+        gap: 8px;
+        padding: 10px 14px;
+        border-top: 1px solid var(--color-line);
+      }
+      .pc button {
+        flex: 1;
+        height: 32px;
+        border-radius: var(--radius-md);
+        font-weight: var(--weight-medium);
+        font-size: 13px;
+        color: var(--color-text-on-accent);
+      }
+      .pc .ok {
+        background: var(--color-accent);
+      }
+      .pc .ok:hover {
+        background: var(--color-accent-hover);
+      }
+      .pc .no {
+        background: var(--color-surface-sunken);
+        color: var(--color-text);
+        border: 1px solid var(--color-line);
+      }
+      .pc .no:hover {
+        color: var(--color-danger);
+        border-color: var(--color-danger);
+      }
+      /* ==== composer ==== */
+      #cmp {
+        flex: none;
+        padding: 8px 20px max(12px, env(safe-area-inset-bottom));
+        position: relative;
+      }
+      .cmp-row {
+        max-width: var(--p-content-max);
+        margin: 0 auto;
+        display: flex;
+        gap: 8px;
+        align-items: flex-end;
+      }
+      .composer-card {
+        flex: 1;
+        position: relative;
+        border: 1px solid var(--color-line);
+        border-radius: var(--radius-xl);
+        background: var(--bg);
+        box-shadow: var(--shadow-md);
+        transition:
+          border-color 0.15s,
+          box-shadow 0.15s;
+        min-width: 0;
+      }
+      .composer-card:focus-within {
+        border-color: var(--color-accent);
+        box-shadow:
+          var(--shadow-md),
+          0 0 0 3px var(--color-accent-soft);
+      }
+      .cin-wrap {
+        position: relative;
+        padding: 12px 14px 6px;
+      }
+      #inp {
+        color: var(--color-text);
+        flex: 1;
+        border: none;
+        outline: none;
+        resize: none;
+        font-size: 15px;
+        background: transparent;
+        min-height: 36px;
+        max-height: calc(100vh / 4);
+        overflow-y: auto;
+        line-height: 1.5;
+        width: 100%;
+        display: block;
+      }
+      #inp::placeholder {
+        color: var(--color-text-faint);
+      }
+      .toolbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 4px 10px 8px;
+      }
+      .toolbar-left,
+      .toolbar-right {
+        display: flex;
+        align-items: center;
+        gap: 2px;
+      }
+      .perm-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 2px 7px;
+        border-radius: var(--radius-sm);
+        font-size: 13px;
+        color: var(--color-text);
+        cursor: pointer;
+        user-select: none;
+      }
+      .perm-pill:hover {
+        background: var(--color-surface-sunken);
+      }
+      .perm-allow {
+        color: var(--color-success);
+      }
+      .perm-deny {
+        color: var(--color-danger);
+      }
+      .perm-ask {
+        color: var(--color-warning);
+      }
+      .mode-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 2px 7px;
+        border-radius: var(--radius-sm);
+        font-size: 13px;
+        color: var(--color-text-muted);
+        cursor: pointer;
+        user-select: none;
+      }
+      .mode-pill:hover {
+        background: var(--color-surface-sunken);
+      }
+      .mode-pill.on {
+        color: var(--color-accent);
+      }
+      .mode-tag {
+        background: var(--color-accent-soft);
+        color: var(--color-accent);
+        border-radius: var(--radius-xs);
+        padding: 0 4px;
+        font-size: 11px;
+      }
+      #send {
+        width: 32px;
+        height: 32px;
+        border-radius: 50%;
+        background: var(--color-accent);
+        color: var(--color-text-on-accent);
+        border: none;
+        box-shadow: var(--shadow-xs);
+        padding: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        flex: none;
+        font-size: 13px;
+      }
+      #send:hover {
+        background: var(--color-accent-hover);
+      }
+      #send:active {
+        transform: scale(0.92);
+      }
+      #send:disabled {
+        opacity: 0.4;
+        cursor: default;
+      }
+      #send.stop {
+        background: var(--color-danger);
+        width: 30px;
+        height: 30px;
+      }
+      #send.stop:hover {
+        background: var(--color-danger);
+        filter: brightness(1.1);
+      }
+      .compact-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        background: none;
+        border: 1px solid var(--color-line);
+        border-radius: var(--radius-xs);
+        color: var(--color-warning);
+        font-family: var(--mono);
+        font-size: 13px;
+        padding: 2px 8px;
+        cursor: pointer;
+      }
+      .compact-chip:hover {
+        background: var(--color-warning-soft);
+      }
+      /* ==== 菜单 ==== */
+      .menu {
+        position: fixed;
+        min-width: 190px;
+        background: var(--color-surface-raised);
+        border: 1px solid var(--color-line);
+        border-radius: var(--radius-md);
+        padding: 4px;
+        box-shadow: var(--shadow-lg);
+        z-index: var(--z-dropdown);
+        display: none;
+      }
+      .menu.open {
+        display: block;
+      }
+      .mi {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 7px 12px;
+        border-radius: var(--radius-sm);
+        cursor: pointer;
+        font-size: 13px;
+        color: var(--color-text);
+      }
+      .mi:hover {
+        background: var(--color-surface-sunken);
+      }
+      .mi.danger {
+        color: var(--color-danger);
+      }
+      .mi .mk {
+        margin-left: auto;
+        color: var(--color-text-faint);
+        font-size: 11px;
+      }
+      .menu .sep {
+        border-top: 1px solid var(--color-line);
+        margin: 4px 6px;
+      }
+      .mi.check::before {
+        content: "✓";
+        color: var(--color-accent);
+        flex: none;
+        font-size: 11px;
+      }
+      /* ==== toast ==== */
+      #toast {
+        position: fixed;
+        left: 50%;
+        bottom: 60px;
+        transform: translateX(-50%);
+        background: var(--color-surface-raised);
+        border: 1px solid var(--color-line);
+        border-radius: var(--radius-md);
+        padding: 8px 16px;
+        font-size: 13px;
+        color: var(--color-text);
+        box-shadow: var(--shadow-lg);
+        z-index: var(--z-toast);
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.2s;
+      }
+      #toast.show {
+        opacity: 1;
+      }
+      /* ==== 移动端 ==== */
+      .topbar {
+        display: none;
+        align-items: center;
+        gap: 8px;
+        height: 48px;
+        padding: 0 12px;
+        border-bottom: 1px solid var(--color-line);
+        flex: none;
+      }
+      .topbar .wsq {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 2px 8px;
+        border-radius: var(--radius-full);
+        font-size: 12px;
+        color: var(--color-accent);
+        border: 1px solid var(--color-accent-bd);
+        background: var(--color-accent-soft);
+        cursor: pointer;
+      }
+      .tb-mid {
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        cursor: pointer;
+        color: var(--color-text);
+        text-align: left;
+      }
+      .tb-ws {
+        color: var(--color-text-muted);
+        font-size: 14px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .tb-sl {
+        color: var(--color-text-faint);
+        flex: none;
+      }
+      .tb-se {
+        font-weight: var(--weight-semibold);
+        font-size: 14px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .tb-model {
+        font-size: 12px;
+        color: var(--color-text-muted);
+        border: 1px solid var(--color-line);
+        border-radius: var(--radius-full);
+        padding: 2px 8px;
+        flex: none;
+        max-width: 120px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        cursor: pointer;
+      }
+      #sheet {
+        display: none;
+        position: fixed;
+        inset: 0;
+        z-index: var(--z-modal);
+      }
+      #sheet.open {
+        display: block;
+      }
+      #scrim {
+        position: absolute;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.45);
+      }
+      #spnl {
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        max-height: 86vh;
+        background: var(--color-surface-raised);
+        border-radius: var(--radius-2xl) var(--radius-2xl) 0 0;
+        display: flex;
+        flex-direction: column;
+        transform: translateY(102%);
+        transition: transform 0.28s ease-out;
+        box-shadow: var(--shadow-lg);
+      }
+      #sheet.open #spnl {
+        transform: translateY(0);
+      }
+      .grab {
+        width: 38px;
+        height: 5px;
+        border-radius: 3px;
+        background: var(--color-line-strong);
+        margin: 8px auto 0;
+        flex: none;
+      }
+      .shd {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 10px 16px 6px;
+        flex: none;
+      }
+      .shd span {
+        font-weight: var(--weight-semibold);
+        font-size: 14px;
+      }
+      .shd button {
+        width: 28px;
+        height: 28px;
+        border-radius: 6px;
+        color: var(--color-text-muted);
+        font-size: 14px;
+      }
+      .shd button:hover {
+        background: var(--color-surface-sunken);
+        color: var(--color-text);
+      }
+      #sbody {
+        flex: 1;
+        min-height: 0;
+        overflow-y: auto;
+        padding: 4px 12px max(16px, env(safe-area-inset-bottom));
+        display: flex;
+        flex-direction: column;
+        gap: 1px;
+      }
+      #sbody .se {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 9px 10px;
+        border-radius: var(--radius-md);
+      }
+      #sbody .se .st {
+        flex: 1;
+      }
+      #sbody .sg-sep {
+        border-top: 1px solid var(--color-line);
+        margin: 6px 8px;
+      }
+      /* 插件槽 */
+      #plugin-header,
+      #plugin-status {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      #plugin-header:empty,
+      #plugin-status:empty {
+        display: none;
+      }
+      .piz-plugin-btn {
+        height: 28px;
+        min-width: 28px;
+        padding: 0 9px;
+        border: 1px solid var(--color-line);
+        border-radius: var(--radius-md);
+        background: var(--color-surface);
+        color: var(--color-text-muted);
+        font-size: 12px;
+        cursor: pointer;
+        white-space: nowrap;
+      }
+      .piz-plugin-btn:hover {
+        color: var(--color-accent);
+        border-color: var(--color-accent-bd);
+      }
+      @media (max-width: 840px) {
+        .app {
+          grid-template-columns: minmax(0, 1fr);
+          height: 100dvh;
+        }
+        #side {
+          display: none;
+        }
+        .topbar {
+          display: flex;
+        }
+        #cmp {
+          padding: 6px 10px max(10px, env(safe-area-inset-bottom));
+        }
+        #wrap {
+          padding: 14px 12px 24px;
+          max-width: none;
+        }
+        .u-bub {
+          max-width: 88%;
+        }
+        #inp {
+          font-size: 16px;
+        }
+        .chat-header {
+          display: none;
+        }
+        #dock {
+          padding: 0 10px;
+        }
+        .ch-ses {
+          max-width: 40vw;
+        }
+      }
+      @media (max-width: 640px) {
+        #thread {
+          gap: 16px;
+        }
+        #inp {
+          max-height: 38vh;
+        }
+        #send {
+          width: 36px;
+          height: 36px;
+        }
+        .a-msg {
+          font-size: 15px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <!-- 连接 splash(kimi GlobalLoading) -->
+    <div class="gload" id="splash">
+      <div class="gload-box">
+        <svg class="gload-logo" viewBox="0 0 32 22" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="piz">
+          <defs>
+            <mask id="splashEyes" maskUnits="userSpaceOnUse">
+              <rect x="0" y="0" width="32" height="22" fill="#fff" />
+              <g fill="#000">
+                <rect class="ch-eye" x="11.8" y="7" width="2.8" height="8" rx="1.4" />
+                <rect class="ch-eye" x="17.4" y="7" width="2.8" height="8" rx="1.4" />
+              </g>
+            </mask>
+          </defs>
+          <rect x="1" y="1" width="30" height="20" rx="6" fill="var(--logo)" mask="url(#splashEyes)" />
+        </svg>
+        <span class="spin"></span>
+        <div class="gload-text">正在连接本地服务器…</div>
+      </div>
+    </div>
+    <!-- 登录页(kimi auth-page) -->
+    <section class="auth-page" id="authPage">
+      <div class="auth-page-inner">
+        <svg class="auth-page-logo" viewBox="0 0 32 22" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="piz">
+          <defs>
+            <mask id="authEyes" maskUnits="userSpaceOnUse">
+              <rect x="0" y="0" width="32" height="22" fill="#fff" />
+              <g fill="#000">
+                <rect class="ch-eye" x="11.8" y="7" width="2.8" height="8" rx="1.4" />
+                <rect class="ch-eye" x="17.4" y="7" width="2.8" height="8" rx="1.4" />
+              </g>
+            </mask>
+          </defs>
+          <rect x="1" y="1" width="30" height="20" rx="6" fill="var(--logo)" mask="url(#authEyes)" />
+        </svg>
+        <h1>piz 需要凭证</h1>
+        <p>此服务器受保护。输入启动时打印的 token(或 <code>--token</code> 设置的值)。</p>
+        <input type="password" id="authTok" placeholder="Token" autocomplete="current-password" />
+        <div class="auth-err" id="authErr"></div>
+        <button id="authBtn" disabled>连接</button>
+      </div>
+    </section>
+    <div id="app" class="app">
+      <aside id="side">
+        <div class="ch">
+          <div class="ch-brand">
+            <svg
+              class="ch-logo"
+              viewBox="0 0 32 22"
+              fill="none"
+              xmlns="http://www.w3.org/2000/svg"
+              role="img"
+              aria-label="piz"
+            >
+              <defs>
+                <mask id="kimiEyes" maskUnits="userSpaceOnUse">
+                  <rect x="0" y="0" width="32" height="22" fill="#fff" />
+                  <g fill="#000">
+                    <rect
+                      class="ch-eye"
+                      x="11.8"
+                      y="7"
+                      width="2.8"
+                      height="8"
+                      rx="1.4"
+                    />
+                    <rect
+                      class="ch-eye"
+                      x="17.4"
+                      y="7"
+                      width="2.8"
+                      height="8"
+                      rx="1.4"
+                    />
+                  </g>
+                </mask>
+              </defs>
+              <rect
+                x="1"
+                y="1"
+                width="30"
+                height="20"
+                rx="6"
+                fill="var(--logo)"
+                mask="url(#kimiEyes)"
+              /></svg
+            ><span class="ch-name" id="wsName">piz</span>
+          </div>
+          <div style="display: flex; gap: 2px">
+            <button class="ch-ib" id="colBtn" title="折叠侧栏">◂</button
+            ><button class="ch-ib" id="setBtn" title="设置">⚙</button>
+          </div>
+        </div>
+        <button class="search" id="searchBtn">
+          <span class="search-ic">⌕</span
+          ><span class="search-t">搜索会话…</span>
+        </button>
+        <button class="btn-new-chat" id="newBtn">
+          <span class="pl">＋</span><span>新对话</span>
+        </button>
+        <div class="sessions" id="slist"></div>
+      </aside>
+      <div class="side-rail">
+        <button class="ch-ib" id="expBtn" title="展开侧栏">▸</button>
+      </div>
+      <main id="main">
+        <div class="topbar">
+          <button class="wsq" id="wsqBtn" title="切换项目">⌂</button>
+          <button class="tb-mid" id="tbMid">
+            <span class="tb-ws" id="tbWs">…</span><span class="tb-sl">/</span
+            ><span class="tb-se" id="tbSe">会话</span>
+          </button>
+          <button class="tb-model" id="tbModel">…</button>
+          <button class="ib" id="tbKebab" title="会话操作">⋯</button>
+        </div>
+        <header class="chat-header" id="chatHdr">
+          <div class="ch-id">
+            <span class="ch-ws" id="hWs"></span
+            ><span class="ch-sep" id="hSep" style="display: none">/</span
+            ><span class="ch-ses" id="hSes" title="重命名"></span>
+          </div>
+          <div class="ch-git" id="hGit"></div>
+          <div class="ch-spacer"></div>
+          <span id="plugin-header" data-piz-slot="header"></span
+          ><span id="plugin-status" data-piz-slot="status"></span>
+          <button class="ib" id="hModel" title="切换模型">…</button>
+          <button class="ib" id="hKebab" title="会话操作">⋯</button>
+        </header>
+        <div id="panes">
+          <div id="wrap" class=""><div id="thread"></div></div>
+        </div>
+        <div id="dock"></div>
+        <div id="cmp">
+          <div class="cmp-row">
+            <div class="composer-card">
+              <div class="cin-wrap">
+                <textarea
+                  id="inp"
+                  rows="1"
+                  placeholder="输入消息… Enter 发送 · Shift+Enter 换行"
+                ></textarea>
+              </div>
+              <div class="toolbar">
+                <div class="toolbar-left">
+                  <span
+                    class="perm-pill perm-ask"
+                    id="permPill"
+                    title="审批模式"
+                    >🛡 自动</span
+                  >
+                  <span class="mode-pill" id="modePill" title="模式"
+                    >模式<span
+                      class="mode-tag"
+                      id="modeTag"
+                      style="display: none"
+                    ></span
+                  ></span>
+                  <button
+                    class="compact-chip"
+                    id="compactChip"
+                    style="display: none"
+                  >
+                    ⚡ 上下文已满
+                  </button>
+                </div>
+                <div class="toolbar-right">
+                  <span id="plugin-composer" data-piz-slot="composer"></span
+                  ><button id="send" title="发送">➤</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </main>
+    </div>
+    <div class="menu" id="kmenu"></div>
+    <div class="menu" id="wsmenu"></div>
+    <div class="menu" id="modelMenu"></div>
+    <div id="toast"></div>
+    <div id="sheet">
+      <div id="scrim"></div>
+      <div id="spnl">
+        <div class="grab"></div>
+        <div class="shd">
+          <span id="stl">会话</span><button id="scls">✕</button>
+        </div>
+        <div id="sbody"></div>
+      </div>
+    </div>
+    <script>
+      "use strict";
+      const $ = (id) => document.getElementById(id);
+      const esc = (s) =>
+        String(s)
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;");
+      const qp = new URLSearchParams(location.search);
+      const sess = qp.get("session") || "default";
+      const ws = decodeURIComponent(qp.get("ws") || "");
+      const wsp = ws ? "ws=" + encodeURIComponent(ws) + "&" : "";
+      const isMobile = () => window.innerWidth < 840;
+      // 主题
+      function applyScheme() {
+        let v = "dark";
+        try {
+          v = localStorage.getItem("piz.scheme") || "dark";
+        } catch {}
+        document.documentElement.dataset.colorScheme = v;
+      }
+      applyScheme();
+      // ---- 服务器凭证(kimi serverAuth.ts:#token= fragment + sessionStorage) ----
+      const AUTH_KEY = "piz-web.credential";
+      let credential = undefined;
+      function readFragmentToken() {
+        const hash = location.hash || "";
+        if (!hash.startsWith("#")) return undefined;
+        const params = new URLSearchParams(hash.slice(1));
+        const token = params.get("token");
+        if (!token) return undefined;
+        const url = new URL(location.href);
+        url.hash = "";
+        history.replaceState(history.state, "", url.pathname + url.search);
+        return token;
+      }
+      function initServerAuth() {
+        const frag = readFragmentToken();
+        if (frag) { setCredential(frag); return true; }
+        try {
+          const stored = sessionStorage.getItem(AUTH_KEY);
+          if (stored) { credential = stored; return true; }
+        } catch {}
+        return false;
+      }
+      function setCredential(v) {
+        credential = v;
+        try { sessionStorage.setItem(AUTH_KEY, v); } catch {}
+      }
+      function clearCredential() {
+        credential = undefined;
+        try { sessionStorage.removeItem(AUTH_KEY); } catch {}
+      }
+      function showAuthPage(msg) {
+        $("splash")?.classList.add("hide");
+        $("authPage")?.classList.add("show");
+        if (msg) $("authErr").textContent = msg;
+        const inp = $("authTok");
+        if (inp) { inp.disabled = false; inp.focus(); }
+        const btn = $("authBtn");
+        if (btn) btn.disabled = true;
+      }
+      function hideAuthPage() {
+        $("authPage")?.classList.remove("show");
+        $("authErr").textContent = "";
+      }
+      // fetch 全局包装:带 Bearer + 401 → 登录页(kimi http.ts 等价)
+      const rawFetch = window.fetch.bind(window);
+      window.fetch = (url, opts = {}) => {
+        opts = Object.assign({}, opts);
+        opts.headers = Object.assign({}, opts.headers || {});
+        if (credential) opts.headers["Authorization"] = "Bearer " + credential;
+        return rawFetch(url, opts).then((res) => {
+          if (res.status === 401 && !opts.headers["X-Skip-Auth"]) {
+            clearCredential();
+            showAuthPage("凭证无效或已过期,请重新输入");
+          }
+          return res;
+        });
+      };
+      // 登录提交
+      const authInp = $("authTok");
+      authInp.addEventListener("input", () => {
+        $("authBtn").disabled = !authInp.value.trim();
+      });
+      authInp.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" && authInp.value.trim() && !$("authBtn").disabled)
+          submitAuth();
+      });
+      async function submitAuth() {
+        const v = authInp.value.trim();
+        if (!v) return;
+        $("authBtn").disabled = true;
+        authInp.disabled = true;
+        setCredential(v);
+        try {
+          const r = await rawFetch("/api/state?" + wsp + "session=" + encodeURIComponent(sess), {
+            headers: { Authorization: "Bearer " + v, "X-Skip-Auth": "1" },
+          });
+          if (r.ok) {
+            hideAuthPage();
+            boot();
+          } else {
+            clearCredential();
+            $("authErr").textContent = "连接失败,请检查 token";
+            authInp.disabled = false;
+            authInp.focus();
+            $("authBtn").disabled = false;
+          }
+        } catch (e) {
+          clearCredential();
+          $("authErr").textContent = "无法连接服务器";
+          authInp.disabled = false;
+          $("authBtn").disabled = false;
+        }
+      }
+      $("authBtn").onclick = submitAuth;
+      // ---- toast ----
+      const toastEl = $("toast");
+      let toastT = null;
+      function showToast(t) {
+        toastEl.textContent = t;
+        toastEl.classList.add("show");
+        clearTimeout(toastT);
+        toastT = setTimeout(() => toastEl.classList.remove("show"), 2200);
+      }
+      // ---- 菜单助手 ----
+      let openMenu = null;
+      function closeMenus() {
+        for (const m of document.querySelectorAll(".menu.open"))
+          m.classList.remove("open");
+        openMenu = null;
+      }
+      function openAt(id, btn) {
+        closeMenus();
+        const m = $(id);
+        m.classList.add("open");
+        const r = btn.getBoundingClientRect();
+        const mw = m.offsetWidth,
+          mh = m.offsetHeight;
+        m.style.left = Math.min(r.right - mw, innerWidth - mw - 8) + "px";
+        m.style.top = Math.min(r.bottom + 4, innerHeight - mh - 8) + "px";
+        openMenu = m;
+      }
+      document.addEventListener("click", (e) => {
+        if (!e.target.closest(".menu") && !e.target.closest(".ib"))
+          closeMenus();
+      });
+      // ---- 项目 ----
+      function loadWorkspaces() {
+        return fetch("/api/workspaces")
+          .then((r) => r.json())
+          .catch(() => []);
+      }
+      async function renderWsName() {
+        const list = await loadWorkspaces();
+        const cur = ws || (list[0] ? list[0].root : "");
+        const nm = cur ? cur.split("/").pop() || cur : "piz";
+        $("wsName").textContent = nm;
+        $("tbWs").textContent = nm;
+        return list;
+      }
+      async function openWsMenu(btn) {
+        const list = await renderWsName();
+        const cur = ws || (list[0] ? list[0].root : "");
+        const m = $("wsmenu");
+        m.innerHTML = "";
+        for (const w of list) {
+          const d = document.createElement("div");
+          d.className = "mi" + (w.root === cur ? " check" : "");
+          d.textContent = (w.name || w.root.split("/").pop()) + " · " + w.root;
+          d.title = w.root;
+          d.onclick = () => {
+            if (w.root !== cur)
+              location.href =
+                "/?ws=" + encodeURIComponent(w.root) + "&session=default";
+          };
+          m.appendChild(d);
+        }
+        const sep = document.createElement("div");
+        sep.className = "sep";
+        m.appendChild(sep);
+        const add = document.createElement("div");
+        add.className = "mi";
+        add.textContent = "＋ 添加项目…";
+        add.onclick = () => {
+          const root = prompt("项目目录(绝对路径):");
+          if (!root) return;
+          fetch("/api/workspaces", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ root }),
+          })
+            .then((r) => r.json())
+            .then(() => {
+              location.href =
+                "/?ws=" + encodeURIComponent(root) + "&session=default";
+            })
+            .catch(() => showToast("无效目录"));
+        };
+        m.appendChild(add);
+        openAt("wsmenu", btn);
+      }
+      $("wsqBtn").onclick = (e) => {
+        e.stopPropagation();
+        openWsMenu(e.currentTarget);
+      };
+      // ---- 会话列表 ----
+      let sessList = [],
+        archList = [],
+        sessMeta = {};
+      function fmtTime(ts) {
+        if (!ts) return "";
+        const d = new Date(ts),
+          now = new Date();
+        if (d.toDateString() === now.toDateString())
+          return d.toTimeString().slice(0, 5);
+        const y = new Date(now);
+        y.setDate(y.getDate() - 1);
+        if (d.toDateString() === y.toDateString()) return "昨天";
+        return d.getMonth() + 1 + "月" + d.getDate() + "日";
+      }
+      function sessionRow(s, arch) {
+        const d = document.createElement("div");
+        d.className =
+          "se" + (s.name === sess ? " on" : "") + (arch ? " arch" : "");
+        const title = s.name === "default" ? "默认会话" : s.title || s.name;
+        d.innerHTML =
+          '<div class="srow"><span class="lead">' +
+          (s.busy
+            ? '<span class="spin"></span>'
+            : s.unread
+              ? '<span class="unread-dot"></span>'
+              : "") +
+          '</span><span class="st">' +
+          esc(title) +
+          "</span>" +
+          (s.status === "awaitingQuestion"
+            ? '<span class="tag info">回答</span>'
+            : "") +
+          (s.status === "awaitingApproval"
+            ? '<span class="tag warn">审批</span>'
+            : "") +
+          (s.status === "aborted"
+            ? '<span class="tag danger">中止</span>'
+            : "") +
+          '<span class="sts">' +
+          fmtTime(s.ts) +
+          '</span><button class="kebab" title="操作">⋯</button></div>';
+        d.onclick = () => {
+          if (s.name === sess) {
+            if (s.auto !== undefined) {
+              autoMode = !!s.auto;
+              setModeBtn();
+            }
+            closeSheet();
+          } else location.href = "/?session=" + encodeURIComponent(s.name);
+        };
+        const kb = d.querySelector(".kebab");
+        kb.onclick = (e) => {
+          e.stopPropagation();
+          openSessionMenu(kb, s, arch);
+        };
+        return d;
+      }
+      function openSessionMenu(btn, s, arch) {
+        const m = $("kmenu");
+        m.innerHTML = "";
+        if (!arch) {
+          const ren = document.createElement("div");
+          ren.className = "mi";
+          ren.textContent = "✎ 重命名";
+          ren.onclick = () => {
+            closeMenus();
+            const t = prompt("会话标题:", s.title || s.name);
+            if (t === null) return;
+            act({ act: "rename", name: t }, (j) => {
+              loadSessions();
+              showToast(j && j.ok ? "已重命名" : "失败");
+            });
+          };
+          m.appendChild(ren);
+          const fork = document.createElement("div");
+          fork.className = "mi";
+          fork.textContent = "✱ 派生会话";
+          fork.onclick = () => {
+            closeMenus();
+            const n = prompt("新会话名(留空自动):", "");
+            act({ act: "fork", name: n || "" }, (j) => {
+              if (j && j.name) {
+                showToast("已派生 " + j.name);
+                setTimeout(
+                  () =>
+                    (location.href = "/?session=" + encodeURIComponent(j.name)),
+                  600,
+                );
+              }
+            });
+          };
+          m.appendChild(fork);
+          const arc = document.createElement("div");
+          arc.className = "mi";
+          arc.textContent = "🗄 归档";
+          arc.onclick = () => {
+            closeMenus();
+            act({ act: "archive" }, (j) => {
+              if (j && j.ok) {
+                showToast("已归档");
+                if (s.name === sess)
+                  setTimeout(() => (location.href = "/?session=default"), 400);
+              }
+              loadSessions();
+            });
+          };
+          m.appendChild(arc);
+          const sep = document.createElement("div");
+          sep.className = "sep";
+          m.appendChild(sep);
+        }
+        const del = document.createElement("div");
+        del.className = "mi danger";
+        del.textContent = arch ? "永久删除" : "删除";
+        del.onclick = () => {
+          closeMenus();
+          if (!confirm("永久删除 " + s.name + "?")) return;
+          act({ act: "delete" }, () => {
+            loadSessions();
+          });
+        };
+        m.appendChild(del);
+        if (arch) {
+          const res = document.createElement("div");
+          res.className = "mi";
+          res.textContent = "↩ 恢复";
+          res.onclick = () => {
+            closeMenus();
+            act({ act: "restore" }, () => {
+              loadSessions();
+              showToast("已恢复 " + s.name);
+            });
+          };
+          m.prepend(res);
+        }
+        openAt("kmenu", btn);
+      }
+      function loadSessions() {
+        fetch("/api/sessions?" + wsp)
+          .then((r) => r.json())
+          .then((list) => {
+            sessList = list.filter((s) => !s.archived);
+            archList = list.filter((s) => s.archived);
+            sessMeta = {};
+            for (const s of list) sessMeta[s.name] = s;
+            const sl = $("slist");
+            sl.innerHTML = "";
+            const q = ((searchQ && searchQ.value) || "").toLowerCase();
+            const show = (s) =>
+              !q || (s.name + (s.title || "")).toLowerCase().includes(q);
+            const groups = new Map();
+            for (const s of sessList) {
+              const g = s.ws || "default";
+              if (!groups.has(g)) groups.set(g, []);
+              groups.get(g).push(s);
+            }
+            let any = false;
+            for (const [g, arr] of groups) {
+              const vis = arr.filter(show);
+              if (!vis.length) continue;
+              any = true;
+              const gh = document.createElement("div");
+              gh.className = "sg-head";
+              gh.innerHTML =
+                '<span class="sg-chev open">▶</span><span class="sg-name">' +
+                esc(g === "default" ? "默认项目" : g) +
+                '</span><span class="sg-cnt">' +
+                arr.length +
+                "</span>";
+              const wrap = document.createElement("div");
+              wrap.style.display = "";
+              gh.onclick = () => {
+                const open = gh
+                  .querySelector(".sg-chev")
+                  .classList.toggle("open");
+                wrap.style.display = open ? "" : "none";
+              };
+              sl.appendChild(gh);
+              sl.appendChild(wrap);
+              for (const s of vis) wrap.appendChild(sessionRow(s, false));
+            }
+            if (!any && sessList.length && q) {
+              const ne = document.createElement("div");
+              ne.className = "sg-name";
+              ne.textContent = "无匹配会话";
+              sl.appendChild(ne);
+            }
+            if (archList.length) {
+              const se = document.createElement("div");
+              se.className = "sg-arch";
+              se.textContent = "归档 " + archList.length;
+              sl.appendChild(se);
+              for (const s of archList) sl.appendChild(sessionRow(s, true));
+            }
+            const sb = $("sbody");
+            if (sb) {
+              sb.innerHTML = "";
+              for (const s of sessList) sb.appendChild(sessionRow(s, false));
+              if (archList.length) {
+                const se2 = document.createElement("div");
+                se2.className = "sg-sep";
+                sb.appendChild(se2);
+                const sh = document.createElement("div");
+                sh.className = "sg-arch";
+                sh.textContent = "归档 " + archList.length;
+                sb.appendChild(sh);
+                for (const s of archList) sb.appendChild(sessionRow(s, true));
+              }
+            }
+            const nb = document.createElement("div");
+            nb.className = "mi";
+            nb.style.justifyContent = "center";
+            nb.textContent = "＋ 新对话";
+            nb.onclick = () => {
+              location.href =
+                "/?session=" + Math.random().toString(36).slice(2, 8);
+            };
+            sl.appendChild(nb);
+          })
+          .catch(() => {});
+      }
+      // 搜索(spotlight 式:点击展开输入过滤)
+      const searchQ = document.createElement("input");
+      searchQ.id = "searchQ";
+      searchQ.placeholder = "搜索会话…";
+      searchQ.style.cssText =
+        "flex:1;min-width:0;border:none;outline:none;background:transparent;font-size:13px;color:var(--color-text)";
+      $("searchBtn").onclick = () => {
+        const t = $("searchBtn").querySelector(".search-t");
+        if (t) t.remove();
+        $("searchBtn").prepend(searchQ);
+        searchQ.focus();
+      };
+      searchQ.addEventListener("input", () => loadSessions());
+      searchQ.addEventListener("blur", () => {
+        if (!searchQ.value) {
+          searchQ.remove();
+          const t = document.createElement("span");
+          t.className = "search-t";
+          t.textContent = "搜索会话…";
+          $("searchBtn").prepend(t);
+        }
+      });
+      // ---- 会话操作 ----
+      function act(body, then) {
+        fetch("/api/action?" + wsp + "session=" + encodeURIComponent(sess), {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body),
+        })
+          .then((r) => r.json())
+          .then((j) => {
+            if (then) then(j);
+          })
+          .catch(() => {});
+      }
+      // ---- 模型 ----
+      function loadModels(sel) {
+        fetch("/api/models")
+          .then((r) => r.json())
+          .then((list) => {
+            const m = $("modelMenu");
+            m.innerHTML = "";
+            for (const md of list) {
+              const d = document.createElement("div");
+              d.className = "mi" + (md === curModel ? " check" : "");
+              d.textContent = md;
+              d.onclick = async () => {
+                try {
+                  const r = await fetch(
+                    "/api/model?" + wsp + "session=" + encodeURIComponent(sess),
+                    {
+                      method: "POST",
+                      headers: { "content-type": "application/json" },
+                      body: JSON.stringify({ model: md }),
+                    },
+                  );
+                  const j = await r.json();
+                  if (j.model) {
+                    curModel = j.model;
+                    renderModel();
+                  }
+                  closeMenus();
+                } catch {}
+              };
+              m.appendChild(d);
+            }
+            openAt("modelMenu", sel);
+          })
+          .catch(() => {});
+      }
+      function renderModel() {
+        $("hModel").textContent = curModel;
+        $("tbModel").textContent = curModel;
+      }
+      $("hModel").onclick = (e) => {
+        e.stopPropagation();
+        loadModels(e.currentTarget);
+      };
+      $("tbModel").onclick = (e) => {
+        e.stopPropagation();
+        loadModels(e.currentTarget);
+      };
+      // ---- 审批模式 / 模式 ----
+      let autoMode = true;
+      function setModeBtn() {
+        const p = $("permPill");
+        p.textContent = autoMode ? "🛡 自动" : "🛡 手动";
+        p.className = "perm-pill " + (autoMode ? "perm-allow" : "perm-ask");
+      }
+      $("permPill").onclick = async () => {
+        autoMode = !autoMode;
+        setModeBtn();
+        try {
+          const r = await fetch(
+            "/api/mode?" + wsp + "session=" + encodeURIComponent(sess),
+            {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ auto: autoMode }),
+            },
+          );
+          const j = await r.json();
+          if (j.auto !== undefined) autoMode = !!j.auto;
+          setModeBtn();
+        } catch {}
+      };
+      $("modePill").onclick = () => {
+        showToast("piz 模式:自动执行工具/手动审批切换在左侧 🛡");
+      };
+      // ---- 压缩提示 ----
+      function setCtx(pct) {
+        if (pct > 85) {
+          const c = $("compactChip");
+          c.style.display = "";
+          c.onclick = () => {
+            showToast("正在压缩…");
+            act({ act: "compact" }, (j) => {
+              showToast(j && j.ok ? "压缩完成" : "压缩失败");
+            });
+          };
+        } else $("compactChip").style.display = "none";
+      }
+      // ---- 头部 ----
+      function renderHdr(s) {
+        const wsName = s.ws || "";
+        const hWs = $("hWs"),
+          hSep = $("hSep"),
+          hSes = $("hSes");
+        if (wsName) {
+          hWs.textContent = wsName;
+          hSep.style.display = "";
+        } else {
+          hWs.textContent = "";
+          hSep.style.display = "none";
+        }
+        hSes.textContent = sess === "default" ? "默认会话" : s.title || sess;
+        $("tbWs").textContent = wsName || "";
+        $("tbSe").textContent =
+          sess === "default" ? "默认会话" : s.title || sess;
+        const git = $("hGit");
+        git.innerHTML = "";
+        if (s.branch) {
+          const pill = document.createElement("span");
+          pill.className = "ch-pill";
+          pill.innerHTML =
+            "<b>" +
+            esc(s.branch) +
+            "</b>" +
+            (s.ahead ? ' <span class="ch-ahead">↑' + s.ahead + "</span>" : "") +
+            (s.behind
+              ? ' <span class="ch-behind">↓' + s.behind + "</span>"
+              : "");
+          git.appendChild(pill);
+        }
+        if (s.changes) {
+          const pill = document.createElement("span");
+          pill.className = "ch-pill";
+          pill.style.borderColor =
+            "color-mix(in srgb,var(--color-success) 20%,var(--color-line))";
+          pill.textContent = s.changes + " 个变更";
+          git.appendChild(pill);
+        }
+      }
+      $("hSes").onclick = () => {
+        const t = prompt("会话标题:", curTitle || "");
+        if (t === null) return;
+        fetch("/api/title?" + wsp + "session=" + encodeURIComponent(sess), {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ title: t }),
+        })
+          .then((r) => r.json())
+          .then((j) => {
+            if (j.title !== undefined) {
+              curTitle = j.title;
+              renderHdr({ title: j.title });
+              loadSessions();
+            }
+          })
+          .catch(() => {});
+      };
+      $("hKebab").onclick = (e) => {
+        e.stopPropagation();
+        const m = $("kmenu");
+        m.innerHTML = "";
+        const mi = (t, fn, danger) => {
+          const d = document.createElement("div");
+          d.className = "mi" + (danger ? " danger" : "");
+          d.textContent = t;
+          d.onclick = () => {
+            closeMenus();
+            fn();
+          };
+          m.appendChild(d);
+        };
+        mi("⧉ 复制全部", () => {
+          const t = th.innerText;
+          navigator.clipboard
+            ?.writeText(t)
+            .then(() => showToast("已复制"))
+            .catch(() => showToast("复制失败"));
+        });
+        mi("✎ 重命名", () => {
+          const t = prompt("会话标题:", curTitle || "");
+          if (t === null) return;
+          fetch("/api/title?" + wsp + "session=" + encodeURIComponent(sess), {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ title: t }),
+          })
+            .then((r) => r.json())
+            .then((j) => {
+              if (j.title !== undefined) {
+                curTitle = j.title;
+                loadSessions();
+              }
+            })
+            .catch(() => {});
+        });
+        mi("✱ 派生会话", () => {
+          const n = prompt("新会话名(留空自动):", "");
+          act({ act: "fork", name: n || "" }, (j) => {
+            if (j && j.name) {
+              showToast("已派生 " + j.name);
+              setTimeout(
+                () =>
+                  (location.href = "/?session=" + encodeURIComponent(j.name)),
+                600,
+              );
+            }
+          });
+        });
+        const se = document.createElement("div");
+        se.className = "sep";
+        m.appendChild(se);
+        mi("↶ 撤销最后一条", () => {
+          act({ act: "undo" }, (j) => {
+            showToast(j && j.ok ? "已撤销" : "无可撤销");
+            setTimeout(() => location.reload(), 400);
+          });
+        });
+        mi("⚡ 压缩上下文", () => {
+          showToast("正在压缩…");
+          act({ act: "compact" }, (j) => {
+            showToast(j && j.ok ? "压缩完成" : "压缩失败");
+          });
+        });
+        const se2 = document.createElement("div");
+        se2.className = "sep";
+        m.appendChild(se2);
+        mi(
+          "🗄 归档会话",
+          () => {
+            act({ act: "archive" }, (j) => {
+              if (j && j.ok) {
+                showToast("已归档");
+                setTimeout(() => (location.href = "/?session=default"), 400);
+              }
+            });
+          },
+          true,
+        );
+        openAt("kmenu", e.currentTarget);
+      };
+      $("tbKebab").onclick = (e) => {
+        e.stopPropagation();
+        $("hKebab").onclick(e);
+      };
+      // ---- 渲染 ----
+      const th = $("thread");
+      let stick = true;
+      $("panes").addEventListener("scroll", () => {
+        const p = $("panes");
+        stick = p.scrollHeight - p.scrollTop - p.clientHeight < 80;
+      });
+      function scrl() {
+        if (stick) $("panes").scrollTop = $("panes").scrollHeight;
+      }
+      let curAsst = null,
+        rsnEl = null,
+        undoBtn = null;
+      function addUser(txt) {
+        hideWelcome();
+        const t = document.createElement("div");
+        t.className = "u-turn";
+        t.innerHTML =
+          '<div class="u-bub"></div><button class="undo-chip">↶ 撤销</button>';
+        t.querySelector(".u-bub").textContent = txt;
+        t.querySelector(".undo-chip").onclick = () => {
+          act({ act: "undo" }, (j) => {
+            showToast(j && j.ok ? "已撤销" : "无可撤销");
+            setTimeout(() => location.reload(), 400);
+          });
+        };
+        th.appendChild(t);
+        scrl();
+        curAsst = null;
+      }
+      function asstEl() {
+        if (!curAsst) {
+          curAsst = document.createElement("div");
+          curAsst.className = "a-turn";
+          curAsst.innerHTML = '<div class="a-msg"><div class="md"></div></div>';
+          th.appendChild(curAsst);
+          scrl();
+        }
+        return curAsst;
+      }
+      function addAsst(txt) {
+        if (!txt) return;
+        const e = asstEl().querySelector(".md");
+        e.textContent += txt;
+        scrl();
+      }
+      function finishAsst() {
+        if (curAsst) {
+          const e = curAsst.querySelector(".md");
+          e.innerHTML = md(e.textContent);
+          pluginEmit("message-rendered", {
+            role: "assistant",
+            text: e.textContent,
+            element: e,
+          });
+          curAsst = null;
+        }
+      }
+      function addRsn(txt) {
+        if (!txt) return;
+        if (!rsnEl) {
+          rsnEl = document.createElement("div");
+          rsnEl.className = "think";
+          rsnEl.innerHTML =
+            '<div class="tc-wrap collapsed"><div class="prev"></div><div class="tc-anim"><pre class="tk"></pre></div></div><span class="tc-hint">思考中</span>';
+          const wrap = rsnEl.querySelector(".tc-wrap");
+          wrap.onclick = () => wrap.classList.toggle("collapsed");
+          th.appendChild(rsnEl);
+          scrl();
+        }
+        const tc = rsnEl.querySelector(".tk");
+        tc.textContent += txt;
+        const prev = rsnEl.querySelector(".prev");
+        const lines = tc.textContent.trim().split("\n");
+        prev.textContent = lines[lines.length - 1].slice(0, 60) || "…";
+        scrl();
+      }
+      function finishRsn() {
+        if (rsnEl) {
+          rsnEl.querySelector(".tc-hint").remove();
+          rsnEl = null;
+        }
+      }
+      // 工具卡
+      const cards = {};
+      let seq = 0;
+      const lastByName = {};
+      function toolType(n) {
+        if (/^(bash|exec|sh|git|cmd|powershell)$/.test(n)) return "term";
+        if (/^(edit|write|apply_patch)$/.test(n)) return "diff";
+        if (/^(read|skill|show)$/.test(n)) return "code";
+        return "sum";
+      }
+      function addTool(name, args) {
+        seq++;
+        const id = "t" + seq;
+        const ty = toolType(name);
+        const st = name === "bash" ? "" : '<span class="st-glyph run"></span>';
+        const d = document.createElement("div");
+        d.className = "tcall";
+        d.id = id;
+        d.dataset.ty = ty;
+        d.innerHTML =
+          '<div class="bh"><span class="gl">' +
+          toolIcon(name) +
+          '</span><span class="a">' +
+          esc(name) +
+          '</span><span class="p">' +
+          esc((args || "").slice(0, 140)) +
+          '</span><span class="rt"><span class="st-glyph run"></span><span class="car">›</span></span></div><div class="bb"><div class="bb-pad"></div></div>';
+        d.querySelector(".bh").onclick = () => {
+          d.classList.toggle("open");
+          if (d.classList.contains("open")) fillTool(d);
+        };
+        th.appendChild(d);
+        scrl();
+        cards[id] = { el: d, name, ty, args: args || "" };
+        curAsst = null;
+        return id;
+      }
+      function toolIcon(n) {
+        if (/^(edit|write|apply_patch)$/.test(n)) return "✎";
+        if (/^(read|skill|show)$/.test(n)) return "≡";
+        if (n === "bash" || n === "exec") return "$";
+        return "⚙";
+      }
+      function fillTool(d) {
+        const ty = d.dataset.ty || "sum";
+        const out = d.dataset.out || "";
+        const bd = d.querySelector(".bb-pad");
+        const card = cards[d.id];
+        const custom = card && toolRenderers.get(card.name);
+        if (custom) {
+          try {
+            const node = custom({
+              name: card.name,
+              args: card.args,
+              output: out,
+              error: d.classList.contains("err"),
+              element: d,
+            });
+            if (node instanceof Node) {
+              bd.replaceChildren(node);
+              return;
+            }
+          } catch (x) {
+            console.error("[piz plugin]", x);
+          }
+        }
+        const pre = document.createElement("pre");
+        if (ty === "term") {
+          pre.className = "term";
+          pre.innerHTML = ansiHtml(out);
+        } else if (ty === "diff") {
+          pre.className = "diff";
+          pre.innerHTML = diffHtml(out);
+        } else {
+          pre.className = "code";
+          pre.textContent =
+            out.length > 2000 ? out.slice(0, 2000) + "\n…(截断)" : out;
+        }
+        bd.replaceChildren(pre);
+      }
+      function toolDone(name, err, summary) {
+        const id = lastByName[name];
+        if (!id) return;
+        const c = cards[id];
+        if (!c) return;
+        const d = c.el;
+        d.classList.add(err ? "err" : "done");
+        const g = d.querySelector(".st-glyph");
+        if (g) {
+          g.className = "st-glyph " + (err ? "err" : "ok");
+          g.textContent = err ? "✗" : "✓";
+        }
+        d.dataset.out = summary || "";
+        if (err) d.classList.add("open");
+        if (d.classList.contains("open")) fillTool(d);
+      }
+      // 审批
+      function addPerm(id, name, args) {
+        const d = document.createElement("div");
+        d.className = "pc";
+        d.dataset.pid = id;
+        const kind = name === "bash" ? "shell" : "file";
+        let body = "";
+        if (kind === "shell") {
+          body =
+            '<div class="body"><div class="shell-cmd"><span class="shell-dollar">$</span>' +
+            esc((args || "").slice(0, 300)) +
+            "</div></div>";
+        } else
+          body =
+            '<div class="body"><pre class="shell-cmd">' +
+            esc((args || "").slice(0, 300)) +
+            "</pre></div>";
+        d.innerHTML =
+          '<div class="ah"><span class="ah-ic">!</span><span class="akind">需要许可</span><span class="apath">' +
+          esc(name) +
+          '</span><span class="aw">等待审批</span></div>' +
+          body +
+          '<div class="pb"><button class="ok">允许</button><button class="no">拒绝</button></div>';
+        d.querySelector(".ok").onclick = () => appr(id, true);
+        d.querySelector(".no").onclick = () => appr(id, false);
+        const dk = $("dock");
+        dk.appendChild(d);
+        scrl();
+      }
+      async function appr(id, allow) {
+        try {
+          await fetch("/api/approve", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ id, allow }),
+          });
+        } catch {}
+      }
+      // markdown(极简:代码块+行内码+粗体)
+      function md(raw) {
+        const out = [];
+        const re = /```(\w*)\n?([\s\S]*?)```/g;
+        let last = 0,
+          m;
+        while ((m = re.exec(raw)) !== null) {
+          if (m.index > last) out.push(mdInline(raw.slice(last, m.index)));
+          out.push("<pre><code>" + esc(m[2]) + "</code></pre>");
+          last = m.index + m[0].length;
+        }
+        if (last < raw.length) out.push(mdInline(raw.slice(last)));
+        return out.join("");
+      }
+      function mdInline(t) {
+        const out = [];
+        const re = /`([^`\n]+)`/g;
+        let last = 0,
+          m;
+        while ((m = re.exec(t)) !== null) {
+          if (m.index > last) out.push(esc(t.slice(last, m.index)));
+          out.push("<code>" + esc(m[1]) + "</code>");
+          last = m.index + m[0].length;
+        }
+        if (last < t.length) out.push(esc(t.slice(last)));
+        return out
+          .join("")
+          .replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>")
+          .replace(/\n/g, "<br>");
+      }
+      const AC = {
+        30: "#333",
+        31: "#f85149",
+        32: "#3fb950",
+        33: "#d29922",
+        34: "#58a6ff",
+        35: "#bc8cff",
+        36: "#39c5cf",
+        37: "#c9d1d9",
+        90: "#8b949e",
+        91: "#ff7b72",
+        92: "#7ee787",
+        93: "#e3b341",
+        94: "#79c0ff",
+        95: "#d2a8ff",
+        96: "#76e3ea",
+        97: "#e6edf3",
+      };
+      function ansiHtml(t) {
+        let o = "",
+          last = 0,
+          fg = null;
+        const re = /\x1b\[([0-9;]*)m/g;
+        let m;
+        while ((m = re.exec(t)) !== null) {
+          o += esc(t.slice(last, m.index));
+          const c = m[1].split(";").filter(Boolean);
+          if (c.includes("0") || c.length === 0) fg = null;
+          else {
+            const col = AC[c.find((x) => AC[x]) || ""];
+            if (col) fg = col;
+          }
+          last = m.index + m[0].length;
+        }
+        o += esc(t.slice(last));
+        return fg ? '<span style="color:' + fg + '">' + o + "</span>" : o;
+      }
+      function diffHtml(t) {
+        return t
+          .split("\n")
+          .map((l) => {
+            if (l.startsWith("+++") || l.startsWith("---"))
+              return '<span class="ad">' + esc(l) + "</span>";
+            if (l.startsWith("+"))
+              return '<span class="ap">' + esc(l) + "</span>";
+            if (l.startsWith("-"))
+              return '<span class="am">' + esc(l) + "</span>";
+            if (l.startsWith("@@"))
+              return '<span class="ah">' + esc(l) + "</span>";
+            return esc(l);
+          })
+          .join("\n");
+      }
+      // ---- SSE ----
+      // SSE:EventSource 无法带 Bearer header → fetch + ReadableStream 解析(kimi ws.ts 等价)
+      const ev = { onmessage: null };
+      let sseRetry = 0;
+      function handleSSELine(line) {
+        if (!line.startsWith("data: ")) return;
+        try {
+          ev.onmessage({ data: line.slice(6) });
+        } catch {}
+      }
+      async function connectSSE() {
+        try {
+          const res = await fetch("/api/events" + (wsp ? "?" + wsp : ""), {
+            headers: { accept: "text/event-stream" },
+          });
+          if (!res.ok || !res.body) {
+            sseRetry = Math.min(sseRetry + 1, 8);
+            setTimeout(connectSSE, 1000 * sseRetry);
+            return;
+          }
+          sseRetry = 0;
+          const reader = res.body.getReader();
+          const dec = new TextDecoder();
+          let buf = "";
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buf += dec.decode(value, { stream: true });
+            let idx;
+            while ((idx = buf.indexOf("\n\n")) !== -1) {
+              const chunk = buf.slice(0, idx);
+              buf = buf.slice(idx + 2);
+              for (const line of chunk.split("\n")) handleSSELine(line);
+            }
+          }
+        } catch {}
+        setTimeout(connectSSE, 1500);
+      }
+      let running = false;
+      function setRun(r) {
+        running = r;
+        $("send").textContent = r ? "■" : "➤";
+        $("send").classList.toggle("stop", r);
+        $("send").title = r ? "停止" : "发送";
+      }
+      ev.onmessage = (e) => {
+        let evt;
+        try {
+          evt = JSON.parse(e.data);
+        } catch {
+          return;
+        }
+        if (evt.session && evt.session !== sess) return;
+        pluginEmit("event", evt);
+        pluginEmit(evt.type, evt);
+        switch (evt.type) {
+          case "user_message":
+            addUser(evt.text);
+            break;
+          case "reasoning":
+            addRsn(evt.text);
+            break;
+          case "message":
+            addAsst(evt.text);
+            break;
+          case "tool_call":
+            lastByName[evt.name] = addTool(evt.name, evt.args);
+            break;
+          case "tool_result":
+            toolDone(evt.name, evt.error, evt.summary);
+            break;
+          case "permission":
+            addPerm(evt.id, evt.name, evt.args);
+            break;
+          case "permission_result":
+            {
+              const pc = document.querySelector(
+                '.pc[data-pid="' + evt.id + '"]',
+              );
+              if (pc) pc.remove();
+            }
+            break;
+          case "turn_end":
+            finishAsst();
+            finishRsn();
+            setRun(false);
+            break;
+          case "status":
+            if (evt.pct !== undefined) {
+              setCtx(evt.pct);
+            }
+            if (evt.model) renderModel();
+            if (evt.branch !== undefined) {
+              /* 状态行省略 */
+            }
+            break;
+        }
+      };
+      // ---- 发送 ----
+      $("send").onclick = () => {
+        if (running) {
+          fetch(
+            "/api/interrupt?" + wsp + "session=" + encodeURIComponent(sess),
+            { method: "POST" },
+          );
+        } else send();
+      };
+      $("inp").addEventListener("keydown", (e) => {
+        if (e.key === "Enter" && !e.shiftKey) {
+          e.preventDefault();
+          send();
+        }
+      });
+      $("inp").addEventListener("input", () => {
+        const i = $("inp");
+        i.style.height = "auto";
+        i.style.height = Math.min(i.scrollHeight, 180) + "px";
+      });
+      async function send() {
+        const t = $("inp").value.trim();
+        if (!t) return;
+        $("inp").value = "";
+        $("inp").style.height = "auto";
+        setRun(true);
+        try {
+          await fetch(
+            "/api/chat?" + wsp + "session=" + encodeURIComponent(sess),
+            {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ text: t }),
+            },
+          );
+        } catch {
+          setRun(false);
+        }
+      }
+      // ---- 移动 sheet ----
+      const sheet = $("sheet");
+      function openSheet() {
+        loadSessions();
+        sheet.classList.add("open");
+      }
+      function closeSheet() {
+        sheet.classList.remove("open");
+      }
+      $("scrim").onclick = closeSheet;
+      $("scls").onclick = closeSheet;
+      $("tbMid").onclick = openSheet;
+      $("newBtn").onclick = () => {
+        location.href = "/?session=" + Math.random().toString(36).slice(2, 8);
+      };
+      $("colBtn").onclick = () => {
+        document.body.classList.add("collapsed");
+      };
+      $("expBtn").onclick = () => {
+        document.body.classList.remove("collapsed");
+      };
+      // 设置
+      $("setBtn").onclick = () => {
+        showToast("设置:配置见 ~/.piz/ 下文件");
+      };
+      // 空状态
+      function hideWelcome() {
+        const x = $("welcome");
+        if (x) x.remove();
+      }
+      // ---- 插件 SDK v1 ----
+      const pluginListeners = new Map(),
+        toolRenderers = new Map(),
+        msgRenderers = [],
+        pluginCleanups = [];
+      function pluginEmit(type, detail) {
+        for (const fn of pluginListeners.get(type) || []) {
+          try {
+            fn(detail);
+          } catch (e) {
+            console.error("[piz plugin]", e);
+          }
+        }
+        window.dispatchEvent(new CustomEvent("piz:" + type, { detail }));
+      }
+      function pluginOn(type, fn) {
+        const set = pluginListeners.get(type) || new Set();
+        set.add(fn);
+        pluginListeners.set(type, set);
+        return () => set.delete(fn);
+      }
+      function pluginUrl(path) {
+        const u = new URL(path, location.href);
+        if (ws) u.searchParams.set("ws", ws);
+        return u.href;
+      }
+      function pluginApi(meta) {
+        const owned = [];
+        const api = {
+          version: 1,
+          id: meta.id,
+          name: meta.name,
+          session: sess,
+          workspace: ws,
+          asset: (rel) =>
+            pluginUrl(new URL(rel, new URL(meta.base, location.href)).href),
+          on: (type, fn) => {
+            owned.push(pluginOn(type, fn));
+            return () => {};
+          },
+          toast: showToast,
+          fetch: async (path, opts) => {
+            const u = new URL(path, location.href);
+            if (u.origin !== location.origin || !u.pathname.startsWith("/api/"))
+              throw new Error(
+                "plugin fetch only allows same-origin /api routes",
+              );
+            if (ws && !u.searchParams.has("ws")) u.searchParams.set("ws", ws);
+            return fetch(u, opts);
+          },
+          send: (text) => {
+            if (running) return false;
+            $("inp").value = String(text);
+            send();
+            return true;
+          },
+          ui: {
+            slot: (name) =>
+              document.querySelector('[data-piz-slot="' + name + '"]'),
+            mount: (slot, value) => {
+              const host = api.ui.slot(slot);
+              if (!host) throw new Error("unknown slot: " + slot);
+              const root = document.createElement("span");
+              root.dataset.pizPlugin = meta.id;
+              root.appendChild(
+                value instanceof Node
+                  ? value
+                  : document.createTextNode(String(value)),
+              );
+              host.appendChild(root);
+              owned.push(() => root.remove());
+              return root;
+            },
+            button: (slot, spec = {}) => {
+              const b = document.createElement("button");
+              b.type = "button";
+              b.className =
+                "piz-plugin-btn" + (spec.className ? " " + spec.className : "");
+              b.textContent = spec.label || meta.name;
+              b.title = spec.title || "";
+              if (spec.onClick) b.addEventListener("click", spec.onClick);
+              api.ui.mount(slot, b);
+              return b;
+            },
+          },
+          renderTool: (name, fn) => {
+            toolRenderers.set(name, fn);
+            owned.push(() => {
+              if (toolRenderers.get(name) === fn) toolRenderers.delete(name);
+            });
+          },
+          renderMessage: (fn) => {
+            msgRenderers.push(fn);
+            owned.push(() => {
+              const i = msgRenderers.indexOf(fn);
+              if (i >= 0) msgRenderers.splice(i, 1);
+            });
+          },
+          storage: {
+            get: (key, fb = null) => {
+              try {
+                const v = localStorage.getItem(
+                  "piz.plugin." + meta.id + "." + key,
+                );
+                return v === null ? fb : JSON.parse(v);
+              } catch {
+                return fb;
+              }
+            },
+            set: (key, value) =>
+              localStorage.setItem(
+                "piz.plugin." + meta.id + "." + key,
+                JSON.stringify(value),
+              ),
+            remove: (key) =>
+              localStorage.removeItem("piz.plugin." + meta.id + "." + key),
+          },
+        };
+        api.dispose = () => {
+          while (owned.length) {
+            try {
+              owned.pop()();
+            } catch {}
+          }
+        };
+        return Object.freeze(api);
+      }
+      async function loadPlugins() {
+        try {
+          const r = await fetch("/api/plugins?" + wsp);
+          if (!r.ok) throw new Error("manifest " + r.status);
+          const m = await r.json();
+          for (const meta of m.plugins || []) {
+            try {
+              if (meta.style) {
+                const l = document.createElement("link");
+                l.rel = "stylesheet";
+                l.href = pluginUrl(meta.style);
+                l.dataset.pizPlugin = meta.id;
+                document.head.appendChild(l);
+                pluginCleanups.push(() => l.remove());
+              }
+              const mod = await import(pluginUrl(meta.entry));
+              const activate =
+                typeof mod.activate === "function"
+                  ? mod.activate
+                  : typeof mod.default === "function"
+                    ? mod.default
+                    : null;
+              if (!activate) throw new Error("missing activate(api)");
+              const api = pluginApi(meta);
+              const cleanup = await activate(api);
+              pluginCleanups.push(() => {
+                try {
+                  if (typeof cleanup === "function") cleanup();
+                } finally {
+                  api.dispose();
+                }
+              });
+              pluginEmit("plugin-loaded", { plugin: meta });
+            } catch (e) {
+              console.error("[piz plugin " + meta.id + "]", e);
+              pluginEmit("plugin-error", { plugin: meta, error: String(e) });
+            }
+          }
+          pluginEmit("ready", {
+            apiVersion: m.apiVersion || 1,
+            plugins: m.plugins || [],
+          });
+        } catch (e) {
+          console.error("[piz plugins]", e);
+        }
+      }
+      window.piz = Object.freeze({
+        version: 1,
+        on: pluginOn,
+        session: sess,
+        workspace: ws,
+        slots: ["header", "composer", "status"],
+      });
+      window.addEventListener("beforeunload", () => {
+        while (pluginCleanups.length) {
+          try {
+            pluginCleanups.pop()();
+          } catch {}
+        }
+      });
+      // ---- 初始化 ----
+      let curModel = "",
+        curTitle = "";
+      // ---- 启动门(kimi GlobalLoading + auth gate):splash → 探活 → 登录页或主界面 ----
+      let booted = false;
+      let splashAt = Date.now();
+      function boot() {
+        if (booted) return;
+        booted = true;
+        const wait = Math.max(0, 450 - (Date.now() - splashAt));
+        setTimeout(() => {
+          $("splash")?.classList.add("hide");
+          setTimeout(() => $("splash")?.remove(), 350);
+        }, wait);
+        connectSSE();
+        fetch("/api/state?" + wsp + "session=" + encodeURIComponent(sess))
+        .then((r) => r.json())
+        .then((s) => {
+          if (s.history && s.history.length) {
+            hideWelcome();
+            for (const h of s.history) {
+              if (h.role === "user") addUser(h.content);
+              else if (h.role === "assistant") {
+                const e = asstEl().querySelector(".md");
+                e.textContent = h.content;
+                finishAsst();
+              } else addTool(h.role, h.content.slice(0, 120));
+            }
+            if (s.running) {
+              const la = th.querySelector(".a-turn:last-child");
+              if (la) curAsst = la;
+            }
+          }
+          if (s.pct !== undefined) setCtx(s.pct);
+          if (s.running) setRun(true);
+          if (s.model) {
+            curModel = s.model;
+            renderModel();
+          }
+          if (s.title) {
+            curTitle = s.title;
+          }
+          if (s.auto !== undefined) {
+            autoMode = !!s.auto;
+            setModeBtn();
+          }
+          renderHdr(s);
+        })
+        .catch(() => {});
+      setModeBtn();
+      const welcome = document.createElement("div");
+      welcome.id = "welcome";
+      welcome.className = "empty-hint";
+      welcome.innerHTML =
+        '<div class="empty-spacer"></div><div class="empty-hint-title">piz</div><div class="empty-hint-text">与终端 AI 协作者对话。Enter 发送 · Shift+Enter 换行 · 工具卡点击展开</div>';
+      const wrap = $("wrap");
+      if (!th.children.length) {
+        wrap.prepend(welcome);
+        const sp = document.createElement("div");
+        sp.className = "empty-spacer";
+        wrap.appendChild(sp);
+      }
+      renderWsName();
+      loadSessions();
+      loadPlugins();
+      }
+      initServerAuth();
+      const probe = rawFetch("/api/state?" + wsp + "session=" + encodeURIComponent(sess), {
+        headers: credential ? { Authorization: "Bearer " + credential } : {},
+      });
+      probe
+        .then((r) => {
+          if (r.ok) boot();
+          else if (r.status === 401) showAuthPage("");
+          else {
+            // 服务器不可达/错误:splash 短暂停留后重试
+            setTimeout(() => location.reload(), 1500);
+          }
+        })
+        .catch(() => {
+          $("authErr").textContent = "无法连接本地服务器";
+          showAuthPage("无法连接本地服务器,请确认 piz web 已启动");
+        });
+    </script>
+  </body>
+</html>

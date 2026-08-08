@@ -1,0 +1,22 @@
+.example-plugin-badge {
+	color: var(--cyan);
+	font:
+		11px ui-monospace,
+		monospace;
+	white-space: nowrap;
+}
+
+.example-search {
+	padding: 10px 12px;
+	color: var(--fg);
+}
+
+.example-search.is-error {
+	color: var(--red);
+}
+
+.example-search pre {
+	margin-top: 6px;
+	color: var(--dim);
+	white-space: pre-wrap;
+}

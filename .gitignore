@@ -1,0 +1,21 @@
+# Zig 构建产物
+.zig-cache/
+zig-out/
+
+# 测试残留:tools.zig 的 "read/write roundtrip" 用例往工作目录写 sub/b.txt,
+# 每次跑测试都会重建。真正该修的是让它写进 tmpDir。
+/sub/
+
+# 编辑器 / 系统
+*.swp
+*~
+.DS_Store
+
+# 本地配置与凭证。piz 的配置在 ~/.piz/,不该出现在仓库里,
+# 但防手滑:models.json 与 auth.json 含 apiKey。
+.env
+.env.*
+auth.json
+models.json
+*.pem
+*.key

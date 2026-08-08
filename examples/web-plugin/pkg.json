@@ -1,0 +1,8 @@
+{
+  "name": "Web Plugin Example",
+  "version": "1.0.0",
+  "web": {
+    "entry": "web/index.js",
+    "style": "web/style.css"
+  }
+}
