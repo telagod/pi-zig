@@ -397,7 +397,7 @@ piz 保留「置前」，理由是两者的压缩语义不同：codex 保留 use
 ## 测试
 
 ```bash
-zig build test          # 122 个测试，core 105 + app 17
+zig build test          # 123 个测试，core 105 + app 18
 ```
 
 两个测试目标：`core.zig` 为根（收集全部 core 模块的 test 块）、`main.zig` 为根（含 `e2e.zig`）。Zig 的 `zig test` 只收集根模块的测试，所以要分两个目标。
@@ -470,6 +470,7 @@ zig build test          # 122 个测试，core 105 + app 17
 | `webui.zig` | `okJson` 对超过任何定长缓冲的值仍产出完整 JSON |
 | `util.zig` | `clampUtf8` 永不切在码点中间（中文、emoji 全长度扫一遍） |
 | `session.zig` | 落盘标题裁到 256 字节且是合法 UTF-8 |
+| `webui.zig` | SSE 槽位满员时拒绝、正常注销复用同号、僵死槽位被回收 |
 
 ## Zig 0.16 注意事项
 
@@ -493,6 +494,8 @@ zig build test          # 122 个测试，core 105 + app 17
 | 裸 fd 读写 | `std.posix.read`/`write`/`close` 已移除，用 `std.os.linux.*`（返回 `usize`，负值是 `-errno`） |
 | 进程组 | `spawn` 的 `.pgid = 0` 让子进程当组长，之后 `std.posix.kill(-pid, SIG)` 收整棵树 |
 | 信号处理器签名 | 参数是 `std.posix.SIG` 枚举而非 `i32`；数组元素类型写 `@TypeOf(std.posix.SIG.TERM)` 让编译器推 |
+| socket 超时 | `std.Io.net.Stream` 没有超时 API（`receiveTimeout` 只在 `Socket` 上，是 UDP 用的），要走 `std.posix.setsockopt(fd, SOL.SOCKET, SO.RCVTIMEO, ...)`；fd 是 `stream.socket.handle` |
+| `recv` | `std.posix.recv` 已移除，裸调 `std.os.linux.recvfrom(fd, buf, len, flags, null, null)`（返回 `usize`，负值是 `-errno`） |
 | `statFile` | 三个参数：`statFile(io, path, .{})`，少了第三个会报 "expected 3 argument(s)" |
 
 **`toOwnedSlice()` 转移所有权后 `defer deinit()` 无内容可释放。** 如果接收方只是拷贝（比如 `tui.appendLine`），那块内存就永久泄漏了 —— 这种情况用 `.written()` 借用。

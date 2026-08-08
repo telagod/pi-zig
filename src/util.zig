@@ -177,6 +177,21 @@ pub fn setNonBlock(fd: std.posix.fd_t) void {
     _ = std.os.linux.fcntl(fd, std.posix.F.SETFL, @as(usize, @intCast(res)) | 0o4000);
 }
 
+/// 对端是否已关闭连接(不消费数据,不阻塞)。
+///
+/// SSE 这类只写不读的长连接感知不到客户端离开:写一个已关闭的 socket
+/// 第一次还会成功(数据进内核缓冲),要等对端 RST 回来的下一次写才失败。
+/// 靠心跳发现断开就得等两个心跳周期,期间连接槽位一直被占着。
+/// MSG_PEEK|MSG_DONTWAIT 的 recv 返回 0 就是干净的 EOF —— 即时且可靠。
+pub fn peerClosed(fd: std.posix.fd_t) bool {
+    var probe: [1]u8 = undefined;
+    const flags = std.os.linux.MSG.PEEK | std.os.linux.MSG.DONTWAIT;
+    const raw = std.os.linux.recvfrom(fd, &probe, probe.len, flags, null, null);
+    const res = @as(isize, @bitCast(raw));
+    // 0 = 对端有序关闭;负值多是 EAGAIN(无数据但连接活着) —— 只有 0 能断言关闭
+    return res == 0;
+}
+
 /// stdin 是否连着终端。
 ///
 /// 用 tcgetattr 成功与否判断 —— 只有终端有 termios。管道、重定向、脚本里都是 false。

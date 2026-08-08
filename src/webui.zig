@@ -20,13 +20,17 @@ pub const WebOptions = struct {
 /// 全局事件(SSE 转发用);agent worker 生产,SSE 连接线程消费。
 /// 裁剪:每连接上报已消费位置,所有连接都消费过的头部事件即释放(防无限积累)。
 pub const EventHub = struct {
+    /// 并发 SSE 连接上限。每个浏览器标签页占一个;满员时新连接收 503 而不是
+    /// 空流。slot 固定不复用索引,防事件游标漂移。
+    pub const MAX_STREAMS = 16;
+
     const Conn = struct {
         cursor: usize = 0,
         last_seen_ns: i128 = 0,
     };
     mutex: std.Io.Mutex = .init,
     events: std.array_list.Managed([]const u8), // 预组装 JSON 行(alloc)
-    conns: [16]?Conn = .{null} ** 16, // 活动 SSE 连接(本地工具,16 并发足够;slot 固定防索引漂移)
+    conns: [MAX_STREAMS]?Conn = .{null} ** MAX_STREAMS,
 
     pub fn init(alloc: std.mem.Allocator) EventHub {
         return .{ .events = std.array_list.Managed([]const u8).init(alloc) };
@@ -38,9 +42,17 @@ pub const EventHub = struct {
         self.events.deinit();
     }
     /// 注册 SSE 连接,返回固定 slot;满员返 null。
+    ///
+    /// 先收僵死 slot:连接非正常断开(关标签页、杀浏览器)时 unregister 不会跑,
+    /// slot 要等下一次 push 才被心跳超时回收。没有 push 的空闲期里,16 个
+    /// 僵死 slot 就能让新连接一直注册不上。
     pub fn register(self: *EventHub, now_ns: i128) ?usize {
         self.mutex.lock(util.io) catch return null;
         defer self.mutex.unlock(util.io);
+        for (&self.conns) |*c| {
+            const st = c.* orelse continue;
+            if (now_ns - st.last_seen_ns > 60 * std.time.ns_per_s) c.* = null;
+        }
         for (&self.conns, 0..) |*c, i| {
             if (c.* == null) {
                 c.* = .{ .last_seen_ns = now_ns };
@@ -145,6 +157,15 @@ pub const WebServer = struct {
     tcp: net.Server,
     port: u16,
     stopping: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    /// 在处理中的连接数。每连接一个 OS 线程 + 12KB 栈缓冲,没有上限时
+    /// 本机一个循环 connect 就能把线程耗光,agent 随之停摆。
+    live_conns: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+
+    /// 并发连接上限。SSE 长连接占满 MAX_STREAMS(16)后还留足余量给普通请求。
+    pub const MAX_CONNS = 64;
+    /// 单个请求头的读超时。连上不发数据的连接会永久占住一个线程 --
+    /// 本机 slowloris 只需 MAX_CONNS 个这样的连接。
+    const READ_TIMEOUT_S = 30;
 
     pub fn start(alloc: std.mem.Allocator, opts: WebOptions, hub: *EventHub) !WebServer {
         // 端口:默认 5494-5503 自动试(对齐 kimi web)
@@ -166,21 +187,47 @@ pub const WebServer = struct {
         self.tcp.deinit(util.io);
     }
 
-    /// accept 循环(阻塞,主线程);每连接 spawn 一个处理线程。
+    /// accept 循环(阻塞,主线程);每连接 spawn 一个处理线程,上限 MAX_CONNS。
     pub fn run(self: *WebServer) !void {
         while (!self.stopping.load(.acquire)) {
             const stream = self.tcp.accept(util.io) catch |err| switch (err) {
                 error.Canceled => return,
                 else => continue,
             };
-            const th = std.Thread.spawn(.{}, handleConn, .{ self, stream }) catch continue;
+            // 满员就立刻关掉:队列里排着不如让客户端明确失败并退避。
+            // 计数在 spawn 前加,避免 accept 快于线程启动时冲过上限。
+            if (self.live_conns.fetchAdd(1, .acq_rel) >= MAX_CONNS) {
+                _ = self.live_conns.fetchSub(1, .acq_rel);
+                var over = stream;
+                over.close(util.io);
+                continue;
+            }
+            const th = std.Thread.spawn(.{}, handleConn, .{ self, stream }) catch {
+                _ = self.live_conns.fetchSub(1, .acq_rel);
+                var failed = stream;
+                failed.close(util.io);
+                continue;
+            };
             th.detach();
         }
     }
 
     fn handleConn(self: *WebServer, stream: net.Stream) void {
         var copy = stream;
-        defer copy.close(util.io);
+        defer {
+            copy.close(util.io);
+            _ = self.live_conns.fetchSub(1, .acq_rel);
+        }
+        // 读超时:没有它,连上却不发数据的连接会永久占住这个线程。
+        // std.Io.net.Stream 在 0.16 没有超时 API,只能走 setsockopt。
+        // SSE 靠 30s 心跳写出保活,读方向本来就空闲,超时不影响它。
+        const tv = std.posix.timeval{ .sec = READ_TIMEOUT_S, .usec = 0 };
+        std.posix.setsockopt(
+            stream.socket.handle,
+            std.posix.SOL.SOCKET,
+            std.posix.SO.RCVTIMEO,
+            std.mem.asBytes(&tv),
+        ) catch {};
         var send_buf: [4096]u8 = undefined;
         var recv_buf: [8192]u8 = undefined;
         var cr = stream.reader(util.io, &recv_buf);
@@ -188,11 +235,12 @@ pub const WebServer = struct {
         var server: http.Server = .init(&cr.interface, &cw.interface);
         while (true) {
             var req = server.receiveHead() catch return;
-            self.serve(&req) catch return;
+            self.serve(&req, stream.socket.handle) catch return;
         }
     }
 
-    fn serve(self: *WebServer, req: *http.Server.Request) !void {
+    /// `conn_fd` 只给 SSE 用:长连接需要探测对端是否已关闭。
+    fn serve(self: *WebServer, req: *http.Server.Request, conn_fd: std.posix.fd_t) !void {
         const target = req.head.target;
         const method = req.head.method;
         // 静态资源(HTML/JS/CSS)免鉴权(kimi 同:仅 API/WS 需凭证)——否则 splash 无法加载
@@ -333,7 +381,7 @@ pub const WebServer = struct {
             return;
         }
         if (method == .GET and std.mem.eql(u8, target, "/api/events")) {
-            return self.serveSSE(req);
+            return self.serveSSE(req, conn_fd);
         }
         if (method == .POST and std.mem.startsWith(u8, target, "/api/chat")) {
             const session = querySession(self.alloc, target) catch "default";
@@ -593,12 +641,22 @@ pub const WebServer = struct {
     /// SSE 长连接:手动原始响应(0.16 BodyWriter.flush 有字节滞留问题),
     /// 头即 flush;轮询转发 hub 事件 + 30s 心跳;上报消费位置供 hub 裁头。
     /// 转发在锁内(事件短、本地回环;锁外转发会与 push 的裁头竞态导致漏事件)。
-    fn serveSSE(self: *WebServer, req: *http.Server.Request) !void {
+    fn serveSSE(self: *WebServer, req: *http.Server.Request, conn_fd: std.posix.fd_t) !void {
         const out = req.server.out;
+        // 必须先抢 slot 再写头:反过来客户端会拿到 200 + 空 event-stream,
+        // 和「连上了但还没事件」完全无法区分,只能干等。
+        const slot = self.hub.register(std.Io.Clock.now(.real, util.io).nanoseconds) orelse {
+            const body = std.fmt.comptimePrint("{{\"error\":\"too many event streams\",\"limit\":{d}}}", .{EventHub.MAX_STREAMS});
+            try out.print(
+                "HTTP/1.1 503 Service Unavailable\r\ncontent-type: application/json\r\ncontent-length: {d}\r\nretry-after: 5\r\nconnection: close\r\n\r\n{s}",
+                .{ body.len, body },
+            );
+            try out.flush();
+            return;
+        };
+        defer self.hub.unregister(slot);
         try out.print("HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncache-control: no-cache\r\nconnection: close\r\n\r\n", .{});
         try out.flush();
-        const slot = self.hub.register(std.Io.Clock.now(.real, util.io).nanoseconds) orelse return;
-        defer self.hub.unregister(slot);
         // 新连接从当前尾部开始(state 已承担历史重放;从头重放会与 state 重复渲染)
         var cursor: usize = 0;
         {
@@ -618,6 +676,10 @@ pub const WebServer = struct {
             const len = self.hub.events.items.len;
             if (cursor >= len) {
                 self.hub.mutex.unlock(util.io);
+                // 关标签页不会让写立刻失败(第一次写进内核缓冲就算成功),
+                // 靠心跳发现要等两个周期 —— 期间 16 个槽位里的一个白占着。
+                // peek 探测在对端 close 后立刻返回 EOF。
+                if (util.peerClosed(conn_fd)) return;
                 idle += 1;
                 if (idle % 150 == 0) { // 30s 心跳
                     try out.writeAll(": ping\n\n");
@@ -962,6 +1024,32 @@ test "okJson survives values longer than any fixed buffer" {
     const q = okJson(a, "title", "a\"b\\c\nd").?;
     const pq = try std.json.parseFromSliceLeaky(std.json.Value, a, q, .{});
     try t.expectEqualStrings("a\"b\\c\nd", pq.object.get("title").?.string);
+}
+
+test "SSE slots are capped and stale ones get reclaimed" {
+    const t = std.testing;
+    try util.testInit();
+    var hub = EventHub.init(t.allocator);
+    defer hub.deinit();
+
+    // 必须用真实时钟:unregister 内部的 trimLocked 拿 Clock.now 判僵死,
+    // 传假时间戳会让所有 slot 立刻被当成超时清掉
+    const now = std.Io.Clock.now(.real, util.io).nanoseconds;
+
+    // 满员前每次都拿到新 slot,满员后拒绝 —— 拒绝必须发生在 serveSSE
+    // 写出 200 头之前,否则客户端拿到的是无法区分的空流
+    var slots: [EventHub.MAX_STREAMS]usize = undefined;
+    for (&slots) |*s| s.* = hub.register(now).?;
+    try t.expect(hub.register(now) == null);
+
+    // 正常注销后立刻可用,且复用同一个 slot 号(游标不漂移)
+    hub.unregister(slots[3]);
+    try t.expectEqual(slots[3], hub.register(now).?);
+    try t.expect(hub.register(now) == null);
+
+    // 非正常断开(关标签页)时 unregister 不会跑,slot 靠 register 回收:
+    // 没有这一步,空闲期里 16 个僵死 slot 能让新连接永远注册不上
+    try t.expect(hub.register(now + 61 * std.time.ns_per_s) != null);
 }
 
 test "unregistered workspace is refused, and a missing hook fails closed" {
