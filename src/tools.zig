@@ -1328,6 +1328,14 @@ test "read/write tools" {
     defer arena.deinit();
     const a = arena.allocator();
 
+    // 必须切进临时目录:工具收的是相对路径,不 chdir 的话 sub/b.txt 会落在
+    // 仓库根上,留下一个每次跑测试都重建的脏文件。
+    const tmppath = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path[0..]});
+    const old_cwd = try std.process.currentPathAlloc(util.io, a);
+    std.Io.Threaded.chdir(tmppath) catch unreachable;
+    defer std.Io.Threaded.chdir(old_cwd) catch {};
+
+    // 父目录不存在时 write 应自己建出来
     const rw = try toolWrite(a, "{\"path\":\"sub/b.txt\",\"content\":\"data\"}");
     try t.expect(!rw.is_error);
     const rr = try toolRead(a, "{\"path\":\"sub/b.txt\"}");

@@ -2,10 +2,6 @@
 .zig-cache/
 zig-out/
 
-# 测试残留:tools.zig 的 "read/write roundtrip" 用例往工作目录写 sub/b.txt,
-# 每次跑测试都会重建。真正该修的是让它写进 tmpDir。
-/sub/
-
 # 编辑器 / 系统
 *.swp
 *~
