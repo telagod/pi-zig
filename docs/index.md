@@ -51,3 +51,6 @@ piz 用**自己的**配置目录 `~/.piz`，不与 pi 共用。
 配置**文件格式**兼容：`settings.json` / `auth.json` / `models.json` / `AGENTS.md` 可以从 `~/.pi/agent` 直接拷过来。资源包的约定目录结构（`skills/` `prompts/`）也兼容。
 
 **会话文件格式不兼容**，无法迁移历史。这也正是不共用目录的原因 —— 早期版本共用 `sessions/`，导致 `/sessions` 列出 pi 的会话、选中后静默得到空历史。细节见 [Sessions](sessions.md#会话格式与-pi-的差异)。
+
+许可证：piz 是 Apache-2.0，pi 是 MIT（Copyright (c) 2025 Mario Zechner）。
+上游声明全文在仓库根的 `NOTICE`，随所有副本分发。

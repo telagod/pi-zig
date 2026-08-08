@@ -72,3 +72,14 @@ zig fmt src build.zig            # 格式化
 ```
 
 改代码前先读 [Architecture](docs/architecture.md)，尤其是 Zig 0.16 注意事项那一节 —— 0.16 的标准库与旧版差异很大。
+
+## 许可证
+
+[Apache-2.0](LICENSE)。
+
+piz 重写自 [pi](https://github.com/earendil-works/pi)（MIT，Copyright (c) 2025
+Mario Zechner）。上游的 MIT 声明全文见 [NOTICE](NOTICE) —— MIT 要求它随所有副本
+分发，Apache-2.0 第 4(d) 条要求衍生作品保留 NOTICE 的内容，两条一起满足。
+
+piz 是独立实现（pi 是 TypeScript，piz 是 Zig），没有逐字拷贝的代码；CLI 界面、
+配置文件格式和若干行为约定沿用 pi。
