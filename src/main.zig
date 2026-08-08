@@ -1032,6 +1032,11 @@ fn poolWorkspacesHook(ctx: ?*anyopaque, alloc: std.mem.Allocator, body: ?[]const
             return null;
         }) catch {};
         pool.mutex.unlock(util.io);
+        // 打到终端:agent 的工作目录换了,而工具层没有路径沙箱(绝对路径与
+        // ../ 都不拦,CLI 模式亦然)。浏览器发起的注册已被 Origin 校验挡住,
+        // 这行覆盖的是绕过浏览器的本机进程 —— 拦不住(用户本人也要注册目录),
+        // 但至少不能无声无息。
+        std.debug.print("piz web: 已注册项目 {s}\n", .{p});
     }
     var stw = std.Io.Writer.Allocating.init(alloc);
     defer stw.deinit();
@@ -1040,7 +1045,9 @@ fn poolWorkspacesHook(ctx: ?*anyopaque, alloc: std.mem.Allocator, body: ?[]const
     pool.mutex.lock(util.io) catch return "[]";
     for (pool.workspaces.items, 0..) |ws, i| {
         if (i > 0) w.writeAll(",") catch {};
-        const base = std.fs.path.basename(ws);
+        // basename("/") 是空串,前端会显示一个没有标签的项目
+        const raw_base = std.fs.path.basename(ws);
+        const base = if (raw_base.len > 0) raw_base else ws;
         w.print("{{\"root\":{s},\"name\":{s}}}", .{
             util.jsonString(alloc, ws) catch "\"\"",
             util.jsonString(alloc, base) catch "\"\"",
