@@ -397,7 +397,7 @@ piz 保留「置前」，理由是两者的压缩语义不同：codex 保留 use
 ## 测试
 
 ```bash
-zig build test          # 120 个测试，core 104 + app 16
+zig build test          # 122 个测试，core 105 + app 17
 ```
 
 两个测试目标：`core.zig` 为根（收集全部 core 模块的 test 块）、`main.zig` 为根（含 `e2e.zig`）。Zig 的 `zig test` 只收集根模块的测试，所以要分两个目标。
@@ -465,6 +465,11 @@ zig build test          # 120 个测试，core 104 + app 16
 | `config.zig` | 语法坏掉的配置永不被覆盖，修好后未知字段仍保留 |
 | `config.zig` | 加载点名解析失败的文件，但仍能降级启动 |
 | `webui.zig` | 跨源写请求被拒（含 `null` Origin 与错端口） |
+| `webui.zig` | 查询参数按 `&` 切分，`?notws=` 不会顶替 `?ws=` |
+| `webui.zig` | 未注册的 `?ws=` 被拒，hook 未接线时 fail-closed |
+| `webui.zig` | `okJson` 对超过任何定长缓冲的值仍产出完整 JSON |
+| `util.zig` | `clampUtf8` 永不切在码点中间（中文、emoji 全长度扫一遍） |
+| `session.zig` | 落盘标题裁到 256 字节且是合法 UTF-8 |
 
 ## Zig 0.16 注意事项
 
@@ -491,6 +496,12 @@ zig build test          # 120 个测试，core 104 + app 16
 | `statFile` | 三个参数：`statFile(io, path, .{})`，少了第三个会报 "expected 3 argument(s)" |
 
 **`toOwnedSlice()` 转移所有权后 `defer deinit()` 无内容可释放。** 如果接收方只是拷贝（比如 `tui.appendLine`），那块内存就永久泄漏了 —— 这种情况用 `.written()` 借用。
+
+**HTTP 响应体不要进定长栈缓冲。** `try std.fmt.bufPrint(&buf, …)` 装不下时返回
+`error.NoSpaceLeft`，错误从 handler 冒出去，**响应头都还没写**，客户端只看到连接
+断开。写操作往往已经生效，读路径又走同一段代码 —— 于是这个端点在进程余生里每次
+都断连。`webui.zig` 的 `okJson` 用 `Writer.Allocating` 兜住这一类；只有输出是固定
+字面量时（`/api/mode` 的布尔）才不需要分配。
 
 `httpc.zig` 里有几处对 `std.http.Client` 内部指针语义的手工修补（`Request.client`、`Response.request`、连接池里的 `conn.client` 都要在结构体从栈拷到堆后重新指向）。这是对 std 私有实现细节的依赖，升级 Zig 时优先检查这里。
 

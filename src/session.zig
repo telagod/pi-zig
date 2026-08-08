@@ -4,6 +4,11 @@ const std = @import("std");
 const util = @import("util.zig");
 const ai = @import("ai.zig");
 
+/// 会话标题字节上限。标题只用于会话列表的一行显示,超出的部分没有用途,
+/// 但会一路带进内存、落盘和每个响应。在唯一的持久化入口(setTitle)裁掉,
+/// 磁盘上就永远是安全值。
+pub const MAX_TITLE_BYTES = 256;
+
 /// ── web 会话持久化 ──
 /// 独立目录 <cfg>/sessions/web/<name>.jsonl;首行 meta {"model","auto"},后续每行一条消息。
 /// 文件名校验:仅 [a-zA-Z0-9_-],防路径穿越。
@@ -436,7 +441,10 @@ pub const Session = struct {
     }
 
     /// 设置标题:重写首行元信息。
-    pub fn setTitle(self: *Session, title: []const u8) !void {
+    /// 参数在这里裁到 MAX_TITLE_BYTES —— 这是标题落盘的唯一入口,裁在这里
+    /// 就保证磁盘上不会出现无界标题,读回来的也一定是安全值。
+    pub fn setTitle(self: *Session, raw_title: []const u8) !void {
+        const title = util.clampUtf8(raw_title, MAX_TITLE_BYTES);
         const content = std.Io.Dir.cwd().readFileAlloc(util.io, self.path, self.alloc, .limited(256 * 1024)) catch return error.InvalidSession;
         defer self.alloc.free(content);
         var lines = std.mem.splitScalar(u8, content, '\n');
@@ -788,6 +796,20 @@ test "session title + list + setTitle" {
     try s1.setTitle("renamed");
     const opened2 = try Session.open(a, s1.path);
     try t.expectEqualStrings("renamed", opened2.title.?);
+
+    // 落盘的标题裁到 MAX_TITLE_BYTES:无界标题会一路带进内存和每个响应
+    try s1.setTitle("L" ** 2000);
+    try t.expectEqual(@as(usize, MAX_TITLE_BYTES), (try Session.open(a, s1.path)).title.?.len);
+
+    // 中文不能切在多字节序列中间 —— 那样读回来是非法 UTF-8,JSON 也就坏了
+    try s1.setTitle("标题" ** 500);
+    const zh = (try Session.open(a, s1.path)).title.?;
+    try t.expect(zh.len <= MAX_TITLE_BYTES);
+    try t.expect(std.unicode.utf8ValidateSlice(zh));
+
+    // 上限内原样保留
+    try s1.setTitle("正常标题");
+    try t.expectEqualStrings("正常标题", (try Session.open(a, s1.path)).title.?);
 }
 
 test "session truncate" {

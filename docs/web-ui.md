@@ -102,7 +102,7 @@ piz web: http://127.0.0.1:5494/#token=0cbc72149b1492b0e5e8ddd11b95fb33  (Ctrl+C 
 | `/api/approve` | 权限决策 |
 | `/api/mode` | 读写审批模式（自动 / 逐次询问） |
 | `/api/model` | 读写当前模型 |
-| `/api/title` | 读写会话标题 |
+| `/api/title` | 读写会话标题（写入裁到 256 字节，见 [Sessions](sessions.md)） |
 | `/api/action` | 会话动作：`fork` / `undo` / `compact` / `archive` / `restore` / `delete` |
 | `/api/config` | 写配置 |
 | `/api/workspaces` | 注册工作区 |

@@ -6,6 +6,7 @@ const std = @import("std");
 const util = @import("core").util;
 const agentmod = @import("core").agent;
 const webplugins = @import("core").webplugins;
+const sessionmod = @import("core").session;
 const http = std.http;
 const net = std.Io.net;
 
@@ -413,8 +414,9 @@ pub const WebServer = struct {
                     try req.respond("{\"ok\":false}", .{ .status = .ok, .extra_headers = &.{.{ .name = "content-type", .value = "application/json" }} });
                     return;
                 };
-                var sbuf: [128]u8 = undefined;
-                const s = try std.fmt.bufPrint(&sbuf, "{{\"ok\":true,\"auto\":{s}}}", .{if (cur) "true" else "false"});
+                // auto 是 JSON 布尔(无引号),不能走 okJson —— 那会变成字符串
+                // 而破坏前端的 === true 判断。输出只有两种,直接选,不用格式化。
+                const s = if (cur) "{\"ok\":true,\"auto\":true}" else "{\"ok\":true,\"auto\":false}";
                 try req.respond(s, .{ .status = .ok, .extra_headers = &.{.{ .name = "content-type", .value = "application/json" }} });
                 return;
             }
@@ -444,9 +446,9 @@ pub const WebServer = struct {
                     try req.respond("{\"ok\":false}", .{ .status = .ok, .extra_headers = &.{.{ .name = "content-type", .value = "application/json" }} });
                     return;
                 };
-                var sbuf: [512]u8 = undefined;
-                const s = try std.fmt.bufPrint(&sbuf, "{{\"ok\":true,\"model\":{s}}}", .{util.jsonString(self.alloc, cur) catch "\"\""});
-                try req.respond(s, .{ .status = .ok, .extra_headers = &.{.{ .name = "content-type", .value = "application/json" }} });
+                const resp = okJson(self.alloc, "model", cur);
+                defer if (resp) |j| self.alloc.free(j);
+                try req.respond(resp orelse "{\"ok\":true}", .{ .status = .ok, .extra_headers = &.{.{ .name = "content-type", .value = "application/json" }} });
                 return;
             }
             try req.respond("{\"ok\":true}", .{ .status = .ok });
@@ -465,7 +467,9 @@ pub const WebServer = struct {
                 if (root) |r| {
                     if (r == .object) {
                         if (r.object.get("title")) |v| {
-                            if (v == .string) title = v.string;
+                            // 在最外层入口就裁:hook 之后标题会进内存、落盘,
+                            // 再往下每一步都不该见到无界值。
+                            if (v == .string) title = util.clampUtf8(v.string, sessionmod.MAX_TITLE_BYTES);
                         }
                     }
                 }
@@ -475,9 +479,11 @@ pub const WebServer = struct {
                     try req.respond("{\"ok\":false}", .{ .status = .ok, .extra_headers = &.{.{ .name = "content-type", .value = "application/json" }} });
                     return;
                 };
-                var sbuf: [512]u8 = undefined;
-                const s = try std.fmt.bufPrint(&sbuf, "{{\"ok\":true,\"title\":{s}}}", .{util.jsonString(self.alloc, cur) catch "\"\""});
-                try req.respond(s, .{ .status = .ok, .extra_headers = &.{.{ .name = "content-type", .value = "application/json" }} });
+                // 入口已裁过标题,但读路径拿的是磁盘上的旧值 —— 那可能是限长
+                // 之前写进去的,所以响应侧也必须不设长度上限。
+                const resp = okJson(self.alloc, "title", cur);
+                defer if (resp) |j| self.alloc.free(j);
+                try req.respond(resp orelse "{\"ok\":true}", .{ .status = .ok, .extra_headers = &.{.{ .name = "content-type", .value = "application/json" }} });
                 return;
             }
             try req.respond("{\"ok\":true}", .{ .status = .ok });
@@ -919,6 +925,43 @@ fn wsAllowed(
     if (ws.len == 0) return true;
     const f = hook orelse return false;
     return f(ctx, ws);
+}
+
+/// 构造 `{"ok":true,"<key>":"<value>"}`,长度不受限。分配失败返回 null。
+///
+/// 原先两处用 `[512]u8` 栈缓冲 + `try bufPrint`:模型名或标题一长就
+/// `error.NoSpaceLeft`,错误冒出 handler,**连响应头都没写出去**,客户端
+/// 只看到连接断开 —— 而写操作在这之前已经生效,读路径也走同一段代码,
+/// 于是这个端点在进程余生里每次都断连。
+fn okJson(alloc: std.mem.Allocator, key: []const u8, value: []const u8) ?[]u8 {
+    var w = std.Io.Writer.Allocating.init(alloc);
+    defer w.deinit();
+    const vj: ?[]u8 = util.jsonString(alloc, value) catch null;
+    defer if (vj) |j| alloc.free(j);
+    w.writer.print("{{\"ok\":true,\"{s}\":{s}}}", .{ key, vj orelse "\"\"" }) catch return null;
+    return w.toOwnedSlice() catch null;
+}
+
+test "okJson survives values longer than any fixed buffer" {
+    const t = std.testing;
+    var arena = util.Arena.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    try t.expectEqualStrings("{\"ok\":true,\"title\":\"hi\"}", okJson(a, "title", "hi").?);
+
+    // 旧实现的栈缓冲是 512 字节,这里远远超过 —— 必须仍然产出完整 JSON
+    const long = "L" ** 4096;
+    const s = okJson(a, "title", long).?;
+    const parsed = try std.json.parseFromSliceLeaky(std.json.Value, a, s, .{});
+    try t.expect(parsed == .object);
+    try t.expectEqual(true, parsed.object.get("ok").?.bool);
+    try t.expectEqual(@as(usize, 4096), parsed.object.get("title").?.string.len);
+
+    // 需要转义的内容不能把 JSON 弄坏
+    const q = okJson(a, "title", "a\"b\\c\nd").?;
+    const pq = try std.json.parseFromSliceLeaky(std.json.Value, a, q, .{});
+    try t.expectEqualStrings("a\"b\\c\nd", pq.object.get("title").?.string);
 }
 
 test "unregistered workspace is refused, and a missing hook fails closed" {

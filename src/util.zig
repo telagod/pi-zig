@@ -420,18 +420,16 @@ pub fn estTokens(s: []const u8) usize {
     return n / 4 + 1;
 }
 
-/// 截断至 n 个 UTF-8 字符边界。
-pub fn truncateUtf8(alloc: std.mem.Allocator, s: []const u8, n: usize) ![]u8 {
-    if (estTokens(s) <= n) return alloc.dupe(u8, s);
-    var count: usize = 0;
-    var i: usize = 0;
-    while (i < s.len) {
-        const w = std.unicode.utf8ByteSequenceLength(s[i]) catch break;
-        count += 1;
-        if (count > n * 4) break;
-        i += w;
-    }
-    return alloc.dupe(u8, s[0..i]);
+/// 按字节上限把 s 截到最近的 UTF-8 边界,返回子切片(不分配)。
+/// 切在多字节序列中间会产生非法 UTF-8,让 JSON 序列化吐出坏字符串 --
+/// 中文每字 3 字节,盲切几乎必然踩中。
+pub fn clampUtf8(s: []const u8, max_bytes: usize) []const u8 {
+    if (s.len <= max_bytes) return s;
+    var end = max_bytes;
+    // 退到序列首字节(跳过 10xxxxxx 的 continuation byte)。停在这里就等于
+    // 丢掉那个跨界的序列,不用再算它的宽度。
+    while (end > 0 and s[end] & 0xC0 == 0x80) end -= 1;
+    return s[0..end];
 }
 
 pub fn eqlIgnoreCase(a: []const u8, b: []const u8) bool {
@@ -440,6 +438,28 @@ pub fn eqlIgnoreCase(a: []const u8, b: []const u8) bool {
         if (std.ascii.toLower(x) != std.ascii.toLower(y)) return false;
     }
     return true;
+}
+
+test "clampUtf8 never splits a codepoint" {
+    const t = std.testing;
+    // 上限内原样返回
+    try t.expectEqualStrings("abc", clampUtf8("abc", 8));
+    try t.expectEqualStrings("abc", clampUtf8("abc", 3));
+    // 纯 ASCII 精确截断
+    try t.expectEqualStrings("abcd", clampUtf8("abcdefgh", 4));
+    // 中文每字 3 字节:上限 4 只能容一个字,第二个字整体丢掉
+    try t.expectEqualStrings("中", clampUtf8("中文", 4));
+    try t.expectEqualStrings("中", clampUtf8("中文", 5));
+    try t.expectEqualStrings("中文", clampUtf8("中文", 6));
+    // emoji 4 字节
+    try t.expectEqualStrings("", clampUtf8("😀x", 3));
+    try t.expectEqualStrings("😀", clampUtf8("😀x", 4));
+    // 结果必须始终是合法 UTF-8 -- 这是整个函数存在的理由
+    const zh = "会话标题很长很长很长很长很长";
+    var n: usize = 0;
+    while (n <= zh.len + 2) : (n += 1) {
+        try t.expect(std.unicode.utf8ValidateSlice(clampUtf8(zh, n)));
+    }
 }
 
 test "joinPath" {
