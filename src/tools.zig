@@ -5,6 +5,40 @@ const activity = @import("activity.zig");
 
 pub const MAX_TOOL_OUTPUT = 16 * 1024;
 
+/// 当前线程的工具根目录 —— 相对路径相对它解析,而不是相对进程 cwd。
+///
+/// 为什么是 thread-local:核心工具用的是无 ctx 的 `handler` 签名,拿不到 Agent。
+/// 而进程只有一个 cwd,web 模式的多 workspace 下两个会话的 Agent 各有自己的
+/// cwd —— 会话声明在 projB、`write out.txt` 落进 projA(进程 cwd)是实测复现
+/// 过的数据损坏。工具在 per-Agent 的线程上跑,thread-local 正好对上。
+///
+/// 空 = 用进程 cwd。CLI 模式下 Agent.cwd 就是进程 cwd,两者等价。
+threadlocal var tool_root: []const u8 = "";
+
+/// 分发工具前设置根目录(agent.zig 的 runToolSlot 调用)。
+pub fn setRoot(root: []const u8) void {
+    tool_root = root;
+}
+
+pub fn clearRoot() void {
+    tool_root = "";
+}
+
+/// 把工具参数里的路径解析成可直接用于 `Dir.cwd()` 的路径。
+///
+/// 绝对路径原样返回 —— agent 的工具本来就没有路径沙箱(绝对路径与 `../`
+/// 都不拦,CLI 模式亦然),这里不改变那个语义,只修「相对谁」。
+pub fn resolvePath(arena: std.mem.Allocator, path: []const u8) []const u8 {
+    if (tool_root.len == 0) return path;
+    if (std.fs.path.isAbsolute(path)) return path;
+    return std.fs.path.join(arena, &.{ tool_root, path }) catch path;
+}
+
+/// 子进程的工作目录:有根目录就用它,否则让子进程继承进程 cwd。
+pub fn rootForSpawn() ?[]const u8 {
+    return if (tool_root.len > 0) tool_root else null;
+}
+
 pub const Result = struct {
     content: []const u8, // 给模型看的内容(arena 所有)
     is_error: bool = false,
@@ -48,7 +82,7 @@ fn parseArgs(arena: std.mem.Allocator, args: []const u8) !std.json.Value {
 /// read: {path, offset?, limit?} → 文件内容(offset/limit 给定时返回 1-based 行区间)
 fn toolRead(arena: std.mem.Allocator, args: []const u8) !Result {
     const v = try parseArgs(arena, args);
-    const path = jstr(v, "path") orelse return .{ .content = "error: missing 'path' argument", .is_error = true };
+    const path = resolvePath(arena, jstr(v, "path") orelse return .{ .content = "error: missing 'path' argument", .is_error = true });
     const content = std.Io.Dir.cwd().readFileAlloc(util.io, path, arena, .limited(16 * 1024 * 1024)) catch |err| {
         return .{ .content = try std.fmt.allocPrint(arena, "error reading {s}: {s}", .{ path, @errorName(err) }), .is_error = true };
     };
@@ -98,7 +132,7 @@ pub fn capped(arena: std.mem.Allocator, body: []const u8, path: []const u8, tota
 /// write: {path, content} → 写文件
 fn toolWrite(arena: std.mem.Allocator, args: []const u8) !Result {
     const v = try parseArgs(arena, args);
-    const path = jstr(v, "path") orelse return .{ .content = "error: missing 'path' argument", .is_error = true };
+    const path = resolvePath(arena, jstr(v, "path") orelse return .{ .content = "error: missing 'path' argument", .is_error = true });
     const content = jstr(v, "content") orelse "";
     if (std.fs.path.dirname(path)) |d| {
         if (d.len > 0) std.Io.Dir.cwd().createDirPath(util.io, d) catch {};
@@ -127,7 +161,7 @@ fn toolWrite(arena: std.mem.Allocator, args: []const u8) !Result {
 /// edit: {path, edits: [{oldText, newText}]} → 精确替换,0/多匹配即报错
 fn toolEdit(arena: std.mem.Allocator, args: []const u8) !Result {
     const v = try parseArgs(arena, args);
-    const path = jstr(v, "path") orelse return .{ .content = "error: missing 'path' argument", .is_error = true };
+    const path = resolvePath(arena, jstr(v, "path") orelse return .{ .content = "error: missing 'path' argument", .is_error = true });
     const edits = v.object.get("edits") orelse return .{ .content = "error: missing 'edits' array", .is_error = true };
     if (edits != .array or edits.array.items.len == 0) {
         return .{ .content = "error: 'edits' must be a non-empty array", .is_error = true };
@@ -350,8 +384,12 @@ fn toolBash(arena: std.mem.Allocator, args: []const u8) !Result {
     // pgid=0:子进程成为新进程组的组长。这样超时/取消时能 kill(-pgid) 收掉
     // 整棵进程树 —— `sh -c "make -j8"` 派生的孙子进程原先会孤儿化,
     // 继续吃 CPU 且没人回收。
+    // cwd 取工具根目录:命令里的相对路径必须相对**这个 Agent 的 cwd**。
+    // resolvePath 对 bash 无能为力(命令是任意 shell 文本,不是路径参数),
+    // 只能靠子进程自己的工作目录。null = 继承进程 cwd(CLI 模式即如此)。
     var child = try std.process.spawn(util.io, .{
         .argv = &.{ "sh", "-c", command },
+        .cwd = if (rootForSpawn()) |r| .{ .path = r } else .inherit,
         .stdout = .pipe,
         .stderr = .pipe,
         .pgid = 0,
@@ -710,7 +748,7 @@ fn toolGrep(arena: std.mem.Allocator, args: []const u8) !Result {
     const v = try parseArgs(arena, args);
     const pattern = jstr(v, "pattern") orelse return .{ .content = "error: missing 'pattern' argument", .is_error = true };
     if (pattern.len == 0) return .{ .content = "error: 'pattern' must not be empty", .is_error = true };
-    const root = jstr(v, "path") orelse ".";
+    const root = resolvePath(arena, jstr(v, "path") orelse ".");
     const glob = jstr(v, "glob");
     const ignore_case = jbool(v, "ignoreCase") orelse false;
     const literal = jbool(v, "literal") orelse false;
@@ -827,7 +865,7 @@ fn asciiContainsIgnoreCase(haystack: []const u8, needle: []const u8) bool {
 fn toolFind(arena: std.mem.Allocator, args: []const u8) !Result {
     const v = try parseArgs(arena, args);
     const pattern = jstr(v, "pattern") orelse return .{ .content = "error: missing 'pattern' argument", .is_error = true };
-    const root = jstr(v, "path") orelse ".";
+    const root = resolvePath(arena, jstr(v, "path") orelse ".");
     const limit: usize = if (jint(v, "limit")) |l| @intCast(@max(1, @min(l, 2000))) else 200;
 
     var files = std.array_list.Managed([]const u8).init(arena);
@@ -854,7 +892,7 @@ fn toolFind(arena: std.mem.Allocator, args: []const u8) !Result {
 /// ls: {path?, limit?} — 列目录条目,目录优先按名排序。
 fn toolLs(arena: std.mem.Allocator, args: []const u8) !Result {
     const v = try parseArgs(arena, args);
-    const path = jstr(v, "path") orelse ".";
+    const path = resolvePath(arena, jstr(v, "path") orelse ".");
     const limit: usize = if (jint(v, "limit")) |l| @intCast(@max(1, @min(l, 2000))) else 200;
 
     var dir = std.Io.Dir.cwd().openDir(util.io, path, .{ .iterate = true }) catch |err| {
@@ -915,11 +953,14 @@ fn toolMultiEdit(arena: std.mem.Allocator, args: []const u8) !Result {
     }
 
     // 阶段一:全量校验并算出每个文件的最终内容(只在内存里,不落盘)
-    const Pending = struct { path: []const u8, content: []const u8, n_edits: usize };
+    // path 是模型给的原始路径(错误消息里要照样回显),disk_path 是解析后的
+    // 实际路径 —— 相对路径要相对这个 Agent 的 cwd,不是进程 cwd。
+    const Pending = struct { path: []const u8, disk_path: []const u8, content: []const u8, n_edits: usize };
     var pending = std.array_list.Managed(Pending).init(arena);
     for (files.array.items) |f| {
         if (f != .object) return .{ .content = "error: files entry must be an object", .is_error = true };
         const path = jstr(f, "path") orelse return .{ .content = "error: files entry missing 'path'", .is_error = true };
+        const disk_path = resolvePath(arena, path);
         const edits = f.object.get("edits") orelse return .{
             .content = try std.fmt.allocPrint(arena, "error: {s}: missing 'edits' array", .{path}),
             .is_error = true,
@@ -928,7 +969,7 @@ fn toolMultiEdit(arena: std.mem.Allocator, args: []const u8) !Result {
             .content = try std.fmt.allocPrint(arena, "error: {s}: 'edits' must be a non-empty array", .{path}),
             .is_error = true,
         };
-        const orig = std.Io.Dir.cwd().readFileAlloc(util.io, path, arena, .limited(64 * 1024 * 1024)) catch |err| {
+        const orig = std.Io.Dir.cwd().readFileAlloc(util.io, disk_path, arena, .limited(64 * 1024 * 1024)) catch |err| {
             return .{
                 .content = try std.fmt.allocPrint(arena, "error reading {s}: {s} — nothing was written", .{ path, @errorName(err) }),
                 .is_error = true,
@@ -968,12 +1009,12 @@ fn toolMultiEdit(arena: std.mem.Allocator, args: []const u8) !Result {
             try next.appendSlice(buf.items[at + old_text.len ..]);
             buf = next;
         }
-        try pending.append(.{ .path = path, .content = buf.items, .n_edits = edits.array.items.len });
+        try pending.append(.{ .path = path, .disk_path = disk_path, .content = buf.items, .n_edits = edits.array.items.len });
     }
 
     // 阶段二:全部校验通过,逐个落盘
     for (pending.items) |p| {
-        std.Io.Dir.cwd().writeFile(util.io, .{ .sub_path = p.path, .data = p.content }) catch |err| {
+        std.Io.Dir.cwd().writeFile(util.io, .{ .sub_path = p.disk_path, .data = p.content }) catch |err| {
             return .{
                 .content = try std.fmt.allocPrint(arena, "error writing {s}: {s} — earlier files in this batch were already written", .{ p.path, @errorName(err) }),
                 .is_error = true,
@@ -1474,4 +1515,69 @@ test "skill tool" {
     // 不存在
     const nf = try toolSkill(a, "{\"name\":\"nope\"}");
     try t.expect(nf.is_error);
+}
+
+test "tool paths resolve against the agent root, not the process cwd" {
+    const t = std.testing;
+    try util.testInit();
+    var arena = util.Arena.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // 无 root:原样返回(CLI 模式,Agent.cwd 就是进程 cwd)
+    clearRoot();
+    try t.expectEqualStrings("out.txt", resolvePath(a, "out.txt"));
+    try t.expect(rootForSpawn() == null);
+
+    // 有 root:相对路径拼到 root 下。web 模式多 workspace 时,会话声明在
+    // projB 而 `write out.txt` 落进进程 cwd 是实测复现过的数据损坏。
+    setRoot("/tmp/projB");
+    defer clearRoot();
+    try t.expectEqualStrings("/tmp/projB/out.txt", resolvePath(a, "out.txt"));
+    try t.expectEqualStrings("/tmp/projB/sub/deep.txt", resolvePath(a, "sub/deep.txt"));
+    try t.expectEqualStrings("/tmp/projB", rootForSpawn().?);
+
+    // 绝对路径不动 —— 工具本来就没有路径沙箱(绝对路径与 ../ 都不拦),
+    // 这里只修「相对谁」,不改变可访问范围
+    try t.expectEqualStrings("/etc/hosts", resolvePath(a, "/etc/hosts"));
+
+    // root 是 thread-local:另一个线程看不到这里设的值,
+    // 否则并行的两个 Agent 会互相串目录
+    const Probe = struct {
+        seen_empty: bool = false,
+        fn run(self: *@This()) void {
+            self.seen_empty = rootForSpawn() == null;
+        }
+    };
+    var probe = Probe{};
+    const th = try std.Thread.spawn(.{}, Probe.run, .{&probe});
+    th.join();
+    try t.expect(probe.seen_empty);
+}
+
+test "bash runs in the agent root" {
+    const t = std.testing;
+    try util.testInit();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = util.Arena.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const cwd_abs = try std.process.currentPathAlloc(util.io, a);
+    const root = try std.fmt.allocPrint(a, "{s}/.zig-cache/tmp/{s}", .{ cwd_abs, tmp.sub_path[0..] });
+
+    // bash 拿的是任意 shell 文本,resolvePath 帮不上 —— 只能靠子进程的
+    // 工作目录。没有这个,web 多 workspace 下 `ls` 列的是别的项目。
+    setRoot(root);
+    defer clearRoot();
+    const r = try toolBash(a, "{\"command\":\"pwd\"}");
+    try t.expect(!r.is_error);
+    try t.expect(std.mem.indexOf(u8, r.content, tmp.sub_path[0..]) != null);
+
+    // 写文件也落在 root 里
+    const w = try toolBash(a, "{\"command\":\"echo marker > from-bash.txt\"}");
+    try t.expect(!w.is_error);
+    const back = try tmp.dir.readFileAlloc(util.io, "from-bash.txt", a, .limited(64));
+    try t.expectEqualStrings("marker\n", back);
 }

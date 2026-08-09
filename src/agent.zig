@@ -135,6 +135,13 @@ fn runToolSlot(slot: *ToolSlot) void {
 
     // 工具 handler 用 agent 的 allocator。std 的 GPA/DebugAllocator 是线程安全的,
     // 但 handler 内部不得触碰 Agent 可变状态 —— 现有 ctx_handler 只读 provider/usage。
+    //
+    // 工具根目录走 thread-local:核心工具的签名里没有 Agent(它们用无 ctx 的
+    // `handler`),而相对路径必须相对**这个 Agent 的 cwd** 而不是进程 cwd。
+    // web 模式多 workspace 下这是实际的数据损坏:会话声明在 projB,
+    // `write out.txt` 落进 projA(实测复现过)。
+    toolsmod.setRoot(self.cwd);
+    defer toolsmod.clearRoot();
     if (t.ctx_handler) |h| {
         slot.result = h(@ptrCast(self), self.alloc, slot.call.args) catch .{ .content = "tool crashed", .is_error = true };
     } else {
@@ -1226,16 +1233,17 @@ test "per-file lock prevents lost writes under concurrency" {
     defer arena.deinit();
     const a = arena.allocator();
 
-    const tmppath = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path[0..]});
-    const old_cwd = try std.process.currentPathAlloc(util.io, a);
-    std.Io.Threaded.chdir(tmppath) catch unreachable;
-    defer std.Io.Threaded.chdir(old_cwd) catch {};
-    try std.Io.Dir.cwd().writeFile(util.io, .{ .sub_path = "shared.txt", .data = "A B" });
+    // Agent.cwd 设成临时目录 —— 工具的相对路径相对它解析,所以不需要 chdir
+    // 进程(那会污染并行跑的其他测试)。这本身也验证了 cwd 隔离:工具落盘的
+    // 位置由 Agent.cwd 决定,不看进程 cwd。
+    const cwd_abs = try std.process.currentPathAlloc(util.io, a);
+    const root = try std.fmt.allocPrint(a, "{s}/.zig-cache/tmp/{s}", .{ cwd_abs, tmp.sub_path[0..] });
+    try tmp.dir.writeFile(util.io, .{ .sub_path = "shared.txt", .data = "A B" });
 
     var cfg = cfgmod.Config{ .arena = &arena };
     var provs = [_]cfgmod.Provider{.{ .name = "mock", .api = .openai_completions, .base_url = "http://127.0.0.1:1", .api_key = "k" }};
     cfg.providers = &provs;
-    var agent = try Agent.init(a, &cfg, "mock", "m", "/tmp");
+    var agent = try Agent.init(a, &cfg, "mock", "m", root);
 
     // 两个 edit 并发改同一文件的不同片段。无锁时二者会各自读到 "A B",
     // 后写的覆盖前面的,丢掉一次修改;有 per-file 锁则两次修改都保留。
@@ -1253,7 +1261,7 @@ test "per-file lock prevents lost writes under concurrency" {
     }
     for (&threads) |th| th.join();
 
-    const final = try std.Io.Dir.cwd().readFileAlloc(util.io, "shared.txt", a, .limited(1024));
+    const final = try tmp.dir.readFileAlloc(util.io, "shared.txt", a, .limited(1024));
     // 两次修改都必须落在最终内容里(顺序无关,但都不能丢)
     try t.expectEqualStrings("AA BB", final);
 }
@@ -1366,7 +1374,10 @@ test "concurrent writes to distinct files run in parallel and none is lost" {
 
     var td = std.testing.tmpDir(.{});
     defer td.cleanup();
-    const base = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{td.sub_path[0..]});
+    const cwd_abs = try std.process.currentPathAlloc(util.io, a);
+    // 绝对路径:工具的相对路径现在相对 Agent.cwd 解析,而这个测试关心的是
+    // 并发写锁契约,不该被 cwd 语义牵连。
+    const base = try std.fmt.allocPrint(a, "{s}/.zig-cache/tmp/{s}", .{ cwd_abs, td.sub_path[0..] });
 
     const N = 6;
     // 建 N 个文件,各写不同内容
@@ -1409,7 +1420,9 @@ test "concurrent writes to the same file serialize without losing content" {
 
     var td = std.testing.tmpDir(.{});
     defer td.cleanup();
-    const p = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/shared.txt", .{td.sub_path[0..]});
+    // 绝对路径:工具的相对路径现在相对 Agent.cwd,而这个测试关心的是写锁契约
+    const cwd_abs2 = try std.process.currentPathAlloc(util.io, a);
+    const p = try std.fmt.allocPrint(a, "{s}/.zig-cache/tmp/{s}/shared.txt", .{ cwd_abs2, td.sub_path[0..] });
 
     // 4 个线程写同一文件:锁保证逐个完成,最终内容是其中某一个的完整内容,
     // 绝不能是两次写交错出的混合体。

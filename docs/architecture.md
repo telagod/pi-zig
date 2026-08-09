@@ -153,6 +153,7 @@ sequenceDiagram
 | Web 会话 | 每会话独立 Agent + arena + worker 线程，池上限 4 |
 | Web 连接 | 每连接一个 detach 线程，上限 64；无读超时（见 [Web UI](web-ui.md#资源上限)） |
 | subagent 委派 | 每个一个 OS 线程 + 完整 piz 子进程，顶层并行 32、嵌套层 4 |
+| 工具工作目录 | thread-local root，分发前由 `runToolSlot` 设为 `Agent.cwd` |
 | 事件命令 | spawn 后 detach，不等待 |
 | TUI 渲染 | 主线程轮询 stdin，worker 线程跑 agent |
 
@@ -408,7 +409,7 @@ piz 保留「置前」，理由是两者的压缩语义不同：codex 保留 use
 ## 测试
 
 ```bash
-zig build test          # 131 个测试，core 107 + app 24
+zig build test          # 133 个测试，core 109 + app 24
 ```
 
 两个测试目标：`core.zig` 为根（收集全部 core 模块的 test 块）、`main.zig` 为根（含 `e2e.zig`）。Zig 的 `zig test` 只收集根模块的测试，所以要分两个目标。
@@ -488,6 +489,8 @@ zig build test          # 131 个测试，core 107 + app 24
 | `webui.zig` | **HTTP 层**：恶意 Origin 403、本服务自身 Origin 放行 |
 | `webui.zig` | **HTTP 层**：未注册 `?ws=` 403、已注册放行、空 ws 放行 |
 | `e2e.zig` | provider 请求真并发（并发峰值 >1）且响应互不串扰 |
+| `tools.zig` | 工具相对路径相对 Agent.cwd 解析，root 是 thread-local |
+| `tools.zig` | bash 在 Agent.cwd 里跑（相对路径与写文件都落在那儿）|
 | `activity.zig` | 槽位满员时 `cancelled()`/`elapsedMs()` 仍有效（否则溢出的 subagent 无法 Ctrl+C）|
 | `tools.zig` | `appendCapped` 保尾且缓冲永不超过 2× 窗口（管道内存有界的全部依据）|
 | `tools.zig` | 截断提示里的 total 是真实流量，不是被裁后的缓冲长度 |
