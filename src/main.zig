@@ -191,13 +191,13 @@ const App = struct {
         if (std.mem.indexOfScalar(u8, spec, '/')) |slash| {
             const p = spec[0..slash];
             const m = spec[slash + 1 ..];
-            const agent = try agentmod.Agent.initOpts(self.alloc, self.cfg, p, m, self.agent.cwd, .{ .read_only = ro });
+            const agent = try agentmod.Agent.initOpts(self.alloc, self.cfg, p, m, self.agent.cwd, .{ .read_only = ro, .depth = self.agent.depth, .plugins = self.agent.plugins });
             self.agent.deinit();
             self.agent.* = agent;
             self.provider_override = p;
             self.model_override = m;
         } else {
-            const agent = try agentmod.Agent.initOpts(self.alloc, self.cfg, self.provider_override, spec, self.agent.cwd, .{ .read_only = ro });
+            const agent = try agentmod.Agent.initOpts(self.alloc, self.cfg, self.provider_override, spec, self.agent.cwd, .{ .read_only = ro, .depth = self.agent.depth, .plugins = self.agent.plugins });
             self.agent.deinit();
             self.agent.* = agent;
             self.model_override = spec;
@@ -292,6 +292,34 @@ fn tuiOnNotice(ctx: ?*anyopaque, text: []const u8) anyerror!void {
     buf.appendSlice("· ") catch {};
     buf.appendSlice(text) catch {};
     app.tui.appendLine("", "\x1b[33m", buf.items) catch {};
+}
+
+/// subagent 中间事件 → TUI 一行。
+///
+/// 逐 token 的正文不显示:32 路并行的文本混在一起没人读得懂,而
+/// 「3 号在跑 grep」是真进度。委派原先是纯黑盒,界面上只有一个转圈。
+fn tuiOnSubagent(ctx: ?*anyopaque, idx: usize, kind: agentmod.SubagentEvent, text: []const u8) anyerror!void {
+    switch (kind) {
+        .text, .reasoning => return,
+        else => {},
+    }
+    const app: *App = @ptrCast(@alignCast(ctx.?));
+    const tag = switch (kind) {
+        .tool_start => "⚙",
+        .tool_done => "✓",
+        .tool_failed => "✗",
+        .notice => "·",
+        .finished => "▣",
+        else => " ",
+    };
+    // 栈缓冲而非 app.alloc:32 路 subagent 并发调这个回调,而 app.alloc 是
+    // ArenaAllocator —— 它不是线程安全的。clampUtf8 保证不切断多字节字符。
+    const clipped = util.clampUtf8(text, 100);
+    var line: [224]u8 = undefined;
+    const s = std.fmt.bufPrint(&line, "[sub {d}] {s} {s}", .{ idx, tag, clipped }) catch return;
+    const color = if (kind == .tool_failed) "\x1b[31m" else "\x1b[2m";
+    // appendLine 自己有锁(tui.zig),行不会交错
+    app.tui.appendLine("", color, s) catch {};
 }
 
 /// 权限询问(worker 线程):构建提示 → 置 pending → 轮询决策。
@@ -479,7 +507,7 @@ fn runWebCmd(alloc: std.mem.Allocator, args: *std.process.Args.Iterator) void {
     warnBrokenConfig(&cfg);
     const abs_cwd = std.process.currentPathAlloc(util.io, arena.allocator()) catch "";
     wopts.project_cwd = abs_cwd;
-    var agent = agentmod.Agent.initOpts(arena.allocator(), &cfg, null, null, abs_cwd, .{}) catch {
+    var agent = agentmod.Agent.initOpts(arena.allocator(), &cfg, null, null, abs_cwd, .{ .depth = pluginsmod.processBaseDepth() }) catch {
         std.debug.print("piz: agent init failed\n", .{});
         std.process.exit(1);
     };
@@ -594,7 +622,7 @@ const SessionPool = struct {
         const abs_cwd = a.dupe(u8, cwd) catch return null;
         // agent 须驻留(值悬垂:getOrCreate 返回后栈失效)
         const agent = a.create(agentmod.Agent) catch return null;
-        agent.* = agentmod.Agent.initOpts(a, self.cfg, null, null, abs_cwd, .{}) catch return null;
+        agent.* = agentmod.Agent.initOpts(a, self.cfg, null, null, abs_cwd, .{ .depth = pluginsmod.processBaseDepth() }) catch return null;
         if (agent.key == null) return null;
         @import("core").plugins.injectMemory(agent);
         // 会话持久化:磁盘有则恢复历史消息/模式/标题
@@ -1969,7 +1997,7 @@ pub fn runInteractive(alloc: std.mem.Allocator, cfg: *cfgmod.Config, cwd: []cons
             (try sessionmod.Session.fresh(alloc, abs_cwd));
 
     // agent
-    var agent = try agentmod.Agent.initOpts(alloc, cfg, opts.provider_name, opts.model_name, abs_cwd, .{ .read_only = opts.read_only, .system_override = opts.system_override });
+    var agent = try agentmod.Agent.initOpts(alloc, cfg, opts.provider_name, opts.model_name, abs_cwd, .{ .read_only = opts.read_only, .system_override = opts.system_override, .depth = pluginsmod.processBaseDepth() });
     if (agent.key == null) {
         var up: [64]u8 = undefined;
         const upname = std.ascii.upperString(up[0..@min(agent.provider.name.len, 63)], agent.provider.name);
@@ -2016,6 +2044,7 @@ pub fn runInteractive(alloc: std.mem.Allocator, cfg: *cfgmod.Config, cwd: []cons
         .on_tool_end = tuiOnToolEnd,
         .on_turn_end = tuiOnTurnEnd,
         .on_notice = tuiOnNotice,
+        .on_subagent = tuiOnSubagent,
         .on_require_permission = tuiOnRequirePermission,
         .on_abort = tuiOnAbort,
     };
@@ -2061,6 +2090,14 @@ const JsonlCtx = struct {
     alloc: std.mem.Allocator,
 };
 
+/// JSONL 输出的互斥。
+///
+/// 两个理由,都由进程内 subagent 引入:
+/// 1. 32 路 subagent 并发调 `jsonlEvent` 时,`jctx.alloc` 是 ArenaAllocator ——
+///    它不是线程安全的,并发分配会损坏 arena。
+/// 2. JSONL 的每行必须完整,交错的半行会让下游解析器直接失败。
+var jsonl_mutex: std.Io.Mutex = .init;
+
 fn jstdout(_: std.mem.Allocator, json: []const u8) !void {
     var sbuf: [8192]u8 = undefined;
     var w = std.Io.File.stdout().writer(util.io, &sbuf);
@@ -2069,6 +2106,8 @@ fn jstdout(_: std.mem.Allocator, json: []const u8) !void {
 }
 
 fn jsonlEvent(alloc: std.mem.Allocator, comptime ty: []const u8, fields: anytype) !void {
+    jsonl_mutex.lockUncancelable(util.io);
+    defer jsonl_mutex.unlock(util.io);
     var ww = std.Io.Writer.Allocating.init(alloc);
     defer ww.deinit();
     try ww.writer.print("{{\"type\":\"{s}\"", .{ty});
@@ -2166,7 +2205,7 @@ pub fn runPrint(alloc: std.mem.Allocator, cfg: *cfgmod.Config, cwd: []const u8, 
         };
         break :blk found;
     } else (try sessionmod.Session.findLatest(alloc, abs_cwd)) orelse (try sessionmod.Session.fresh(alloc, abs_cwd));
-    var agent = try agentmod.Agent.initOpts(alloc, cfg, opts.provider_name, opts.model_name, abs_cwd, .{ .read_only = opts.read_only, .system_override = opts.system_override });
+    var agent = try agentmod.Agent.initOpts(alloc, cfg, opts.provider_name, opts.model_name, abs_cwd, .{ .read_only = opts.read_only, .system_override = opts.system_override, .depth = pluginsmod.processBaseDepth() });
     if (agent.key == null) {
         std.debug.print("piz: no API key for provider '{s}'. Set ~/.piz/auth.json, models.json apiKey, or env.\n", .{agent.provider.name});
         std.process.exit(1);
@@ -2184,6 +2223,7 @@ pub fn runPrint(alloc: std.mem.Allocator, cfg: *cfgmod.Config, cwd: []const u8, 
             .on_tool_start = jsonlOnToolStart,
             .on_tool_end = jsonlOnToolEnd,
             .on_notice = jsonlOnNotice,
+            .on_subagent = jsonlOnSubagent,
         };
     } else if (opts.output_format == .text) {
         agent.cbs = .{
@@ -2192,6 +2232,7 @@ pub fn runPrint(alloc: std.mem.Allocator, cfg: *cfgmod.Config, cwd: []const u8, 
             .on_tool_start = printOnToolStart,
             .on_tool_end = printOnToolEnd,
             .on_notice = printOnNotice,
+            .on_subagent = printOnSubagent,
         };
     }
 
@@ -2321,6 +2362,52 @@ fn printOnNotice(ctx: ?*anyopaque, text: []const u8) anyerror!void {
 fn jsonlOnNotice(ctx: ?*anyopaque, text: []const u8) anyerror!void {
     const jctx: *JsonlCtx = @ptrCast(@alignCast(ctx.?));
     try jsonlEvent(jctx.alloc, "notice", .{ "text", text });
+}
+
+/// 并发写 stderr 的互斥。
+///
+/// 32 路 subagent 同时报进度,共享一个模块级缓冲会直接数据竞争 ——
+/// 实测输出里出现被切断的多字节字符(UTF-8 解码失败)。缓冲改成栈上的,
+/// 再用一次 writeAll 把整行写出去:内核对 ≤PIPE_BUF 的写是原子的,
+/// 行与行之间就不会交错。
+var sub_out_mutex: std.Io.Mutex = .init;
+
+/// subagent 中间事件 → stderr 一行。
+///
+/// 只显示「谁在做什么」不显示内容:32 路并行的正文混在一起没人读得懂,
+/// 而「3 号在跑 grep」是真正有用的进度信息。
+fn printOnSubagent(ctx: ?*anyopaque, idx: usize, kind: agentmod.SubagentEvent, text: []const u8) anyerror!void {
+    _ = ctx;
+    // 正文与推理逐 token 到达,一路一行都印会把终端刷爆 —— 只报动作与结束
+    switch (kind) {
+        .text, .reasoning => return,
+        else => {},
+    }
+    const tag = switch (kind) {
+        .tool_start => "⚙",
+        .tool_done => "✓",
+        .tool_failed => "✗",
+        .notice => "·",
+        .finished => "▣",
+        else => " ",
+    };
+    // clampUtf8 而非裸切片:切在多字节序列中间会产出坏字节
+    const clipped = util.clampUtf8(text, 120);
+    var line: [256]u8 = undefined;
+    const s = std.fmt.bufPrint(&line, "\x1b[2m[sub {d}]\x1b[0m {s} {s}\n", .{ idx, tag, clipped }) catch return;
+    sub_out_mutex.lockUncancelable(util.io);
+    defer sub_out_mutex.unlock(util.io);
+    var wbuf: [256]u8 = undefined;
+    var w = std.Io.File.stderr().writer(util.io, &wbuf);
+    w.interface.writeAll(s) catch {};
+    w.flush() catch {};
+}
+
+fn jsonlOnSubagent(ctx: ?*anyopaque, idx: usize, kind: agentmod.SubagentEvent, text: []const u8) anyerror!void {
+    const jctx: *JsonlCtx = @ptrCast(@alignCast(ctx.?));
+    var nb: [24]u8 = undefined;
+    const idx_str = std.fmt.bufPrint(&nb, "{d}", .{idx}) catch "0";
+    try jsonlEvent(jctx.alloc, "subagent", .{ "task", idx_str, "kind", @tagName(kind), "text", text });
 }
 
 /// 配置文件解析失败时提示用户。

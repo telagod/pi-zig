@@ -951,3 +951,263 @@ test "provider requests actually run in parallel and none get corrupted" {
     // 48169ms vs 3755ms(12.8 倍)。串行时这个峰值恒为 1。
     try t.expect(state.peak.load(.acquire) > 1);
 }
+
+// ---------- 进程内 subagent ----------
+
+/// 专用 mock:第一轮回 task 工具调用,subagent 的请求回 bash 工具调用,
+/// 带过工具结果的请求回文本。按请求内容分派而非序号 —— 并行 subagent
+/// 的到达顺序不确定。
+const SubMock = struct {
+    port: u16,
+    stop: std.atomic.Value(bool) = .init(false),
+    /// 看到的 read_only 子请求数(请求体无 tools 字段)
+    ro_requests: std.atomic.Value(u32) = .init(0),
+    /// 见过的「要求再委派」的请求数 —— 深度闸门失效时它会失控增长
+    nest_requests: std.atomic.Value(u32) = .init(0),
+};
+
+var submock_alloc: std.mem.Allocator = undefined;
+
+fn subMockHandle(state: *SubMock, fd: std.posix.fd_t) void {
+    var conn = std.Io.net.Stream{ .socket = .{ .handle = fd, .address = undefined } };
+    defer conn.close(util.io);
+    var rbuf: [16 * 1024]u8 = undefined;
+    var wbuf: [8 * 1024]u8 = undefined;
+    var fin = conn.reader(util.io, &rbuf);
+    var fout = conn.writer(util.io, &wbuf);
+    var server = std.http.Server.init(&fin.interface, &fout.interface);
+    var req = server.receiveHead() catch return;
+    var tbuf: [64 * 1024]u8 = undefined;
+    const reader = req.readerExpectContinue(&tbuf) catch return;
+    const body = reader.allocRemaining(submock_alloc, .limited(4 * 1024 * 1024)) catch return;
+
+    const ran_tool = std.mem.indexOf(u8, body, "\"role\":\"tool\"") != null;
+    const wants_task = std.mem.indexOf(u8, body, "SPLIT-ME") != null;
+    // 嵌套委派:subagent 收到 NEST-ME 时也要求再委派一层。深度正确递增时
+    // 第二层撞上 MAX_TASK_DEPTH 被拒;不递增就会一层层下去。
+    const wants_nest = std.mem.indexOf(u8, body, "NEST-ME") != null;
+    if (std.mem.indexOf(u8, body, "\"tools\"") == null) {
+        _ = state.ro_requests.fetchAdd(1, .acq_rel);
+    }
+    if (wants_nest and !ran_tool) _ = state.nest_requests.fetchAdd(1, .acq_rel);
+
+    const payload = if (ran_tool)
+        "data: {\"choices\":[{\"delta\":{\"content\":\"SUB-DONE\"},\"finish_reason\":null}]}\n\n" ++
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n" ++
+            "data: [DONE]\n\n"
+    else if (wants_task)
+        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"t1\",\"function\":{\"name\":\"task\",\"arguments\":\"{\\\"tasks\\\":[{\\\"description\\\":\\\"leg one\\\"},{\\\"description\\\":\\\"leg two\\\"}]}\"}}]},\"finish_reason\":null}]}\n\n" ++
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n" ++
+            "data: [DONE]\n\n"
+    else if (wants_nest)
+        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"n1\",\"function\":{\"name\":\"task\",\"arguments\":\"{\\\"description\\\":\\\"NEST-ME deeper\\\"}\"}}]},\"finish_reason\":null}]}\n\n" ++
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n" ++
+            "data: [DONE]\n\n"
+    else
+        // subagent 的第一轮:跑一个真工具,父 agent 才有中间事件可看
+        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"b1\",\"function\":{\"name\":\"bash\",\"arguments\":\"{\\\"command\\\":\\\"echo inner\\\"}\"}}]},\"finish_reason\":null}]}\n\n" ++
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n" ++
+            "data: [DONE]\n\n";
+
+    // 必须声明 close:这个 mock 每连接只处理一个请求,而 httpc 的连接池
+    // 默认 keep_alive,复用到已关闭的连接就是 HttpConnectionClosing。
+    req.respond(payload, .{
+        .status = .ok,
+        .keep_alive = false,
+        .extra_headers = &.{.{ .name = "content-type", .value = "text/event-stream" }},
+    }) catch return;
+}
+
+fn subMockMain(state: *SubMock) void {
+    const addr = std.Io.net.IpAddress.parseIp4("127.0.0.1", state.port) catch return;
+    var server = addr.listen(util.io, .{ .reuse_address = true }) catch return;
+    defer server.deinit(util.io);
+    util.setNonBlock(server.socket.handle);
+    var pfds = [_]std.posix.pollfd{.{ .fd = server.socket.handle, .events = std.posix.POLL.IN, .revents = 0 }};
+    while (!state.stop.load(.acquire)) {
+        const n = std.posix.poll(&pfds, 10) catch continue;
+        if (n == 0) continue;
+        const raw = std.os.linux.accept4(server.socket.handle, null, null, 0o2000000);
+        const rc = @as(isize, @bitCast(raw));
+        if (rc < 0) continue;
+        // 每连接一线程:并行 subagent 的请求必须能同时处理,串行 accept-handle
+        // 会把它们排成队,测出来的是 mock 的极限而不是 piz 的
+        const th = std.Thread.spawn(.{}, subMockHandle, .{ state, @as(std.posix.fd_t, @intCast(rc)) }) catch {
+            subMockHandle(state, @intCast(rc));
+            continue;
+        };
+        th.detach();
+    }
+}
+
+/// 收集父 agent 看到的 subagent 事件。
+const SubSpy = struct {
+    mutex: std.Io.Mutex = .init,
+    tool_starts: u32 = 0,
+    tool_dones: u32 = 0,
+    finished: u32 = 0,
+    /// 见过的最大任务序号 —— 每一路都得有自己的编号,否则界面上分不清
+    max_idx: usize = 0,
+
+    fn onEvent(ctx: ?*anyopaque, idx: usize, kind: agentmod.SubagentEvent, text: []const u8) anyerror!void {
+        _ = text;
+        const self: *SubSpy = @ptrCast(@alignCast(ctx.?));
+        self.mutex.lockUncancelable(util.io);
+        defer self.mutex.unlock(util.io);
+        self.max_idx = @max(self.max_idx, idx);
+        switch (kind) {
+            .tool_start => self.tool_starts += 1,
+            .tool_done => self.tool_dones += 1,
+            .finished => self.finished += 1,
+            else => {},
+        }
+    }
+};
+
+test "in-process subagents report progress and inherit the right identity" {
+    const t = std.testing;
+    try util.testInit();
+    var arena = util.Arena.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    submock_alloc = a;
+
+    var state = SubMock{ .port = 18731 };
+    const server_thread = try std.Thread.spawn(.{}, subMockMain, .{&state});
+    defer {
+        state.stop.store(true, .release);
+        server_thread.join();
+    }
+    _ = std.Io.sleep(util.io, .{ .nanoseconds = 60 * std.time.ns_per_ms }, .awake) catch {};
+
+    var cfg = cfgmod.Config{ .arena = &arena };
+    var provs = [_]cfgmod.Provider{.{
+        .name = "mock",
+        .api = .openai_completions,
+        .base_url = "http://127.0.0.1:18731",
+        .api_key = "k",
+    }};
+    cfg.providers = &provs;
+
+    // 父 agent 带 task 工具
+    var spy = SubSpy{};
+    var parent = try agentmod.Agent.initOpts(a, &cfg, "mock", "m", "/tmp", .{
+        .plugins = pluginsmod.withEnabled(0, "task-delegation"),
+    });
+    parent.cbs = .{ .ctx = &spy, .on_subagent = SubSpy.onEvent };
+
+    const result = try parent.send("SPLIT-ME into two");
+    try t.expect(result.error_msg == null);
+
+    // 两路 subagent 都跑完,且父 agent 拿到了最终答复
+    var tool_msg: []const u8 = "";
+    for (parent.messages.items) |m| {
+        if (std.mem.eql(u8, m.role, "tool")) tool_msg = m.content;
+    }
+    try t.expect(std.mem.indexOf(u8, tool_msg, "2 succeeded") != null);
+    try t.expect(std.mem.indexOf(u8, tool_msg, "SUB-DONE") != null);
+
+    // **本次改造的核心:中间过程可见。**
+    // 子进程路径下委派是纯黑盒 —— 父 agent join() 干等,只能拿到最终文本。
+    // 进程内跑之后 subagent 的每次工具调用都实时转发出来。
+    try t.expect(spy.tool_starts >= 2);
+    try t.expect(spy.tool_dones >= 2);
+    try t.expectEqual(@as(u32, 2), spy.finished);
+    // 每一路有自己的序号,否则界面上两路事件混成一团
+    try t.expectEqual(@as(usize, 2), spy.max_idx);
+
+    // subagent 没有真的 spawn 进程 —— 它们跑在本进程的线程里。
+    // 校验方式:mock 看到的请求里既有带 tools 的(subagent 有工具),
+    // 又都来自同一个进程(否则 e2e 里根本连不上这个 mock:
+    // 子进程走的是 piz 可执行文件,那需要 API key 与真配置文件)。
+    try t.expect(state.ro_requests.load(.acquire) == 0);
+}
+
+test "sub-agent identity: depth increments, read-only only tightens" {
+    const t = std.testing;
+    try util.testInit();
+    var arena = util.Arena.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    var cfg = cfgmod.Config{ .arena = &arena };
+    var provs = [_]cfgmod.Provider{.{
+        .name = "mock",
+        .api = .openai_completions,
+        .base_url = "http://127.0.0.1:1",
+        .api_key = "k",
+    }};
+    cfg.providers = &provs;
+
+    // 只读父 agent 的 subagent 必然只读 —— 否则委派就是一条提权通道
+    const ro_parent = try agentmod.Agent.initOpts(a, &cfg, "mock", "m", "/tmp", .{ .read_only = true });
+    try t.expect(ro_parent.read_only);
+
+    // 深度是 Agent 字段而非环境变量:进程内 subagent 没有新进程可继承环境
+    const deep = try agentmod.Agent.initOpts(a, &cfg, "mock", "m", "/tmp", .{ .depth = 1 });
+    try t.expectEqual(@as(usize, 1), deep.depth);
+    const deeper = try agentmod.Agent.initOpts(a, &cfg, "mock", "m", "/tmp", .{ .depth = deep.depth + 1 });
+    try t.expectEqual(@as(usize, 2), deeper.depth);
+
+    // 启用集是 per-Agent:一个 Agent 开了插件不会影响另一个
+    const with_task = try agentmod.Agent.initOpts(a, &cfg, "mock", "m", "/tmp", .{
+        .plugins = pluginsmod.withEnabled(0, "task-delegation"),
+    });
+    const without = try agentmod.Agent.initOpts(a, &cfg, "mock", "m", "/tmp", .{ .plugins = 0 });
+    try t.expect(pluginsmod.findToolIn(with_task.plugins, "task") != null);
+    try t.expect(pluginsmod.findToolIn(without.plugins, "task") == null);
+}
+
+test "nested in-process delegation is stopped by the depth gate" {
+    const t = std.testing;
+    try util.testInit();
+    var arena = util.Arena.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    submock_alloc = a;
+
+    var state = SubMock{ .port = 18732 };
+    const server_thread = try std.Thread.spawn(.{}, subMockMain, .{&state});
+    defer {
+        state.stop.store(true, .release);
+        server_thread.join();
+    }
+    _ = std.Io.sleep(util.io, .{ .nanoseconds = 60 * std.time.ns_per_ms }, .awake) catch {};
+
+    var cfg = cfgmod.Config{ .arena = &arena };
+    var provs = [_]cfgmod.Provider{.{
+        .name = "mock",
+        .api = .openai_completions,
+        .base_url = "http://127.0.0.1:18732",
+        .api_key = "k",
+    }};
+    cfg.providers = &provs;
+
+    // mock 让每一层都要求再委派。深度正确递增时:顶层(0)派出 subagent(1),
+    // 它再派就撞上 MAX_TASK_DEPTH=2 被拒。父 agent 拿到拒绝后会在工具循环里
+    // 重试(上限 MAX_TOOL_ITER),所以请求数不是常数,但**有界**。
+    //
+    // 深度不递增的话每层都是 depth 1,闸门永远不触发,一层层递归下去 ——
+    // 进程内路径没有进程边界兜底,那就是栈溢出或挂死。这个测试跑得完
+    // 本身就是闸门生效的证据。
+    var parent = try agentmod.Agent.initOpts(a, &cfg, "mock", "m", "/tmp", .{
+        .plugins = pluginsmod.withEnabled(0, "task-delegation"),
+    });
+    const result = try parent.send("NEST-ME once");
+    try t.expect(result.error_msg == null);
+
+    // 有界:每轮工具循环最多派一次,不会指数增长
+    try t.expect(state.nest_requests.load(.acquire) <= 64);
+
+    // 顶层派出的那一路必须跑完(闸门只该拦更深的一层,不该让整条委派失败)
+    var saw_task_result = false;
+    for (parent.messages.items) |m| {
+        if (std.mem.eql(u8, m.role, "tool") and std.mem.indexOf(u8, m.content, "=== ") != null) {
+            saw_task_result = true;
+        }
+    }
+    try t.expect(saw_task_result);
+
+    // 深度闸门的错误文本本身由 plugins.zig 的单元测试守着 —— 它在 subagent
+    // 内部,父 agent 只看到那一路的最终答复。这里守的是「递归会停」。
+}

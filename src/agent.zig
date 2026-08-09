@@ -235,6 +235,18 @@ fn collectPaths(a: std.mem.Allocator, args: []const u8, out: *[MAX_LOCKED_PATHS]
     return 0;
 }
 
+/// subagent 事件类型(父 agent 侧决定怎么展示)。
+pub const SubagentEvent = enum {
+    text,
+    reasoning,
+    tool_start,
+    tool_done,
+    tool_failed,
+    notice,
+    /// 这一路委派结束(text 是最终答复的首行或错误原因)
+    finished,
+};
+
 pub const AgentCallbacks = struct {
     ctx: ?*anyopaque = null,
     on_text: ?*const fn (ctx: ?*anyopaque, text: []const u8) anyerror!void = null,
@@ -257,6 +269,12 @@ pub const AgentCallbacks = struct {
     /// 「模型说链路断了」和「引擎发现链路断了正在重连」—— 后者才需要
     /// 用户知道 piz 仍在推进,而不是卡住了。
     on_notice: ?*const fn (ctx: ?*anyopaque, text: []const u8) anyerror!void = null,
+    /// subagent 的中间事件(进程内委派)。`idx` 是任务序号(1 起)。
+    ///
+    /// 子进程路径下委派是纯黑盒:父 agent join() 干等,只能拿到最终文本。
+    /// 进程内跑之后 subagent 的每个 delta、每次工具调用都能实时透出来 ——
+    /// 用户看得见「3 号在跑 grep」而不是只有一个转圈。
+    on_subagent: ?*const fn (ctx: ?*anyopaque, idx: usize, kind: SubagentEvent, text: []const u8) anyerror!void = null,
 };
 
 /// 止损切断时模型往往一个字正文都没产出 —— 但答案通常就在最后一份工具输出里。
@@ -311,6 +329,17 @@ pub const Agent = struct {
     compacts: usize = 0,
     /// 只读模式:不暴露工具,工具调用一律拒绝。
     read_only: bool = false,
+    /// 本 Agent 的插件启用集(位掩码)。
+    ///
+    /// 从前是 plugins.zig 的进程级单例。进程内并行跑多个 Agent 时那不成立:
+    /// 一个 Agent 开了 skills 会让所有 Agent 都看到 skill 工具,而只读的
+    /// 调研 subagent 更不该因为兄弟 agent 的设置拿到写工具。
+    plugins: pluginsmod.EnabledSet = 0,
+    /// 委派深度。顶层 agent = 0,它派出的 subagent = 1。
+    ///
+    /// 从前只能靠 PIZ_TASK_DEPTH 环境变量跨进程传 —— 进程内 subagent 没有
+    /// 新进程可继承环境,深度必须是 Agent 自己的字段。
+    depth: usize = 0,
     cbs: AgentCallbacks = .{},
     /// 流被取消(如 Ctrl+C)
     aborted: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
@@ -325,11 +354,19 @@ pub const Agent = struct {
         read_only: bool = false,
         /// 自定义系统提示(--system):替换默认提示(AGENTS.md/memory/skills 一并省略)
         system_override: ?[]const u8 = null,
+        /// 插件启用集。null = 用进程默认集(CLI/web 的常规路径)。
+        /// subagent 显式传:它的启用集独立于父 agent 与兄弟 agent。
+        plugins: ?pluginsmod.EnabledSet = null,
+        /// 委派深度。顶层 = 0;subagent 传父深度 + 1。
+        depth: usize = 0,
     };
 
     pub fn initOpts(alloc: std.mem.Allocator, cfg: *cfgmod.Config, provider_name: ?[]const u8, model_name: ?[]const u8, cwd: []const u8, opts: InitOptions) !Agent {
         const resolved = try cfg.resolve(provider_name, model_name);
         const url = try cfg.endpointUrl(resolved.provider);
+        // 启用集:调用方给了就用它,否则拷进程默认集。之后只改这个副本 ——
+        // 从前 initOpts 里的 enable("skills") 改的是全局,会污染别的 Agent。
+        var enabled = opts.plugins orelse pluginsmod.defaultSet();
         // 系统提示:环境 + AGENTS.md + memory.md + skills 索引
         var spw = std.Io.Writer.Allocating.init(alloc);
         defer spw.deinit();
@@ -360,7 +397,7 @@ pub const Agent = struct {
             \\
         );
         // 联网准则:仅在工具真的可用时才说,否则是在教模型用不存在的东西
-        if (pluginsmod.isToolEnabled("web_search") or pluginsmod.isToolEnabled("fetch_url")) {
+        if (pluginsmod.isToolEnabledIn(enabled, "web_search") or pluginsmod.isToolEnabledIn(enabled, "fetch_url")) {
             try spw.writer.writeAll(
                 \\# When local information runs out
                 \\Your knowledge has a cutoff and this machine may not have the answer.
@@ -372,7 +409,7 @@ pub const Agent = struct {
             );
         }
         // 委派准则:同上,只在 task 工具可用时说
-        if (pluginsmod.isToolEnabled("task")) {
+        if (pluginsmod.isToolEnabledIn(enabled, "task")) {
             try spw.writer.writeAll(
                 \\# Delegating
                 \\Use task to farm out independent, self-contained pieces of work and run them
@@ -398,7 +435,9 @@ pub const Agent = struct {
         if (skills_idx.len > 0) {
             // 装了技能才自动开 skills 插件(暴露 skill 工具)。
             // 没装技能时暴露它是纯浪费:模型多一个永远无结果的工具。
-            _ = pluginsmod.enable("skills");
+            // 只开本 Agent 的:从前调 pluginsmod.enable 改的是进程全局,
+            // 一个装了 skills 的 Agent 会让所有 Agent 都看到 skill 工具。
+            enabled = pluginsmod.withEnabled(enabled, "skills");
             try spw.writer.writeAll("# Available skills (use the skill tool to load one)\n");
             try spw.writer.writeAll(skills_idx);
             try spw.writer.writeByte('\n');
@@ -425,6 +464,8 @@ pub const Agent = struct {
                 .messages = std.array_list.Managed(ai.Message).init(alloc),
                 .system_prompt = try spw2.toOwnedSlice(),
                 .read_only = opts.read_only,
+                .plugins = enabled,
+                .depth = opts.depth,
             };
         }
         // SYSTEM.md(项目 .pi/SYSTEM.md 优先,其次全局)替换默认提示
@@ -449,6 +490,8 @@ pub const Agent = struct {
                     .messages = std.array_list.Managed(ai.Message).init(alloc),
                     .system_prompt = try spw2.toOwnedSlice(),
                     .read_only = opts.read_only,
+                    .plugins = enabled,
+                    .depth = opts.depth,
                 };
             } else |_| {}
         }
@@ -469,6 +512,8 @@ pub const Agent = struct {
             .messages = std.array_list.Managed(ai.Message).init(alloc),
             .system_prompt = try spw.toOwnedSlice(),
             .read_only = opts.read_only,
+            .plugins = enabled,
+            .depth = opts.depth,
         };
     }
 
@@ -529,7 +574,7 @@ pub const Agent = struct {
         }
         // 工具定义每轮都全量重发,是上下文的一部分 —— 实测默认工具集 1024 token。
         // 漏掉它压缩就会晚触发,预算查询也会虚报余量。只读模式不发工具。
-        if (!self.read_only) n += pluginsmod.toolDefsTokens();
+        if (!self.read_only) n += pluginsmod.toolDefsTokensIn(self.plugins);
         return n;
     }
 
@@ -612,7 +657,7 @@ pub const Agent = struct {
             // 工具定义(核心 + 插件;带真 JSON Schema)
             var tool_defs = std.array_list.Managed(ai.ToolDef).init(self.alloc);
             defer tool_defs.deinit();
-            if (!self.read_only) try pluginsmod.appendToolDefs(&tool_defs);
+            if (!self.read_only) try pluginsmod.appendToolDefsIn(self.plugins, &tool_defs);
 
             const cbs = ai.Callbacks{
                 .ctx = self.cbs.ctx,
@@ -758,7 +803,7 @@ pub const Agent = struct {
                         continue;
                     }
                 }
-                const tool = if (self.read_only) null else pluginsmod.findTool(tc.name);
+                const tool = if (self.read_only) null else pluginsmod.findToolIn(self.plugins, tc.name);
                 if (tool == null) {
                     slots[i].done = true;
                     slots[i].result = if (self.read_only) .{
@@ -1081,7 +1126,7 @@ test "context estimate counts the tool definitions that ship every turn" {
 
     // 工具定义每轮全量重发,是上下文的一部分。漏掉它压缩会晚触发、
     // get_context_remaining 会虚报余量。
-    const tool_tokens = pluginsmod.toolDefsTokens();
+    const tool_tokens = pluginsmod.toolDefsTokensIn(pluginsmod.defaultSet());
     try t.expect(tool_tokens > 500); // 默认工具集实测约 1024
 
     var agent = try Agent.init(a, &cfg, "mock", "m", "/tmp");
@@ -1209,7 +1254,7 @@ test "parallel tool slots preserve call order" {
     };
     const slots = try a.alloc(ToolSlot, calls.len);
     for (calls, 0..) |c, i| {
-        slots[i] = .{ .call = c, .agent = &agent, .tool = pluginsmod.findTool(c.name) };
+        slots[i] = .{ .call = c, .agent = &agent, .tool = pluginsmod.findToolIn(agent.plugins, c.name) };
     }
     var threads: [5]std.Thread = undefined;
     for (slots, 0..) |*s, i| {
@@ -1253,7 +1298,7 @@ test "per-file lock prevents lost writes under concurrency" {
     };
     const slots = try a.alloc(ToolSlot, calls.len);
     for (calls, 0..) |c, i| {
-        slots[i] = .{ .call = c, .agent = &agent, .tool = pluginsmod.findTool(c.name) };
+        slots[i] = .{ .call = c, .agent = &agent, .tool = pluginsmod.findToolIn(agent.plugins, c.name) };
     }
     var threads: [2]std.Thread = undefined;
     for (slots, 0..) |*s, i| {

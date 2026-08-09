@@ -216,8 +216,16 @@ test "task tool delegates to a real sub-process and returns its output" {
     // 这里用空 description 让它在 spawn 之前就返回参数错误)
     try t.expect(std.mem.indexOf(u8, (try toolTask(&agent, a, "{\"tasks\":[]}")).content, "non-empty") != null);
 
-    // 深度闸门:子 agent 读同一份 settings.json 也带 task 工具,
-    // 不拦就是 fork bomb(并发按层相乘)。深度靠环境变量跨进程传。
+    // 深度闸门:subagent 也带 task 工具,不拦就是 fork bomb(并发按层相乘)。
+    // 深度现在是 Agent 字段 —— 进程内 subagent 没有新进程可继承环境变量。
+    agent.depth = MAX_TASK_DEPTH;
+    const deep = try toolTask(&agent, a, "{\"description\":\"go deeper\"}");
+    try t.expect(deep.is_error);
+    try t.expect(std.mem.indexOf(u8, deep.content, "depth limit") != null);
+    agent.depth = 0;
+
+    // 环境变量只做**进程基准**:本进程被别的 piz spawn 起来时,顶层 agent
+    // 的起始深度从这里读。两条路径在 processBaseDepth 汇合。
     const env = agentmod.util.environ_map.?;
     const saved = env.get(DEPTH_ENV);
     defer if (saved) |s| {
@@ -225,19 +233,18 @@ test "task tool delegates to a real sub-process and returns its output" {
     } else {
         _ = env.swapRemove(DEPTH_ENV);
     };
-
     try env.put(DEPTH_ENV, "0");
-    try t.expectEqual(@as(usize, 0), currentTaskDepth());
-
+    try t.expectEqual(@as(usize, 0), processBaseDepth());
     try env.put(DEPTH_ENV, "2");
-    try t.expectEqual(@as(usize, 2), currentTaskDepth());
-    const deep = try toolTask(&agent, a, "{\"description\":\"go deeper\"}");
-    try t.expect(deep.is_error);
-    try t.expect(std.mem.indexOf(u8, deep.content, "depth limit") != null);
-
+    try t.expectEqual(@as(usize, 2), processBaseDepth());
     // 坏值当 0 处理(不能因为环境被污染就拒绝所有委托)
     try env.put(DEPTH_ENV, "not-a-number");
-    try t.expectEqual(@as(usize, 0), currentTaskDepth());
+    try t.expectEqual(@as(usize, 0), processBaseDepth());
+    // 关键:环境变量不再直接决定闸门 —— agent.depth 才是
+    try env.put(DEPTH_ENV, "9");
+    agent.depth = 0;
+    const still_ok = try toolTask(&agent, a, "{\"tasks\":[]}");
+    try t.expect(std.mem.indexOf(u8, still_ok.content, "depth limit") == null);
 
     // 嵌套层的并行上限必须远小于顶层 —— 并发是**乘起来**的:
     // 顶层 32 × 嵌套 32 × 深度 2 = 1056 个 piz 进程 ≈ 9GB,足够打死机器。
@@ -248,7 +255,7 @@ test "task tool delegates to a real sub-process and returns its output" {
     try t.expect(MAX_PARALLEL_TASKS + MAX_PARALLEL_TASKS * MAX_PARALLEL_TASKS_NESTED <= 256);
 
     // 深度 1 时,超过嵌套上限就该被拒 —— 顶层的 32 在这里不适用
-    try env.put(DEPTH_ENV, "1");
+    agent.depth = 1;
     var nested = std.array_list.Managed(u8).init(a);
     try nested.appendSlice("{\"tasks\":[");
     for (0..MAX_PARALLEL_TASKS_NESTED + 1) |i| {
@@ -272,10 +279,15 @@ test "task slots run in parallel and report per-task failure" {
 
     // 直接驱动 TaskSlot:用 sh 替代子 agent,验证并行 + 输出回传 + 失败归因。
     // 真跑 piz 子进程要 API key,测试环境没有。
+    // 每槽独立 arena:它们在各自线程里跑,共用一个会并发损坏
+    var sa = [_]std.heap.ArenaAllocator{
+        std.heap.ArenaAllocator.init(a), std.heap.ArenaAllocator.init(a), std.heap.ArenaAllocator.init(a),
+    };
+    defer for (&sa) |*x| x.deinit();
     var slots = [_]TaskSlot{
-        .{ .desc = "ok", .alloc = a, .cwd = "/tmp", .argv = &.{ "sh", "-c", "sleep 0.3; echo DONE-A" } },
-        .{ .desc = "ok2", .alloc = a, .cwd = "/tmp", .argv = &.{ "sh", "-c", "sleep 0.3; echo DONE-B" } },
-        .{ .desc = "fail", .alloc = a, .cwd = "/tmp", .argv = &.{ "sh", "-c", "echo BOOM >&2; exit 3" } },
+        .{ .desc = "ok", .arena = &sa[0], .alloc = sa[0].allocator(), .cwd = "/tmp", .argv = &.{ "sh", "-c", "sleep 0.3; echo DONE-A" } },
+        .{ .desc = "ok2", .arena = &sa[1], .alloc = sa[1].allocator(), .cwd = "/tmp", .argv = &.{ "sh", "-c", "sleep 0.3; echo DONE-B" } },
+        .{ .desc = "fail", .arena = &sa[2], .alloc = sa[2].allocator(), .cwd = "/tmp", .argv = &.{ "sh", "-c", "echo BOOM >&2; exit 3" } },
     };
     const start = std.Io.Clock.now(.awake, agentmod.util.io).nanoseconds;
     var threads: [3]std.Thread = undefined;
@@ -303,9 +315,13 @@ test "delegation results stay readable and keep partial output from failures" {
     defer arena.deinit();
     const a = arena.allocator();
 
+    var sa2 = [_]std.heap.ArenaAllocator{
+        std.heap.ArenaAllocator.init(a), std.heap.ArenaAllocator.init(a),
+    };
+    defer for (&sa2) |*x| x.deinit();
     var slots = [_]TaskSlot{
-        .{ .desc = "survey the parser", .alloc = a, .cwd = "/tmp", .argv = &.{ "sh", "-c", "printf 'line one\\nline two\\n'" } },
-        .{ .desc = "check the lexer", .alloc = a, .cwd = "/tmp", .argv = &.{ "sh", "-c", "echo partial-progress; echo WHY >&2; exit 4" } },
+        .{ .desc = "survey the parser", .arena = &sa2[0], .alloc = sa2[0].allocator(), .cwd = "/tmp", .argv = &.{ "sh", "-c", "printf 'line one\\nline two\\n'" } },
+        .{ .desc = "check the lexer", .arena = &sa2[1], .alloc = sa2[1].allocator(), .cwd = "/tmp", .argv = &.{ "sh", "-c", "echo partial-progress; echo WHY >&2; exit 4" } },
     };
     for (&slots) |*s| runTaskSlot(s);
 
@@ -327,8 +343,10 @@ test "delegation results stay readable and keep partial output from failures" {
     try t.expect(!out.is_error);
 
     // 全失败才算失败
+    var sa3 = std.heap.ArenaAllocator.init(a);
+    defer sa3.deinit();
     var all_bad = [_]TaskSlot{
-        .{ .desc = "x", .alloc = a, .cwd = "/tmp", .argv = &.{ "sh", "-c", "exit 1" } },
+        .{ .desc = "x", .arena = &sa3, .alloc = sa3.allocator(), .cwd = "/tmp", .argv = &.{ "sh", "-c", "exit 1" } },
     };
     runTaskSlot(&all_bad[0]);
     const bad = try formatTaskResults(a, &all_bad);
@@ -540,7 +558,7 @@ fn toolContextRemaining(ctx: ?*anyopaque, arena: std.mem.Allocator, args: []cons
     const limit = w * agentmod.CTX_HARD_PERCENT / 100;
     const until_compact = if (used < limit) limit - used else 0;
     // 工具定义的份额单列:它是恒定开销,模型省不掉,不该让它以为那是可回收的空间。
-    const tools_share = if (self.read_only) 0 else toolDefsTokens();
+    const tools_share = if (self.read_only) 0 else toolDefsTokensIn(self.plugins);
     return .{ .content = try std.fmt.allocPrint(
         arena,
         "Context budget: window {d} tokens, used ~{d} (of which ~{d} is the fixed tool definitions), remaining ~{d}. Auto-compaction triggers at {d}% ({d} tokens) — ~{d} tokens of headroom before that.",
@@ -929,17 +947,30 @@ const TASK_OUTPUT_LIMIT = 32 * 1024;
 /// 没有上限的话父 agent 会无限期挂着 —— 而它此刻正占着一个工具执行槽。
 const TASK_TIMEOUT_MS = 600_000;
 
-/// 委托深度上限。子 agent 读的是**同一份** settings.json,所以它也带 `task`
-/// 工具、也能继续 spawn —— 没有深度限制就是 fork bomb,而每个 piz 进程常驻 9MB。
+/// 委托深度上限。子 agent 也带 `task` 工具、也能继续委派 —— 没有深度限制
+/// 就是 fork bomb,而每个 piz 进程常驻 9MB。
 ///
 /// 深度与并行上限一起把最坏情况钉死:顶层 32 + 嵌套层每个 4,深度 2
-/// → 最坏 32 + 32×4 = 160 个进程 ≈ 1.4GB。若嵌套层也用 32,同样的深度
-/// 就是 1056 个进程 ≈ 9GB。深度靠环境变量跨进程传递(唯一可靠的通道)。
+/// → 最坏 32 + 32×4 = 160 个 agent。进程内路径下它们是线程而非进程,
+/// 内存代价小得多,但上限仍按最坏情况定 —— 逃生通道会切回子进程。
 const MAX_TASK_DEPTH = 2;
+
+/// 子进程路径传递深度用的环境变量(进程内路径用 `Agent.depth` 字段)。
 const DEPTH_ENV = "PIZ_TASK_DEPTH";
 
-/// 当前进程的委托深度。顶层 agent = 0。
-fn currentTaskDepth() usize {
+/// 设成非空非 "0" 时,委派回退到 spawn 子进程。
+///
+/// 逃生通道:进程内 subagent 共享地址空间,它里面的 panic 会拖垮整个 piz。
+/// 真出问题时不必回滚版本,设个环境变量就切回旧行为。
+const SPAWN_ENV = "PIZ_TASK_SPAWN";
+
+/// 进程基准委托深度(从 `PIZ_TASK_DEPTH` 读一次)。
+///
+/// 进程内 subagent 没有新进程可继承环境,深度是 `Agent.depth` 字段。但**子进程**
+/// 路径仍然存在(`piz -p` 被别的 piz spawn 起来),那种情况下本进程顶层 agent
+/// 的起始深度得从环境读。两条路径在这里汇合:顶层 Agent 的 depth = 这个基准,
+/// 它派出的 subagent = 自己的 depth + 1。
+pub fn processBaseDepth() usize {
     const env = agentmod.util.environ_map orelse return 0;
     const v = env.get(DEPTH_ENV) orelse return 0;
     return std.fmt.parseInt(usize, std.mem.trim(u8, v, " \t\r\n"), 10) catch 0;
@@ -968,14 +999,32 @@ fn buildTaskArgv(
     return argv.toOwnedSlice();
 }
 
-/// 一个委托槽:spawn 后由工作线程抽输出 + wait。
+/// 一个委托槽。两种执行路径共用它:
+/// - 进程内(默认):在本进程建一个 Agent 跑,中间事件实时转发给父 agent
+/// - 子进程(`PIZ_TASK_SPAWN=1`):spawn piz -p,只能拿到最终文本
 const TaskSlot = struct {
     desc: []const u8,
+    /// **本槽独占**的分配器。
+    ///
+    /// 不能共用 toolTask 的 arena:32 个槽在各自线程里跑,而 ArenaAllocator
+    /// 不是线程安全的 —— 并发分配会直接损坏它。每槽一个 arena,由 toolTask
+    /// 在读完结果后统一回收。
+    arena: *std.heap.ArenaAllocator,
     alloc: std.mem.Allocator,
-    argv: []const []const u8,
     cwd: []const u8,
+    /// 本槽的序号(1 起),事件转发时告诉父 agent 是哪个子任务
+    idx: usize = 0,
+    read_only: bool = false,
+
+    // ---- 进程内路径 ----
+    /// 父 agent:借它的 cfg / provider / model / 启用集 / 回调
+    parent: ?*agentmod.Agent = null,
+
+    // ---- 子进程路径 ----
+    argv: []const []const u8 = &.{},
     /// 子进程环境:父环境 + PIZ_TASK_DEPTH+1(深度靠它跨进程传递)
     environ: ?*const std.process.Environ.Map = null,
+
     output: []const u8 = "",
     failed: bool = false,
     err: []const u8 = "",
@@ -984,16 +1033,164 @@ const TaskSlot = struct {
     elapsed_ms: i64 = 0,
 };
 
+/// 事件转发上下文:把 subagent 的回调翻译成父 agent 的 `on_subagent`。
+const ForwardCtx = struct {
+    slot: *TaskSlot,
+    parent: *agentmod.Agent,
+
+    fn emit(self: *ForwardCtx, kind: agentmod.SubagentEvent, text: []const u8) void {
+        const f = self.parent.cbs.on_subagent orelse return;
+        f(self.parent.cbs.ctx, self.slot.idx, kind, text) catch {};
+    }
+    fn onText(ctx: ?*anyopaque, text: []const u8) anyerror!void {
+        const self: *ForwardCtx = @ptrCast(@alignCast(ctx.?));
+        self.emit(.text, text);
+    }
+    fn onReasoning(ctx: ?*anyopaque, text: []const u8) anyerror!void {
+        const self: *ForwardCtx = @ptrCast(@alignCast(ctx.?));
+        self.emit(.reasoning, text);
+    }
+    fn onToolStart(ctx: ?*anyopaque, name: []const u8, args: []const u8) anyerror!void {
+        const self: *ForwardCtx = @ptrCast(@alignCast(ctx.?));
+        _ = args;
+        self.emit(.tool_start, name);
+    }
+    fn onToolEnd(ctx: ?*anyopaque, name: []const u8, is_error: bool, summary: []const u8) anyerror!void {
+        const self: *ForwardCtx = @ptrCast(@alignCast(ctx.?));
+        _ = summary;
+        self.emit(if (is_error) .tool_failed else .tool_done, name);
+    }
+    fn onNotice(ctx: ?*anyopaque, text: []const u8) anyerror!void {
+        const self: *ForwardCtx = @ptrCast(@alignCast(ctx.?));
+        self.emit(.notice, text);
+    }
+    /// subagent 跟着父 agent 一起被 Ctrl+C 中断
+    fn onAbort(ctx: ?*anyopaque) bool {
+        const self: *ForwardCtx = @ptrCast(@alignCast(ctx.?));
+        return self.parent.aborted.load(.acquire);
+    }
+};
+
+/// 首行(结束事件的摘要:多行答复在界面上只显示一行)。
+fn firstLine(text: []const u8) []const u8 {
+    const t = std.mem.trim(u8, text, " \t\r\n");
+    const nl = std.mem.indexOfScalar(u8, t, '\n') orelse return t;
+    return t[0..nl];
+}
+
+/// 跑一个委托槽。有 `parent` 就走进程内,否则 spawn 子进程。
 fn runTaskSlot(slot: *TaskSlot) void {
-    const io = agentmod.util.io;
     // 登记活动:委派原先是最长 10 分钟的纯黑盒,父 agent join() 干等,
     // 界面一动不动。登记后 TUI 能显示每个子 agent 的耗时与已回传字节。
     const act = activity.begin(.subagent, "task", slot.desc, TASK_TIMEOUT_MS);
     defer {
         slot.elapsed_ms = act.elapsedMs();
         act.release();
+        // 结束事件放这里 —— 两条执行路径都覆盖,且失败路径也发得出去。
+        if (slot.parent) |p| {
+            if (p.cbs.on_subagent) |f| {
+                const summary = if (slot.failed) slot.err else slot.output;
+                f(p.cbs.ctx, slot.idx, .finished, firstLine(summary)) catch {};
+            }
+        }
     }
 
+    if (slot.parent) |parent| {
+        runTaskInProcess(slot, parent, act);
+        return;
+    }
+    runTaskSpawned(slot, act);
+}
+
+/// 进程内跑 subagent。
+///
+/// 比 spawn 快在省掉进程启动 + 配置重读 + 连接池重建;更重要的是**中间过程
+/// 可见**:subagent 的每个 delta、每次工具调用都实时转发给父 agent,
+/// 而子进程路径只能在结束时拿到一坨文本。
+fn runTaskInProcess(slot: *TaskSlot, parent: *agentmod.Agent, act: activity.Handle) void {
+    // 独立 arena:subagent 的历史与工具输出跟它一起回收,不进父 agent 的
+    // 分配器(那是会话级的,长跑下只增不减)。
+    var arena = agentmod.util.Arena.init(slot.alloc);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    var fwd = ForwardCtx{ .slot = slot, .parent = parent };
+
+    // 继承 provider / model / cwd / 启用集与只读位;深度 +1。
+    // read_only 只能加不能减 —— 只读父 agent 的 subagent 必然只读,
+    // 否则委派就是一条提权通道。
+    var sub = agentmod.Agent.initOpts(a, parent.cfg, parent.provider.name, parent.model, parent.cwd, .{
+        .read_only = parent.read_only or slot.read_only,
+        .plugins = parent.plugins,
+        .depth = parent.depth + 1,
+    }) catch |e| {
+        slot.failed = true;
+        slot.err = std.fmt.allocPrint(slot.alloc, "cannot start sub-agent: {s}", .{@errorName(e)}) catch "cannot start sub-agent";
+        return;
+    };
+    sub.cbs = .{
+        .ctx = &fwd,
+        .on_text = ForwardCtx.onText,
+        .on_reasoning = ForwardCtx.onReasoning,
+        .on_tool_start = ForwardCtx.onToolStart,
+        .on_tool_end = ForwardCtx.onToolEnd,
+        .on_notice = ForwardCtx.onNotice,
+        .on_abort = ForwardCtx.onAbort,
+    };
+
+    const result = sub.send(slot.desc) catch |e| {
+        // Ctrl+C 与真故障要分开:前者不是错误,模型不该重试
+        const cancelled = act.cancelled() or parent.aborted.load(.acquire);
+        slot.failed = true;
+        slot.err = if (cancelled)
+            "interrupted by user"
+        else
+            std.fmt.allocPrint(slot.alloc, "{s}", .{@errorName(e)}) catch "sub-agent failed";
+        // 已产出的部分留着 —— 一个跑挂的 subagent 常常已经查到了有用的东西
+        slot.output = lastAssistantText(slot.alloc, &sub);
+        return;
+    };
+
+    // 输出必须拷进 slot.alloc:arena 在函数返回时就没了
+    const text = if (result.text.len > 0) result.text else lastToolOutput(&sub);
+    slot.output = copyTail(slot.alloc, text);
+    if (result.error_msg) |msg| {
+        slot.failed = true;
+        slot.err = slot.alloc.dupe(u8, msg) catch "sub-agent reported an error";
+    }
+}
+
+/// 取最后一条 assistant 正文(中断时留下的 partial)。
+fn lastAssistantText(alloc: std.mem.Allocator, sub: *agentmod.Agent) []const u8 {
+    var i = sub.messages.items.len;
+    while (i > 0) {
+        i -= 1;
+        const m = sub.messages.items[i];
+        if (std.mem.eql(u8, m.role, "assistant") and m.content.len > 0) return copyTail(alloc, m.content);
+    }
+    return "";
+}
+
+/// 模型一个字正文都没产出时,答案通常在最后一份工具输出里。
+fn lastToolOutput(sub: *agentmod.Agent) []const u8 {
+    var i = sub.messages.items.len;
+    while (i > 0) {
+        i -= 1;
+        const m = sub.messages.items[i];
+        if (std.mem.eql(u8, m.role, "tool") and m.content.len > 0) return m.content;
+    }
+    return "";
+}
+
+/// 拷尾部 TASK_OUTPUT_LIMIT 字节 —— 结论在最后。
+fn copyTail(alloc: std.mem.Allocator, text: []const u8) []const u8 {
+    const tail = if (text.len > TASK_OUTPUT_LIMIT) text[text.len - TASK_OUTPUT_LIMIT ..] else text;
+    return alloc.dupe(u8, tail) catch "";
+}
+
+/// spawn 子进程跑 subagent(`PIZ_TASK_SPAWN=1` 的逃生通道)。
+fn runTaskSpawned(slot: *TaskSlot, act: activity.Handle) void {
+    const io = agentmod.util.io;
     var child = std.process.spawn(io, .{
         .argv = slot.argv,
         .cwd = .{ .path = slot.cwd },
@@ -1077,9 +1274,10 @@ fn toolTask(ctx: ?*anyopaque, arena: std.mem.Allocator, args: []const u8) anyerr
     const self: *agentmod.Agent = @ptrCast(@alignCast(ctx.?));
     const v = try std.json.parseFromSliceLeaky(std.json.Value, arena, args, .{});
 
-    // 深度闸门:子 agent 读同一份 settings.json,所以它也有 `task` 工具。
-    // 不拦就是 fork bomb —— 每个 piz 进程常驻 9MB,而并发是乘起来的。
-    const depth = currentTaskDepth();
+    // 深度闸门:subagent 也有 `task` 工具(读同一份 settings.json,或直接
+    // 继承父 agent 的启用集),不拦就是 fork bomb —— 并发是乘起来的。
+    // 深度取 Agent 字段而非环境变量:进程内 subagent 没有新进程可继承环境。
+    const depth = self.depth;
     if (depth >= MAX_TASK_DEPTH) {
         return .{
             .content = try std.fmt.allocPrint(
@@ -1133,33 +1331,65 @@ fn toolTask(ctx: ?*anyopaque, arena: std.mem.Allocator, args: []const u8) anyerr
         };
     }
 
-    // 自身可执行文件的**绝对路径**。原来 spawn 裸名 "piz" 靠 PATH 查找,
-    // 而 piz 通常不在 PATH 里 —— 实测 error.FileNotFound,委托一次都成功不了。
-    const exe = std.process.executablePathAlloc(agentmod.util.io, arena) catch |e| {
-        return .{
-            .content = try std.fmt.allocPrint(arena, "error: cannot resolve own executable path: {s}", .{@errorName(e)}),
-            .is_error = true,
-        };
+    // 执行路径:默认进程内。`PIZ_TASK_SPAWN=1` 切回 spawn 子进程 ——
+    // 进程内共享地址空间,subagent 里的 panic 会拖垮整个 piz,留个逃生通道。
+    const spawn_mode = blk: {
+        const env = agentmod.util.environ_map orelse break :blk false;
+        const flag = env.get(SPAWN_ENV) orelse break :blk false;
+        break :blk !(flag.len == 0 or std.mem.eql(u8, flag, "0"));
     };
 
-    // 子进程环境 = 父环境 + 深度+1。不能直接改父进程的 environ_map:
-    // 那是全局单例,并行的兄弟槽会互相踩。
-    var child_env = std.process.Environ.Map.init(arena);
-    if (agentmod.util.environ_map) |pe| {
-        var it = pe.iterator();
-        while (it.next()) |kv| try child_env.put(kv.key_ptr.*, kv.value_ptr.*);
-    }
-    try child_env.put(DEPTH_ENV, try std.fmt.allocPrint(arena, "{d}", .{depth + 1}));
-
     const slots = try arena.alloc(TaskSlot, specs.items.len);
-    for (slots, specs.items) |*slot, spec| {
-        slot.* = .{
-            .desc = spec.desc,
-            .alloc = arena,
-            .argv = try buildTaskArgv(arena, self, exe, spec.desc, spec.read_only),
-            .cwd = self.cwd,
-            .environ = &child_env,
+    // 每槽一个独立 arena:槽在各自线程里跑,共用一个 ArenaAllocator 会并发
+    // 损坏它。底层内存从父 arena 借,读完结果统一释放。
+    const slot_arenas = try arena.alloc(std.heap.ArenaAllocator, specs.items.len);
+    for (slot_arenas) |*sa| sa.* = std.heap.ArenaAllocator.init(arena);
+    defer for (slot_arenas) |*sa| sa.deinit();
+
+    if (!spawn_mode) {
+        for (slots, slot_arenas, specs.items, 1..) |*slot, *sa, spec, i| {
+            slot.* = .{
+                .desc = spec.desc,
+                .arena = sa,
+                .alloc = sa.allocator(),
+                .cwd = self.cwd,
+                .idx = i,
+                .read_only = spec.read_only,
+                .parent = self,
+            };
+        }
+    } else {
+        // 自身可执行文件的**绝对路径**。原来 spawn 裸名 "piz" 靠 PATH 查找,
+        // 而 piz 通常不在 PATH 里 —— 实测 error.FileNotFound,委托一次都成功不了。
+        const exe = std.process.executablePathAlloc(agentmod.util.io, arena) catch |e| {
+            return .{
+                .content = try std.fmt.allocPrint(arena, "error: cannot resolve own executable path: {s}", .{@errorName(e)}),
+                .is_error = true,
+            };
         };
+
+        // 子进程环境 = 父环境 + 深度+1。不能直接改父进程的 environ_map:
+        // 那是全局单例,并行的兄弟槽会互相踩。
+        const child_env = try arena.create(std.process.Environ.Map);
+        child_env.* = std.process.Environ.Map.init(arena);
+        if (agentmod.util.environ_map) |pe| {
+            var it = pe.iterator();
+            while (it.next()) |kv| try child_env.put(kv.key_ptr.*, kv.value_ptr.*);
+        }
+        try child_env.put(DEPTH_ENV, try std.fmt.allocPrint(arena, "{d}", .{depth + 1}));
+
+        for (slots, slot_arenas, specs.items, 1..) |*slot, *sa, spec, i| {
+            slot.* = .{
+                .desc = spec.desc,
+                .arena = sa,
+                .alloc = sa.allocator(),
+                .cwd = self.cwd,
+                .idx = i,
+                .read_only = spec.read_only,
+                .argv = try buildTaskArgv(arena, self, exe, spec.desc, spec.read_only),
+                .environ = child_env,
+            };
+        }
     }
 
     // 并行跑。单个任务不开线程,省一次 spawn/join。
@@ -2019,34 +2249,71 @@ pub const builtin_plugins = [_]Plugin{
     } },
 };
 
-/// 运行时插件启用集。默认按 `enabled_by_default`;
-/// `enable` 追加开启项(来自 settings.json 的 `plugins` 或 `--plugin`)。
-/// 进程级单例:插件表本身是编译期常量,启用与否是启动期决策。
-var extra_enabled: [builtin_plugins.len]bool = @splat(false);
+/// 插件启用集的位掩码类型(14 个内置插件)。
+pub const EnabledSet = u16;
 
-/// 按名开启一个可选插件。未知名字返回 false(调用方给提示)。
+comptime {
+    if (builtin_plugins.len > @bitSizeOf(EnabledSet)) {
+        @compileError("插件数超过 EnabledSet 的位宽,把它换成更宽的整型");
+    }
+}
+
+/// **进程默认**启用集。`--plugin` 与 settings.json 的 `plugins` 写它,
+/// 新建 Agent 时作为初值拷进 `Agent.plugins`。
+///
+/// 为什么不再是唯一真相:进程内并行跑多个 Agent 时,一个 Agent 开了 skills
+/// 就会让所有 Agent 都看到 skill 工具。subagent 尤其不能这样 —— 它可能是
+/// 只读的调研 agent,却因为兄弟 agent 的设置拿到了写工具。
+var default_enabled: EnabledSet = 0;
+
+/// 按名开启一个可选插件(改进程默认集)。未知名字返回 false(调用方给提示)。
 pub fn enable(name: []const u8) bool {
     for (&builtin_plugins, 0..) |p, i| {
         if (std.mem.eql(u8, p.name, name)) {
-            extra_enabled[i] = true;
+            default_enabled |= maskOf(i);
             return true;
         }
     }
     return false;
 }
 
-/// 该插件当前是否启用。
-fn isEnabled(idx: usize) bool {
-    return builtin_plugins[idx].enabled_by_default or extra_enabled[idx];
+fn maskOf(idx: usize) EnabledSet {
+    return @as(EnabledSet, 1) << @intCast(idx);
+}
+
+/// 进程默认启用集 —— 新 Agent 的初值。
+pub fn defaultSet() EnabledSet {
+    return default_enabled;
+}
+
+/// 在一个启用集上开启某个插件,返回新集合。未知名字原样返回。
+pub fn withEnabled(set: EnabledSet, name: []const u8) EnabledSet {
+    for (&builtin_plugins, 0..) |p, i| {
+        if (std.mem.eql(u8, p.name, name)) return set | maskOf(i);
+    }
+    return set;
+}
+
+/// 该插件在给定启用集下是否可用。
+/// 从 hook 的 ctx(总是 Agent 指针)取它的启用集。ctx 为 null 时退回进程默认集
+/// —— 只有测试会那样调。
+fn setOfCtx(ctx: ?*anyopaque) EnabledSet {
+    const c = ctx orelse return default_enabled;
+    const agent: *agentmod.Agent = @ptrCast(@alignCast(c));
+    return agent.plugins;
+}
+
+fn isEnabledIn(set: EnabledSet, idx: usize) bool {
+    return builtin_plugins[idx].enabled_by_default or (set & maskOf(idx)) != 0;
 }
 
 /// 某个插件工具当前是否可用。
 ///
 /// 系统提示用它决定该不该教模型用某个工具 —— 讲一个不存在的工具比不讲更糟:
 /// 模型会去调,拿到 unknown tool,然后浪费一轮重新想办法。
-pub fn isToolEnabled(tool_name: []const u8) bool {
+pub fn isToolEnabledIn(set: EnabledSet, tool_name: []const u8) bool {
     for (&builtin_plugins, 0..) |p, i| {
-        if (!isEnabled(i)) continue;
+        if (!isEnabledIn(set, i)) continue;
         for (p.tools) |*t| {
             if (std.mem.eql(u8, t.name, tool_name)) return true;
         }
@@ -2059,7 +2326,7 @@ pub fn listPlugins(arena: std.mem.Allocator) ![]const u8 {
     var aw = std.Io.Writer.Allocating.init(arena);
     defer aw.deinit();
     for (&builtin_plugins, 0..) |p, i| {
-        const mark = if (isEnabled(i)) "on " else "off";
+        const mark = if (isEnabledIn(default_enabled, i)) "on " else "off";
         try aw.writer.print("  [{s}] {s}", .{ mark, p.name });
         if (p.tools.len > 0) {
             try aw.writer.writeAll("  tools:");
@@ -2072,21 +2339,23 @@ pub fn listPlugins(arena: std.mem.Allocator) ![]const u8 {
 
 /// 仅供测试:重置运行时启用集,避免测试间互相污染(启用集是进程级单例)。
 pub fn resetEnabledForTest() void {
-    extra_enabled = @splat(false);
+    default_enabled = 0;
 }
 
 /// 运行全部启用插件的 before_turn 钩子(agent 每轮请求前调用)。
 pub fn runBeforeTurn(ctx: ?*anyopaque) void {
+    const set = setOfCtx(ctx);
     for (&builtin_plugins, 0..) |p, i| {
-        if (!isEnabled(i)) continue;
+        if (!isEnabledIn(set, i)) continue;
         if (p.before_turn) |h| h(ctx);
     }
 }
 
 /// 工具执行前拦截:返回拦截消息或 null。
 pub fn runToolBefore(ctx: ?*anyopaque, name: []const u8, args: []const u8) ?[]const u8 {
+    const set = setOfCtx(ctx);
     for (&builtin_plugins, 0..) |p, i| {
-        if (!isEnabled(i)) continue;
+        if (!isEnabledIn(set, i)) continue;
         if (p.on_tool_before) |h| {
             if (h(ctx, name, args)) |msg| return msg;
         }
@@ -2096,8 +2365,9 @@ pub fn runToolBefore(ctx: ?*anyopaque, name: []const u8, args: []const u8) ?[]co
 
 /// 工具结果后处理:返回替换内容或 null。
 pub fn runToolAfter(ctx: ?*anyopaque, name: []const u8, content: []const u8) ?[]const u8 {
+    const set = setOfCtx(ctx);
     for (&builtin_plugins, 0..) |p, i| {
-        if (!isEnabled(i)) continue;
+        if (!isEnabledIn(set, i)) continue;
         if (p.on_tool_result) |h| {
             if (h(ctx, name, content)) |nc| return nc;
         }
@@ -2107,8 +2377,9 @@ pub fn runToolAfter(ctx: ?*anyopaque, name: []const u8, content: []const u8) ?[]
 
 /// 压缩失败:返回备用模型名或 null。
 pub fn compactFallbackModel(ctx: ?*anyopaque) ?[]const u8 {
+    const set = setOfCtx(ctx);
     for (&builtin_plugins, 0..) |p, i| {
-        if (!isEnabled(i)) continue;
+        if (!isEnabledIn(set, i)) continue;
         if (p.on_compact_failed) |h| {
             if (h(ctx)) |m| return m;
         }
@@ -2118,18 +2389,19 @@ pub fn compactFallbackModel(ctx: ?*anyopaque) ?[]const u8 {
 
 /// 压缩成功后调用(跨会话记忆等)。
 pub fn runAfterCompact(ctx: ?*anyopaque, summary: []const u8) void {
+    const set = setOfCtx(ctx);
     for (&builtin_plugins, 0..) |p, i| {
-        if (!isEnabled(i)) continue;
+        if (!isEnabledIn(set, i)) continue;
         if (p.on_compact) |h| h(ctx, summary);
     }
 }
 
 /// 查工具:核心表 + 已启用插件的工具。
 /// 禁用插件的工具查不到 —— 与 appendToolDefs 一致,否则模型能调到没声明的工具。
-pub fn findTool(name: []const u8) ?*const toolsmod.Tool {
+pub fn findToolIn(set: EnabledSet, name: []const u8) ?*const toolsmod.Tool {
     if (toolsmod.find(name)) |t| return t;
     for (&builtin_plugins, 0..) |p, i| {
-        if (!isEnabled(i)) continue;
+        if (!isEnabledIn(set, i)) continue;
         for (p.tools) |*t| {
             if (std.mem.eql(u8, t.name, name)) return t;
         }
@@ -2139,12 +2411,12 @@ pub fn findTool(name: []const u8) ?*const toolsmod.Tool {
 
 /// 汇总工具定义(核心表 + 已启用插件)到 out,供 ai.run 的 tools 参数。
 /// 单一真相源:新增插件工具自动带上其 JSON Schema,无需改此函数。
-pub fn appendToolDefs(out: *std.array_list.Managed(aimod.ToolDef)) !void {
+pub fn appendToolDefsIn(set: EnabledSet, out: *std.array_list.Managed(aimod.ToolDef)) !void {
     for (&toolsmod.tools) |*t| {
         try out.append(.{ .name = t.name, .desc = t.desc, .schema = t.schema });
     }
     for (&builtin_plugins, 0..) |p, i| {
-        if (!isEnabled(i)) continue;
+        if (!isEnabledIn(set, i)) continue;
         for (p.tools) |*t| {
             try out.append(.{ .name = t.name, .desc = t.desc, .schema = t.schema });
         }
@@ -2157,11 +2429,11 @@ pub fn appendToolDefs(out: *std.array_list.Managed(aimod.ToolDef)) !void {
 /// 1024 token。漏掉它会让压缩晚触发、也让 `get_context_remaining` 虚报余量。
 /// 单独一个函数而非复用 `appendToolDefs`:预算估算在热路径上被反复调用,
 /// 不该为了数几个字符去分配一个 list。
-pub fn toolDefsTokens() usize {
+pub fn toolDefsTokensIn(set: EnabledSet) usize {
     var n: usize = 0;
     for (&toolsmod.tools) |*t| n += defTokens(t.name, t.desc, t.schema);
     for (&builtin_plugins, 0..) |p, i| {
-        if (!isEnabled(i)) continue;
+        if (!isEnabledIn(set, i)) continue;
         for (p.tools) |*t| n += defTokens(t.name, t.desc, t.schema);
     }
     return n;
@@ -2248,7 +2520,7 @@ test "all plugin tools ship a parseable schema" {
     }
 }
 
-test "optional plugins are gated out of the default tool set" {
+test "optional plugins are gated per agent, not process-wide" {
     const t = std.testing;
     resetEnabledForTest();
     defer resetEnabledForTest();
@@ -2258,36 +2530,51 @@ test "optional plugins are gated out of the default tool set" {
 
     // 默认工具集 = 核心表,不含任何插件工具。
     // 极简内核的可验证形式:每轮请求的 tools 数组只有真正必需的那几个。
+    const bare: EnabledSet = 0;
     var defs = std.array_list.Managed(aimod.ToolDef).init(a);
-    try appendToolDefs(&defs);
+    try appendToolDefsIn(bare, &defs);
     try t.expectEqual(toolsmod.tools.len, defs.items.len);
     for (defs.items) |d| {
         try t.expect(toolsmod.find(d.name) != null);
     }
     // 关键:禁用插件的工具查不到 —— 否则模型能调到没在 tools 里声明的工具
-    try t.expect(findTool("lsp") == null);
-    try t.expect(findTool("todo_write") == null);
-    try t.expect(findTool("git_status") == null);
+    try t.expect(findToolIn(bare, "lsp") == null);
+    try t.expect(findToolIn(bare, "todo_write") == null);
+    try t.expect(findToolIn(bare, "git_status") == null);
     // 核心工具始终在
-    try t.expect(findTool("read") != null);
-    try t.expect(findTool("grep") != null);
+    try t.expect(findToolIn(bare, "read") != null);
+    try t.expect(findToolIn(bare, "grep") != null);
 
-    // 开一个插件:它的工具立刻可见
-    try t.expect(enable("lsp"));
-    try t.expect(findTool("lsp") != null);
+    // 开一个插件:它的工具在**这个集合**里可见
+    const with_lsp = withEnabled(bare, "lsp");
+    try t.expect(findToolIn(with_lsp, "lsp") != null);
     var defs2 = std.array_list.Managed(aimod.ToolDef).init(a);
-    try appendToolDefs(&defs2);
+    try appendToolDefsIn(with_lsp, &defs2);
     try t.expectEqual(toolsmod.tools.len + 1, defs2.items.len);
     // 其他插件仍然关着
-    try t.expect(findTool("todo_write") == null);
+    try t.expect(findToolIn(with_lsp, "todo_write") == null);
 
     // 多工具插件一次性全开
-    try t.expect(enable("todo"));
-    try t.expect(findTool("todo_write") != null);
-    try t.expect(findTool("todo_read") != null);
+    const with_todo = withEnabled(with_lsp, "todo");
+    try t.expect(findToolIn(with_todo, "todo_write") != null);
+    try t.expect(findToolIn(with_todo, "todo_read") != null);
 
-    // 未知插件名返回 false,不 panic
-    try t.expect(!enable("nonexistent-plugin"));
+    // **本次改动的核心契约:启用集互不影响。**
+    // 从前是进程级单例 —— 一个 Agent 开了 lsp,所有 Agent 都能调 lsp,
+    // 而只读的调研 subagent 更不该因为兄弟 agent 的设置拿到别的工具。
+    try t.expect(findToolIn(bare, "lsp") == null);
+    try t.expect(findToolIn(with_lsp, "todo_write") == null);
+    try t.expect(findToolIn(with_todo, "lsp") != null);
+
+    // token 估算也跟着集合走 —— 上下文预算必须按本 Agent 的工具集算
+    try t.expect(toolDefsTokensIn(with_todo) > toolDefsTokensIn(bare));
+
+    // 进程默认集只影响新建 Agent 的初值
+    try t.expectEqual(@as(EnabledSet, 0), defaultSet());
+    try t.expect(enable("lsp"));
+    try t.expect(findToolIn(defaultSet(), "lsp") != null);
+    // 已有的集合不受进程默认集变化影响
+    try t.expect(findToolIn(bare, "lsp") == null);
 }
 
 test "default-on plugins register no tools" {

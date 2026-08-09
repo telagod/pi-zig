@@ -152,7 +152,7 @@ sequenceDiagram
 | 工具执行 | `std.Thread` + 信号量限流，同时在跑上限 8，流水线调度 |
 | Web 会话 | 每会话独立 Agent + arena + worker 线程，池上限 4 |
 | Web 连接 | 每连接一个 detach 线程，上限 64；无读超时（见 [Web UI](web-ui.md#资源上限)） |
-| subagent 委派 | 每个一个 OS 线程 + 完整 piz 子进程，顶层并行 32、嵌套层 4 |
+| subagent 委派 | 每个一个 OS 线程 + 进程内独立 Agent，顶层并行 32、嵌套层 4（`PIZ_TASK_SPAWN=1` 回退到子进程）|
 | 工具工作目录 | thread-local root，分发前由 `runToolSlot` 设为 `Agent.cwd` |
 | 事件命令 | spawn 后 detach，不等待 |
 | TUI 渲染 | 主线程轮询 stdin，worker 线程跑 agent |
@@ -176,6 +176,12 @@ worker 会在队列上 100ms 轮询到进程结束：实测 24 个会话建删�
 不回收的 arena。
 
 插件若需跨调用状态，按 Agent 指针地址隔离并自己加锁（参考 `todo` 插件）。
+
+**进程内 subagent 的三条隔离要求**（改 `runTaskInProcess` 前必读）：
+
+1. **每槽一个 arena。** `ArenaAllocator` 不是线程安全的，32 个槽共用一个会直接损坏它。槽 arena 从父 arena 借底层内存，读完结果统一释放。
+2. **启用集与深度是 `Agent` 字段。** 插件启用状态从前是 `plugins.zig` 的进程级单例，一个 Agent 开了 skills 会让所有 Agent 都看到 skill 工具 —— 只读的调研子 agent 更不该因为兄弟 agent 的设置拿到写工具。深度同理：进程内没有新进程可继承 `PIZ_TASK_DEPTH`，环境变量只做进程基准。
+3. **回调不能碰共享 arena，输出要整行写。** 32 路子 agent 并发调 `on_subagent`，用 `app.alloc`（arena）做 `allocPrint` 会竞争；多线程分段写 stderr 会切断多字节字符（实测出现过 UTF-8 解码失败）。改成栈缓冲 + `clampUtf8` + 一把锁整行写出。JSONL 路径尤其要锁：半行会让下游解析器直接失败。
 
 ### 活动登记表
 
@@ -409,7 +415,7 @@ piz 保留「置前」，理由是两者的压缩语义不同：codex 保留 use
 ## 测试
 
 ```bash
-zig build test          # 133 个测试，core 109 + app 24
+zig build test          # 136 个测试，core 109 + app 27
 ```
 
 两个测试目标：`core.zig` 为根（收集全部 core 模块的 test 块）、`main.zig` 为根（含 `e2e.zig`）。Zig 的 `zig test` 只收集根模块的测试，所以要分两个目标。
@@ -495,6 +501,10 @@ zig build test          # 133 个测试，core 109 + app 24
 | `tools.zig` | `appendCapped` 保尾且缓冲永不超过 2× 窗口（管道内存有界的全部依据）|
 | `tools.zig` | 截断提示里的 total 是真实流量，不是被裁后的缓冲长度 |
 | `plugins.zig` | 嵌套层并行上限远小于顶层，最坏进程数有可算上界 |
+| `plugins.zig` | 插件启用集 per-Agent，两个集合互不影响（从前是进程级单例）|
+| `plugins.zig` | 深度闸门看 `Agent.depth`，环境变量只做进程基准 |
+| `e2e.zig` | 进程内 subagent 实时转发工具事件，每路有独立序号 |
+| `e2e.zig` | 嵌套委派被深度闸门拦住（不递增就是无限递归）|
 
 ## Zig 0.16 注意事项
 
