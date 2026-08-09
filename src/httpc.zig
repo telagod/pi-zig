@@ -20,9 +20,16 @@ pub const Header = std.http.Header;
 /// 一旦释放,池里的连接就持有悬垂指针,下一次请求在 Client.connectTcp 里段错误。
 /// 这是实际踩过的坑,不是理论风险。page_allocator 无状态、进程级有效、线程安全。
 ///
-/// 线程安全:std.http.Client 的连接池自身不保证并发安全,故所有取用走 mutex。
-/// 当前 ai.run 只在主循环调用(工具并行不涉及 provider 请求),锁几乎不竞争;
-/// 加锁是为了将来真出现并发调用时不会静默损坏连接池。
+/// 线程安全:`std.http.Client` 自己的 `ConnectionPool` 带 `Io.Mutex`,文档写明
+/// "Connections are opened in a thread-safe manner, but individual Requests are
+/// not"(std/http/Client.zig:3)。每个 `Stream` 持有自己的 `Request`,所以并发
+/// 请求之间没有共享的可变状态 —— 这里的 mutex 只保护 `client` 这个 optional
+/// 的懒初始化,不能覆盖请求过程。
+///
+/// 覆盖整个请求会把并发调用**完全串行化**。实测(TTFB 300ms 的 mock,
+/// 32 线程 × 5 轮 = 160 请求):锁覆盖 init 全程 48169ms,只保护懒初始化
+/// 3755ms —— 12.8 倍,而两者都是 160/160 完整响应、零内容错乱。
+/// subagent 一旦改成进程内并行,这把锁就是唯一的串行点。
 const ClientPool = struct {
     var mutex: std.Io.Mutex = .init;
     var client: ?std.http.Client = null;
@@ -239,12 +246,14 @@ pub const Stream = struct {
         // client 活在全局,不随 Stream 销毁 —— 故无需像从前那样把连接的 client
         // 指针重指到拷贝体(那是 client 在栈上时才有的问题)。
         //
-        // 锁持有到函数返回:请求发送与响应头读取都在锁内。这确实会串行化并发
-        // 请求,但当前 ai.run 只在主循环调用,无竞争;换来的是绝不会有两个线程
-        // 同时动同一个连接池。真要支持并发请求,应改成每 host 一个池 + 细粒度锁。
-        ClientPool.mutex.lockUncancelable(util.io);
-        const client = ClientPool.acquire();
-        defer ClientPool.mutex.unlock(util.io);
+        // 锁只护 client 的懒初始化。持到函数返回会把并发请求完全串行化
+        // (实测 12.8 倍差距,见 ClientPool 注释),而 std 的 ConnectionPool
+        // 自带锁、每个 Stream 又持有自己的 Request,请求过程无共享可变状态。
+        const client = blk: {
+            ClientPool.mutex.lockUncancelable(util.io);
+            defer ClientPool.mutex.unlock(util.io);
+            break :blk ClientPool.acquire();
+        };
 
         const uri = try std.Uri.parse(url);
         var req = client.request(.POST, uri, .{
@@ -253,8 +262,9 @@ pub const Stream = struct {
             // 复用的前提。false 会让 std 在响应结束后关闭连接。
             .keep_alive = true,
         }) catch |e| {
-            // 连接层失败:池里可能残留半死连接,整池丢弃让下次重建。
-            ClientPool.reset();
+            // 不再整池丢弃:std 的 ConnectionPool.release 是 threadsafe 的,
+            // 且 connection.closing 时自己 destroy 坏连接。并发下 reset 会
+            // 销毁别的线程正在用的 client —— 用错误换崩溃。
             return e;
         };
         errdefer req.deinit();

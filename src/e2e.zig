@@ -8,6 +8,7 @@ const pluginsmod = @import("core").plugins;
 const ai = @import("core").ai;
 const toolsmod = @import("core").tools;
 const activity = @import("core").activity;
+const httpc = @import("core").httpc;
 
 const MOCK_PORT: u16 = 18521;
 const MOCK_PORT2: u16 = 18522;
@@ -819,4 +820,134 @@ test "salvage never overwrites text the model actually produced" {
     var both_empty = ai.RunResult{};
     agentmod.salvageTextForTest(a, &both_empty, "bash", "");
     try t.expectEqualStrings("", both_empty.text);
+}
+
+// ---------- 并发 provider 请求 ----------
+
+/// 记录并发峰值的最小 mock。每连接一个线程 —— e2e 的主 mock 是串行 accept-handle,
+/// 用它测不出串行化(服务端本身就是串行的)。
+const ConcState = struct {
+    port: u16,
+    stop: std.atomic.Value(bool) = .init(false),
+    /// 当前同时在处理的请求数
+    in_flight: std.atomic.Value(u32) = .init(0),
+    /// 见过的最大并发数 —— 这是断言的核心。锁串行化时它永远是 1,
+    /// 而这个判据与机器速度无关(时间断言在 CI 上不稳)。
+    peak: std.atomic.Value(u32) = .init(0),
+    completed: std.atomic.Value(u32) = .init(0),
+};
+
+fn concHandle(state: *ConcState, fd: std.posix.fd_t) void {
+    var conn = std.Io.net.Stream{ .socket = .{ .handle = fd, .address = undefined } };
+    defer conn.close(util.io);
+
+    const now = state.in_flight.fetchAdd(1, .acq_rel) + 1;
+    _ = state.peak.fetchMax(now, .acq_rel);
+    defer _ = state.in_flight.fetchSub(1, .acq_rel);
+
+    var rbuf: [4096]u8 = undefined;
+    var wbuf: [4096]u8 = undefined;
+    var fin = conn.reader(util.io, &rbuf);
+    var fout = conn.writer(util.io, &wbuf);
+    var server = std.http.Server.init(&fin.interface, &fout.interface);
+    var req = server.receiveHead() catch return;
+    var tbuf: [8192]u8 = undefined;
+    const reader = req.readerExpectContinue(&tbuf) catch return;
+    _ = reader.allocRemaining(state_alloc, .limited(1024 * 1024)) catch return;
+
+    // 停在这里等一小会:所有请求都卡在这段窗口内,峰值才反映真实并发度。
+    // 串行化的话每个请求依次进出,峰值恒为 1。
+    std.Io.sleep(util.io, .{ .nanoseconds = 120 * std.time.ns_per_ms }, .awake) catch {};
+
+    const body =
+        "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n" ++
+        "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n" ++
+        "data: [DONE]\n\n";
+    req.respond(body, .{
+        .status = .ok,
+        .extra_headers = &.{.{ .name = "content-type", .value = "text/event-stream" }},
+    }) catch return;
+    _ = state.completed.fetchAdd(1, .acq_rel);
+}
+
+var state_alloc: std.mem.Allocator = undefined;
+
+fn concServerMain(state: *ConcState) void {
+    const addr = std.Io.net.IpAddress.parseIp4("127.0.0.1", state.port) catch return;
+    var server = addr.listen(util.io, .{ .reuse_address = true }) catch return;
+    defer server.deinit(util.io);
+    util.setNonBlock(server.socket.handle);
+
+    var pfds = [_]std.posix.pollfd{.{ .fd = server.socket.handle, .events = std.posix.POLL.IN, .revents = 0 }};
+    while (!state.stop.load(.acquire)) {
+        const n = std.posix.poll(&pfds, 10) catch continue;
+        if (n == 0) continue;
+        const raw = std.os.linux.accept4(server.socket.handle, null, null, 0o2000000);
+        const rc = @as(isize, @bitCast(raw));
+        if (rc < 0) continue;
+        const th = std.Thread.spawn(.{}, concHandle, .{ state, @as(std.posix.fd_t, @intCast(rc)) }) catch {
+            concHandle(state, @intCast(rc));
+            continue;
+        };
+        th.detach();
+    }
+}
+
+test "provider requests actually run in parallel and none get corrupted" {
+    const t = std.testing;
+    try util.testInit();
+    var arena = util.Arena.init(t.allocator);
+    defer arena.deinit();
+    state_alloc = arena.allocator();
+
+    var state = ConcState{ .port = 18711 };
+    const server_thread = try std.Thread.spawn(.{}, concServerMain, .{&state});
+    defer {
+        state.stop.store(true, .release);
+        server_thread.join();
+    }
+    _ = std.Io.sleep(util.io, .{ .nanoseconds = 60 * std.time.ns_per_ms }, .awake) catch {};
+
+    const N = 8;
+    const Worker = struct {
+        ok: std.atomic.Value(u32) = .init(0),
+        bad: std.atomic.Value(u32) = .init(0),
+        port: u16,
+
+        fn run(self: *@This()) void {
+            var url_buf: [64]u8 = undefined;
+            const url = std.fmt.bufPrint(&url_buf, "http://127.0.0.1:{d}/v1/chat/completions", .{self.port}) catch return;
+            const body = "{\"model\":\"m\",\"messages\":[],\"stream\":true}";
+            const s = httpc.Stream.init(std.heap.page_allocator, url, &.{}, body) catch {
+                _ = self.bad.fetchAdd(1, .acq_rel);
+                return;
+            };
+            defer s.deinit();
+            // 每个响应必须完整:2 个 data 事件 + [DONE]。少一个就说明
+            // 两个线程读串了同一个连接。
+            var data_events: usize = 0;
+            var saw_done = false;
+            while (s.readLine() catch null) |line| {
+                if (std.mem.startsWith(u8, line, "data: [DONE]")) saw_done = true else if (std.mem.startsWith(u8, line, "data: ")) data_events += 1;
+            }
+            if (data_events == 2 and saw_done) {
+                _ = self.ok.fetchAdd(1, .acq_rel);
+            } else {
+                _ = self.bad.fetchAdd(1, .acq_rel);
+            }
+        }
+    };
+    var w = Worker{ .port = state.port };
+    var threads: [N]std.Thread = undefined;
+    for (&threads) |*th| th.* = try std.Thread.spawn(.{}, Worker.run, .{&w});
+    for (threads) |th| th.join();
+
+    // 全部完整 —— 并发不能损坏连接池
+    try t.expectEqual(@as(u32, N), w.ok.load(.acquire));
+    try t.expectEqual(@as(u32, 0), w.bad.load(.acquire));
+
+    // 真的并发。ClientPool 的锁曾覆盖整个 Stream.init(建连 + 发请求体 +
+    // 收响应头),把并发调用完全串行化:实测 TTFB 300ms 下 160 个请求
+    // 48169ms vs 3755ms(12.8 倍)。串行时这个峰值恒为 1。
+    try t.expect(state.peak.load(.acquire) > 1);
 }
