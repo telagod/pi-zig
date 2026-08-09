@@ -157,15 +157,15 @@ pub const WebServer = struct {
     tcp: net.Server,
     port: u16,
     stopping: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    /// accept 循环已退出。停机方靠它知道「不用再唤醒了」——
+    /// std.Thread.join 没有超时版本,盲等就是永久挂住。
+    stopped: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     /// 在处理中的连接数。每连接一个 OS 线程 + 12KB 栈缓冲,没有上限时
     /// 本机一个循环 connect 就能把线程耗光,agent 随之停摆。
     live_conns: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
 
     /// 并发连接上限。SSE 长连接占满 MAX_STREAMS(16)后还留足余量给普通请求。
     pub const MAX_CONNS = 64;
-    /// 单个请求头的读超时。连上不发数据的连接会永久占住一个线程 --
-    /// 本机 slowloris 只需 MAX_CONNS 个这样的连接。
-    const READ_TIMEOUT_S = 30;
 
     pub fn start(alloc: std.mem.Allocator, opts: WebOptions, hub: *EventHub) !WebServer {
         // 端口:默认 5494-5503 自动试(对齐 kimi web)
@@ -189,10 +189,17 @@ pub const WebServer = struct {
 
     /// accept 循环(阻塞,主线程);每连接 spawn 一个处理线程,上限 MAX_CONNS。
     pub fn run(self: *WebServer) !void {
+        defer self.stopped.store(true, .release);
         while (!self.stopping.load(.acquire)) {
             const stream = self.tcp.accept(util.io) catch |err| switch (err) {
                 error.Canceled => return,
-                else => continue,
+                // 监听 socket 坏掉(被关、fd 耗尽)时 continue 会变成忙等 spin。
+                // 让出一次 CPU 再回到循环条件 —— stopping 已置位就干净退出。
+                else => {
+                    if (self.stopping.load(.acquire)) return;
+                    std.Io.sleep(util.io, .{ .nanoseconds = 5 * std.time.ns_per_ms }, .awake) catch {};
+                    continue;
+                },
             };
             // 满员就立刻关掉:队列里排着不如让客户端明确失败并退避。
             // 计数在 spawn 前加,避免 accept 快于线程启动时冲过上限。
@@ -218,16 +225,15 @@ pub const WebServer = struct {
             copy.close(util.io);
             _ = self.live_conns.fetchSub(1, .acq_rel);
         }
-        // 读超时:没有它,连上却不发数据的连接会永久占住这个线程。
-        // std.Io.net.Stream 在 0.16 没有超时 API,只能走 setsockopt。
-        // SSE 靠 30s 心跳写出保活,读方向本来就空闲,超时不影响它。
-        const tv = std.posix.timeval{ .sec = READ_TIMEOUT_S, .usec = 0 };
-        std.posix.setsockopt(
-            stream.socket.handle,
-            std.posix.SOL.SOCKET,
-            std.posix.SO.RCVTIMEO,
-            std.mem.asBytes(&tv),
-        ) catch {};
+        // 没有请求头读超时 —— 试过 setsockopt(SO_RCVTIMEO),不能用:
+        // std.Io.Threaded 假定所有 fd 都是阻塞的(它自己管调度),超时让 recv
+        // 返回 EAGAIN,而 Threaded 把 EAGAIN 当 programmer bug —— Debug 构建
+        // 直接 panic(实测),ReleaseFast 下静默转 error.Unexpected。
+        //
+        // 真要做就得靠看门狗线程 shutdown(fd, SHUT_RD) 把阻塞的 recv 变成
+        // 干净的 EOF。没做:服务绑 127.0.0.1,能占住连接的攻击者已经在本机
+        // 执行代码,那时他直接读 ~/.piz/models.json 就有 apiKey,占 64 个连接
+        // 是他最不划算的选择。MAX_CONNS 已经挡住了线程耗尽。
         var send_buf: [4096]u8 = undefined;
         var recv_buf: [8192]u8 = undefined;
         var cr = stream.reader(util.io, &recv_buf);
@@ -235,7 +241,12 @@ pub const WebServer = struct {
         var server: http.Server = .init(&cr.interface, &cw.interface);
         while (true) {
             var req = server.receiveHead() catch return;
+            // HTTP/1.1 要求收到 `Connection: close` 后关闭连接。不关的话客户端
+            // 读到 EOF 才停的那类读法(allocRemaining 之类)会永久阻塞 ——
+            // 浏览器自己会关所以看不出来,别的客户端就挂住。
+            const keep = req.head.keep_alive;
             self.serve(&req, stream.socket.handle) catch return;
+            if (!keep) return;
         }
     }
 
@@ -641,6 +652,10 @@ pub const WebServer = struct {
     /// SSE 长连接:手动原始响应(0.16 BodyWriter.flush 有字节滞留问题),
     /// 头即 flush;轮询转发 hub 事件 + 30s 心跳;上报消费位置供 hub 裁头。
     /// 转发在锁内(事件短、本地回环;锁外转发会与 push 的裁头竞态导致漏事件)。
+    /// 结束后连接必须关闭 —— 两条路径都声明了 `connection: close`。
+    /// 返回 `error.ConnectionDone` 让 handleConn 走 defer 关掉:承诺了 close
+    /// 却继续 receiveHead 的话,客户端永远读不到 EOF,`allocRemaining`
+    /// 之类的读法会永久阻塞。
     fn serveSSE(self: *WebServer, req: *http.Server.Request, conn_fd: std.posix.fd_t) !void {
         const out = req.server.out;
         // 必须先抢 slot 再写头:反过来客户端会拿到 200 + 空 event-stream,
@@ -652,7 +667,7 @@ pub const WebServer = struct {
                 .{ body.len, body },
             );
             try out.flush();
-            return;
+            return error.ConnectionDone;
         };
         defer self.hub.unregister(slot);
         try out.print("HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncache-control: no-cache\r\nconnection: close\r\n\r\n", .{});
@@ -660,13 +675,13 @@ pub const WebServer = struct {
         // 新连接从当前尾部开始(state 已承担历史重放;从头重放会与 state 重复渲染)
         var cursor: usize = 0;
         {
-            self.hub.mutex.lock(util.io) catch return;
+            self.hub.mutex.lock(util.io) catch return error.ConnectionDone;
             cursor = self.hub.events.items.len;
             self.hub.mutex.unlock(util.io);
         }
         var idle: usize = 0;
         while (!self.stopping.load(.acquire)) {
-            self.hub.mutex.lock(util.io) catch return;
+            self.hub.mutex.lock(util.io) catch return error.ConnectionDone;
             if (self.hub.conns[slot]) |*st| {
                 st.cursor = cursor;
                 st.last_seen_ns = std.Io.Clock.now(.real, util.io).nanoseconds;
@@ -679,7 +694,7 @@ pub const WebServer = struct {
                 // 关标签页不会让写立刻失败(第一次写进内核缓冲就算成功),
                 // 靠心跳发现要等两个周期 —— 期间 16 个槽位里的一个白占着。
                 // peek 探测在对端 close 后立刻返回 EOF。
-                if (util.peerClosed(conn_fd)) return;
+                if (util.peerClosed(conn_fd)) return error.ConnectionDone;
                 idle += 1;
                 if (idle % 150 == 0) { // 30s 心跳
                     try out.writeAll(": ping\n\n");
@@ -697,6 +712,8 @@ pub const WebServer = struct {
             self.hub.mutex.unlock(util.io);
             try out.flush();
         }
+        // 循环退出(服务停止 / 对端已关)——连接也到此为止
+        return error.ConnectionDone;
     }
 
     /// 打开浏览器(仅本地;失败静默)。--token 时 URL 带 #token= 片段(前端读取后 scrub)。
@@ -891,6 +908,143 @@ test "dequeue returns on per-session stop, not just global shutdown" {
     try t.expectEqualStrings("pending", item.?.text);
 }
 
+// ---------- HTTP 层集成测试 ----------
+// 上面那些测试都是纯函数级的。真实的 HTTP 行为(状态码、响应头、拒绝时机)
+// 只有起真服务打真请求才能验证 —— 之前这一层完全靠手工 curl。
+
+const ITest = struct {
+    srv: *WebServer,
+    hub: *EventHub,
+    thread: std.Thread,
+    port: u16,
+    alloc: std.mem.Allocator,
+
+    /// `first_port` 只是起点:被占用就往上找。固定端口会在并行跑、
+    /// CI、或上一次跑留下残留进程时撞车。
+    fn start(alloc: std.mem.Allocator, first_port: u16, hooks: struct {
+        title: ?*const fn (ctx: ?*anyopaque, cwd: []const u8, session: []const u8, title: ?[]const u8) ?[]const u8 = null,
+        ws_allowed: ?*const fn (ctx: ?*anyopaque, ws: []const u8) bool = null,
+    }) !ITest {
+        const hub = try alloc.create(EventHub);
+        hub.* = EventHub.init(alloc);
+        const srv = try alloc.create(WebServer);
+        var port = first_port;
+        srv.* = while (port < first_port + 40) : (port += 1) {
+            break WebServer.start(alloc, .{ .port = port, .no_open = true, .token = null }, hub) catch continue;
+        } else return error.NoFreePort;
+        srv.title_hook = hooks.title;
+        srv.ws_allowed_hook = hooks.ws_allowed;
+        const th = try std.Thread.spawn(.{}, runServer, .{srv});
+        return .{ .srv = srv, .hub = hub, .thread = th, .port = srv.port, .alloc = alloc };
+    }
+
+    fn runServer(srv: *WebServer) void {
+        srv.run() catch {};
+    }
+
+    fn stop(self: *ITest) void {
+        self.srv.stopping.store(true, .release);
+        // 先让连接线程收摊:SSE 循环看到 stopping 就退,最多一个轮询周期。
+        // 放在 join 之前,这样它们不会在 hub.deinit 之后再碰锁。
+        var spins: usize = 0;
+        while (self.srv.live_conns.load(.acquire) > 0 and spins < 300) : (spins += 1) {
+            std.Io.sleep(util.io, .{ .nanoseconds = 10 * std.time.ns_per_ms }, .awake) catch break;
+        }
+        // accept 阻塞在 listen socket 上,必须来一次连接才让它回到循环条件。
+        // 一次不够就再来 —— join 没有超时版本,唤醒失败就是永久挂住,
+        // 而挂住的进程会占着测试端口,让后续每一次跑都受影响(踩过)。
+        var tries: usize = 0;
+        while (tries < 50) : (tries += 1) {
+            if (self.srv.stopped.load(.acquire)) break;
+            if (net.IpAddress.parseIp4("127.0.0.1", self.port)) |addr| {
+                if (addr.connect(util.io, .{ .mode = .stream })) |s| {
+                    var c = s;
+                    c.close(util.io);
+                } else |_| {}
+            } else |_| {}
+            std.Io.sleep(util.io, .{ .nanoseconds = 20 * std.time.ns_per_ms }, .awake) catch break;
+        }
+        self.thread.join();
+        self.srv.deinit();
+        self.hub.deinit();
+        self.alloc.destroy(self.srv);
+        self.alloc.destroy(self.hub);
+    }
+
+    /// 发一个原始请求,返回完整响应文本(调用方 free)。
+    fn request(self: *ITest, raw: []const u8) ![]u8 {
+        const addr = try net.IpAddress.parseIp4("127.0.0.1", self.port);
+        var s = try addr.connect(util.io, .{ .mode = .stream });
+        defer s.close(util.io);
+        var wbuf: [4096]u8 = undefined;
+        var w = s.writer(util.io, &wbuf);
+        try w.interface.writeAll(raw);
+        try w.interface.flush();
+        var rbuf: [8192]u8 = undefined;
+        var r = s.reader(util.io, &rbuf);
+        // 读到对端关闭或缓冲满;SSE 不会关,所以只在明确期待完整响应时用
+        return r.interface.allocRemaining(self.alloc, .limited(256 * 1024)) catch |err| switch (err) {
+            error.StreamTooLong => try self.alloc.dupe(u8, r.interface.buffered()),
+            else => return err,
+        };
+    }
+
+    /// 只读到响应头(SSE 这类不关闭的连接用)。返回持有的连接,调用方负责关。
+    fn openStream(self: *ITest, raw: []const u8) !net.Stream {
+        const addr = try net.IpAddress.parseIp4("127.0.0.1", self.port);
+        var s = try addr.connect(util.io, .{ .mode = .stream });
+        var wbuf: [1024]u8 = undefined;
+        var w = s.writer(util.io, &wbuf);
+        w.interface.writeAll(raw) catch {};
+        w.interface.flush() catch {};
+        return s;
+    }
+
+    fn statusOf(resp: []const u8) []const u8 {
+        const eol = std.mem.indexOfAny(u8, resp, "\r\n") orelse resp.len;
+        return resp[0..eol];
+    }
+};
+
+test "http: SSE stream limit answers 503 before writing any 200" {
+    const t = std.testing;
+    try util.testInit();
+    var arena = util.Arena.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    var it = try ITest.start(a, 18631, .{});
+    defer it.stop();
+
+    // 占满全部槽位
+    var held: [EventHub.MAX_STREAMS]net.Stream = undefined;
+    for (&held) |*s| {
+        s.* = try it.openStream("GET /api/events HTTP/1.1\r\nhost: x\r\naccept: text/event-stream\r\n\r\n");
+    }
+    defer for (&held) |*s| s.close(util.io);
+    // 等服务端把它们都注册上(每连接一个线程,注册不是同步的)
+    var waited: usize = 0;
+    while (waited < 200) : (waited += 1) {
+        it.hub.mutex.lock(util.io) catch break;
+        var n: usize = 0;
+        for (&it.hub.conns) |c| {
+            if (c != null) n += 1;
+        }
+        it.hub.mutex.unlock(util.io);
+        if (n == EventHub.MAX_STREAMS) break;
+        std.Io.sleep(util.io, .{ .nanoseconds = 10 * std.time.ns_per_ms }, .awake) catch {};
+    }
+
+    // 第 17 个:必须是 503 且带明确原因。旧实现先写 200 头再 register,
+    // 满员时直接关流 —— 客户端拿到的 200 空流和「还没事件」无法区分。
+    const resp = try it.request("GET /api/events HTTP/1.1\r\nhost: x\r\naccept: text/event-stream\r\n\r\n");
+    try t.expect(std.mem.indexOf(u8, ITest.statusOf(resp), "503") != null);
+    try t.expect(std.mem.indexOf(u8, resp, "too many event streams") != null);
+    try t.expect(std.mem.indexOf(u8, resp, "retry-after") != null);
+    // 不能同时出现 200 —— 那说明头写在拒绝之前
+    try t.expect(std.mem.indexOf(u8, resp, "200 OK") == null);
+}
+
 var global: ChatQueue = .{ .items = std.array_list.Managed(ChatQueue.Item).init(std.heap.page_allocator) };
 
 /// 权限闸:manual 模式下工具请求等待浏览器审批。
@@ -978,6 +1132,106 @@ pub const PermGate = struct {
         return false;
     }
 };
+
+var itest_title_buf: [1024]u8 = undefined;
+var itest_title_len: usize = 0;
+
+/// 最小 title hook:存住写入值,读时返回。够验证 HTTP 层的行为。
+fn itestTitleHook(_: ?*anyopaque, _: []const u8, _: []const u8, title: ?[]const u8) ?[]const u8 {
+    if (title) |tt| {
+        const n = @min(tt.len, itest_title_buf.len);
+        @memcpy(itest_title_buf[0..n], tt[0..n]);
+        itest_title_len = n;
+    }
+    return itest_title_buf[0..itest_title_len];
+}
+
+test "http: an over-long title still gets a complete response" {
+    const t = std.testing;
+    try util.testInit();
+    var arena = util.Arena.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    itest_title_len = 0;
+    var it = try ITest.start(a, 18632, .{ .title = itestTitleHook });
+    defer it.stop();
+
+    // 600 字符标题。旧实现用 512 字节栈缓冲拼响应,NoSpaceLeft 冒出 handler,
+    // 响应头都没写出去 —— 客户端只看到连接断开,而且读路径走同一段代码,
+    // 这个端点在进程余生里每次都断连。
+    const long = "L" ** 600;
+    const body = try std.fmt.allocPrint(a, "{{\"title\":\"{s}\"}}", .{long});
+    const req = try std.fmt.allocPrint(
+        a,
+        "POST /api/title?session=default HTTP/1.1\r\nhost: x\r\ncontent-type: application/json\r\ncontent-length: {d}\r\nconnection: close\r\n\r\n{s}",
+        .{ body.len, body },
+    );
+    const resp = try it.request(req);
+    try t.expect(std.mem.indexOf(u8, ITest.statusOf(resp), "200") != null);
+
+    // 响应体必须是完整可解析的 JSON,标题裁到上限内
+    const sep = std.mem.indexOf(u8, resp, "\r\n\r\n") orelse return error.NoBody;
+    const json_body = resp[sep + 4 ..];
+    const parsed = try std.json.parseFromSliceLeaky(std.json.Value, a, json_body, .{});
+    try t.expectEqual(true, parsed.object.get("ok").?.bool);
+    const got = parsed.object.get("title").?.string;
+    try t.expectEqual(@as(usize, sessionmod.MAX_TITLE_BYTES), got.len);
+}
+
+test "http: cross-origin write is refused with 403" {
+    const t = std.testing;
+    try util.testInit();
+    var arena = util.Arena.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    var it = try ITest.start(a, 18633, .{ .title = itestTitleHook });
+    defer it.stop();
+
+    // 恶意源:即使没开 token 也必须拒绝
+    const evil = try it.request(
+        "POST /api/title?session=default HTTP/1.1\r\nhost: x\r\norigin: https://evil.example.com\r\ncontent-length: 2\r\nconnection: close\r\n\r\n{}",
+    );
+    try t.expect(std.mem.indexOf(u8, ITest.statusOf(evil), "403") != null);
+
+    // 本服务自己的页面放行
+    const own = try std.fmt.allocPrint(
+        a,
+        "POST /api/title?session=default HTTP/1.1\r\nhost: x\r\norigin: http://127.0.0.1:{d}\r\ncontent-length: 2\r\nconnection: close\r\n\r\n{{}}",
+        .{it.port},
+    );
+    const ok = try it.request(own);
+    try t.expect(std.mem.indexOf(u8, ITest.statusOf(ok), "200") != null);
+}
+
+test "http: unregistered ws is refused before reaching any handler" {
+    const t = std.testing;
+    try util.testInit();
+    var arena = util.Arena.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const Allow = struct {
+        fn only(_: ?*anyopaque, ws: []const u8) bool {
+            return std.mem.eql(u8, ws, "/registered");
+        }
+    };
+    var it = try ITest.start(a, 18634, .{ .title = itestTitleHook, .ws_allowed = Allow.only });
+    defer it.stop();
+
+    // 未注册的 ws:一个不带凭证的 GET 曾能读出 ~/.piz/models.json 里的 apiKey
+    const bad = try it.request("GET /api/plugins/assets/p/web/x?ws=/tmp/attacker HTTP/1.1\r\nhost: x\r\nconnection: close\r\n\r\n");
+    try t.expect(std.mem.indexOf(u8, ITest.statusOf(bad), "403") != null);
+
+    // 已注册的 ws 过校验(资源不存在,所以是 404 而非 403 —— 关键是不再被门口拦下)
+    const good = try it.request("GET /api/plugins/assets/p/web/x?ws=/registered HTTP/1.1\r\nhost: x\r\nconnection: close\r\n\r\n");
+    try t.expect(std.mem.indexOf(u8, ITest.statusOf(good), "403") == null);
+
+    // 空 ws = 用进程默认项目,一律放行
+    const empty = try it.request("GET / HTTP/1.1\r\nhost: x\r\nconnection: close\r\n\r\n");
+    try t.expect(std.mem.indexOf(u8, ITest.statusOf(empty), "200") != null);
+}
 
 var global_gate: PermGate = .{ .reqs = std.array_list.Managed(PermGate.Req).init(std.heap.page_allocator) };
 
