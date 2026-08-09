@@ -152,6 +152,7 @@ sequenceDiagram
 | 工具执行 | `std.Thread` + 信号量限流，同时在跑上限 8，流水线调度 |
 | Web 会话 | 每会话独立 Agent + arena + worker 线程，池上限 4 |
 | Web 连接 | 每连接一个 detach 线程，上限 64；无读超时（见 [Web UI](web-ui.md#资源上限)） |
+| subagent 委派 | 每个一个 OS 线程 + 完整 piz 子进程，顶层并行 32、嵌套层 4 |
 | 事件命令 | spawn 后 detach，不等待 |
 | TUI 渲染 | 主线程轮询 stdin，worker 线程跑 agent |
 
@@ -199,7 +200,7 @@ worker 会在队列上 100ms 轮询到进程结束：实测 24 个会话建删�
 **取消是世代而非布尔。** `cancelAll` 递增世代号，只有登记时世代匹配的活动才算被取消。
 用布尔的话中断一次之后所有新活动都会立刻自杀，得重启进程。
 
-槽位满了就返回空句柄，所有操作静默失效 —— 少一行显示可以接受，为登记阻塞工具执行不行。
+槽位满了仍然登记，只是不显示。句柄自带 `gen` 与 `start_ms`，所以 `cancelled()` 和 `elapsedMs()` 照常工作 —— 早先这两个也跟着槽位失效，于是并发超过 `MAX_SLOTS` 时溢出的 subagent 既不响应 Ctrl+C（`pumpPipes` 靠 `cancelled()` 决定是否中止，永远拿到 `false`，只能跑满 10 分钟超时）也把耗时报成 0（模型据此以为任务瞬间完成）。少一行显示可以接受，丢掉取消能力不行。
 
 ### 自愈与止损
 
@@ -407,7 +408,7 @@ piz 保留「置前」，理由是两者的压缩语义不同：codex 保留 use
 ## 测试
 
 ```bash
-zig build test          # 128 个测试，core 105 + app 23
+zig build test          # 130 个测试，core 107 + app 23
 ```
 
 两个测试目标：`core.zig` 为根（收集全部 core 模块的 test 块）、`main.zig` 为根（含 `e2e.zig`）。Zig 的 `zig test` 只收集根模块的测试，所以要分两个目标。
@@ -486,6 +487,10 @@ zig build test          # 128 个测试，core 105 + app 23
 | `webui.zig` | **HTTP 层**：600 字符标题仍拿到完整可解析 JSON，标题裁到 256 字节 |
 | `webui.zig` | **HTTP 层**：恶意 Origin 403、本服务自身 Origin 放行 |
 | `webui.zig` | **HTTP 层**：未注册 `?ws=` 403、已注册放行、空 ws 放行 |
+| `activity.zig` | 槽位满员时 `cancelled()`/`elapsedMs()` 仍有效（否则溢出的 subagent 无法 Ctrl+C）|
+| `tools.zig` | `appendCapped` 保尾且缓冲永不超过 2× 窗口（管道内存有界的全部依据）|
+| `tools.zig` | 截断提示里的 total 是真实流量，不是被裁后的缓冲长度 |
+| `plugins.zig` | 嵌套层并行上限远小于顶层，最坏进程数有可算上界 |
 
 ## Zig 0.16 注意事项
 

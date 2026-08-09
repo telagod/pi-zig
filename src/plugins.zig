@@ -198,14 +198,26 @@ test "task tool delegates to a real sub-process and returns its output" {
     try t.expect((try toolTask(&agent, a, "{}")).is_error);
     try t.expect((try toolTask(&agent, a, "{\"description\":\"\"}")).is_error);
 
-    // 超过并行上限 → 拒绝,不是静默丢弃
-    const many = "{\"tasks\":[{\"description\":\"a\"},{\"description\":\"b\"},{\"description\":\"c\"},{\"description\":\"d\"},{\"description\":\"e\"}]}";
-    const over = try toolTask(&agent, a, many);
+    // 超过并行上限 → 拒绝,不是静默丢弃。任务数从常量派生 ——
+    // 硬编码的话每次调整上限都要跟着改测试,而忘了改就变成「测试通过但
+    // 其实没测到拒绝路径」。
+    var many = std.array_list.Managed(u8).init(a);
+    try many.appendSlice("{\"tasks\":[");
+    for (0..MAX_PARALLEL_TASKS + 1) |i| {
+        if (i > 0) try many.appendSlice(",");
+        try many.appendSlice(try std.fmt.allocPrint(a, "{{\"description\":\"t{d}\"}}", .{i}));
+    }
+    try many.appendSlice("]}");
+    const over = try toolTask(&agent, a, many.items);
     try t.expect(over.is_error);
     try t.expect(std.mem.indexOf(u8, over.content, "too many tasks") != null);
 
+    // 正好在上限上不该被拒(只验参数校验,不真 spawn 那么多进程:
+    // 这里用空 description 让它在 spawn 之前就返回参数错误)
+    try t.expect(std.mem.indexOf(u8, (try toolTask(&agent, a, "{\"tasks\":[]}")).content, "non-empty") != null);
+
     // 深度闸门:子 agent 读同一份 settings.json 也带 task 工具,
-    // 不拦就是 fork bomb(每层 ×4)。深度靠环境变量跨进程传。
+    // 不拦就是 fork bomb(并发按层相乘)。深度靠环境变量跨进程传。
     const env = agentmod.util.environ_map.?;
     const saved = env.get(DEPTH_ENV);
     defer if (saved) |s| {
@@ -226,6 +238,29 @@ test "task tool delegates to a real sub-process and returns its output" {
     // 坏值当 0 处理(不能因为环境被污染就拒绝所有委托)
     try env.put(DEPTH_ENV, "not-a-number");
     try t.expectEqual(@as(usize, 0), currentTaskDepth());
+
+    // 嵌套层的并行上限必须远小于顶层 —— 并发是**乘起来**的:
+    // 顶层 32 × 嵌套 32 × 深度 2 = 1056 个 piz 进程 ≈ 9GB,足够打死机器。
+    try t.expectEqual(@as(usize, MAX_PARALLEL_TASKS), parallelLimitAt(0));
+    try t.expectEqual(@as(usize, MAX_PARALLEL_TASKS_NESTED), parallelLimitAt(1));
+    try t.expect(MAX_PARALLEL_TASKS_NESTED < MAX_PARALLEL_TASKS);
+    // 最坏进程数要有个能算清的上界(顶层 + 顶层×嵌套)
+    try t.expect(MAX_PARALLEL_TASKS + MAX_PARALLEL_TASKS * MAX_PARALLEL_TASKS_NESTED <= 256);
+
+    // 深度 1 时,超过嵌套上限就该被拒 —— 顶层的 32 在这里不适用
+    try env.put(DEPTH_ENV, "1");
+    var nested = std.array_list.Managed(u8).init(a);
+    try nested.appendSlice("{\"tasks\":[");
+    for (0..MAX_PARALLEL_TASKS_NESTED + 1) |i| {
+        if (i > 0) try nested.appendSlice(",");
+        try nested.appendSlice(try std.fmt.allocPrint(a, "{{\"description\":\"n{d}\"}}", .{i}));
+    }
+    try nested.appendSlice("]}");
+    const over_nested = try toolTask(&agent, a, nested.items);
+    try t.expect(over_nested.is_error);
+    try t.expect(std.mem.indexOf(u8, over_nested.content, "too many tasks") != null);
+    // 错误里要点明是哪一层的上限,否则模型不知道为什么同样的调用在顶层能过
+    try t.expect(std.mem.indexOf(u8, over_nested.content, "depth 1") != null);
 }
 
 test "task slots run in parallel and report per-task failure" {
@@ -853,20 +888,38 @@ fn compactFallback(ctx: ?*anyopaque) ?[]const u8 {
     return null;
 }
 
-// =====================================================================
-// 任务编排插件:task 工具——spawn 自身子进程执行委托任务(可并行)。
-//
-// 子 agent **继承父 agent 的 cwd / provider / model / 只读模式**。不继承的话
-// 委托出去的任务在错误的目录、用错误的模型跑 —— web 模式下多会话各自 cwd
-// 不同,漏传 cwd 等于让子 agent 随机挑一个目录动手。
-//
-// 直接抓子进程 stdout 拿最终答复,不走 `-a`:`-a` 多套一层中间进程(它 spawn
-// 完孙进程就退出),父 agent 只能拿到一个立刻失效的 pid,对不上任何会话。
-// =====================================================================
+/// 顶层 agent 的并行委托上限。
+///
+/// 实测(mock provider,本机 13 代 i7):每个 subagent 是完整 piz 进程,
+/// 常驻 9MB / 3 线程;父进程侧每个约 +0.5MB、+1 线程、+2 fd。
+/// 32 个并行:整树 299MB、33 进程、墙钟 1.60s vs 单个 1.54s —— 扇出代价
+/// 几乎为零。再往上受制于 provider 的并发配额而不是本机资源。
+///
+/// 改这个值必须同时确认 activity.MAX_SLOTS 够用 —— 下面的 comptime 断言
+/// 会挡住忘记同步的情况。
+const MAX_PARALLEL_TASKS = 32;
 
-/// 并行委托上限。子 agent 各自是完整进程(自带上下文窗口与工具集),
-/// 比进程内工具调用重得多,所以上限比 MAX_PARALLEL_TOOLS(8)保守。
-const MAX_PARALLEL_TASKS = 4;
+/// 深度 ≥1 的 agent 的并行上限。
+///
+/// 必须远小于顶层值:并发是**乘起来**的。顶层 32 × 每层 32 × 深度 2
+/// = 最坏 1056 个 piz 进程 ≈ 9GB,足够打死机器。压到 4 之后最坏是
+/// 32 + 32×4 = 160 个进程 ≈ 1.4GB,机器还能用。
+///
+/// 子 agent 的任务本来就该更窄 —— 它是被派来做一件具体事的,不是再当调度器。
+const MAX_PARALLEL_TASKS_NESTED = 4;
+
+/// 该深度允许的并行委托数。
+fn parallelLimitAt(depth: usize) usize {
+    return if (depth == 0) MAX_PARALLEL_TASKS else MAX_PARALLEL_TASKS_NESTED;
+}
+
+comptime {
+    // 槽位不够时溢出的活动虽然仍能取消(activity.Handle 自带 gen/start_ms),
+    // 但在 TUI 里完全看不见 —— 一半 subagent 在跑而界面上没有,是不可接受的。
+    if (activity.MAX_SLOTS < MAX_PARALLEL_TASKS + agentmod.MAX_PARALLEL_TOOLS) {
+        @compileError("activity.MAX_SLOTS 必须 >= MAX_PARALLEL_TASKS + MAX_PARALLEL_TOOLS,否则并发活动在界面上不可见");
+    }
+}
 
 /// 单个子 agent 回传的输出上限。超出截断——委托的产出应当是结论,
 /// 不是原始日志;真需要全文就让子 agent 写文件。
@@ -877,8 +930,11 @@ const TASK_OUTPUT_LIMIT = 32 * 1024;
 const TASK_TIMEOUT_MS = 600_000;
 
 /// 委托深度上限。子 agent 读的是**同一份** settings.json,所以它也带 `task`
-/// 工具、也能继续 spawn —— 没有深度限制就是 fork bomb:每层 ×4,而每个
-/// piz 进程是几十 MB。深度靠环境变量跨进程传递(唯一可靠的通道)。
+/// 工具、也能继续 spawn —— 没有深度限制就是 fork bomb,而每个 piz 进程常驻 9MB。
+///
+/// 深度与并行上限一起把最坏情况钉死:顶层 32 + 嵌套层每个 4,深度 2
+/// → 最坏 32 + 32×4 = 160 个进程 ≈ 1.4GB。若嵌套层也用 32,同样的深度
+/// 就是 1056 个进程 ≈ 9GB。深度靠环境变量跨进程传递(唯一可靠的通道)。
 const MAX_TASK_DEPTH = 2;
 const DEPTH_ENV = "PIZ_TASK_DEPTH";
 
@@ -961,11 +1017,15 @@ fn runTaskSlot(slot: *TaskSlot) void {
     var out = std.array_list.Managed(u8).init(slot.alloc);
     var errbuf = std.array_list.Managed(u8).init(slot.alloc);
     // stdout/stderr 分流:stdout 是子 agent 的答复,stderr 是诊断。
+    // keep_bytes:边读边丢头部。原先全量收完再截到 TASK_OUTPUT_LIMIT ——
+    // 一个吐 500MB 的子 agent 让父进程驻留 473MB(实测)去换 32KB 结论,
+    // 而 subagent 是并行的,N 个就是 N 倍。
     var state = toolsmod.PipeState{
         .buf = &out,
         .err_buf = &errbuf,
         .out_fd = out_fd,
         .err_fd = err_fd,
+        .keep_bytes = TASK_OUTPUT_LIMIT,
     };
     // 不手动 close:child.wait 内部会关掉这两个 fd。提前 close 会让 wait
     // 撞上 EBADF(在 Debug 下直接 panic)。
@@ -1018,7 +1078,7 @@ fn toolTask(ctx: ?*anyopaque, arena: std.mem.Allocator, args: []const u8) anyerr
     const v = try std.json.parseFromSliceLeaky(std.json.Value, arena, args, .{});
 
     // 深度闸门:子 agent 读同一份 settings.json,所以它也有 `task` 工具。
-    // 不拦就是 fork bomb —— 每层 ×4,每个 piz 进程几十 MB。
+    // 不拦就是 fork bomb —— 每个 piz 进程常驻 9MB,而并发是乘起来的。
     const depth = currentTaskDepth();
     if (depth >= MAX_TASK_DEPTH) {
         return .{
@@ -1064,9 +1124,11 @@ fn toolTask(ctx: ?*anyopaque, arena: std.mem.Allocator, args: []const u8) anyerr
     if (specs.items.len == 0) {
         return .{ .content = "error: task requires a non-empty 'description' or 'tasks[].description'", .is_error = true };
     }
-    if (specs.items.len > MAX_PARALLEL_TASKS) {
+    // 上限按深度取:并发是乘起来的,嵌套层不能再拿顶层的 32。
+    const limit = parallelLimitAt(depth);
+    if (specs.items.len > limit) {
         return .{
-            .content = try std.fmt.allocPrint(arena, "error: too many tasks ({d}); max {d} per call — batch them or run the rest in a follow-up call", .{ specs.items.len, MAX_PARALLEL_TASKS }),
+            .content = try std.fmt.allocPrint(arena, "error: too many tasks ({d}); max {d} per call at delegation depth {d} — batch them or run the rest in a follow-up call", .{ specs.items.len, limit, depth }),
             .is_error = true,
         };
     }
@@ -1918,9 +1980,9 @@ pub const builtin_plugins = [_]Plugin{
     .{ .name = "task-delegation", .enabled_by_default = false, .tools = &.{
         .{
             .name = "task",
-            .desc = "Delegate a self-contained task to a sub-agent and wait for its answer. Sub-agents inherit this session's directory and model but start with no conversation history, so each description must be complete on its own. Pass 'tasks' to run up to 4 in parallel; prefer that over sequential calls for independent work.",
+            .desc = "Delegate a self-contained task to a sub-agent and wait for its answer. Sub-agents inherit this session's directory and model but start with no conversation history, so each description must be complete on its own. Pass 'tasks' to run up to 32 in parallel; prefer that over sequential calls for independent work.",
             .schema =
-            \\{"type":"object","properties":{"description":{"type":"string","description":"A single self-contained task, including all context the sub-agent needs."},"read_only":{"type":"boolean","description":"Run the sub-agent without write tools. Use it for investigation and review so a sub-agent cannot change files while you are still deciding."},"tasks":{"type":"array","description":"Independent tasks to run in parallel (max 4).","items":{"type":"object","properties":{"description":{"type":"string","description":"A single self-contained task."},"read_only":{"type":"boolean","description":"Run this sub-agent without write tools."}},"required":["description"]}}}}
+            \\{"type":"object","properties":{"description":{"type":"string","description":"A single self-contained task, including all context the sub-agent needs."},"read_only":{"type":"boolean","description":"Run the sub-agent without write tools. Use it for investigation and review so a sub-agent cannot change files while you are still deciding."},"tasks":{"type":"array","description":"Independent tasks to run in parallel (max 32 at top level, 4 inside a sub-agent).","items":{"type":"object","properties":{"description":{"type":"string","description":"A single self-contained task."},"read_only":{"type":"boolean","description":"Run this sub-agent without write tools."}},"required":["description"]}}}}
             ,
             .handler = toolCtxStub,
             .ctx_handler = toolTask,

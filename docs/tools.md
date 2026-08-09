@@ -324,7 +324,7 @@ pi 明确声明不做 to-dos，这是 piz 的增强。
 {"tasks": [{"description": "任务 A"}, {"description": "任务 B", "read_only": true}]}
 ```
 
-spawn piz 自身的子进程跑委托任务，**阻塞等结果**，把子 agent 的最终答复回传给模型。`tasks` 数组并行（上限 4，超了直接报错而不是静默截断）。
+spawn piz 自身的子进程跑委托任务，**阻塞等结果**，把子 agent 的最终答复回传给模型。`tasks` 数组并行（顶层上限 32、子 agent 里 4，超了直接报错而不是静默截断）。
 
 `read_only` 让子 agent 不带写工具，适合调研与审查 —— 一个还在帮你做判断的子 agent 不该同时改文件。
 它**只能收紧不能放宽**：只读父 agent 的子 agent 必然只读，否则委派就是一条提权通道。
@@ -365,7 +365,11 @@ spawn 的进程一起收掉（子进程同样起成独立进程组）。
 
 子 agent 一律 `-x`（工具自动执行）：它没有终端可以向用户提权限询问。委托出去就等于放弃了那些任务的逐次确认，这是固有代价。墙钟上限 10 分钟，超时杀进程并报 `timed out` —— 父 agent 此刻正占着一个工具执行槽，不能无限期挂着。
 
-**委托深度上限 2 层**（顶层 agent 算第 0 层）。子 agent 读的是同一份 `settings.json`，所以它也带 `task` 工具、也能继续 spawn —— 不拦就是 fork bomb：每层 ×4，而每个 piz 进程几十 MB。深度靠 `PIZ_TASK_DEPTH` 环境变量跨进程传递（进程间唯一可靠的通道），超限时报 `delegation depth limit reached` 让模型自己动手。最坏情况的进程数因此是 4 + 16 = 20，而不是无界。
+**并行上限按层取**：顶层 agent 32 个，子 agent 里 4 个。并发是**乘起来**的，两个数字必须一起看：顶层 32 × 嵌套 32 × 深度 2 = 最坏 1056 个 piz 进程 ≈ 9GB，足够打死机器；压到嵌套 4 之后最坏是 32 + 32×4 = 160 个进程 ≈ 1.4GB。超限的错误里带上当前深度（`max 4 per call at delegation depth 1`），否则模型不明白同样的调用为什么在顶层能过。
+
+实测（mock provider，13 代 i7）：每个 subagent 常驻 9MB / 3 线程，父进程侧每个约 +0.5MB、+1 线程、+2 fd。顶层跑满 32 个：整树 299MB、33 个进程、墙钟 1.60s，而单个 subagent 自己就要 1.54s —— 扇出代价几乎为零。再往上受制于 provider 的并发配额而不是本机资源。
+
+**委托深度上限 2 层**（顶层 agent 算第 0 层）。子 agent 读的是同一份 `settings.json`，所以它也带 `task` 工具、也能继续 spawn —— 不拦就是 fork bomb。深度靠 `PIZ_TASK_DEPTH` 环境变量跨进程传递（进程间唯一可靠的通道），超限时报 `delegation depth limit reached` 让模型自己动手。
 
 > 这条限制是读 codex 源码时发现的 —— 它有 `exceeds_thread_spawn_depth_limit`（`core/src/agent/registry.rs:76`）而 piz 当时只限并发数。
 
@@ -456,7 +460,7 @@ tool definitions), remaining ~129901. Auto-compaction triggers at 85%
 
 读类工具（`read` `grep` `find` `ls` `bash`）无锁并行。
 
-`task` 是唯一会**嵌套**并发的工具：它自己占一个工具执行槽，同时最多再拉 4 个 piz 子进程，每个子进程又能开自己的 8 个工具槽。并发是乘起来的，所以委托上限（4）刻意比工具上限（8）保守。
+`task` 是唯一会**嵌套**并发的工具：它自己占一个工具执行槽，同时最多再拉 32 个 piz 子进程（子 agent 里降到 4），每个子进程又能开自己的 8 个工具槽。并发是乘起来的，所以嵌套层的委托上限（4）刻意远小于顶层（32）—— 详见上面 [task](#task) 一节的进程数账。
 
 ## 参数 schema
 

@@ -215,7 +215,27 @@ pub const PipeState = struct {
     err_fd: std.posix.fd_t,
     out_eof: bool = false,
     err_eof: bool = false,
+    /// 缓冲保留的字节上限(只留尾部)。0 = 不限。
+    ///
+    /// 两个消费者最后都只取尾部(bash 见 toolBash 的截断、task 见 runTaskSlot),
+    /// 但原先是全量收完再截:一个吐 500MB 的子进程让父进程驻留 473MB(实测),
+    /// 最后只用 16KB。N 个并行 subagent 就是 N 倍。
+    keep_bytes: usize = 0,
+    /// 实际流过的总字节数(含已丢弃的)。截断提示要报真实总量。
+    total_out: usize = 0,
+    total_err: usize = 0,
 };
+
+/// 追加并把 list 压回 `keep` 字节以内(丢头留尾)。
+fn appendCapped(list: *std.array_list.Managed(u8), data: []const u8, keep: usize) !void {
+    try list.appendSlice(data);
+    if (keep == 0 or list.items.len <= keep) return;
+    // 留出余量再裁,避免每个 chunk 都触发一次 memmove:超过 2 倍才压回。
+    if (list.items.len < keep * 2) return;
+    const drop = list.items.len - keep;
+    std.mem.copyForwards(u8, list.items[0..keep], list.items[drop..]);
+    list.shrinkRetainingCapacity(keep);
+}
 
 fn drainPipe(state: *PipeState, fd: std.posix.fd_t, is_err: bool) !void {
     var chunk: [8192]u8 = undefined;
@@ -233,14 +253,17 @@ fn drainPipe(state: *PipeState, fd: std.posix.fd_t, is_err: bool) !void {
             break;
         }
         if (is_err) {
+            state.total_err += n;
             if (state.err_buf) |eb| {
-                try eb.appendSlice(chunk[0..n]);
+                try appendCapped(eb, chunk[0..n], state.keep_bytes);
                 continue;
             }
-            try state.buf.appendSlice("\x1b[2m[stderr]\x1b[0m ");
+            try appendCapped(state.buf, "\x1b[2m[stderr]\x1b[0m ", state.keep_bytes);
+        } else {
+            state.total_out += n;
         }
-        try state.buf.appendSlice(chunk[0..n]);
-        if (is_err) try state.buf.appendSlice("\n");
+        try appendCapped(state.buf, chunk[0..n], state.keep_bytes);
+        if (is_err) try appendCapped(state.buf, "\n", state.keep_bytes);
     }
 }
 
@@ -345,7 +368,9 @@ fn toolBash(arena: std.mem.Allocator, args: []const u8) !Result {
 
     var buf = std.array_list.Managed(u8).init(arena);
     // err_buf 省略:bash 把 stderr 交错进同一个 buffer,用户要看到执行顺序
-    var state = PipeState{ .buf = &buf, .out_fd = out_fd, .err_fd = err_fd };
+    // keep_bytes:边读边丢头部,只留最后 MAX_TOOL_OUTPUT。留全量再截的话,
+    // 一条 `find /` 就让 piz 驻留几百 MB 去换 16KB 的结果。
+    var state = PipeState{ .buf = &buf, .out_fd = out_fd, .err_fd = err_fd, .keep_bytes = MAX_TOOL_OUTPUT };
     defer {
         if (child.stdout) |f| f.close(util.io);
         if (child.stderr) |f| f.close(util.io);
@@ -374,10 +399,16 @@ fn toolBash(arena: std.mem.Allocator, args: []const u8) !Result {
         };
     }
 
-    // 截断
+    // 截断。总量取 state 累计的真实字节数 —— buf 已经被 drain 阶段裁过,
+    // 用它的长度会把「输出了 500MB」报成「输出了 32KB」。
+    const streamed = state.total_out + state.total_err;
     var content: []u8 = undefined;
     if (buf.items.len > MAX_TOOL_OUTPUT) {
-        content = try std.fmt.allocPrint(arena, "{s}\n...[output truncated at {d} bytes]...", .{ buf.items[buf.items.len - MAX_TOOL_OUTPUT ..], buf.items.len });
+        content = try std.fmt.allocPrint(arena, "{s}\n...[output truncated at {d} bytes, total {d}]...", .{
+            buf.items[buf.items.len - MAX_TOOL_OUTPUT ..],
+            MAX_TOOL_OUTPUT,
+            streamed,
+        });
     } else {
         content = try arena.dupe(u8, buf.items);
     }
@@ -1358,6 +1389,64 @@ test "bash tool" {
     const r2 = try toolBash(a, "{\"command\":\"exit 3\"}");
     try t.expect(r2.is_error);
     try t.expect(std.mem.indexOf(u8, r2.content, "exit code 3") != null);
+}
+
+test "appendCapped keeps the tail and never grows past 2x the window" {
+    const t = std.testing;
+    var list = std.array_list.Managed(u8).init(t.allocator);
+    defer list.deinit();
+
+    // keep=0 表示不限
+    try appendCapped(&list, "abc", 0);
+    try t.expectEqualStrings("abc", list.items);
+    list.clearRetainingCapacity();
+
+    // 窗口内原样保留
+    try appendCapped(&list, "hello", 10);
+    try t.expectEqualStrings("hello", list.items);
+
+    // 灌 1000 个 chunk,每个 64 字节 = 64KB 流量,窗口 100 字节。
+    // 关键不变量:缓冲永不超过 2×窗口 —— 这是内存有界的全部依据。
+    // 原先无界追加:一个吐 500MB 的子进程让父进程驻留 473MB(实测)。
+    list.clearRetainingCapacity();
+    var i: usize = 0;
+    var max_seen: usize = 0;
+    while (i < 1000) : (i += 1) {
+        var chunk: [64]u8 = undefined;
+        @memset(&chunk, @intCast('a' + (i % 26)));
+        try appendCapped(&list, &chunk, 100);
+        max_seen = @max(max_seen, list.items.len);
+    }
+    try t.expect(max_seen <= 200);
+
+    // 保的是尾部:最后一个 chunk 的内容必须在
+    const last: u8 = @intCast('a' + (999 % 26));
+    try t.expectEqual(last, list.items[list.items.len - 1]);
+}
+
+test "bash reports the true byte total after dropping the head" {
+    const t = std.testing;
+    try util.testInit();
+    var arena = util.Arena.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // 输出远超 MAX_TOOL_OUTPUT。截断提示里的 total 必须是真实流量,
+    // 不是被裁后的缓冲长度 —— 否则「输出了 5MB」会报成「输出了 16KB」,
+    // 模型据此判断要不要换个更窄的命令重跑。
+    const r = try toolBash(a, "{\"command\":\"head -c 5000000 /dev/zero | tr '\\\\0' x\",\"timeout\":60}");
+    try t.expect(!r.is_error);
+    try t.expect(std.mem.indexOf(u8, r.content, "truncated at") != null);
+
+    const marker = "total ";
+    const pos = std.mem.indexOf(u8, r.content, marker).?;
+    var end = pos + marker.len;
+    while (end < r.content.len and r.content[end] >= '0' and r.content[end] <= '9') end += 1;
+    const total = try std.fmt.parseInt(usize, r.content[pos + marker.len .. end], 10);
+    try t.expect(total >= 5_000_000);
+
+    // 交给模型的内容本身仍然受限
+    try t.expect(r.content.len < MAX_TOOL_OUTPUT * 2);
 }
 
 test "skill tool" {

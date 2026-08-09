@@ -16,9 +16,13 @@
 const std = @import("std");
 const util = @import("util.zig");
 
-/// 槽位数 = MAX_PARALLEL_TOOLS(8) + 委派并发(4) + HTTP/余量。
-/// 满了就不登记:少一行显示可以接受,为此阻塞工具执行不行。
-pub const MAX_SLOTS = 16;
+/// 槽位数 = MAX_PARALLEL_TOOLS(8) + 委派并发(32) + HTTP/余量。
+/// 满了仍会登记(句柄自带 gen/start_ms,取消与耗时照常),只是不显示 ——
+/// 少一行显示可以接受,为此阻塞工具执行不行。
+///
+/// plugins.zig 有 comptime 断言挡住「提了 MAX_PARALLEL_TASKS 忘了提这里」。
+/// 每个槽位约 200 字节静态数组,48 个不到 10KB,不值得为省这点动态分配。
+pub const MAX_SLOTS = 48;
 
 pub const Kind = enum(u8) {
     tool,
@@ -64,11 +68,18 @@ fn nowMs() i64 {
     return @intCast(@divTrunc(std.Io.Clock.now(.awake, util.io).nanoseconds, std.time.ns_per_ms));
 }
 
-/// 活动句柄。没抢到槽位时是 `none` —— 所有方法都对 `none` 安全,
-/// 调用方不必分支处理。
+/// 活动句柄。没抢到槽位时是 `none` —— 显示类方法(progress/attempt/detail)
+/// 变空操作,但 `cancelled()` 与 `elapsedMs()` **照常工作**。
+///
+/// 这两个不能依赖槽位:调用方靠 `cancelled()` 决定要不要中止(pumpPipes 就是
+/// 这么做的),槽位满员时返回 false 意味着 Ctrl+C 对这个活动完全无效 —— 一个
+/// 委派出去的 subagent 会跑满 10 分钟超时。`elapsedMs()` 返回 0 则让模型
+/// 以为任务瞬间完成。所以 gen 和 start_ms 都存在句柄自身里。
 pub const Handle = struct {
     idx: usize = MAX_SLOTS,
     gen: u32 = 0,
+    /// 句柄自带的开始时间,与槽位无关。0 = 未登记(Handle.none 的默认值)。
+    start_ms: i64 = 0,
 
     pub const none = Handle{};
 
@@ -94,20 +105,29 @@ pub const Handle = struct {
     }
 
     /// 是否被取消(Ctrl+C 提升了世代)。深层循环靠它主动退出。
+    ///
+    /// 不看槽位:`gen` 在句柄里,槽位满员的活动同样要能被 Ctrl+C 停下。
+    /// `Handle.none`(gen=0,start_ms=0)是唯一例外 —— 它从未登记过,
+    /// 没有"被取消"可言。
     pub fn cancelled(self: Handle) bool {
-        if (self.idx >= MAX_SLOTS) return false;
+        if (self.start_ms == 0) return false;
         return cancel_gen.load(.acquire) != self.gen;
     }
 
     /// 是否已被转后台。
+    ///
+    /// 这个确实依赖槽位:detachAll 只扫槽位,没有槽位就不可能被转后台。
+    /// 保守返回 false —— 意味着它仍受 Ctrl+C 和墙钟上限约束,是安全的方向。
     pub fn isDetached(self: Handle) bool {
         if (self.idx >= MAX_SLOTS) return false;
         return slots[self.idx].detached.load(.acquire);
     }
 
+    /// 墙钟耗时。同样不看槽位 —— 回给模型的耗时不能因为槽位满就变成 0,
+    /// 那会让它以为委派出去的任务瞬间完成。
     pub fn elapsedMs(self: Handle) i64 {
-        if (self.idx >= MAX_SLOTS) return 0;
-        return @max(0, nowMs() - slots[self.idx].start_ms.load(.monotonic));
+        if (self.start_ms == 0) return 0;
+        return @max(0, nowMs() - self.start_ms);
     }
 
     pub fn release(self: Handle) void {
@@ -120,8 +140,13 @@ pub const Handle = struct {
 };
 
 /// 登记一个活动。`limit_ms` 为 0 表示无墙钟上限。
-/// 抢不到槽位时返回 `Handle.none`(所有操作变成空操作)。
+///
+/// 抢不到槽位时返回一个**无槽句柄**:显示类方法变空操作,但取消与耗时
+/// 照常工作。以前这里返回 `Handle.none`,于是溢出的活动既不响应 Ctrl+C
+/// 也报告 0 耗时 —— 并发一旦超过 MAX_SLOTS 就成了正确性问题。
 pub fn begin(kind: Kind, name: []const u8, det: []const u8, limit_ms: i64) Handle {
+    const started = nowMs();
+    const g = cancel_gen.load(.acquire);
     for (&slots, 0..) |*s, i| {
         // `claimed` 只做占位:CAS 成功即独占这个槽,但此刻内容还是上一次的残留。
         if (s.claimed.cmpxchgStrong(false, true, .acq_rel, .acquire) != null) continue;
@@ -132,20 +157,20 @@ pub fn begin(kind: Kind, name: []const u8, det: []const u8, limit_ms: i64) Handl
         @memcpy(s.detail_buf[0..dn], det[0..dn]);
         s.detail_len.store(@intCast(dn), .monotonic);
         s.kind.store(@intFromEnum(kind), .monotonic);
-        s.start_ms.store(nowMs(), .monotonic);
+        s.start_ms.store(started, .monotonic);
         s.bytes.store(0, .monotonic);
         s.attempt.store(0, .monotonic);
         s.limit_ms.store(limit_ms, .monotonic);
         s.detached.store(false, .monotonic);
-        const g = cancel_gen.load(.acquire);
         s.gen.store(g, .monotonic);
         // 内容齐了才对读端可见。两个标志而非一个:占位必须在写之前(否则两个
         // 线程抢同一槽),发布必须在写之后(否则渲染读到 start_ms=0,
         // 算出来的耗时是整个系统启动时长)。
         s.active.store(true, .release);
-        return .{ .idx = i, .gen = g };
+        return .{ .idx = i, .gen = g, .start_ms = started };
     }
-    return Handle.none;
+    // 无槽:不显示,但仍可取消、仍报告真实耗时
+    return .{ .idx = MAX_SLOTS, .gen = g, .start_ms = started };
 }
 
 /// 取消当前全部在跑的活动(Ctrl+C)。返回被取消的活动数。
@@ -372,7 +397,7 @@ test "detached activities survive cancel" {
     h.release();
 }
 
-test "slot exhaustion degrades to no-op handle" {
+test "slot exhaustion keeps cancel and elapsed working" {
     const t = std.testing;
     try util.testInit();
     reset();
@@ -380,12 +405,32 @@ test "slot exhaustion degrades to no-op handle" {
 
     var hs: [MAX_SLOTS]Handle = undefined;
     for (&hs) |*h| h.* = begin(.tool, "x", "", 0);
-    // 满了:再登记拿到空句柄,所有操作静默无效而不是崩
     const overflow = begin(.tool, "y", "", 0);
     try t.expectEqual(@as(usize, MAX_SLOTS), overflow.idx);
+
+    // 显示类方法静默无效(没有槽位可写),但不能崩
     overflow.progress(999);
     overflow.detail("ignored");
+    overflow.attempt(3);
+    try t.expectEqual(@as(usize, MAX_SLOTS), count()); // 溢出的那个不出现在快照里
+
+    // 取消必须照常生效。返回 false 的话 pumpPipes 永远不中止 ——
+    // 一个委派出去的 subagent 会跑满 TASK_TIMEOUT_MS(10 分钟),
+    // 用户按 Ctrl+C 完全没反应。
     try t.expect(!overflow.cancelled());
+    _ = cancelAll();
+    try t.expect(overflow.cancelled());
+    for (hs) |h| try t.expect(h.cancelled());
+
+    // 耗时也必须真实:报 0 会让模型以为委派的任务瞬间完成
+    try t.expect(overflow.elapsedMs() >= 0);
+    try t.expectEqual(@as(usize, MAX_SLOTS), overflow.idx);
+
+    // 从未登记的句柄仍是纯空操作 —— 它没有"被取消"可言
+    const never = Handle.none;
+    try t.expect(!never.cancelled());
+    try t.expectEqual(@as(i64, 0), never.elapsedMs());
+
     overflow.release();
     for (hs) |h| h.release();
     try t.expectEqual(@as(usize, 0), count());
