@@ -54,6 +54,13 @@ const HELP =
     \\
 ;
 
+/// `/help` 输出的斜杠命令清单。
+///
+/// 每个真实存在的命令都必须在这里出现 —— 漏掉的等于没实现:
+/// /dump /export /plan /queue 四条一直可用,却从不出现在帮助里,
+/// 用户没有任何途径发现它们。下面有测试盯着这份清单与实际分发的一致性。
+const SLASH_HELP = "/help /status /model <m> /new /sessions /resume <n> /title <t> /tree /fork <n> /copy /undo /redo /memory /compact /clear /plan <goal> /queue /export /dump /quit";
+
 // ---------- 交互模式 ----------
 
 const App = struct {
@@ -1408,6 +1415,12 @@ fn copyToClipboard(alloc: std.mem.Allocator, text: []const u8) bool {
         defer {
             _ = child.wait(util.io) catch {};
         }
+        // 写完必须把 stdin 关掉,否则 wl-copy/xclip 一直等 EOF,child.wait 卡死。
+        //
+        // 关完要把 handle 置空:`child.wait` 内部还会再关一遍
+        // (Threaded.childCleanupPosix → closeFd(stdin.handle)),同一个 fd
+        // 关两次拿到 EBADF,std 视为 OS bug —— Debug 构建直接
+        // `unreachable`,整个 piz 崩掉。实测 /copy 必崩。
         if (child.stdin) |f| {
             var wbuf: [8192]u8 = undefined;
             var w = f.writer(util.io, &wbuf);
@@ -1415,6 +1428,7 @@ fn copyToClipboard(alloc: std.mem.Allocator, text: []const u8) bool {
                 w.flush() catch {};
             } else |_| {}
             f.close(util.io);
+            child.stdin = null;
         }
         return true;
     }
@@ -1534,7 +1548,7 @@ fn onSubmit(tui: *tui_mod.Tui, line: []const u8) anyerror!void {
             return;
         }
         if (std.mem.eql(u8, cmd, "undo")) {
-            if (app.worker != null) {
+            if (app.worker_active.load(.acquire)) {
                 app.tui.appendLine("", "\x1b[31m", "cannot undo while a turn is running") catch {};
                 return;
             }
@@ -1698,9 +1712,10 @@ fn onSubmit(tui: *tui_mod.Tui, line: []const u8) anyerror!void {
             app.tui.appendLine("", "\x1b[36m", bw.written()) catch {};
             return;
         }
-        if (std.mem.eql(u8, cmd, "plan")) {
-            // 计划模式:让模型制定计划写入 PLAN.md,随后按计划执行
-            const goal = line[5..];
+        if (std.mem.startsWith(u8, cmd, "plan")) {
+            // 计划模式:让模型制定计划写入 PLAN.md,随后按计划执行。
+            // startsWith:既匹配 /plan(显示用法)也匹配 /plan <goal>。
+            const goal = std.mem.trim(u8, cmd["plan".len..], " ");
             if (goal.len == 0) {
                 app.tui.appendLine("", "\x1b[31m", "usage: /plan <goal>") catch {};
                 return;
@@ -1786,7 +1801,7 @@ fn onSubmit(tui: *tui_mod.Tui, line: []const u8) anyerror!void {
             return;
         }
         if (std.mem.eql(u8, cmd, "help")) {
-            app.tui.appendLine("", "\x1b[36m", "/help /status /model <m> /new /sessions /resume <n> /title <t> /tree /fork <n> /copy /undo /redo /memory /compact /clear /quit") catch {};
+            app.tui.appendLine("", "\x1b[36m", SLASH_HELP) catch {};
             return;
         }
         // 未知斜杠命令:尝试 prompt 模板(/name [args])
@@ -2865,7 +2880,6 @@ test "expandRefs" {
     // 写相对 cwd 的引用文件
     try std.Io.Dir.cwd().writeFile(util.io, .{ .sub_path = "ref_test.txt", .data = "FILE-CONTENT" });
     defer std.Io.Dir.cwd().deleteFile(util.io, "ref_test.txt") catch {};
-
     // @./ref_test.txt 展开
     const r1 = try expandRefs(a, "read this @./ref_test.txt please");
     try t.expect(std.mem.indexOf(u8, r1, "FILE-CONTENT") != null);
@@ -2929,4 +2943,44 @@ test "concurrent print callbacks never interleave a line" {
         for (line) |c| try t.expectEqual(line[0], c);
     }
     try t.expectEqual(@as(usize, 600), lines);
+}
+
+test "copyToClipboard does not double-close the child stdin" {
+    try util.testInit();
+    var arena = util.Arena.init(std.testing.allocator);
+    defer arena.deinit();
+
+    // 回归测试:写完 stdin 后既 close 又让 child.wait 再关一次,
+    // 同一 fd 关两次 → EBADF → std 判为 OS bug → Debug 构建 unreachable,
+    // 整个 piz 崩在 /copy 上。这里只要求它不 panic。
+    //
+    // 系统没装 wl-copy/xclip 时返回 false,同样不该崩 —— 两条路径都走一遍。
+    _ = copyToClipboard(arena.allocator(), "clipboard round trip\n");
+    _ = copyToClipboard(arena.allocator(), "");
+}
+
+test "every slash command appears in /help" {
+    const t = std.testing;
+
+    // /dump /export /plan /queue 四条一直能用却没在帮助里列出 ——
+    // 对用户等于不存在。这里把清单和实际分发绑在一起:
+    // 新加命令忘了写进 SLASH_HELP,测试就失败。
+    //
+    // 命令名取自 onSubmit 里的 `eql(u8, cmd, "…")` / `startsWith(u8, cmd, "… ")`。
+    const dispatched = [_][]const u8{
+        "help",   "status",  "model", "new",  "sessions", "resume",
+        "title",  "tree",    "fork",  "copy", "undo",     "redo",
+        "memory", "compact", "clear", "plan", "queue",    "export",
+        "dump",   "quit",
+    };
+    for (dispatched) |cmd| {
+        var buf: [32]u8 = undefined;
+        const needle = try std.fmt.bufPrint(&buf, "/{s}", .{cmd});
+        if (std.mem.indexOf(u8, SLASH_HELP, needle) == null) {
+            std.debug.print("命令 /{s} 能用但没在 SLASH_HELP 里\n", .{cmd});
+            return error.CommandMissingFromHelp;
+        }
+    }
+    // 别名不单独列(/q /exit 是 /quit 的简写,列出来只是噪音)
+    try t.expect(std.mem.indexOf(u8, SLASH_HELP, "/q ") == null);
 }
