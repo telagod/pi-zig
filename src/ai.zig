@@ -398,6 +398,57 @@ fn emitCallback(cbs: Callbacks, cb: ?*const fn (ctx: ?*anyopaque, text: []const 
     if (cb) |f| try f(cbs.ctx, text);
 }
 
+/// 正文 chunk 专用:模型把工具调用写成正文时(deepseek 漏 `<｜｜DSML｜｜` 这类
+/// 特殊 token 字面量),标记之后的内容一律不外发。
+///
+/// 必须在流式层拦:文本是一边收一边打到 stdout 的,等整轮结束再判断已经晚了 ——
+/// 标记早就印在用户屏幕上,收不回来。agent 层的重试负责让模型重答,这里只
+/// 负责别把垃圾漏出去。
+///
+/// `accumulated` 是**含本 chunk**的全部正文,所以标记跨 chunk 拆开也能认出来。
+fn emitText(cbs: Callbacks, accumulated: []const u8, chunk: []const u8) !void {
+    const cut = textMarkerStart(accumulated) orelse {
+        try emitCallback(cbs, cbs.on_text, chunk);
+        return;
+    };
+    // 标记起点在本 chunk 之前 → 整块丢掉;落在本 chunk 内 → 只发前半截
+    const chunk_start = accumulated.len - chunk.len;
+    if (cut <= chunk_start) return;
+    try emitCallback(cbs, cbs.on_text, accumulated[chunk_start..cut]);
+}
+
+/// 伪造工具调用标记的起始下标。同时匹配**前缀** —— 标记可能刚开始流,
+/// 后半截还在下个 chunk 里,那时也必须立刻闭嘴。
+fn textMarkerStart(text: []const u8) ?usize {
+    var best: ?usize = null;
+    for (TEXT_MARKERS) |m| {
+        if (std.mem.indexOf(u8, text, m)) |i| {
+            if (best == null or i < best.?) best = i;
+            continue;
+        }
+        // 尾部是否是 m 的前缀(标记被 chunk 边界切断)
+        const max = @min(m.len - 1, text.len);
+        var n = max;
+        while (n > 0) : (n -= 1) {
+            if (std.mem.eql(u8, text[text.len - n ..], m[0..n])) {
+                const i = text.len - n;
+                if (best == null or i < best.?) best = i;
+                break;
+            }
+        }
+    }
+    return best;
+}
+
+/// 与 agent.TEXT_TOOL_CALL_MARKERS 同一份清单(这里是流式层的副本 ——
+/// ai 不依赖 agent,反向依赖会成环)。
+const TEXT_MARKERS = [_][]const u8{
+    "<｜｜DSML｜｜",
+    "<|DSML|>",
+    "<｜tool▁calls▁begin｜>",
+    "<|tool_calls_begin|>",
+};
+
 /// 解析单个 OpenAI 流式 chunk,返回是否消耗。
 fn parseOpenAIChunk(alloc: std.mem.Allocator, arena: std.mem.Allocator, chunk: []const u8, acc: *std.array_list.Managed(ToolAcc), cbs: Callbacks, out_text: *std.array_list.Managed(u8), out_reasoning: *std.array_list.Managed(u8), usage: *Usage, finish: *std.array_list.Managed(u8)) !void {
     const root = std.json.parseFromSliceLeaky(std.json.Value, alloc, chunk, .{}) catch return;
@@ -441,7 +492,7 @@ fn parseOpenAIChunk(alloc: std.mem.Allocator, arena: std.mem.Allocator, chunk: [
     if (delta.object.get("content")) |c| {
         if (c == .string and c.string.len > 0) {
             try out_text.appendSlice(c.string);
-            try emitCallback(cbs, cbs.on_text, c.string);
+            try emitText(cbs, out_text.items, c.string);
         }
     }
     // 推理字段有两种叫法:DeepSeek 系用 reasoning_content,OpenRouter 等网关用 reasoning。
@@ -586,7 +637,7 @@ fn parseOpenAIJson(alloc: std.mem.Allocator, body: []const u8, cbs: Callbacks, r
                             if (msg.object.get("content")) |c| {
                                 if (c == .string) {
                                     try out_text.appendSlice(c.string);
-                                    try emitCallback(cbs, cbs.on_text, c.string);
+                                    try emitText(cbs, out_text.items, c.string);
                                 }
                             }
                             if (msg.object.get("tool_calls")) |tcs| {
@@ -678,7 +729,7 @@ fn parseAnthropicEvent(alloc: std.mem.Allocator, arena: std.mem.Allocator, ev: [
                             if (d.object.get("text")) |txt| {
                                 if (txt == .string) {
                                     try out_text.appendSlice(txt.string);
-                                    try emitCallback(cbs, cbs.on_text, txt.string);
+                                    try emitText(cbs, out_text.items, txt.string);
                                 }
                             }
                         } else if (std.mem.eql(u8, t.string, "input_json_delta")) {
@@ -890,7 +941,7 @@ pub fn run(
                                     if (block.object.get("text")) |txt| {
                                         if (txt == .string) {
                                             try out_text.appendSlice(txt.string);
-                                            try emitCallback(options.callbacks, options.callbacks.on_text, txt.string);
+                                            try emitText(options.callbacks, out_text.items, txt.string);
                                         }
                                     }
                                 } else if (std.mem.eql(u8, t.string, "tool_use")) {
@@ -992,6 +1043,72 @@ test "invalid utf8 in tool output still serializes as a JSON string" {
         }
         try t.expect(saw_tool_text);
     }
+}
+
+test "text tool-call markers are withheld from the stream" {
+    const t = std.testing;
+
+    // 收集 on_text 实际外发的内容
+    const Sink = struct {
+        var buf: [4096]u8 = undefined;
+        var len: usize = 0;
+        fn reset() void {
+            len = 0;
+        }
+        fn cb(_: ?*anyopaque, text: []const u8) anyerror!void {
+            @memcpy(buf[len .. len + text.len], text);
+            len += text.len;
+        }
+        fn got() []const u8 {
+            return buf[0..len];
+        }
+    };
+    const cbs = Callbacks{ .on_text = Sink.cb };
+
+    // 按 chunk 喂进去,模拟流式
+    const feed = struct {
+        fn go(c: Callbacks, chunks: []const []const u8) !void {
+            Sink.reset();
+            var acc = std.array_list.Managed(u8).init(std.testing.allocator);
+            defer acc.deinit();
+            for (chunks) |ch| {
+                try acc.appendSlice(ch);
+                try emitText(c, acc.items, ch);
+            }
+        }
+    }.go;
+
+    // 干净文本原样透传
+    try feed(cbs, &.{ "hello ", "world" });
+    try t.expectEqualStrings("hello world", Sink.got());
+
+    // 标记在一个 chunk 内 —— 之前的留下,标记及之后全部扣住
+    try feed(cbs, &.{"answer: <｜｜DSML｜｜tool_calls>\n<｜｜DSML｜｜invoke name=\"bash\">"});
+    try t.expectEqualStrings("answer: ", Sink.got());
+
+    // 标记被 chunk 边界切开 —— 半截前缀也必须立刻闭嘴,
+    // 否则 `<｜｜DS` 已经印在屏幕上了
+    try feed(cbs, &.{ "text <｜｜DS", "ML｜｜tool_calls>" });
+    try t.expectEqualStrings("text ", Sink.got());
+
+    // 逐字节流式:最坏情况
+    var bytes: [64][]const u8 = undefined;
+    const src = "ok <｜｜DSML｜｜tool_calls>";
+    var n: usize = 0;
+    for (src, 0..) |_, i| {
+        bytes[n] = src[i .. i + 1];
+        n += 1;
+    }
+    try feed(cbs, bytes[0..n]);
+    try t.expectEqualStrings("ok ", Sink.got());
+
+    // 标记之后就算又出现正常文本也不放行 —— 那都是伪造调用的内容
+    try feed(cbs, &.{ "a<｜｜DSML｜｜x", "more text here" });
+    try t.expectEqualStrings("a", Sink.got());
+
+    // 全角竖线不能和 ASCII 竖线混淆:正常文本里的 | 不该触发
+    try feed(cbs, &.{"pipe | char and <|not a marker|>"});
+    try t.expectEqualStrings("pipe | char and <|not a marker|>", Sink.got());
 }
 
 test "escapes survive the invalid-utf8 slow path" {

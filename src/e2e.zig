@@ -427,6 +427,81 @@ pub fn testTaskDelegation(exe_path: []const u8) !void {
     try t.expect(std.mem.indexOf(u8, out.items, "Let me check") != null);
 }
 
+/// `--` 之后的参数必须当字面量。没有它,任何以 '-' 开头的提示词都无法输入:
+/// argv 解析会把 `-rf ...` 当未知选项直接退出。这里真跑子进程验证。
+pub fn testDashSeparator(exe_path: []const u8) !void {
+    const t = std.testing;
+    try util.testInit();
+    var arena = util.Arena.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const PORT: u16 = 18527;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const cwd_abs = try std.process.currentPathAlloc(util.io, a);
+    const cfg_dir = try std.fmt.allocPrint(a, "{s}/.zig-cache/tmp/{s}", .{ cwd_abs, tmp.sub_path });
+    const models = try std.fmt.allocPrint(a,
+        \\{{"providers":{{"mock":{{"baseUrl":"http://127.0.0.1:{d}/v1","apiKey":"k","api":"openai-completions","models":["mock-model"]}}}}}}
+    , .{PORT});
+    try tmp.dir.writeFile(util.io, .{ .sub_path = "models.json", .data = models });
+
+    var state = MockState{ .alloc = std.heap.page_allocator, .port = PORT };
+    const thread = try std.Thread.spawn(.{}, mockServerMain, .{&state});
+    defer {
+        state.stop.store(true, .release);
+        thread.join();
+        state.stop.store(false, .release);
+    }
+    var ready = false;
+    for (0..100) |_| {
+        const addr = std.Io.net.IpAddress.parseIp4("127.0.0.1", PORT) catch break;
+        var s = addr.connect(util.io, .{ .mode = .stream, .protocol = .tcp }) catch {
+            _ = std.Io.sleep(util.io, .{ .nanoseconds = 10 * std.time.ns_per_ms }, .awake) catch {};
+            continue;
+        };
+        s.close(util.io);
+        ready = true;
+        break;
+    }
+    try t.expect(ready);
+
+    var env = std.process.Environ.Map.init(a);
+    defer env.deinit();
+    var it = util.environ_map.?.iterator();
+    while (it.next()) |kv| try env.put(kv.key_ptr.*, kv.value_ptr.*);
+    try env.put("PIZ_DIR", cfg_dir);
+
+    // 提示词以 '-' 开头 —— 不走 `--` 就会被当成选项
+    var child = try std.process.spawn(util.io, .{
+        .argv = &.{ exe_path, "-p", "-n", "-x", "--provider", "mock", "-m", "mock-model", "--", "-rf what does it mean" },
+        .cwd = .{ .path = "/tmp" },
+        .environ_map = &env,
+        .stdin = .ignore,
+        .stdout = .pipe,
+        .stderr = .pipe,
+    });
+    util.setNonBlock(child.stdout.?.handle);
+    util.setNonBlock(child.stderr.?.handle);
+    var out = std.array_list.Managed(u8).init(a);
+    var errbuf = std.array_list.Managed(u8).init(a);
+    var pipes = toolsmod.PipeState{
+        .buf = &out,
+        .err_buf = &errbuf,
+        .out_fd = child.stdout.?.handle,
+        .err_fd = child.stderr.?.handle,
+    };
+    const timed_out = try toolsmod.pumpPipes(&pipes, 60_000, activity.Handle.none);
+    try t.expect(!timed_out);
+    const term = try child.wait(util.io);
+
+    // 正常退出,不是 "unknown option" 的 exit(1)
+    try t.expectEqual(std.process.Child.Term{ .exited = 0 }, term);
+    try t.expect(std.mem.indexOf(u8, errbuf.items, "unknown option") == null);
+    try t.expect(std.mem.indexOf(u8, out.items, "Let me check") != null);
+}
+
 // ---------------------------------------------------------------------
 // 断流自愈:连接读到一半断掉,piz 应保住已收内容并自动续跑说完。
 // ---------------------------------------------------------------------

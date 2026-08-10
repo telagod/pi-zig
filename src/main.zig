@@ -40,6 +40,7 @@ const HELP =
     \\      --models     列出可用模型
     \\      --plugin N   开启可选插件(可重复)
     \\      --plugins    列出全部内置插件与启用状态
+    \\      --           之后的参数不再当选项(提示词以 '-' 开头时用)
     \\  pkg 子命令: piz pkg install <path> [-l] [-y] | piz pkg list | piz pkg remove <name> [-l]
     \\    (资源包:含 skills/、prompts/ 或 AGENTS.md 的目录;-l 安装到项目 .piz/packages)
     \\    (-y 跳过生命周期钩子确认;包声明的钩子会以 bash -c 执行)
@@ -2554,6 +2555,19 @@ pub fn main(init: std.process.Init) !void {
             runPkgCmd(alloc, &args); // 不返回
         } else if (std.mem.eql(u8, arg, "web")) {
             runWebCmd(alloc, &args); // 不返回
+        } else if (std.mem.eql(u8, arg, "--")) {
+            // 之后全部当字面量 —— 提示词以 '-' 开头时唯一的写法,
+            // 比如 `piz -p -- "-rf 是什么意思"`。少了它这种提问无法输入。
+            while (args.next()) |rest| {
+                if (print_mode) {
+                    try prompt_parts.append(rest);
+                } else if (dir == null) {
+                    dir = rest;
+                } else {
+                    std.debug.print("piz: unexpected argument {s}\n", .{rest});
+                    std.process.exit(1);
+                }
+            }
         } else if (arg.len > 0 and arg[0] == '-') {
             std.debug.print("piz: unknown option {s}\n{s}", .{ arg, HELP });
             std.process.exit(1);
@@ -2807,6 +2821,17 @@ test "e2e task delegation spawns a real sub-agent" {
     const exe = try std.fmt.allocPrint(a, "{s}/zig-out/bin/piz", .{cwd});
     std.Io.Dir.cwd().access(util.io, exe, .{}) catch return error.SkipZigTest;
     try @import("e2e.zig").testTaskDelegation(exe);
+}
+
+test "e2e -- passes a dash-leading prompt through" {
+    try util.testInit();
+    var arena = util.Arena.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cwd = try std.process.currentPathAlloc(util.io, a);
+    const exe = try std.fmt.allocPrint(a, "{s}/zig-out/bin/piz", .{cwd});
+    std.Io.Dir.cwd().access(util.io, exe, .{}) catch return error.SkipZigTest;
+    try @import("e2e.zig").testDashSeparator(exe);
 }
 
 test "expandRefs" {

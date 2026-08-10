@@ -29,6 +29,24 @@ pub const MAX_STREAM_RESUMES = 2;
 /// 2 = 第三次发起同一批调用时干预。合法的重试几乎总会改参数(换路径、
 /// 加超时、换命令),原封不动重发三次说明模型没在用结果。
 const MAX_REPEAT_ROUNDS = 2;
+const MAX_FAKE_CALL_RETRIES = 2;
+
+/// 模型把工具调用写成正文时用的标记。都是各家的特殊 token 漏成了字面文本,
+/// 正常回答里不会出现。`｜` 是 U+FF5C 全角竖线,不是 ASCII `|`。
+const TEXT_TOOL_CALL_MARKERS = [_][]const u8{
+    "<｜｜DSML｜｜", // deepseek
+    "<|DSML|>",
+    "<｜tool▁calls▁begin｜>", // deepseek 另一种
+    "<|tool_calls_begin|>",
+};
+
+/// 正文里是否含伪造的工具调用标记;返回命中的那个,便于诊断。
+pub fn textToolCallMarker(text: []const u8) ?[]const u8 {
+    for (TEXT_TOOL_CALL_MARKERS) |m| {
+        if (std.mem.indexOf(u8, text, m) != null) return m;
+    }
+    return null;
+}
 
 /// 同一工具拿到**完全相同的输出**多少次后判定为空转。
 ///
@@ -379,9 +397,16 @@ pub const Agent = struct {
             \\
         , .{cwd});
         if (opts.read_only) {
+            // 光说 "no tools" 不够:紧随其后的 "Keep going" 会推着模型
+            // 自己想办法,于是它开始用**文本格式**伪造工具调用
+            // (实测 deepseek 吐 `<||DSML||tool_calls>` 标记),这些原样
+            // 打到 stdout,用户看到一堆标记而不是答复。必须明确禁止。
             try spw.writer.writeAll(
-                \\READ-ONLY MODE: you have no tools and must not attempt to modify the filesystem.
-                \\Answer questions and analyze code only.
+                \\READ-ONLY MODE: you have no tools at all. You cannot read files, run
+                \\commands, or search. Answer only from the conversation and your own knowledge.
+                \\Never emit tool calls in any form, including text or markup that imitates
+                \\a tool call. If answering needs information you were not given, say plainly
+                \\what you would need instead of pretending to look it up.
                 \\
             );
         }
@@ -646,6 +671,9 @@ pub const Agent = struct {
         var last_good_tool: []const u8 = "";
         // 已经劝过一次收尾。两个判据共用 —— 劝两次就是同一个死循环换形状。
         var nudged_once = false;
+        // 模型把工具调用写成正文的重试次数。给 2 次:一次纠正通常够,
+        // 再多就是这个模型在这个模式下压不住,该把实情告诉用户。
+        var fake_call_retries: usize = 0;
         while (iter < MAX_TOOL_ITER) : (iter += 1) {
             if (self.aborted.load(.acquire)) return error.Aborted;
             // 组装完整消息(system 在前)
@@ -729,6 +757,37 @@ pub const Agent = struct {
                 return result;
             }
 
+            // 文本形式的工具调用:模型没走 tool_calls 字段,而是把调用当正文吐出来
+            // (deepseek 漏 `<||DSML||...>` 特殊标记,｜是 U+FF5C 全角竖线)。
+            //
+            // 只读模式最容易触发 —— 一个工具定义都没发,模型又被要求"想办法
+            // 往前走",于是自己造一套格式。这些标记原样打到 stdout,用户看到
+            // 一堆标记而不是答复。加强 system prompt 完全无效(实测 3/3 仍漏),
+            // 因为格式是模型训练里烧进去的。
+            //
+            // 处理方式和空转检测一致:告诉它这不算调用,让它重答一次。
+            if (result.tool_calls.len == 0 and textToolCallMarker(result.text) != null) {
+                if (fake_call_retries < MAX_FAKE_CALL_RETRIES) {
+                    fake_call_retries += 1;
+                    if (self.cbs.on_notice) |f| {
+                        var nb: [160]u8 = undefined;
+                        const msg = std.fmt.bufPrint(&nb, "the model wrote a tool call as text instead of calling a tool — asking it to answer directly ({d}/{d})", .{ fake_call_retries, MAX_FAKE_CALL_RETRIES }) catch "the model faked a tool call as text — retrying";
+                        f(self.cbs.ctx, msg) catch {};
+                    }
+                    try self.messages.append(.{
+                        .role = "user",
+                        .content = if (self.read_only)
+                            "(That was not a tool call — it printed as literal text. You have no tools in this mode. Answer directly from what you already know, or say what information you would need.)"
+                        else
+                            "(That was not a tool call — it printed as literal text. Use the real tool-calling interface, or answer directly.)",
+                    });
+                    continue;
+                }
+                // 额度用尽:标记清楚,不要把标记当答复交出去
+                result.error_msg = "the model kept writing tool calls as text instead of calling tools; the reply above is not usable";
+                if (self.cbs.on_turn_end) |f| try f(self.cbs.ctx);
+                return result;
+            }
             if (result.tool_calls.len == 0) {
                 if (self.cbs.on_turn_end) |f| try f(self.cbs.ctx);
                 return result;

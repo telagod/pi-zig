@@ -2075,18 +2075,69 @@ fn lspDecodeFrame(buf: []const u8) ?LspFrame {
     return .{ .body = buf[body_start .. body_start + body_len], .consumed = body_start + body_len };
 }
 
+const LspPos = struct { line: u32, character: u32 };
+
 /// 在文件内容里找符号首次出现的位置,返回 0-based (line, character)。
 /// 模型给符号名而非行列时用这个 —— 降低调用门槛。
-fn lspFindSymbol(content: []const u8, symbol: []const u8) ?struct { line: u32, character: u32 } {
+///
+/// 必须跳过注释里的出现:带文档注释的符号(`// Foo does ...` 紧挨 `fn Foo`)
+/// 首个文本匹配落在注释上,language server 在那个位置没有符号,references
+/// 直接返回空。实测 gopls 就是这样失败的。
+/// 同理跳过字符串字面量内部,并要求匹配是完整标识符而非更长名字的子串。
+fn lspFindSymbol(content: []const u8, symbol: []const u8) ?LspPos {
     if (symbol.len == 0) return null;
+    var fallback: ?LspPos = null;
     var line_no: u32 = 0;
     var it = std.mem.splitScalar(u8, content, '\n');
     while (it.next()) |line| : (line_no += 1) {
-        if (std.mem.indexOf(u8, line, symbol)) |col| {
-            return .{ .line = line_no, .character = @intCast(col) };
+        var from: usize = 0;
+        while (std.mem.indexOfPos(u8, line, from, symbol)) |col| {
+            from = col + 1;
+            // 完整标识符:两侧不能再是标识符字符,否则 `Total` 会命中 `ComputeTotal`
+            const before_ok = col == 0 or !isIdentChar(line[col - 1]);
+            const after = col + symbol.len;
+            const after_ok = after >= line.len or !isIdentChar(line[after]);
+            if (!before_ok or !after_ok) continue;
+            const hit: LspPos = .{ .line = line_no, .character = @intCast(col) };
+            // 注释/字符串里的出现只作兜底 —— 真实定义几乎总在后面
+            if (inCommentOrString(line, col)) {
+                if (fallback == null) fallback = hit;
+                continue;
+            }
+            return hit;
         }
     }
-    return null;
+    return fallback;
+}
+
+fn isIdentChar(c: u8) bool {
+    return std.ascii.isAlphanumeric(c) or c == '_';
+}
+
+/// 判断 `col` 是否落在行注释或字符串字面量内。按行判断,足够覆盖
+/// 文档注释这个实际场景;跨行块注释不处理(代价远大于收益)。
+fn inCommentOrString(line: []const u8, col: usize) bool {
+    var i: usize = 0;
+    var quote: ?u8 = null;
+    while (i < col) : (i += 1) {
+        const c = line[i];
+        if (quote) |q| {
+            if (c == '\\') {
+                i += 1; // 跳过被转义的字符
+            } else if (c == q) {
+                quote = null;
+            }
+            continue;
+        }
+        switch (c) {
+            '"', '\'', '`' => quote = c,
+            '/' => if (i + 1 < line.len and (line[i + 1] == '/')) return true,
+            '#' => return true, // python/shell 行注释
+            ';' => {},
+            else => {},
+        }
+    }
+    return quote != null;
 }
 
 /// 把绝对路径转成 file:// URI(百分号编码空格等)。
@@ -3175,6 +3226,38 @@ test "lsp symbol location is zero-based" {
     // 找不到 → null
     try t.expect(lspFindSymbol(content, "nonexistent") == null);
     try t.expect(lspFindSymbol(content, "") == null);
+}
+
+test "lsp symbol lookup skips comments and partial matches" {
+    const t = std.testing;
+
+    // 实测踩过的坑:gopls 对着文档注释里的符号名返回空 references。
+    // 首个文本匹配在第 1 行的注释上,真实定义在第 2 行。
+    const doc = "// ComputeTotal sums a slice.\nfunc ComputeTotal(xs []int) int {\n";
+    const p1 = lspFindSymbol(doc, "ComputeTotal") orelse return error.NotFound;
+    try t.expectEqual(@as(u32, 1), p1.line); // 跳过注释,落在定义行
+    try t.expectEqual(@as(u32, 5), p1.character); // "func " 之后
+
+    // 完整标识符:Total 不该命中 ComputeTotal 的尾部
+    const sub = "func ComputeTotal() {}\nvar Total = 1;\n";
+    const p2 = lspFindSymbol(sub, "Total") orelse return error.NotFound;
+    try t.expectEqual(@as(u32, 1), p2.line);
+    try t.expectEqual(@as(u32, 4), p2.character);
+
+    // 字符串字面量里的出现也跳过
+    const str = "print(\"call handleReq now\")\nfn handleReq() void {}\n";
+    const p3 = lspFindSymbol(str, "handleReq") orelse return error.NotFound;
+    try t.expectEqual(@as(u32, 1), p3.line);
+
+    // 只在注释里出现 → 兜底返回它,而不是假装找不到
+    const only = "// TODO: rename oldName later\nconst x = 1;\n";
+    const p4 = lspFindSymbol(only, "oldName") orelse return error.NotFound;
+    try t.expectEqual(@as(u32, 0), p4.line);
+
+    // python/shell 的 # 注释同样跳过
+    const hash = "# helper does things\ndef helper():\n    pass\n";
+    const p5 = lspFindSymbol(hash, "helper") orelse return error.NotFound;
+    try t.expectEqual(@as(u32, 1), p5.line);
 }
 
 test "lsp tool fails gracefully without a server" {
