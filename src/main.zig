@@ -2702,17 +2702,36 @@ fn runAsync(alloc: std.mem.Allocator, cwd: []const u8, prompt: []const u8, orig_
     var logf = try std.Io.Dir.cwd().createFile(util.io, log_path, .{ .truncate = true, .permissions = @enumFromInt(0o600) });
     defer logf.close(util.io);
 
-    // 重建 argv:原参数(含 argv[0])去 -a/--async,尾部加 -s <id> -n(确保子进程写此会话)
+    // 重建 argv:原参数(含 argv[0])去 -a/--async,加 -s <id> 让子进程写此会话。
+    //
+    // `-s` 等必须插在 `--` **之前**:`--` 之后全是字面量,追加到尾部会被
+    // 当成提示词的一部分 —— 实测子进程收到的提示词变成
+    // `ASYNC-OK -s 1786375593575 -n -c`,会话选项则完全没生效。
     var argv = std.array_list.Managed([]const u8).init(alloc);
     defer argv.deinit();
+    var tail = std.array_list.Managed([]const u8).init(alloc);
+    defer tail.deinit();
+    var after_dashdash = false;
     for (orig_args) |a| {
         if (std.mem.eql(u8, a, "-a") or std.mem.eql(u8, a, "--async")) continue;
+        if (after_dashdash) {
+            try tail.append(a);
+            continue;
+        }
+        if (std.mem.eql(u8, a, "--")) {
+            after_dashdash = true;
+            continue;
+        }
         try argv.append(a);
     }
     try argv.append("-s");
     try argv.append(id);
     try argv.append("-n");
     try argv.append("-c"); // -s 优先于 -n;-c 覆盖前序 -n(防御)
+    if (tail.items.len > 0) {
+        try argv.append("--");
+        try argv.appendSlice(tail.items);
+    }
 
     const child = try std.process.spawn(util.io, .{
         .argv = argv.items,

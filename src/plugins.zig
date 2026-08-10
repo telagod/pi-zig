@@ -443,6 +443,14 @@ test "sub-agent argv inherits cwd, model and read-only mode" {
         try j3.append(' ');
     }
     try t.expect(std.mem.indexOf(u8, j3.items, " -r ") != null);
+
+    // desc 必须排在 `--` 之后,且 `--` 之后只有 desc。
+    // 否则以 '-' 开头的任务描述会被子进程当选项,直接 unknown option 退出。
+    const argv4 = try buildTaskArgv(a, &rw, "/proc/self/exe", "-r what does it do", false);
+    try t.expectEqualStrings("--", argv4[argv4.len - 2]);
+    try t.expectEqualStrings("-r what does it do", argv4[argv4.len - 1]);
+    // 描述里的 "-r" 不能被误当成只读开关:`--` 之前不该出现 -r
+    for (argv4[0 .. argv4.len - 2]) |x| try t.expect(!std.mem.eql(u8, x, "-r"));
 }
 
 test "prune plugin trims old tool outputs only" {
@@ -1026,11 +1034,15 @@ fn buildTaskArgv(
 ) ![]const []const u8 {
     var argv = std.array_list.Managed([]const u8).init(alloc);
     // -n:子 agent 开新会话,不续载父会话历史(否则两边同时写一个 jsonl)
-    try argv.appendSlice(&.{ exe, "-p", desc, "-n", "--provider", self.provider.name, "-m", self.model });
+    try argv.appendSlice(&.{ exe, "-p", "-n", "--provider", self.provider.name, "-m", self.model });
     if (self.read_only or force_read_only) try argv.append("-r");
     // 交互式父 agent 每次工具调用都问用户;子 agent 没有终端可问,
     // 只能自动执行 —— 这是委托的固有代价,文档里写明。
     try argv.append("-x");
+    // desc 走 `--` 之后:任务描述以 '-' 开头(比如 "-r 选项做什么用?")
+    // 否则会被子进程当成选项,直接 "unknown option" 退出。
+    try argv.append("--");
+    try argv.append(desc);
     return argv.toOwnedSlice();
 }
 
