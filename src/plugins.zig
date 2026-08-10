@@ -147,6 +147,22 @@ test "artifact store externalizes large outputs" {
     const fpath = ref[path_start..path_end];
     const stored = try std.Io.Dir.cwd().readFileAlloc(agentmod.util.io, fpath, a, .limited(64 * 1024));
     try t.expectEqual(big.len, stored.len);
+
+    // 多字节内容:预览必须切在字符边界上。
+    //
+    // 这是实际踩过的坑:裸切片让预览尾部带上半个汉字,而
+    // std.json.Stringify 对非法 UTF-8 的 []const u8 会静默退化成**整数数组**,
+    // provider 直接 400(deepseek: "invalid type: integer `91`")。
+    // 报错跟真实原因毫无关系,查了很久才定位。
+    // 源码文件的中文注释必然踩中 —— 400 字节边界落在汉字中间。
+    // 前缀 "x" 是刻意的:不加它,400 字节边界正好落在字符边界上,
+    // 裸切片也能通过 —— 测试会因为运气而不是因为正确性变绿。
+    const zh = "x" ++ "// agents.zig — 会话级 subagent 注册表:长驻 agent + 邮箱。\n" ** 80;
+    try t.expect(zh.len > ARTIFACT_THRESHOLD_CHARS);
+    try t.expect(!std.unicode.utf8ValidateSlice(zh[0..400])); // 400 处确实切在字符中间
+    const zh_ref = artifactStore(&agent, "read", zh).?;
+    // 整条引用必须是合法 UTF-8 —— 预览尾部带半个汉字就会在这里失败
+    try t.expect(std.unicode.utf8ValidateSlice(zh_ref));
 }
 
 test "cross-session memory persists and injects idempotently" {
@@ -587,7 +603,13 @@ fn artifactStore(ctx: ?*anyopaque, name: []const u8, content: []const u8) ?[]con
     defer self.alloc.free(fpath);
     std.Io.Dir.cwd().writeFile(agentmod.util.io, .{ .sub_path = fpath, .data = content }) catch return null;
     // 引用替换:预览 + 文件路径(模型可 bash cat 取全量)
-    const preview = content[0..@min(content.len, 400)];
+    //
+    // clampUtf8 而非裸切片:切在多字节序列中间会产出非法 UTF-8,而
+    // std.json.Stringify 对非法 UTF-8 的 []const u8 不报错 —— 它退化成
+    // **整数数组**。provider 收到 `"content":[91,65,...]` 直接 400
+    // (deepseek: "invalid type: integer `91`, expected ContentBlock")。
+    // 中文注释开头的源码文件必然踩中:400 字节边界落在汉字中间。
+    const preview = agentmod.util.clampUtf8(content, 400);
     return std.fmt.allocPrint(self.alloc, "[Artifact stored: {s} ({d} bytes)]\n{s}\n...(truncated; read the artifact file for full content)", .{ fpath, content.len, preview }) catch null;
 }
 
@@ -2617,7 +2639,7 @@ pub const builtin_plugins = [_]Plugin{
             .name = "task",
             .desc = "Delegate self-contained work to sub-agents and wait for all of them to finish. Sub-agents inherit this session's directory, model and tools but start with no conversation history, so each description must be complete on its own. Pass 'tasks' to run up to 32 in parallel. Use this when you just want the answers; use spawn_agent instead when you want to keep working while they run, or may need to redirect them.",
             .schema =
-            \\{"type":"object","properties":{"description":{"type":"string","description":"A single self-contained task, including all context the sub-agent needs."},"read_only":{"type":"boolean","description":"Run the sub-agent without write tools. Use it for investigation and review so a sub-agent cannot change files while you are still deciding."},"tasks":{"type":"array","description":"Independent tasks to run in parallel (max 32 at top level, 4 inside a sub-agent).","items":{"type":"object","properties":{"description":{"type":"string","description":"A single self-contained task."},"read_only":{"type":"boolean","description":"Run this sub-agent without write tools."}},"required":["description"]}}}}
+            \\{"type":"object","properties":{"description":{"type":"string","description":"A single self-contained task, including all context the sub-agent needs."},"read_only":{"type":"boolean","description":"Give the sub-agent NO tools at all — it can only reason from the task text you provide. It cannot read files, run commands or search. Leave this off for investigation: a sub-agent that cannot read cannot investigate."},"tasks":{"type":"array","description":"Independent tasks to run in parallel (max 32 at top level, 4 inside a sub-agent).","items":{"type":"object","properties":{"description":{"type":"string","description":"A single self-contained task."},"read_only":{"type":"boolean","description":"Give this sub-agent no tools at all; it can only reason from its task text."}},"required":["description"]}}}}
             ,
             .handler = toolCtxStub,
             .ctx_handler = toolTask,
@@ -2626,7 +2648,7 @@ pub const builtin_plugins = [_]Plugin{
             .name = "spawn_agent",
             .desc = "Start a background sub-agent and return immediately with its id. Unlike task, this does not block: you keep working while it runs, can send it more instructions mid-flight, and collect its output when you are ready. Follow up with wait_agent, read_agent, send_agent and close_agent. Prefer this for long investigations, or when its findings may change what you ask it next.",
             .schema =
-            \\{"type":"object","properties":{"task":{"type":"string","description":"Self-contained description of what the sub-agent should do. It starts with no memory of this conversation unless fork_context is set."},"name":{"type":"string","description":"Short label for this sub-agent, shown in list_agents."},"read_only":{"type":"boolean","description":"Run it without write tools. Use it for investigation and review."},"fork_context":{"type":"boolean","description":"Copy this conversation's history into the sub-agent. Use it when the task only makes sense given what was already discussed; leave it off otherwise to save tokens."}},"required":["task"]}
+            \\{"type":"object","properties":{"task":{"type":"string","description":"Self-contained description of what the sub-agent should do. It starts with no memory of this conversation unless fork_context is set."},"name":{"type":"string","description":"Short label for this sub-agent, shown in list_agents."},"read_only":{"type":"boolean","description":"Give it NO tools at all — it can only reason from the task text. It cannot read files or run commands, so leave this off whenever it needs to look at anything."},"fork_context":{"type":"boolean","description":"Copy this conversation's history into the sub-agent. Use it when the task only makes sense given what was already discussed; leave it off otherwise to save tokens."}},"required":["task"]}
             ,
             .handler = toolCtxStub,
             .ctx_handler = toolSpawnAgent,

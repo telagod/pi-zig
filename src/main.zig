@@ -2281,44 +2281,69 @@ pub fn runPrint(alloc: std.mem.Allocator, cfg: *cfgmod.Config, cwd: []const u8, 
     std.process.exit(0);
 }
 
+/// print 模式的输出锁。
+///
+/// 长驻 sub-agent 的进度是从 **worker 线程** 经 on_subagent 回调过来的,与父
+/// agent 自己的流式正文并发。下面这些回调都往 stdout/stderr 写,不串起来
+/// 就会互相撕碎 —— 实测 stdout 收到 `.corrects`、`|*S|---ton` 这种碎片。
+///
+/// 一把锁覆盖全部回调:粒度粗但正确。这里是人看的输出路径,不在热路径上。
+var out_mutex: std.Io.Mutex = .init;
+
+/// 锁内把整块字节直接写到 fd。
+///
+/// **不用 `File.writer()`**:那要一块 buffer,而 buffer 要么是每次调用新建的
+/// 栈数组(fd 上仍然两个线程各自 flush,顺序无保证),要么是进程级共享的
+/// (两个线程直接踩同一块内存)。两种都错。
+///
+/// `writeAll` 直达 fd:内核对单次写有原子性,锁又保证了调用之间不重叠,
+/// 两条通道的输出就不会互相插入。
+fn writeLocked(file: std.Io.File, bytes: []const u8) void {
+    out_mutex.lockUncancelable(util.io);
+    defer out_mutex.unlock(util.io);
+    file.writeStreamingAll(util.io, bytes) catch {};
+}
+
 fn printOnText(ctx: ?*anyopaque, text: []const u8) anyerror!void {
     _ = ctx;
-    var sbuf: [4096]u8 = undefined;
-    var w = std.Io.File.stdout().writer(util.io, &sbuf);
-    try w.interface.writeAll(text);
-    try w.flush();
+    writeLocked(std.Io.File.stdout(), text);
 }
 
-var reason_buf: [512]u8 = undefined;
 fn printOnReasoning(ctx: ?*anyopaque, text: []const u8) anyerror!void {
     _ = ctx;
-    var w = std.Io.File.stderr().writer(util.io, &reason_buf);
-    w.interface.print("\x1b[2m{s}\x1b[0m", .{text}) catch {};
-    w.flush() catch {};
+    // 栈缓冲 + 一次成型:格式化在锁外做,锁内只有一次 writeAll。
+    // 推理文本逐 token 到达,可能超过缓冲 —— 那就分块写,每块自身完整。
+    var buf: [1024]u8 = undefined;
+    const s = std.fmt.bufPrint(&buf, "\x1b[2m{s}\x1b[0m", .{text}) catch {
+        // 太长装不下:直接原样写,丢掉暗色包装而不是丢内容
+        writeLocked(std.Io.File.stderr(), text);
+        return;
+    };
+    writeLocked(std.Io.File.stderr(), s);
 }
 
-var tool_buf: [512]u8 = undefined;
 fn printOnToolStart(ctx: ?*anyopaque, name: []const u8, args: []const u8) anyerror!void {
     _ = ctx;
-    var w = std.Io.File.stderr().writer(util.io, &tool_buf);
-    w.interface.print("\n\x1b[36m⚙ {s} {s}\x1b[0m\n", .{ name, args[0..@min(args.len, 200)] }) catch {};
-    w.flush() catch {};
+    var buf: [512]u8 = undefined;
+    // clampUtf8:args 截断在多字节序列中间会在终端上产出乱码方块
+    const clipped = util.clampUtf8(args, 200);
+    const s = std.fmt.bufPrint(&buf, "\n\x1b[36m⚙ {s} {s}\x1b[0m\n", .{ name, clipped }) catch return;
+    writeLocked(std.Io.File.stderr(), s);
 }
 
-var toolend_buf: [512]u8 = undefined;
 fn printOnToolEnd(ctx: ?*anyopaque, name: []const u8, is_error: bool, summary: []const u8) anyerror!void {
     _ = ctx;
-    var w = std.Io.File.stderr().writer(util.io, &toolend_buf);
     // 带上输出规模:print 模式下工具产出全进了模型上下文,用户一个字看不到,
     // 至少让他知道「这一步吐了 12KB」而不是完全无从判断。
     var bb: [24]u8 = undefined;
-    w.interface.print("\x1b[{s}m{s} {s}\x1b[0m \x1b[2m{s}\x1b[0m\n", .{
+    var buf: [512]u8 = undefined;
+    const s = std.fmt.bufPrint(&buf, "\x1b[{s}m{s} {s}\x1b[0m \x1b[2m{s}\x1b[0m\n", .{
         if (is_error) "31" else "32",
         if (is_error) "✗" else "✓",
         name,
         activity.formatBytes(&bb, summary.len),
-    }) catch {};
-    w.flush() catch {};
+    }) catch return;
+    writeLocked(std.Io.File.stderr(), s);
 }
 
 /// 确认包目录声明的 events 钩子。返回 true 表示可以继续。
@@ -2357,27 +2382,18 @@ fn confirmPkgHooks(alloc: std.mem.Allocator, pkg_dir: []const u8, prompt: []cons
     return std.mem.eql(u8, ans, "y") or std.mem.eql(u8, ans, "Y") or std.mem.eql(u8, ans, "yes");
 }
 
-var notice_buf: [512]u8 = undefined;
 /// 引擎级告知走 stderr:stdout 是给管道下游的答复正文,不能混进这些。
 fn printOnNotice(ctx: ?*anyopaque, text: []const u8) anyerror!void {
     _ = ctx;
-    var w = std.Io.File.stderr().writer(util.io, &notice_buf);
-    w.interface.print("\x1b[33m· {s}\x1b[0m\n", .{text}) catch {};
-    w.flush() catch {};
+    var buf: [640]u8 = undefined;
+    const s = std.fmt.bufPrint(&buf, "\x1b[33m· {s}\x1b[0m\n", .{util.clampUtf8(text, 512)}) catch return;
+    writeLocked(std.Io.File.stderr(), s);
 }
 
 fn jsonlOnNotice(ctx: ?*anyopaque, text: []const u8) anyerror!void {
     const jctx: *JsonlCtx = @ptrCast(@alignCast(ctx.?));
     try jsonlEvent(jctx.alloc, "notice", .{ "text", text });
 }
-
-/// 并发写 stderr 的互斥。
-///
-/// 32 路 subagent 同时报进度,共享一个模块级缓冲会直接数据竞争 ——
-/// 实测输出里出现被切断的多字节字符(UTF-8 解码失败)。缓冲改成栈上的,
-/// 再用一次 writeAll 把整行写出去:内核对 ≤PIPE_BUF 的写是原子的,
-/// 行与行之间就不会交错。
-var sub_out_mutex: std.Io.Mutex = .init;
 
 /// subagent 中间事件 → stderr 一行。
 ///
@@ -2402,12 +2418,7 @@ fn printOnSubagent(ctx: ?*anyopaque, idx: usize, kind: agentmod.SubagentEvent, t
     const clipped = util.clampUtf8(text, 120);
     var line: [256]u8 = undefined;
     const s = std.fmt.bufPrint(&line, "\x1b[2m[sub {d}]\x1b[0m {s} {s}\n", .{ idx, tag, clipped }) catch return;
-    sub_out_mutex.lockUncancelable(util.io);
-    defer sub_out_mutex.unlock(util.io);
-    var wbuf: [256]u8 = undefined;
-    var w = std.Io.File.stderr().writer(util.io, &wbuf);
-    w.interface.writeAll(s) catch {};
-    w.flush() catch {};
+    writeLocked(std.Io.File.stderr(), s);
 }
 
 fn jsonlOnSubagent(ctx: ?*anyopaque, idx: usize, kind: agentmod.SubagentEvent, text: []const u8) anyerror!void {
@@ -2821,4 +2832,57 @@ test "expandRefs" {
     // 不存在路径保留原文
     const r3 = try expandRefs(a, "see @./nope.txt end");
     try t.expectEqualStrings("see @./nope.txt end", r3);
+}
+
+test "concurrent print callbacks never interleave a line" {
+    const t = std.testing;
+    try util.testInit();
+
+    // 长驻 sub-agent 的进度来自 worker 线程,与父 agent 的流式正文并发。
+    // 实测症状:stdout 收到 `.corrects`、`|*S|---ton` 这种碎片 —— 两条通道
+    // 的字节互相插进对方中间。这里把 writeLocked 顶到同样的并发下,验证
+    // 每一次写都完整落地。
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = "concur_out.txt";
+    try std.Io.Dir.cwd().writeFile(util.io, .{ .sub_path = path, .data = "" });
+    defer std.Io.Dir.cwd().deleteFile(util.io, path) catch {};
+
+    var file = try std.Io.Dir.cwd().openFile(util.io, path, .{ .mode = .write_only });
+    defer file.close(util.io);
+
+    const Writer = struct {
+        f: std.Io.File,
+        tag: u8,
+        fn run(self: @This()) void {
+            var line: [64]u8 = undefined;
+            for (0..200) |_| {
+                // 每行同一个字符重复 —— 交错会立刻显形为混合字符的行
+                @memset(line[0 .. line.len - 1], self.tag);
+                line[line.len - 1] = '\n';
+                writeLocked(self.f, &line);
+            }
+        }
+    };
+
+    // 三条线程模拟:父 agent 正文 + 两个 subagent 的进度
+    var threads: [3]std.Thread = undefined;
+    const tags = [_]u8{ 'A', 'B', 'C' };
+    for (&threads, tags) |*th, tag| {
+        th.* = try std.Thread.spawn(.{}, Writer.run, .{Writer{ .f = file, .tag = tag }});
+    }
+    for (&threads) |th| th.join();
+
+    const content = try std.Io.Dir.cwd().readFileAlloc(util.io, path, t.allocator, .limited(1 << 20));
+    defer t.allocator.free(content);
+
+    var lines: usize = 0;
+    var it = std.mem.tokenizeScalar(u8, content, '\n');
+    while (it.next()) |line| {
+        lines += 1;
+        // 每行必须是单一字符重复 —— 混了别的 tag 就是被插进来了
+        try t.expectEqual(@as(usize, 63), line.len);
+        for (line) |c| try t.expectEqual(line[0], c);
+    }
+    try t.expectEqual(@as(usize, 600), lines);
 }

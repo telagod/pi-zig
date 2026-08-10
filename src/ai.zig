@@ -120,6 +120,67 @@ fn writeSchema(writer: *std.Io.Writer, schema: []const u8) !void {
     try writer.writeAll(schema);
 }
 
+/// 把任意字节写成 JSON **字符串**。
+///
+/// 存在的理由:`std.json.Stringify.value` 对 `[]const u8` 的处理取决于内容是否
+/// 合法 UTF-8 —— 合法则写字符串,不合法**静默退化成整数数组**。于是一份被切在
+/// 汉字中间的工具输出会让请求体里出现 `"content":[91,65,114,...]`,provider
+/// 直接 400(deepseek 原话:`invalid type: integer 91, expected
+/// ChatCompletionRequestContentBlock`),而报错内容与真正的原因毫无关系。
+///
+/// 工具输出来自文件、命令 stdout、网络 —— 非法字节是常态而非异常,不能指望
+/// 每个产出点都先自查。这里统一兜住:非法序列替换为 U+FFFD,永远写出字符串。
+fn writeJsonText(writer: *std.Io.Writer, s: []const u8) !void {
+    // 快路径:绝大多数内容是合法 UTF-8,直接交给 std(它也负责转义)。
+    if (std.unicode.utf8ValidateSlice(s)) {
+        try std.json.Stringify.value(s, .{}, writer);
+        return;
+    }
+    // 慢路径:逐序列扫,合法的整段透出、非法字节替换。不逐字符分配。
+    try writer.writeByte('"');
+    var i: usize = 0;
+    var run_start: usize = 0; // 待输出的合法段起点
+    while (i < s.len) {
+        const n = std.unicode.utf8ByteSequenceLength(s[i]) catch 0;
+        const ok = n > 0 and i + n <= s.len and std.unicode.utf8ValidateSlice(s[i .. i + n]);
+        if (ok and !needsEscape(s[i])) {
+            i += n;
+            continue;
+        }
+        // 遇到需转义或非法字节:先把之前攒的合法段冲出去
+        if (i > run_start) try writer.writeAll(s[run_start..i]);
+        if (!ok) {
+            try writer.writeAll("\u{fffd}");
+            i += 1;
+        } else {
+            try writeEscaped(writer, s[i]);
+            i += 1;
+        }
+        run_start = i;
+    }
+    if (i > run_start) try writer.writeAll(s[run_start..i]);
+    try writer.writeByte('"');
+}
+
+/// JSON 字符串里必须转义的字节。
+fn needsEscape(c: u8) bool {
+    return c == '"' or c == '\\' or c < 0x20;
+}
+
+/// 写单个需转义字节的 JSON 形式。
+fn writeEscaped(writer: *std.Io.Writer, c: u8) !void {
+    switch (c) {
+        '"' => try writer.writeAll("\\\""),
+        '\\' => try writer.writeAll("\\\\"),
+        '\n' => try writer.writeAll("\\n"),
+        '\r' => try writer.writeAll("\\r"),
+        '\t' => try writer.writeAll("\\t"),
+        0x08 => try writer.writeAll("\\b"),
+        0x0c => try writer.writeAll("\\f"),
+        else => try writer.print("\\u{x:0>4}", .{c}),
+    }
+}
+
 /// 序列化 OpenAI 兼容请求体。
 fn serializeOpenAI(
     alloc: std.mem.Allocator,
@@ -185,17 +246,8 @@ fn serializeOpenAI(
             try writer.writeAll("]}");
         } else {
             try writer.writeAll(",\"content\":");
-            if (std.mem.eql(u8, m.role, "tool")) {
-                // 工具结果字符串或 JSON
-                if (m.content.len > 0 and (m.content[0] == '{' or m.content[0] == '[')) {
-                    // 原样嵌入(已由工具保证是合法 JSON 字符串时除外)——此处统一按字符串处理
-                    try std.json.Stringify.value(m.content, .{}, writer);
-                } else {
-                    try std.json.Stringify.value(m.content, .{}, writer);
-                }
-            } else {
-                try std.json.Stringify.value(m.content, .{}, writer);
-            }
+            try writeJsonText(writer, m.content);
+
             if (m.tool_call_id) |id| {
                 try writer.writeAll(",\"tool_call_id\":");
                 try std.json.Stringify.value(id, .{}, writer);
@@ -270,7 +322,7 @@ fn serializeAnthropic(alloc: std.mem.Allocator, model: []const u8, messages: []c
             try writer.writeAll("{\"role\":\"user\",\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":");
             try std.json.Stringify.value(m.tool_call_id orelse "", .{}, writer);
             try writer.writeAll(",\"content\":");
-            try std.json.Stringify.value(m.content, .{}, writer);
+            try writeJsonText(writer, m.content);
             try writer.writeAll("}]}");
             first = false;
             continue;
@@ -281,7 +333,7 @@ fn serializeAnthropic(alloc: std.mem.Allocator, model: []const u8, messages: []c
             try writer.writeAll("{\"role\":\"assistant\",\"content\":[");
             if (m.content.len > 0) {
                 try writer.writeAll("{\"type\":\"text\",\"text\":");
-                try std.json.Stringify.value(m.content, .{}, writer);
+                try writeJsonText(writer, m.content);
                 try writer.writeByte(',');
             }
             for (tcs, 0..) |tc, i| {
@@ -311,7 +363,7 @@ fn serializeAnthropic(alloc: std.mem.Allocator, model: []const u8, messages: []c
         try writer.writeAll("{\"role\":");
         try std.json.Stringify.value(m.role, .{}, writer);
         try writer.writeAll(",\"content\":");
-        try std.json.Stringify.value(m.content, .{}, writer);
+        try writeJsonText(writer, m.content);
         try writer.writeAll("}");
         first = false;
     }
@@ -888,6 +940,80 @@ test "serializeOpenAI basic" {
     try t.expect(std.mem.indexOf(u8, body, "\"model\":\"m\"") != null);
     try t.expect(std.mem.indexOf(u8, body, "\"tool_call_id\":\"c1\"") != null);
     try t.expect(std.mem.indexOf(u8, body, "\"arguments\":\"{\\\"command\\\":\\\"ls\\\"}\"") != null);
+}
+
+test "invalid utf8 in tool output still serializes as a JSON string" {
+    const t = std.testing;
+    var arena = util.Arena.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // 汉字被切在序列中间 —— 工具输出砍字节数时的常态。
+    // "会话级" 的 UTF-8 是 e4bc9a e8af9d e7baa7;这里砍掉最后一个字节。
+    const truncated = "// agents.zig — \xe4\xbc\x9a\xe8\xaf\x9d\xe7\xba";
+    try t.expect(!std.unicode.utf8ValidateSlice(truncated));
+
+    const msgs = [_]Message{
+        .{ .role = "user", .content = "go" },
+        .{ .role = "tool", .content = truncated, .tool_call_id = "c1" },
+    };
+
+    // 两个协议都必须写出**字符串**。std.json.Stringify 对非法 UTF-8 的
+    // []const u8 会静默退化成整数数组,provider 拿到 "content":[91,65,...]
+    // 直接 400,而报错内容(“expected ContentBlock”)跟真实原因毫无关系。
+    inline for (.{ true, false }) |openai| {
+        const body = if (openai)
+            try serializeOpenAI(a, "m", &msgs, &.{}, 100, null)
+        else
+            try serializeAnthropic(a, "m", &msgs, &.{}, 100);
+        // 合法 JSON 是底线
+        const parsed = try std.json.parseFromSlice(std.json.Value, a, body, .{});
+        defer parsed.deinit();
+        // content 是字符串,不是数组
+        const arr = parsed.value.object.get("messages").?.array;
+        var saw_tool_text = false;
+        for (arr.items) |m| {
+            const c = m.object.get("content") orelse continue;
+            switch (c) {
+                .string => |s| {
+                    if (std.mem.indexOf(u8, s, "agents.zig") != null) saw_tool_text = true;
+                },
+                // anthropic 把 tool 结果包成 content 块数组,块里的 content 才是文本
+                .array => |blocks| for (blocks.items) |b| {
+                    const inner = b.object.get("content") orelse continue;
+                    if (inner == .string and std.mem.indexOf(u8, inner.string, "agents.zig") != null) {
+                        saw_tool_text = true;
+                    }
+                    // 非字符串就是退化成了整数数组 —— 正是要防的
+                    try t.expect(inner != .integer);
+                },
+                else => return error.ContentIsNotText,
+            }
+        }
+        try t.expect(saw_tool_text);
+    }
+}
+
+test "escapes survive the invalid-utf8 slow path" {
+    const t = std.testing;
+    var arena = util.Arena.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // 非法字节触发慢路径,同一份内容里还有必须转义的字符。
+    // 慢路径自己做转义,漏了就产出非法 JSON。
+    const nasty = "say \"hi\"\n\ttab\\slash \x1b[0m \xff end";
+    const msgs = [_]Message{.{ .role = "tool", .content = nasty, .tool_call_id = "c" }};
+    const body = try serializeOpenAI(a, "m", &msgs, &.{}, 100, null);
+
+    const parsed = try std.json.parseFromSlice(std.json.Value, a, body, .{});
+    defer parsed.deinit();
+    const got = parsed.value.object.get("messages").?.array.items[0].object.get("content").?.string;
+    // 往返之后合法字符原样留存,只有非法字节变成替换符
+    try t.expect(std.mem.indexOf(u8, got, "say \"hi\"") != null);
+    try t.expect(std.mem.indexOf(u8, got, "\n\ttab\\slash") != null);
+    try t.expect(std.mem.indexOf(u8, got, "\x1b[0m") != null);
+    try t.expect(std.mem.indexOf(u8, got, "\u{fffd}") != null);
 }
 
 test "parse streamed usage with cache hit" {
