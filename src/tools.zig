@@ -464,7 +464,11 @@ fn toolBash(arena: std.mem.Allocator, args: []const u8) !Result {
     return .{ .content = full, .is_error = code != 0 };
 }
 
-/// skill: {name} → 读取 <configDir>/skills/<name>/SKILL.md 内容。
+/// skill: {name} → 读 SKILL.md。搜索顺序与 `util.loadSkillsIndex` 必须一致:
+/// <configDir>/skills/,然后各资源包的 skills/。
+///
+/// 两处不一致就会出现「系统提示里列了这个技能,skill 工具却报 FileNotFound」——
+/// 实测装了资源包的技能全都加载不了,模型只能自己 read SKILL.md 兜底。
 /// 由 skills 插件注册(仅装了技能时才需要),故导出。
 pub fn toolSkill(arena: std.mem.Allocator, args: []const u8) !Result {
     const v = try parseArgs(arena, args);
@@ -476,11 +480,23 @@ pub fn toolSkill(arena: std.mem.Allocator, args: []const u8) !Result {
         }
     }
     const cfg_dir = util.configDir(arena) catch return .{ .content = "error: no config dir", .is_error = true };
-    const path = try std.fmt.allocPrint(arena, "{s}/skills/{s}/SKILL.md", .{ cfg_dir, name });
-    const content = std.Io.Dir.cwd().readFileAlloc(util.io, path, arena, .limited(256 * 1024)) catch |err| {
-        return .{ .content = try std.fmt.allocPrint(arena, "error reading skill '{s}': {s}", .{ name, @errorName(err) }), .is_error = true };
+    const first = try std.fmt.allocPrint(arena, "{s}/skills/{s}/SKILL.md", .{ cfg_dir, name });
+    if (std.Io.Dir.cwd().readFileAlloc(util.io, first, arena, .limited(256 * 1024))) |content| {
+        return .{ .content = try std.fmt.allocPrint(arena, "# Skill {s}\n\n{s}", .{ name, content }) };
+    } else |_| {}
+    // 资源包(用户级 + 项目级)
+    if (util.pkgDirsForRuntime(arena)) |pkgs| {
+        for (pkgs) |pkg| {
+            const p = try std.fmt.allocPrint(arena, "{s}/skills/{s}/SKILL.md", .{ pkg, name });
+            if (std.Io.Dir.cwd().readFileAlloc(util.io, p, arena, .limited(256 * 1024))) |content| {
+                return .{ .content = try std.fmt.allocPrint(arena, "# Skill {s}\n\n{s}", .{ name, content }) };
+            } else |_| {}
+        }
+    } else |_| {}
+    return .{
+        .content = try std.fmt.allocPrint(arena, "error: skill '{s}' not found in {s}/skills/ or any installed package", .{ name, cfg_dir }),
+        .is_error = true,
     };
-    return .{ .content = try std.fmt.allocPrint(arena, "# Skill {s}\n\n{s}", .{ name, content }) };
 }
 
 pub const Tool = struct {
@@ -1515,6 +1531,20 @@ test "skill tool" {
     // 不存在
     const nf = try toolSkill(a, "{\"name\":\"nope\"}");
     try t.expect(nf.is_error);
+
+    // 资源包里的技能也必须能加载。
+    //
+    // loadSkillsIndex 会扫资源包,所以系统提示里列得出来;而 toolSkill
+    // 原先只看 <configDir>/skills/ —— 于是「提示里有、工具报 FileNotFound」。
+    // 实测装了包的技能全加载不了,模型只能自己 read SKILL.md 兜底。
+    tmp.dir.createDirPath(util.io, "packages/demo-pkg/skills/demo-skill") catch {};
+    try tmp.dir.writeFile(util.io, .{
+        .sub_path = "packages/demo-pkg/skills/demo-skill/SKILL.md",
+        .data = "name: demo-skill\ndescription: from an installed package\n",
+    });
+    const pk = try toolSkill(a, "{\"name\":\"demo-skill\"}");
+    try t.expect(!pk.is_error);
+    try t.expect(std.mem.indexOf(u8, pk.content, "from an installed package") != null);
 }
 
 test "tool paths resolve against the agent root, not the process cwd" {

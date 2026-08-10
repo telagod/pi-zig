@@ -321,7 +321,7 @@ pub fn loadTemplate(alloc: std.mem.Allocator, cwd: []const u8, name: []const u8)
 }
 
 /// 全部资源包目录(用户级 + 项目级;失败返回空)。
-fn pkgDirsForRuntime(alloc: std.mem.Allocator) ![][]const u8 {
+pub fn pkgDirsForRuntime(alloc: std.mem.Allocator) ![][]const u8 {
     const cwd = std.process.currentPathAlloc(io, alloc) catch ".";
     return @import("pkgs.zig").allPkgDirs(alloc, cwd);
 }
