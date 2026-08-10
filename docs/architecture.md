@@ -51,6 +51,7 @@ graph TD
     core --> ai["ai.zig — provider 协议 / SSE"]
     core --> tools["tools.zig — 8 个核心工具"]
     core --> plugins["plugins.zig — 14 个内置插件"]
+    core --> agents["agents.zig — 长驻 sub-agent 注册表 + 邮箱"]
     core --> session["session.zig — JSONL 持久化"]
     core --> config["config.zig — 配置 / provider 解析"]
     core --> httpc["httpc.zig — HTTP 流式 / 重试"]
@@ -153,6 +154,7 @@ sequenceDiagram
 | Web 会话 | 每会话独立 Agent + arena + worker 线程，池上限 4 |
 | Web 连接 | 每连接一个 detach 线程，上限 64；无读超时（见 [Web UI](web-ui.md#资源上限)） |
 | subagent 委派 | 每个一个 OS 线程 + 进程内独立 Agent，顶层并行 32、嵌套层 4（`PIZ_TASK_SPAWN=1` 回退到子进程）|
+| 长驻 sub-agent | 每个一个 OS 线程 + 独立 Agent + 独立 arena，会话级上限 32 |
 | 工具工作目录 | thread-local root，分发前由 `runToolSlot` 设为 `Agent.cwd` |
 | 事件命令 | spawn 后 detach，不等待 |
 | TUI 渲染 | 主线程轮询 stdin，worker 线程跑 agent |
@@ -176,6 +178,13 @@ worker 会在队列上 100ms 轮询到进程结束：实测 24 个会话建删�
 不回收的 arena。
 
 插件若需跨调用状态，按 Agent 指针地址隔离并自己加锁（参考 `todo` 插件）。
+
+**长驻 sub-agent 的四条约束**（改 `agents.zig` 前必读）：
+
+1. **邮箱分两类读者。** `read_agent` 只给模型终态（`turn_done`/`failed`/`notice`），`progress` 被过滤 —— 逐条工具调用进上下文只是烧 token。进度走 `on_subagent` 回调给人看。`wait_agent` 同样只被终态唤醒，否则父 agent 会为「子 agent 在跑 bash」白烧一整轮。
+2. **`waitMail` 必须在无人可产出时提前返回。** 全部 agent 都 `idle` 且没有排队输入 → 再等也不会有新结果，盲等满超时是纯浪费。
+3. **邮箱有容量上限，满了丢最旧。** 一个话多的 agent 否则能吃光内存。丢头时 `read_cursor` 要跟着减，不然会把已读的又读一遍或越界。
+4. **`close` 的 join 必须在锁外。** worker 可能正跑一轮（几十秒），持注册表锁等它会把所有 agent 操作冻住。
 
 **进程内 subagent 的三条隔离要求**（改 `runTaskInProcess` 前必读）：
 
@@ -415,7 +424,7 @@ piz 保留「置前」，理由是两者的压缩语义不同：codex 保留 use
 ## 测试
 
 ```bash
-zig build test          # 136 个测试，core 109 + app 27
+zig build test          # 140 个测试，core 113 + app 27
 ```
 
 两个测试目标：`core.zig` 为根（收集全部 core 模块的 test 块）、`main.zig` 为根（含 `e2e.zig`）。Zig 的 `zig test` 只收集根模块的测试，所以要分两个目标。
@@ -505,6 +514,9 @@ zig build test          # 136 个测试，core 109 + app 27
 | `plugins.zig` | 深度闸门看 `Agent.depth`，环境变量只做进程基准 |
 | `e2e.zig` | 进程内 subagent 实时转发工具事件，每路有独立序号 |
 | `e2e.zig` | 嵌套委派被深度闸门拦住（不递增就是无限递归）|
+| `agents.zig` | 邮箱账本：注册、投递、drain 推进游标、interrupt 插队首 |
+| `agents.zig` | 邮箱满了丢最旧，游标保持合法 |
+| `agents.zig` | `wait` 被结果唤醒而非 progress；无人可产出时立刻返回 |
 
 ## Zig 0.16 注意事项
 

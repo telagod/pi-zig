@@ -67,7 +67,7 @@ piz 额外做了 pi 明确声明不做的事：交互式权限门、`/plan` 计�
 ## 开发
 
 ```bash
-zig build test                   # 136 个测试
+zig build test                   # 140 个测试
 zig fmt src build.zig            # 格式化
 ```
 

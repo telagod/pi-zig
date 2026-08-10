@@ -7,6 +7,7 @@ pub const ai = @import("ai.zig");
 pub const tools = @import("tools.zig");
 pub const session = @import("session.zig");
 pub const agent = @import("agent.zig");
+pub const agents = @import("agents.zig");
 pub const pkgs = @import("pkgs.zig");
 pub const events = @import("events.zig");
 pub const webplugins = @import("webplugins.zig");
@@ -21,6 +22,7 @@ test {
     _ = @import("tools.zig");
     _ = @import("session.zig");
     _ = @import("agent.zig");
+    _ = @import("agents.zig");
     _ = @import("pkgs.zig");
     _ = @import("events.zig");
     _ = @import("webplugins.zig");

@@ -2010,6 +2010,9 @@ pub fn runInteractive(alloc: std.mem.Allocator, cfg: *cfgmod.Config, cwd: []cons
     // TUI
     var tui = try tui_mod.Tui.init(alloc);
     defer tui.deinit();
+    // 声明在 tui.deinit 之后 → LIFO 下先执行:长驻 subagent 先收摊,
+    // 之后才还原终端,它们的收尾输出不会打在已经恢复的 shell 上。
+    defer pluginsmod.shutdownAgents();
     try tui.enterRaw();
     defer tui.restoreTerminal();
 
@@ -2263,6 +2266,7 @@ pub fn runPrint(alloc: std.mem.Allocator, cfg: *cfgmod.Config, cwd: []const u8, 
 
     if (result.error_msg) |msg| {
         if (opts.output_format == .text) std.debug.print("error: {s}\n", .{msg});
+        pluginsmod.shutdownAgents();
         std.process.exit(1);
     }
     // 工具调用摘要(print 模式工具输出已在工具回调中显示到 stderr)
@@ -2271,6 +2275,9 @@ pub fn runPrint(alloc: std.mem.Allocator, cfg: *cfgmod.Config, cwd: []const u8, 
     if (result.usage.input) |i| stderr.interface.print("\n[tokens in: {d}]", .{i}) catch {};
     if (result.usage.output) |o| stderr.interface.print(" [out: {d}]", .{o}) catch {};
     stderr.interface.print("\n", .{}) catch {};
+    // 关掉还开着的长驻 subagent。不关就让它们随进程一起没 —— 它们可能正在
+    // 写文件,截断出来的半个文件比没写更糟。
+    pluginsmod.shutdownAgents();
     std.process.exit(0);
 }
 

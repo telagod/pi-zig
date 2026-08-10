@@ -4,6 +4,7 @@
 const std = @import("std");
 const agentmod = @import("agent.zig");
 const activity = @import("activity.zig");
+const agentsmod = @import("agents.zig");
 const toolsmod = @import("tools.zig");
 const aimod = @import("ai.zig");
 
@@ -690,6 +691,18 @@ fn jsonStr(v: std.json.Value, key: []const u8) ?[]const u8 {
     if (f != .string) return null;
     if (f.string.len == 0) return null;
     return f.string;
+}
+
+/// 取整数字段。容忍模型把数字写成字符串或浮点(常见偏差)。
+fn jsonInt(v: std.json.Value, key: []const u8) ?i64 {
+    if (v != .object) return null;
+    const f = v.object.get(key) orelse return null;
+    return switch (f) {
+        .integer => |i| i,
+        .float => |x| @intFromFloat(x),
+        .string => |sv| std.fmt.parseInt(i64, std.mem.trim(u8, sv, " \t"), 10) catch null,
+        else => null,
+    };
 }
 
 /// fetch_url:取网页正文。
@@ -1448,6 +1461,398 @@ fn formatTaskResults(arena: std.mem.Allocator, slots: []const TaskSlot) !toolsmo
     }
     // 全失败才算工具失败:部分成功的结果对模型仍有用。
     return .{ .content = try aw.toOwnedSlice(), .is_error = ok == 0 };
+}
+
+// =====================================================================
+// 长驻 subagent:spawn / wait / send / list / close。
+//
+// `task` 是阻塞式批量封装(派 N 路、等全部完成、拼好返回),适合"这几件事
+// 互不相关,做完告诉我"。它的局限是委派期间父 agent 什么也做不了,发现某
+// 一路方向错了只能等它烧完一整轮。
+//
+// 这一组把生命周期拆开(照 codex 的 multi_agents 做法):
+//   spawn_agent → 立即返回 id,父 agent 接着干自己的活
+//   wait_agent  → 等**任意** agent 有邮件,只说"谁有更新"
+//   read_agent  → 取某个 agent 的未读邮件
+//   send_agent  → 追加输入;interrupt=true 打断当前轮立即处理
+//   list_agents → 谁在跑、跑了几轮、有多少未读
+//   close_agent → 关掉并回收(跑完 ≠ 释放,得显式关)
+// =====================================================================
+
+/// 会话级注册表。顶层 agent 与它的全部后代共享一份。
+///
+/// 进程级单例而非挂在 Agent 上:web 模式下多个会话各有自己的 Agent,但
+/// subagent 的槽位是**机器资源**,该按进程算。registry 内部按父 agent
+/// 指针区分归属(list/close 只能看到自己派的)。
+var g_registry: ?agentsmod.Registry = null;
+var g_registry_once: std.Io.Mutex = .init;
+
+fn registry() *agentsmod.Registry {
+    g_registry_once.lockUncancelable(agentmod.util.io);
+    defer g_registry_once.unlock(agentmod.util.io);
+    if (g_registry == null) {
+        g_registry = agentsmod.Registry.init(std.heap.page_allocator);
+    }
+    return &g_registry.?;
+}
+
+/// 仅供测试:当前打开的 subagent 数。
+pub fn agentOpenCountForTest() usize {
+    return registry().openCount();
+}
+
+/// 进程退出前回收全部 subagent(main 调用)。
+pub fn shutdownAgents() void {
+    if (g_registry) |*r| r.deinit();
+    g_registry = null;
+}
+
+/// 长驻 worker 的事件转发。
+///
+/// 两个去处,服务两类读者:
+/// - **邮箱**:模型靠 read_agent 取,只取终态(progress 被过滤掉 —— 逐条工具
+///   调用进上下文只是烧 token)
+/// - **父 agent 的 on_subagent 回调**:给**人**看,TUI 显示 `[sub 1] ⚙ bash`。
+///   没有这一路,长驻 agent 在界面上就是完全静默的几十秒。
+const MailCtx = struct {
+    reg: *agentsmod.Registry,
+    entry: *agentsmod.Entry,
+    /// 派出它的父 agent —— 借它的回调把进度显示给人。
+    parent_cbs: agentmod.AgentCallbacks,
+
+    fn toHuman(self: *MailCtx, kind: agentmod.SubagentEvent, text: []const u8) void {
+        const f = self.parent_cbs.on_subagent orelse return;
+        f(self.parent_cbs.ctx, self.entry.id, kind, text) catch {};
+    }
+
+    fn onToolStart(ctx: ?*anyopaque, name: []const u8, args: []const u8) anyerror!void {
+        const self: *MailCtx = @ptrCast(@alignCast(ctx.?));
+        _ = args;
+        self.reg.post(self.entry, .progress, name);
+        self.toHuman(.tool_start, name);
+    }
+    fn onToolEnd(ctx: ?*anyopaque, name: []const u8, is_error: bool, summary: []const u8) anyerror!void {
+        const self: *MailCtx = @ptrCast(@alignCast(ctx.?));
+        _ = summary;
+        if (is_error) self.reg.post(self.entry, .progress, name);
+        self.toHuman(if (is_error) .tool_failed else .tool_done, name);
+    }
+    fn onNotice(ctx: ?*anyopaque, text: []const u8) anyerror!void {
+        const self: *MailCtx = @ptrCast(@alignCast(ctx.?));
+        self.reg.post(self.entry, .notice, text);
+        self.toHuman(.notice, text);
+    }
+    /// 只认自己的停止标志:父 agent 的 Ctrl+C 由 close_agent 显式传导,
+    /// 不然父 agent 中断一次就把所有长驻 agent 全杀了 —— 那违背"长驻"的意义。
+    fn onAbort(ctx: ?*anyopaque) bool {
+        const self: *MailCtx = @ptrCast(@alignCast(ctx.?));
+        return self.entry.stopping.load(.acquire) or self.entry.agent.aborted.load(.acquire);
+    }
+};
+
+/// 长驻 worker:取输入 → 跑一轮 → 投递结果 → 转 idle → 等下一条。
+fn agentWorker(entry: *agentsmod.Entry) void {
+    const reg = registry();
+    var mail = MailCtx{ .reg = reg, .entry = entry, .parent_cbs = entry.parent_cbs };
+    entry.agent.cbs = .{
+        .ctx = &mail,
+        .on_tool_start = MailCtx.onToolStart,
+        .on_tool_end = MailCtx.onToolEnd,
+        .on_notice = MailCtx.onNotice,
+        .on_abort = MailCtx.onAbort,
+    };
+
+    while (!entry.stopping.load(.acquire)) {
+        const input = reg.takeInput(entry) orelse {
+            reg.setStatus(entry, .idle);
+            // 100ms 轮询等下一条输入。长驻 agent 大部分时间在这里 ——
+            // 每秒 10 次唤醒,32 个也可以忽略。
+            std.Io.sleep(agentmod.util.io, .{ .nanoseconds = 100 * std.time.ns_per_ms }, .awake) catch break;
+            continue;
+        };
+        reg.setStatus(entry, .running);
+        // 清掉上一轮 interrupt 留下的中断标志,否则这一轮开局就被判取消
+        entry.agent.aborted.store(false, .release);
+
+        const act = activity.begin(.subagent, "agent", input, TASK_TIMEOUT_MS);
+        const result = entry.agent.send(input) catch |e| {
+            act.release();
+            if (entry.stopping.load(.acquire)) break;
+            // 被 interrupt 打断不是故障:队首已经是新输入,直接进下一圈
+            if (reg.hasQueuedInput(entry)) continue;
+            reg.post(entry, .failed, @errorName(e));
+            entry.turns += 1;
+            continue;
+        };
+        act.release();
+        entry.turns += 1;
+
+        if (result.error_msg) |msg| {
+            reg.post(entry, .failed, msg);
+        } else {
+            const text = if (result.text.len > 0) result.text else "(no text produced)";
+            reg.post(entry, .turn_done, text);
+        }
+    }
+    reg.setStatus(entry, .done);
+}
+
+/// spawn_agent:建一个长驻 subagent,立即返回 id。
+fn toolSpawnAgent(ctx: ?*anyopaque, arena: std.mem.Allocator, args: []const u8) anyerror!toolsmod.Result {
+    const self: *agentmod.Agent = @ptrCast(@alignCast(ctx.?));
+    const v = try std.json.parseFromSliceLeaky(std.json.Value, arena, args, .{});
+
+    if (self.depth >= MAX_TASK_DEPTH) {
+        return .{
+            .content = try std.fmt.allocPrint(arena, "error: delegation depth limit reached ({d}/{d}); do this yourself instead of delegating further", .{ self.depth, MAX_TASK_DEPTH }),
+            .is_error = true,
+        };
+    }
+
+    const task = jsonStr(v, "task") orelse return .{
+        .content = "error: spawn_agent requires 'task' — a self-contained description of what the sub-agent should do",
+        .is_error = true,
+    };
+    const name = jsonStr(v, "name") orelse "";
+    const read_only = if (v == .object) blk: {
+        if (v.object.get("read_only")) |r| {
+            if (r == .bool) break :blk r.bool;
+        }
+        break :blk false;
+    } else false;
+    // fork_context:继承父 agent 的对话历史。默认关 —— 多数委派任务不需要
+    // 全部上下文,继承过去只是白烧 token。需要"接着刚才那件事"时才开。
+    const fork_context = if (v == .object) blk: {
+        if (v.object.get("fork_context")) |f| {
+            if (f == .bool) break :blk f.bool;
+        }
+        break :blk false;
+    } else false;
+
+    const reg = registry();
+    const gpa = std.heap.page_allocator;
+
+    // 每个 agent 一个 arena:它自己、它的历史、它的邮件都在里面,close 时整体回收。
+    // 用 page_allocator 而非工具的 arena —— 那个在本次工具调用结束就没了,
+    // 而长驻 agent 要活到 close。
+    const ar = gpa.create(std.heap.ArenaAllocator) catch return .{
+        .content = "error: out of memory starting sub-agent",
+        .is_error = true,
+    };
+    ar.* = std.heap.ArenaAllocator.init(gpa);
+    const a = ar.allocator();
+
+    const sub = a.create(agentmod.Agent) catch {
+        ar.deinit();
+        gpa.destroy(ar);
+        return .{ .content = "error: out of memory starting sub-agent", .is_error = true };
+    };
+    sub.* = agentmod.Agent.initOpts(a, self.cfg, self.provider.name, self.model, self.cwd, .{
+        .read_only = self.read_only or read_only,
+        .plugins = self.plugins,
+        .depth = self.depth + 1,
+    }) catch |e| {
+        ar.deinit();
+        gpa.destroy(ar);
+        return .{
+            .content = try std.fmt.allocPrint(arena, "error: cannot start sub-agent: {s}", .{@errorName(e)}),
+            .is_error = true,
+        };
+    };
+
+    if (fork_context) {
+        // 拷父 agent 的历史。消息内容借用父 agent 的内存 —— 父 agent 活得
+        // 比 subagent 长(它是派出方),所以借用安全。
+        sub.messages.appendSlice(self.messages.items) catch {};
+    }
+
+    const entry = a.create(agentsmod.Entry) catch {
+        ar.deinit();
+        gpa.destroy(ar);
+        return .{ .content = "error: out of memory starting sub-agent", .is_error = true };
+    };
+    entry.* = .{
+        .id = 0,
+        .name = if (name.len > 0) a.dupe(u8, name) catch "sub" else "sub",
+        .task = a.dupe(u8, task) catch task,
+        .arena = ar,
+        .agent = sub,
+        .worker = undefined,
+        .status = std.atomic.Value(agentsmod.Status).init(.running),
+        .inbox = std.array_list.Managed([]const u8).init(a),
+        .mailbox = std.array_list.Managed(agentsmod.Mail).init(a),
+        .stopping = std.atomic.Value(bool).init(false),
+        // 借父 agent 的回调把进度显示给人 —— 模型看结论(read_agent),
+        // 人看过程(TUI 的 [sub N] 行)。
+        .parent_cbs = self.cbs,
+    };
+    // 首个任务作为第一条输入
+    entry.inbox.append(entry.task) catch {};
+
+    const id = reg.register(entry) catch |e| {
+        ar.deinit();
+        gpa.destroy(ar);
+        return .{
+            .content = switch (e) {
+                error.AgentLimitReached => try std.fmt.allocPrint(arena, "error: too many open sub-agents ({d}); close_agent the ones you are done with — completed agents still hold a slot", .{agentsmod.MAX_OPEN_AGENTS}),
+                else => "error: cannot register sub-agent",
+            },
+            .is_error = true,
+        };
+    };
+
+    entry.worker = std.Thread.spawn(.{}, agentWorker, .{entry}) catch {
+        _ = reg.close(id) catch {};
+        return .{ .content = "error: cannot start sub-agent worker thread", .is_error = true };
+    };
+
+    return .{ .content = try std.fmt.allocPrint(arena, "sub-agent #{d} ({s}) started. It runs in the background — use wait_agent to be told when it has something, read_agent to collect it, send_agent to give it more work, close_agent when done.", .{ id, entry.name }) };
+}
+
+/// wait_agent:等任意 agent 有未读邮件。
+fn toolWaitAgent(ctx: ?*anyopaque, arena: std.mem.Allocator, args: []const u8) anyerror!toolsmod.Result {
+    _ = ctx;
+    const v = std.json.parseFromSliceLeaky(std.json.Value, arena, args, .{}) catch std.json.Value{ .null = {} };
+    var timeout_ms: i64 = 60_000;
+    if (v == .object) {
+        if (v.object.get("timeout_seconds")) |ts| {
+            const secs: i64 = switch (ts) {
+                .integer => |i| i,
+                .float => |f| @intFromFloat(f),
+                else => 60,
+            };
+            timeout_ms = @max(1_000, @min(secs * 1000, TASK_TIMEOUT_MS));
+        }
+    }
+
+    const reg = registry();
+    if (reg.openCount() == 0) {
+        return .{ .content = "no sub-agents are open — spawn_agent first", .is_error = true };
+    }
+
+    const act = activity.begin(.tool, "wait_agent", "waiting for sub-agent mail", timeout_ms);
+    defer act.release();
+    const got = reg.waitMail(timeout_ms, act);
+
+    var aw = std.Io.Writer.Allocating.init(arena);
+    defer aw.deinit();
+    if (!got) {
+        try aw.writer.writeAll("timed out with nothing new. Current state:\n");
+    } else {
+        try aw.writer.writeAll("one or more sub-agents have updates — read_agent to collect:\n");
+    }
+    try reg.writeList(&aw.writer);
+    return .{ .content = try aw.toOwnedSlice() };
+}
+
+/// read_agent:取某个 agent 的终态结果。
+///
+/// **只返回 turn_done / failed,不返回 progress。** 逐条工具调用对父 agent 的
+/// 决策没有价值,进上下文只是烧 token —— codex 也是这样:它的细粒度事件只走
+/// UI 与 rollout,进父 agent 模型上下文的唯一东西是子 agent 终止时的一条摘要
+/// (session_prefix.rs 的 format_inter_agent_completion_message,上限 1000 token)。
+///
+/// progress 邮件仍然收着:`list_agents` 的 unread 计数要用,TUI 也靠
+/// `on_subagent` 回调把它显示给**人**看。人看进度,模型看结论。
+fn toolReadAgent(ctx: ?*anyopaque, arena: std.mem.Allocator, args: []const u8) anyerror!toolsmod.Result {
+    _ = ctx;
+    const v = try std.json.parseFromSliceLeaky(std.json.Value, arena, args, .{});
+    const id = jsonInt(v, "id") orelse return .{
+        .content = "error: read_agent requires 'id' (from spawn_agent)",
+        .is_error = true,
+    };
+
+    const reg = registry();
+    var mails = std.array_list.Managed(agentsmod.Mail).init(arena);
+    reg.drain(@intCast(id), &mails) catch |e| return .{
+        .content = try std.fmt.allocPrint(arena, "error: {s} (id {d})", .{ @errorName(e), id }),
+        .is_error = true,
+    };
+
+    var aw = std.Io.Writer.Allocating.init(arena);
+    defer aw.deinit();
+    var reported: usize = 0;
+    var skipped: usize = 0;
+    for (mails.items) |m| {
+        switch (m.kind) {
+            .turn_done, .failed, .notice => {
+                if (reported == 0) try aw.writer.print("sub-agent #{d}:\n", .{id});
+                try aw.writer.print("[{s}] {s}\n", .{ m.kind.name(), m.text });
+                reported += 1;
+            },
+            .progress => skipped += 1,
+        }
+    }
+    if (reported == 0) {
+        // 区分三种"没有结果":还在跑 / 跑完了但结果已被读走 / 从没产出过。
+        // 一律说"still working"会让模型在一个已经空了的 agent 上反复 wait。
+        const state = reg.stateOf(@intCast(id));
+        const hint = switch (state) {
+            .running => "it is still working — wait_agent again",
+            .idle => "it is idle and has nothing new; give it more work with send_agent, or close_agent",
+            .closing, .done => "it has stopped; close_agent to free its slot",
+        };
+        return .{ .content = try std.fmt.allocPrint(
+            arena,
+            "sub-agent #{d}: no new result ({d} progress update(s) skipped). {s}.",
+            .{ id, skipped, hint },
+        ) };
+    }
+    return .{ .content = try aw.toOwnedSlice() };
+}
+
+/// send_agent:追加输入。interrupt=true 打断当前轮。
+fn toolSendAgent(ctx: ?*anyopaque, arena: std.mem.Allocator, args: []const u8) anyerror!toolsmod.Result {
+    _ = ctx;
+    const v = try std.json.parseFromSliceLeaky(std.json.Value, arena, args, .{});
+    const id = jsonInt(v, "id") orelse return .{
+        .content = "error: send_agent requires 'id' (from spawn_agent)",
+        .is_error = true,
+    };
+    const message = jsonStr(v, "message") orelse return .{
+        .content = "error: send_agent requires 'message'",
+        .is_error = true,
+    };
+    const interrupt = if (v == .object) blk: {
+        if (v.object.get("interrupt")) |i| {
+            if (i == .bool) break :blk i.bool;
+        }
+        break :blk false;
+    } else false;
+
+    registry().send(@intCast(id), message, interrupt) catch |e| return .{
+        .content = try std.fmt.allocPrint(arena, "error: {s} (id {d})", .{ @errorName(e), id }),
+        .is_error = true,
+    };
+    return .{ .content = try std.fmt.allocPrint(arena, "sent to sub-agent #{d}{s}", .{
+        id,
+        if (interrupt) " (interrupting its current turn)" else " (queued behind its current work)",
+    }) };
+}
+
+/// list_agents:谁在跑、跑了几轮、有多少未读。
+fn toolListAgents(ctx: ?*anyopaque, arena: std.mem.Allocator, args: []const u8) anyerror!toolsmod.Result {
+    _ = ctx;
+    _ = args;
+    var aw = std.Io.Writer.Allocating.init(arena);
+    defer aw.deinit();
+    try registry().writeList(&aw.writer);
+    return .{ .content = try aw.toOwnedSlice() };
+}
+
+/// close_agent:关掉并回收槽位。
+fn toolCloseAgent(ctx: ?*anyopaque, arena: std.mem.Allocator, args: []const u8) anyerror!toolsmod.Result {
+    _ = ctx;
+    const v = try std.json.parseFromSliceLeaky(std.json.Value, arena, args, .{});
+    const id = jsonInt(v, "id") orelse return .{
+        .content = "error: close_agent requires 'id' (from spawn_agent)",
+        .is_error = true,
+    };
+    const prev = registry().close(@intCast(id)) catch |e| return .{
+        .content = try std.fmt.allocPrint(arena, "error: {s} (id {d})", .{ @errorName(e), id }),
+        .is_error = true,
+    };
+    return .{ .content = try std.fmt.allocPrint(arena, "closed sub-agent #{d} (was {s})", .{ id, prev.name() }) };
 }
 
 // =====================================================================
@@ -2210,12 +2615,64 @@ pub const builtin_plugins = [_]Plugin{
     .{ .name = "task-delegation", .enabled_by_default = false, .tools = &.{
         .{
             .name = "task",
-            .desc = "Delegate a self-contained task to a sub-agent and wait for its answer. Sub-agents inherit this session's directory and model but start with no conversation history, so each description must be complete on its own. Pass 'tasks' to run up to 32 in parallel; prefer that over sequential calls for independent work.",
+            .desc = "Delegate self-contained work to sub-agents and wait for all of them to finish. Sub-agents inherit this session's directory, model and tools but start with no conversation history, so each description must be complete on its own. Pass 'tasks' to run up to 32 in parallel. Use this when you just want the answers; use spawn_agent instead when you want to keep working while they run, or may need to redirect them.",
             .schema =
             \\{"type":"object","properties":{"description":{"type":"string","description":"A single self-contained task, including all context the sub-agent needs."},"read_only":{"type":"boolean","description":"Run the sub-agent without write tools. Use it for investigation and review so a sub-agent cannot change files while you are still deciding."},"tasks":{"type":"array","description":"Independent tasks to run in parallel (max 32 at top level, 4 inside a sub-agent).","items":{"type":"object","properties":{"description":{"type":"string","description":"A single self-contained task."},"read_only":{"type":"boolean","description":"Run this sub-agent without write tools."}},"required":["description"]}}}}
             ,
             .handler = toolCtxStub,
             .ctx_handler = toolTask,
+        },
+        .{
+            .name = "spawn_agent",
+            .desc = "Start a background sub-agent and return immediately with its id. Unlike task, this does not block: you keep working while it runs, can send it more instructions mid-flight, and collect its output when you are ready. Follow up with wait_agent, read_agent, send_agent and close_agent. Prefer this for long investigations, or when its findings may change what you ask it next.",
+            .schema =
+            \\{"type":"object","properties":{"task":{"type":"string","description":"Self-contained description of what the sub-agent should do. It starts with no memory of this conversation unless fork_context is set."},"name":{"type":"string","description":"Short label for this sub-agent, shown in list_agents."},"read_only":{"type":"boolean","description":"Run it without write tools. Use it for investigation and review."},"fork_context":{"type":"boolean","description":"Copy this conversation's history into the sub-agent. Use it when the task only makes sense given what was already discussed; leave it off otherwise to save tokens."}},"required":["task"]}
+            ,
+            .handler = toolCtxStub,
+            .ctx_handler = toolSpawnAgent,
+        },
+        .{
+            .name = "wait_agent",
+            .desc = "Block until any background sub-agent has something new, or the timeout expires. Returns which agents have updates and their status, not the content — call read_agent to collect it. Returns early once every agent is idle, so it will not sit through the full timeout when there is nothing left to wait for.",
+            .schema =
+            \\{"type":"object","properties":{"timeout_seconds":{"type":"integer","description":"How long to wait before giving up. Default 60, capped at 600."}}}
+            ,
+            .handler = toolCtxStub,
+            .ctx_handler = toolWaitAgent,
+        },
+        .{
+            .name = "read_agent",
+            .desc = "Collect a background sub-agent's unread updates: finished turns, failures, and which tools it ran. Each update is returned once — the read position advances.",
+            .schema =
+            \\{"type":"object","properties":{"id":{"type":"integer","description":"Sub-agent id from spawn_agent."}},"required":["id"]}
+            ,
+            .handler = toolCtxStub,
+            .ctx_handler = toolReadAgent,
+        },
+        .{
+            .name = "send_agent",
+            .desc = "Give a background sub-agent more work. By default the message is queued behind what it is currently doing; set interrupt to abandon its current turn and handle your message right away. Use interrupt when its findings so far already tell you it is going the wrong way.",
+            .schema =
+            \\{"type":"object","properties":{"id":{"type":"integer","description":"Sub-agent id from spawn_agent."},"message":{"type":"string","description":"What it should do next. It keeps the context of its earlier turns."},"interrupt":{"type":"boolean","description":"True abandons its current turn and handles this immediately; false or omitted queues it."}},"required":["id","message"]}
+            ,
+            .handler = toolCtxStub,
+            .ctx_handler = toolSendAgent,
+        },
+        .{
+            .name = "list_agents",
+            .desc = "List background sub-agents with their status, how many turns they have run, unread updates and queued input.",
+            .schema = toolsmod.EMPTY_SCHEMA,
+            .handler = toolCtxStub,
+            .ctx_handler = toolListAgents,
+        },
+        .{
+            .name = "close_agent",
+            .desc = "Shut down a background sub-agent and free its slot. Finished agents keep holding a slot until closed, so close them once you have collected what you need.",
+            .schema =
+            \\{"type":"object","properties":{"id":{"type":"integer","description":"Sub-agent id from spawn_agent."}},"required":["id"]}
+            ,
+            .handler = toolCtxStub,
+            .ctx_handler = toolCloseAgent,
         },
     } },
     .{ .name = "todo", .enabled_by_default = false, .tools = &.{

@@ -397,6 +397,31 @@ spawn 的进程一起收掉（子进程同样起成独立进程组）。
 
 实现上走的是自身可执行文件的绝对路径（`std.process.executablePathAlloc`）。早先 spawn 裸名 `"piz"` 靠 PATH 查找，而 piz 通常不在 PATH 里，实测 `error.FileNotFound` —— 那个版本一次都成功不了。
 
+### 长驻 sub-agent
+
+`task` 是**阻塞式批量**：派 N 路、等全部跑完、拼好返回。适合「这几件事互不相关，做完告诉我」。它的局限是委派期间父 agent 什么也做不了 —— 发现某一路方向错了只能等它烧完一整轮。
+
+另一组工具把生命周期拆开（照 codex 的 `multi_agents` 做法）：
+
+| 工具 | 作用 |
+|------|------|
+| `spawn_agent` | 起一个后台 agent，**立即返回 id**，父 agent 接着干自己的活 |
+| `wait_agent` | 阻塞到**任意** agent 有结果，只报「谁有更新」，不返回内容 |
+| `read_agent` | 取某个 agent 的结果，读取位置随之推进 |
+| `send_agent` | 追加输入；`interrupt=true` 放弃它当前那一轮，立即处理新指令 |
+| `list_agents` | 谁在跑、跑了几轮、多少未读、多少排队 |
+| `close_agent` | 关掉并释放槽位 |
+
+**长驻**的意思是跑完一轮不销毁，停在 `idle` 等下一条输入 —— 它保留自己的对话历史，所以 `send_agent` 是「接着刚才那件事」，不是重新开始。实测同一个 agent 跑两轮：第一轮报 parser，`interrupt` 转向后第二轮报 lexer，`turns` 从 1 变 2。
+
+`spawn_agent` 的 `fork_context` 让子 agent 继承父 agent 的完整对话历史。默认关：多数委派任务不需要全部上下文，继承过去只是白烧 token。需要「接着刚才讨论的事」时才开。
+
+**两个读者，两条通道。** `read_agent` 只返回终态（`turn_done` / `failed` / `notice`），逐条工具调用被过滤掉 —— 那对父 agent 的决策没有价值，进上下文只是烧 token。进度仍然收着，走 `on_subagent` 回调显示给**人**看（TUI 与 `-o text` 的 `[sub 1] ⚙ bash`）。codex 也是这样分的：它的细粒度事件只进 UI 与 rollout，进父 agent 模型上下文的唯一东西是子 agent 终止时的一条摘要（`session_prefix.rs`，上限 1000 token）。
+
+**同时打开上限 32 个，跑完不等于释放** —— 完成的 agent 仍占槽位直到 `close_agent`。这是有意的：父 agent 可能还要 `send_agent` 让它继续，提前回收就丢了上下文。
+
+> 槽位是**会话级共享**的。子 agent 继承父 agent 的插件启用集，所以它也有 `spawn_agent` —— 它派出的 agent 同样吃这 32 个槽位。深度闸门（2 层）限制的是层数，不是总数；一个中间层可以把槽位吃光，然后兄弟层拿不到。实测：一个会递归 spawn 的模型只开到 26 个就撞上限（每层多吃 6 个）。真跑满时错误信息会提示去 `close_agent`。
+
 ### web_search
 
 ```json
