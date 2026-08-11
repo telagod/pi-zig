@@ -38,11 +38,13 @@ piz 的插件是**编译期注册的 Zig 函数表**，不是运行时加载的�
 | `skills` | `skill`（**装了技能时自动开启**） |
 | `lsp` | `lsp` |
 | `todo` | `todo_write` `todo_read` |
-| `task-delegation` | `task` |
+| `task-delegation` | `task` `spawn_agent` `wait_agent` `read_agent` `send_agent` `list_agents` `close_agent` |
 | `web-search` | `web_search` `fetch_url` |
 | `git-awareness` | `git_status` |
 | `context-budget` | `get_context_remaining` |
 | `elicitation` | `ask_user` |
+
+`task` 阻塞等结果，其余 6 个是长驻 sub-agent 的生命周期管理（派出去、按需收、中途改向）。详见 [Tools](tools.md)。
 
 ### 开启方式
 

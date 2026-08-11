@@ -102,6 +102,35 @@ piz 用自己的配置目录 `~/.piz`。配置**文件格式**与 pi 兼容（`s
 | `contextWindow` | 上下文窗口 token 数，缺省 131072（128K） |
 | `models` | 该 provider 下的模型名列表 |
 
+Claude 兼容（`anthropic-messages`）的第三方端点同理，只是 `api` 换一个值：
+
+```json
+{
+  "providers": {
+    "volcark": {
+      "api": "anthropic-messages",
+      "baseUrl": "https://ark.cn-beijing.volces.com/api/plan",
+      "apiKey": "ark-...",
+      "contextWindow": 1000000,
+      "models": ["deepseek-v4-flash"]
+    }
+  }
+}
+```
+
+`baseUrl` 写到 provider 文档给的那一层，piz 按协议补齐路径（`src/config.zig` 的 `endpointUrl`）：
+
+| baseUrl 结尾 | anthropic-messages | openai-completions |
+|-------------|-------------------|-------------------|
+| `v1` | `+/messages` | `+/chat/completions` |
+| `/v1/` | `+messages` | `+chat/completions` |
+| `chat/completions` | — | 原样使用 |
+| 其他 | `+/v1/messages` | `+/v1/chat/completions` |
+
+所以 `https://ark.cn-beijing.volces.com/api/plan` 走「其他」这行，实际请求
+`.../api/plan/v1/messages`。**别加尾部斜杠** —— 只有正好以 `/v1/` 结尾时才特殊处理，
+其他路径带斜杠会拼出双斜杠。
+
 ## 内置 provider
 
 | provider | 协议 | baseUrl | 内置模型列表 |

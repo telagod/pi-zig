@@ -17,7 +17,10 @@ piz --plugin lsp               # 本次开启 lsp
 { "plugins": ["lsp", "todo"] }
 ```
 
-用 `-r` / `--read-only` 可以完全不向模型暴露工具。
+用 `-r` / `--read-only` 完全不向模型暴露工具 —— 一个都不发，`read` 和 `grep` 也没有。
+
+> **别用它做调研。** 只读模式下模型连文件都读不了，只能凭已有上下文和自身知识回答。
+> 想让模型「看但不改」，用默认的逐次询问模式，写操作在提示时拒绝即可。
 
 ## 目录
 
@@ -320,13 +323,14 @@ pi 明确声明不做 to-dos，这是 piz 的增强。
 ### task
 
 ```json
-{"description": "审计 auth 模块的注入风险", "read_only": true}
+{"description": "分析这段错误日志说明什么", "read_only": true}
 {"tasks": [{"description": "任务 A"}, {"description": "任务 B", "read_only": true}]}
 ```
 
 在**本进程内**建一个独立 Agent 跑委托任务，**阻塞等结果**，把子 agent 的最终答复回传给模型。`tasks` 数组并行（顶层上限 32、子 agent 里 4，超了直接报错而不是静默截断）。
 
-`read_only` 让子 agent 不带写工具，适合调研与审查 —— 一个还在帮你做判断的子 agent 不该同时改文件。
+`read_only` 让子 agent **一个工具都没有**（不是「只有读工具」）—— 它只能凭 `description` 里的
+文字推理。调研任务别开：读不了文件的子 agent 调研不了任何东西。
 它**只能收紧不能放宽**：只读父 agent 的子 agent 必然只读，否则委派就是一条提权通道。
 顶层 `read_only` 作为 `tasks[]` 各项的默认值，单项可以覆盖。
 

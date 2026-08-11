@@ -424,7 +424,7 @@ piz 保留「置前」，理由是两者的压缩语义不同：codex 保留 use
 ## 测试
 
 ```bash
-zig build test          # 140 个测试，core 113 + app 27
+zig build test          # 148 个测试
 ```
 
 两个测试目标：`core.zig` 为根（收集全部 core 模块的 test 块）、`main.zig` 为根（含 `e2e.zig`）。Zig 的 `zig test` 只收集根模块的测试，所以要分两个目标。
