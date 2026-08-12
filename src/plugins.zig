@@ -1604,12 +1604,23 @@ fn agentWorker(entry: *agentsmod.Entry) void {
             std.Io.sleep(agentmod.util.io, .{ .nanoseconds = 100 * std.time.ns_per_ms }, .awake) catch break;
             continue;
         };
+        // inbox 文本由 Registry.send 用 page_allocator 分配;agent.send 会把
+        // 它挂进 messages 长期引用 —— 先拷进会话 arena 再 free 队列副本,
+        // 否则 free 掉的是还在被历史引用的正文(web 侧实测过同一 UAF)。
+        // dupe 失败宁可丢这一条(报 failed),也不能让 messages 指向已释放内存。
+        const text = entry.agent.alloc.dupe(u8, input) catch {
+            std.heap.page_allocator.free(input);
+            reg.post(entry, .failed, "out of memory copying task input");
+            entry.turns += 1;
+            continue;
+        };
+        defer std.heap.page_allocator.free(input);
         reg.setStatus(entry, .running);
         // 清掉上一轮 interrupt 留下的中断标志,否则这一轮开局就被判取消
         entry.agent.aborted.store(false, .release);
 
-        const act = activity.begin(.subagent, "agent", input, TASK_TIMEOUT_MS);
-        const result = entry.agent.send(input) catch |e| {
+        const act = activity.begin(.subagent, "agent", text, TASK_TIMEOUT_MS);
+        const result = entry.agent.send(text) catch |e| {
             act.release();
             if (entry.stopping.load(.acquire)) break;
             // 被 interrupt 打断不是故障:队首已经是新输入,直接进下一圈
@@ -1624,8 +1635,8 @@ fn agentWorker(entry: *agentsmod.Entry) void {
         if (result.error_msg) |msg| {
             reg.post(entry, .failed, msg);
         } else {
-            const text = if (result.text.len > 0) result.text else "(no text produced)";
-            reg.post(entry, .turn_done, text);
+            const reply = if (result.text.len > 0) result.text else "(no text produced)";
+            reg.post(entry, .turn_done, reply);
         }
     }
     reg.setStatus(entry, .done);

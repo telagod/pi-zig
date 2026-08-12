@@ -17,6 +17,72 @@ pub const WebOptions = struct {
     project_cwd: ?[]const u8 = null,
 };
 
+/// 带锁的 arena:多线程并发分配安全。
+///
+/// WebServer.alloc 与 SessionPool.alloc 会被**多个 HTTP 线程并发分配**
+/// (每个请求都在上面拼 JSON、解析 body),而裸 ArenaAllocator 不是线程安全的
+/// —— 实测两路并发 chat 直接把进程打崩。包装一层互斥锁后,arena 的
+/// 「进程活到退出、免逐条 free」语义保留,并发安全也拿到。
+/// 锁粒度粗但可接受:本地 UI 的分配频率远够不上争锁。
+pub const SyncedArena = struct {
+    mutex: std.Io.Mutex = .init,
+    arena: std.heap.ArenaAllocator,
+
+    pub fn init(child: std.mem.Allocator) SyncedArena {
+        return .{ .arena = std.heap.ArenaAllocator.init(child) };
+    }
+
+    pub fn deinit(self: *SyncedArena) void {
+        self.arena.deinit();
+    }
+
+    pub fn allocator(self: *SyncedArena) std.mem.Allocator {
+        return .{
+            .ptr = self,
+            .vtable = &.{
+                .alloc = allocFn,
+                .resize = resizeFn,
+                .remap = remapFn,
+                .free = freeFn,
+            },
+        };
+    }
+
+    fn allocFn(ctx: *anyopaque, len: usize, alignment: std.mem.Alignment, ret_addr: usize) ?[*]u8 {
+        const self: *SyncedArena = @ptrCast(@alignCast(ctx));
+        self.mutex.lockUncancelable(util.io);
+        defer self.mutex.unlock(util.io);
+        // 注意 inner.ptr 是 &self.arena,不是 ctx —— vtable 函数需要 arena 对象
+        // 的地址,传 SyncedArena 的地址会被按 ArenaAllocator 解引用(UB)。
+        const inner = self.arena.allocator();
+        return inner.vtable.alloc(inner.ptr, len, alignment, ret_addr);
+    }
+
+    fn resizeFn(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_len: usize, ret_addr: usize) bool {
+        const self: *SyncedArena = @ptrCast(@alignCast(ctx));
+        self.mutex.lockUncancelable(util.io);
+        defer self.mutex.unlock(util.io);
+        const inner = self.arena.allocator();
+        return inner.vtable.resize(inner.ptr, memory, alignment, new_len, ret_addr);
+    }
+
+    fn remapFn(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_len: usize, ret_addr: usize) ?[*]u8 {
+        const self: *SyncedArena = @ptrCast(@alignCast(ctx));
+        self.mutex.lockUncancelable(util.io);
+        defer self.mutex.unlock(util.io);
+        const inner = self.arena.allocator();
+        return inner.vtable.remap(inner.ptr, memory, alignment, new_len, ret_addr);
+    }
+
+    fn freeFn(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, ret_addr: usize) void {
+        const self: *SyncedArena = @ptrCast(@alignCast(ctx));
+        self.mutex.lockUncancelable(util.io);
+        defer self.mutex.unlock(util.io);
+        const inner = self.arena.allocator();
+        inner.vtable.free(inner.ptr, memory, alignment, ret_addr);
+    }
+};
+
 /// 全局事件(SSE 转发用);agent worker 生产,SSE 连接线程消费。
 /// 裁剪:每连接上报已消费位置,所有连接都消费过的头部事件即释放(防无限积累)。
 pub const EventHub = struct {
@@ -1355,4 +1421,35 @@ test "unregistered workspace is refused, and a missing hook fails closed" {
     // 否则一次重构漏掉接线就又敞开了。
     try t.expect(!wsAllowed(null, null, "/registered"));
     try t.expect(!wsAllowed(null, null, "/anything"));
+}
+
+test "SyncedArena survives concurrent allocation from many threads" {
+    const t = std.testing;
+    try util.testInit();
+    // 裸 arena 在并发下会损坏;SyncedArena 必须让 8 线程 × 200 次分配全部
+    // 拿到正确、互不重叠的内存。这个测试挂在 SyncedArena 上就是要它崩:
+    // HTTP 层正是这个模式(每请求拼 JSON)。
+    var sa = SyncedArena.init(t.allocator);
+    defer sa.deinit();
+    const a = sa.allocator();
+
+    const Worker = struct {
+        fn run(alloc: std.mem.Allocator, out: *std.atomic.Value(usize)) void {
+            var arena = util.Arena.init(alloc);
+            defer arena.deinit();
+            const aa = arena.allocator();
+            var total: usize = 0;
+            for (0..200) |i| {
+                const s = std.fmt.allocPrint(aa, "w{d}", .{i}) catch continue;
+                total += s.len;
+            }
+            _ = out.fetchAdd(total, .monotonic);
+        }
+    };
+    var sum = std.atomic.Value(usize).init(0);
+    var threads: [8]std.Thread = undefined;
+    for (&threads) |*th| th.* = try std.Thread.spawn(.{}, Worker.run, .{ a, &sum });
+    for (&threads) |th| th.join();
+    // 8 线程 × 200 次 × "w" + 最多 3 位数字 ≥ 8*200*2 = 3200
+    try t.expect(sum.load(.monotonic) >= 3200);
 }

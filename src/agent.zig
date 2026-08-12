@@ -379,8 +379,13 @@ pub const Agent = struct {
     cbs: AgentCallbacks = .{},
     /// 流被取消(如 Ctrl+C)
     aborted: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
-    /// 当前活跃 provider 流(ai.run 经 on_connect 通知;中断时 shutdown 打断阻塞读)
-    cur_stream: ?*httpcmod.Stream = null,
+    /// 当前活跃 provider 流的 socket fd(-1 = 无)。
+    ///
+    /// 从前是 `?*httpc.Stream` 指针:interrupt 来自 HTTP 线程、Stream 活在
+    /// worker 线程的栈上,send 返回后指针悬垂,读旧值再 abortRead 就是 UAF。
+    /// fd 由 on_connect 存入(经 Stream.fd())、turn 结束置 -1;interrupt 线程
+    /// 对它 shutdown(.recv) 打断阻塞读 —— fd 复用误伤的代价只是一次断连。
+    cur_stream_fd: std.atomic.Value(i32) = std.atomic.Value(i32).init(-1),
 
     pub fn init(alloc: std.mem.Allocator, cfg: *cfgmod.Config, provider_name: ?[]const u8, model_name: ?[]const u8, cwd: []const u8) !Agent {
         return initOpts(alloc, cfg, provider_name, model_name, cwd, .{});
@@ -571,7 +576,11 @@ pub const Agent = struct {
         self.provider = resolved.provider;
         self.model = resolved.model;
         self.key = resolved.key;
-        self.url = try self.cfg.endpointUrl(resolved.provider);
+        // url 用 page_allocator:switchModel 可能从 HTTP 线程调用(web UI),
+        // 而 self.alloc(会话 arena)是 worker 线程的常驻分配器 —— 两个线程
+        // 并发分配同一个 arena 会损坏它。旧 url 留在 arena 不 free,
+        // 每次切换泄漏约百字节,可忽略。
+        self.url = try std.heap.page_allocator.dupe(u8, try self.cfg.endpointUrl(resolved.provider));
     }
 
     /// 设置会话标题(null 清除)。
@@ -731,7 +740,7 @@ pub const Agent = struct {
                 if (result.text.len > 0) {
                     try self.messages.append(.{ .role = "assistant", .content = result.text });
                 }
-                self.cur_stream = null;
+                self.cur_stream_fd.store(-1, .release);
                 if (self.cbs.on_turn_end) |f| try f(self.cbs.ctx);
                 return error.Aborted;
             }

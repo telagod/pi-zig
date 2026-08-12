@@ -98,6 +98,12 @@ const App = struct {
     last_usage: ai.Usage = .{},
     /// 会话累计 token(状态栏 t/s)
     tokens_total: usize = 0,
+    /// worker 每轮结束发布的上下文 token 估算(主线程状态栏读它)。
+    ///
+    /// 主线程不能现场调 estTokens:那会遍历 messages,而 worker 正在 append
+    /// (std 的 append 先加 len 后写数据,读侧撞上半写消息会 segfault ——
+    /// web 侧实测过同一机制)。worker 与主线程只经这个原子交换。
+    est_ctx: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
     /// 会话起始时刻(ns,状态栏 t/s)
     start_ns: i128,
 
@@ -147,7 +153,8 @@ const App = struct {
         }
         // ctx%:分级色(绿 <50 / cyan 50-85 / red >85——codex 禁黄)
         const cw = @as(usize, self.agent.provider.context_window);
-        const used = self.agent.estTokens();
+        // 读 worker 发布的估算值,不现场遍历 messages(见 est_ctx 注释)
+        const used = self.est_ctx.load(.acquire);
         const pct = if (cw > 0) used * 100 / cw else 0;
         const pct_col: []const u8 = if (pct > 85) "31" else if (pct > 50) "36" else "32";
         try w.print(" \x1b[{s}m{d}%\x1b[0m", .{ pct_col, pct });
@@ -458,6 +465,8 @@ fn workerMain(wctx: *WorkerCtx) void {
             }
         }
         app.agent.aborted.store(false, .release);
+        // 发布本轮后的上下文占用:主线程状态栏经它读,不碰活 messages
+        app.est_ctx.store(app.agent.estTokens(), .release);
         const st = app.statusLine() catch return;
         app.tui.setStatus("\x1b[2m", st) catch {};
         if (err_msg != null) break; // 出错停止投递后续队列
@@ -526,6 +535,10 @@ fn runWebCmd(alloc: std.mem.Allocator, args: *std.process.Args.Iterator) void {
     warnBrokenConfig(&cfg);
     const abs_cwd = std.process.currentPathAlloc(util.io, arena.allocator()) catch "";
     wopts.project_cwd = abs_cwd;
+    // HTTP 线程会并发分配 SessionPool/WebServer 的 allocator(每请求拼 JSON、
+    // 解析 body),裸 arena 会在并发下损坏 —— 必须走带锁的 SyncedArena。
+    var sync_arena = webui_mod.SyncedArena.init(alloc);
+    defer sync_arena.deinit();
     var agent = agentmod.Agent.initOpts(arena.allocator(), &cfg, null, null, abs_cwd, .{ .depth = pluginsmod.processBaseDepth() }) catch {
         std.debug.print("piz: agent init failed\n", .{});
         std.process.exit(1);
@@ -536,8 +549,12 @@ fn runWebCmd(alloc: std.mem.Allocator, args: *std.process.Args.Iterator) void {
     }
     @import("core").plugins.injectMemory(&agent);
 
-    var hub = webui_mod.EventHub.init(arena.allocator());
-    var ws = webui_mod.WebServer.start(arena.allocator(), wopts, &hub) catch |err| {
+    // 事件中心用 page_allocator:push 从 HTTP 线程与 worker 线程并发调用,
+    // 锁外的 allocPrint 需要线程安全分配器 —— arena 会被并发分配直接踩坏。
+    // 事件中心用 page_allocator:push 从 HTTP 线程与 worker 线程并发调用,
+    // 锁外的 allocPrint 需要线程安全分配器 —— arena 会被并发分配直接踩坏。
+    var hub = webui_mod.EventHub.init(std.heap.page_allocator);
+    var ws = webui_mod.WebServer.start(sync_arena.allocator(), wopts, &hub) catch |err| {
         std.debug.print("piz web: cannot listen: {t}\n", .{err});
         std.process.exit(1);
     };
@@ -551,7 +568,7 @@ fn runWebCmd(alloc: std.mem.Allocator, args: *std.process.Args.Iterator) void {
 
     // 会话池:default 会话 + hooks(webui 端点经回调接入)
     var pool = SessionPool{
-        .alloc = arena.allocator(),
+        .alloc = sync_arena.allocator(),
         .hub = &hub,
         .cfg = &cfg,
         .sessions = std.array_list.Managed(*WebSession).init(arena.allocator()),
@@ -616,14 +633,27 @@ const WebSession = struct {
     /// 请 worker 退出。没有它,worker 在 ChatQueue 上永久 100ms 轮询 ——
     /// 会话从池里摘掉了,线程还在,实测建删三轮 3 个会话涨到 9 个空转线程。
     stopping: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
-    /// worker 正在跑一轮(send 进行中,会写 agent.messages)。
+    /// 会话忙碌状态机:0=空闲 1=worker 跑一轮 2=HTTP 侧 action 运行。
     ///
-    /// undo/compact 这类 HTTP 侧会改 messages 的动作必须先看它:
-    /// worker 在 append、HTTP 在 shrink,两个线程同时改 len 是真数据竞态
-    /// (预分配只解决了 items 指针移动,解不了 len 并发写)。
-    /// 读历史(无锁)不用等它 —— 预分配下 items 稳定、每条消息先写后加 len,
-    /// 读者最多看到「多一条刚写完的消息」,永远看不到半截数据。
-    turning: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    /// 谁改 messages 谁先 CAS(0→自己):worker 的 send 与 HTTP 的 undo/compact/
+    /// fork 因此**严格互斥**,不存在「检查 turning 之后 worker 才开跑」的
+    /// TOCTOU 窗口(两门方案实测仍能并发撞上)。CAS 失败即忙,拒绝或等待。
+    busy: std.atomic.Value(u8) = std.atomic.Value(u8).init(0),
+    /// 会话快照(worker 每轮结束、模型/历史变化后重建;HTTP 读侧只读它)。
+    ///
+    /// 为什么不能直接读 agent.messages:std 的 array_list.append 先 len+=1
+    /// 再写 items[len-1] —— 读侧会拿到半写的 Message,content 的 ptr/len
+    /// 撕裂组合指向有效字符串的混合体,estTokens 遍历直接 segfault(实测)。
+    /// 快照由单一写者(持 busy 的一方)重建,锁内换指针、内容在会话 arena
+    /// 常驻永不改写 —— 读者锁内取指针后锁外使用也安全。
+    snap_mutex: std.Io.Mutex = .init,
+    /// 最近 20 条历史的 JSON 数组文本(会话 arena 常驻)
+    snap_history: []const u8 = "[]",
+    /// 快照时的 model 名(会话 arena 常驻;模型切换后重建快照)
+    snap_model: []const u8 = "",
+    /// 快照时的消息数 / 上下文占用(worker 算好存原子,免读 messages)
+    snap_msgs: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+    snap_pct: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
 };
 
 const SessionPool = struct {
@@ -694,6 +724,10 @@ const SessionPool = struct {
             .on_abort = webOnAbort,
             .on_connect = webOnConnect,
         };
+        // 初始快照(含磁盘恢复的历史):必须在 spawn **前**建 —— spawn 后
+        // worker 可能立即拿到队列里的消息开跑,与 rebuild 并发遍历 messages。
+        // 此刻 worker 尚不存在,messages 静止,安全。
+        rebuildSnap(ses);
         ses.worker = std.Thread.spawn(.{}, webWorker, .{ses}) catch return null;
         self.sessions.append(ses) catch return null;
         return ses;
@@ -725,13 +759,53 @@ const SessionPool = struct {
     }
 };
 
+/// 重建会话快照(snap_history / snap_model / snap_msgs / snap_pct)。
+///
+/// 调用时机:worker 每轮结束;HTTP 侧 undo/compact/switchModel 之后。
+/// 调用前提:此刻持 busy 所有权(worker 的 send 或 HTTP 的 action),
+/// 没有别的线程在改 agent.messages。快照分配落在会话 arena ——
+/// 常驻、换指针不换内容,读者锁内取指针后锁外使用也安全。
+fn rebuildSnap(ses: *WebSession) void {
+    const a = ses.agent.alloc;
+    const ag = ses.agent;
+    var stw = std.Io.Writer.Allocating.init(a);
+    defer stw.deinit();
+    const w = &stw.writer;
+    w.writeAll("[") catch {};
+    const msgs = ag.messages.items;
+    const hist_start = if (msgs.len > 20) msgs.len - 20 else 0;
+    var first = true;
+    var i = hist_start;
+    while (i < msgs.len) : (i += 1) {
+        const m = &msgs[i];
+        // 空文本 assistant(纯工具调用回合)不渲染,工具经 tool 卡体现
+        if (m.content.len == 0 and std.mem.eql(u8, m.role, "assistant")) continue;
+        if (!first) w.writeAll(",") catch {};
+        first = false;
+        const content = if (m.content.len > 300) m.content[0..300] else m.content;
+        w.print("{{\"role\":{s},\"content\":{s}}}", .{ util.jsonString(a, m.role) catch "\"\"", util.jsonString(a, content) catch "\"\"" }) catch {};
+    }
+    w.writeAll("]") catch {};
+    const history = stw.toOwnedSlice() catch return;
+    const model = a.dupe(u8, ag.model) catch return;
+    const cw = @as(usize, ag.provider.context_window);
+    const used = ag.estTokens();
+    const pct: u32 = @intCast(if (cw > 0) @min(used * 100 / cw, 10000) else 0);
+    ses.snap_mutex.lock(util.io) catch return;
+    ses.snap_history = history;
+    ses.snap_model = model;
+    ses.snap_pct.store(pct, .release);
+    ses.snap_msgs.store(@intCast(@min(msgs.len, std.math.maxInt(u32))), .release);
+    ses.snap_mutex.unlock(util.io);
+}
+
 fn webOnAbort(ctx: ?*anyopaque) bool {
     const s: *WebSession = @ptrCast(@alignCast(ctx.?));
     return s.agent.aborted.load(.acquire);
 }
 fn webOnConnect(ctx: ?*anyopaque, stream: *@import("core").httpc.Stream) void {
     const s: *WebSession = @ptrCast(@alignCast(ctx.?));
-    s.agent.cur_stream = stream;
+    s.agent.cur_stream_fd.store(stream.fd() orelse -1, .release);
 }
 
 /// /api/sessions hook:活跃会话列表(name + 消息数)。
@@ -748,19 +822,19 @@ fn poolSessionsHook(ctx: ?*anyopaque, cwd: []const u8, alloc: std.mem.Allocator)
         if (!std.mem.eql(u8, ses.cwd, cwd2)) continue;
         if (!first) w.print(",", .{}) catch {};
         first = false;
-        const ag = ses.agent;
-        const cw = @as(usize, ag.provider.context_window);
-        const used = ag.estTokens();
-        const pct = if (cw > 0) used * 100 / cw else 0;
-        // 无锁读:items 预分配永不移动,len 单次读(见 poolStateHook 注释)
-        const msgs_n = ag.messages.items.len;
+        // msgs/pct/model 读快照(worker 发布):读活 messages 会撞上 append 的
+        // 半写窗口(见 WebSession.snap_* 注释)。title 是单指针读,撕裂最多
+        // 显示一帧旧值,不会越界。
+        ses.snap_mutex.lock(util.io) catch return "[]";
+        const snap_model = ses.snap_model;
+        ses.snap_mutex.unlock(util.io);
         w.print("{{\"name\":{s},\"msgs\":{d},\"pct\":{d},\"model\":{s},\"auto\":{s},\"title\":{s},\"ts\":{d}}}", .{
             util.jsonString(alloc, ses.name) catch "\"\"",
-            msgs_n,
-            pct,
-            util.jsonString(alloc, ag.model) catch "\"\"",
+            ses.snap_msgs.load(.acquire),
+            ses.snap_pct.load(.acquire),
+            util.jsonString(alloc, snap_model) catch "\"\"",
             if (ses.mode.load(.acquire)) "true" else "false",
-            util.jsonString(alloc, ag.title orelse "") catch "\"\"",
+            util.jsonString(alloc, ses.agent.title orelse "") catch "\"\"",
             @divTrunc(ses.updated_ns, std.time.ns_per_ms),
         }) catch {};
     }
@@ -813,6 +887,10 @@ fn poolSessionsHook(ctx: ?*anyopaque, cwd: []const u8, alloc: std.mem.Allocator)
                 while (lines.next()) |l| {
                     if (std.mem.trim(u8, l, " \t\r\n").len > 0) count += 1;
                 }
+                // 逗号分隔:active 循环结束时 first 已置 false,这里必须补 ——
+                // 缺了它,磁盘会话与活跃会话之间无分隔,整个响应不是合法 JSON。
+                if (!first) w.print(",", .{}) catch {};
+                first = false;
                 w.print("{{\"name\":{s},\"msgs\":{d},\"pct\":0,\"model\":{s},\"auto\":true,\"title\":{s},\"ts\":{d},\"disk\":true}}", .{
                     util.jsonString(alloc, dname) catch "\"\"",
                     count,
@@ -838,6 +916,11 @@ fn poolSessionsHook(ctx: ?*anyopaque, cwd: []const u8, alloc: std.mem.Allocator)
 }
 
 /// /api/state hook:按 session 返回 agent 状态与历史。
+///
+/// 全部读快照(worker 发布)而非活 messages:std 的 append 先加 len 后写数据,
+/// 读活列表会撞上半写消息(实测 estTokens 遍历时 segfault)。
+/// 快照内容在会话 arena 常驻,锁内取指针、锁外用也安全(换快照只换指针,
+/// 旧内容永不被改写)。
 fn poolStateHook(ctx: ?*anyopaque, cwd: []const u8, session: []const u8, alloc: std.mem.Allocator) []const u8 {
     const pool: *SessionPool = @ptrCast(@alignCast(ctx.?));
     const cwd2 = if (cwd.len > 0) cwd else (if (pool.workspaces.items.len > 0) pool.workspaces.items[0] else "");
@@ -851,49 +934,52 @@ fn poolStateHook(ctx: ?*anyopaque, cwd: []const u8, session: []const u8, alloc: 
     }
     pool.mutex.unlock(util.io);
     const ses = found orelse (pool.getOrCreate(session, cwd2) orelse return "{}");
+    ses.snap_mutex.lock(util.io) catch return "{}";
+    const snap_history = ses.snap_history;
+    const snap_model = ses.snap_model;
+    ses.snap_mutex.unlock(util.io);
     var stw = std.Io.Writer.Allocating.init(alloc);
     defer stw.deinit();
     const w = &stw.writer;
-    const ag = ses.agent;
-    w.print("{{\"model\":{s},\"auto\":{s},\"title\":{s}", .{ util.jsonString(alloc, ag.model) catch "\"\"", if (ses.mode.load(.acquire)) "true" else "false", util.jsonString(alloc, ag.title orelse "") catch "\"\"" }) catch {};
-    const cw = @as(usize, ag.provider.context_window);
-    const used = ag.estTokens();
-    const pct = if (cw > 0) used * 100 / cw else 0;
-    w.print(",\"pct\":{d},\"running\":{s},\"history\":[", .{ pct, if (ag.cur_stream != null) "true" else "false" }) catch {};
-    // 无锁读 worker 的消息列表,靠 agent.zig 的预分配契约:
-    // items 指针永不移动(容量预分配),每条消息先写数据后加 len。
-    // len 快照成局部变量 —— 若用 msgs.len 直接进 while 条件,每次迭代
-    // 重新读 len,worker 恰好 append 时会把新消息也卷进遍历(无害但乱),
-    // 不如一次定界。
-    const msgs = ag.messages.items;
-    const msgs_len = msgs.len;
-    const hist_start = if (msgs_len > 20) msgs_len - 20 else 0;
-    var first = true;
-    var i = hist_start;
-    while (i < msgs_len) : (i += 1) {
-        const m = &msgs[i];
-        // 空文本 assistant(纯工具调用回合)不渲染,工具经 tool 卡体现
-        if (m.content.len == 0 and std.mem.eql(u8, m.role, "assistant")) continue;
-        if (!first) w.writeAll(",") catch {};
-        first = false;
-        const content = if (m.content.len > 300) m.content[0..300] else m.content;
-        w.print("{{\"role\":{s},\"content\":{s}}}", .{ util.jsonString(alloc, m.role) catch "\"\"", util.jsonString(alloc, content) catch "\"\"" }) catch {};
-    }
-    w.writeAll("]}") catch {};
+    w.print("{{\"model\":{s},\"auto\":{s},\"title\":{s}", .{
+        util.jsonString(alloc, snap_model) catch "\"\"",
+        if (ses.mode.load(.acquire)) "true" else "false",
+        util.jsonString(alloc, ses.agent.title orelse "") catch "\"\"",
+    }) catch {};
+    w.print(",\"pct\":{d},\"running\":{s},\"history\":{s}", .{
+        ses.snap_pct.load(.acquire),
+        if (ses.agent.cur_stream_fd.load(.acquire) >= 0) "true" else "false",
+        snap_history,
+    }) catch {};
+    w.writeAll("}") catch {};
     return stw.toOwnedSlice() catch "{}";
 }
 
 fn webWorker(ses: *WebSession) void {
     while (true) {
         const item = webui_mod.ChatQueue.dequeue(ses.qkey, &ses.stopping) orelse break;
+        // 入队时 dupe 到 page_allocator。**不能直接 free 队列副本**:send 会把
+        // item.text 挂进 messages 的 user 消息,历史长存 —— free 掉队列副本
+        // 等于 free 还在被引用的消息正文(实测 UAF)。必须先拷进会话 arena,
+        // dupe 失败则泄漏队列副本(不 free,悬垂比泄漏糟得多)。
+        const text = ses.agent.alloc.dupe(u8, item.text) catch null;
+        const a = std.heap.page_allocator;
+        a.free(item.session);
+        if (text != null) a.free(item.text);
+        // 拿忙碌所有权:HTTP 侧 action(undo/compact/fork)改 messages 期间
+        // 不 send。通常毫秒级;compact 要跑模型请求则多等一会 ——
+        // 用户主动点的动作,排队是合理语义。CAS 而非检查+置位:两门方案的
+        // TOCTOU 窗口实测会与 action 并发撞上。
+        while (ses.busy.cmpxchgWeak(0, 1, .acq_rel, .acquire) != null) {
+            if (ses.stopping.load(.acquire)) break;
+            std.Io.sleep(util.io, .{ .nanoseconds = 100 * std.time.ns_per_ms }, .awake) catch {};
+        }
+        if (ses.stopping.load(.acquire)) break;
+        defer ses.busy.store(0, .release);
         // 新消息清除上一轮残留的中断标志
         ses.agent.aborted.store(false, .release);
         ses.updated_ns = std.Io.Clock.now(.real, util.io).nanoseconds;
-        // turning 门:undo/compact 等 HTTP 侧动作见这个标志才敢动 messages。
-        // 用 atomic 而非普通 bool —— HTTP 线程读、本线程写,跨线程必须成对
-        // release/acquire,否则编译器完全有权把写滞后到 send 之后。
-        ses.turning.store(true, .release);
-        const result = ses.agent.send(item.text) catch null;
+        const result = ses.agent.send(text orelse item.text) catch null;
         if (result) |r| {
             const u = r.usage;
             ses.tokens_total += (u.input orelse 0) + (u.output orelse 0) + (u.cache_read orelse 0);
@@ -905,7 +991,9 @@ fn webWorker(ses: *WebSession) void {
             const msg = std.fmt.allocPrint(ses.agent.alloc, "会话保存失败({s}):本轮内容在重启后会丢失", .{@errorName(err)}) catch "session save failed";
             ses.hub.push("{{\"type\":\"notice\",\"session\":{s},\"text\":{s}}}", .{ util.jsonString(ses.agent.alloc, ses.name) catch "\"\"", util.jsonString(ses.agent.alloc, msg) catch "\"\"" });
         };
-        ses.turning.store(false, .release);
+        // 快照必须在释放 busy **前**发布:读侧看见 busy=0 时,
+        // 快照已是本轮的完整结果。
+        rebuildSnap(ses);
         ses.hub.push("{{\"type\":\"turn_end\",\"session\":{s}}}", .{util.jsonString(ses.agent.alloc, ses.name) catch "\"\""});
     }
 }
@@ -939,7 +1027,7 @@ fn webOnToolEnd(ctx: ?*anyopaque, name: []const u8, is_error: bool, summary: []c
 }
 fn webOnTurnEnd(ctx: ?*anyopaque) anyerror!void {
     const s: *WebSession = @ptrCast(@alignCast(ctx.?));
-    s.agent.cur_stream = null; // 回合结束:running 标志复位
+    s.agent.cur_stream_fd.store(-1, .release); // 回合结束:running 标志复位
     // 状态栏数据(ctx%/model/cache/tps)——全局(无 session)
     const cw = @as(usize, s.agent.provider.context_window);
     const used = s.agent.estTokens();
@@ -963,8 +1051,15 @@ fn poolInterruptHook(ctx: ?*anyopaque, cwd: []const u8, session: []const u8) voi
     for (pool.sessions.items) |ses| {
         if (std.mem.eql(u8, ses.name, session) and std.mem.eql(u8, ses.cwd, cwd2)) {
             ses.agent.aborted.store(true, .release);
-            // 打断阻塞中的 provider 读(读错误由 on_abort 判定转中止,保留 partial)
-            if (ses.agent.cur_stream) |st| st.abortRead();
+            // 打断阻塞中的 provider 读(读错误由 on_abort 判定转中止,保留 partial)。
+            // 用 fd 而非 Stream 指针:指针在 worker 栈上,send 返回即悬垂。
+            const fd = ses.agent.cur_stream_fd.load(.acquire);
+            if (fd >= 0) {
+                // SHUT_RD = 0:半关闭读方向,让阻塞中的 recv 立刻以 EOF 返回。
+                // 直接系统调用 —— 构造 net.Stream 需要 socket 的 address 等字段,
+                // 这里只有一个 fd,造不出来也不必造。
+                _ = std.posix.system.shutdown(@intCast(fd), 0);
+            }
             break;
         }
     }
@@ -1188,6 +1283,13 @@ fn poolModelHook(ctx: ?*anyopaque, cwd: []const u8, session: []const u8, model: 
                     pool.mutex.unlock(util.io);
                     return null;
                 };
+                // 快照含 model 名 —— 切换后要重建。switchModel 不改 messages,
+                // 但 rebuildSnap 遍历它;拿不到 busy(worker 在跑)就跳过,
+                // worker 轮次结束时的重建会带上新 model。
+                if (ses.busy.cmpxchgWeak(0, 2, .acq_rel, .acquire) == null) {
+                    rebuildSnap(ses);
+                    ses.busy.store(0, .release);
+                }
             }
             cur = ses.agent.model;
             break;
@@ -1210,7 +1312,11 @@ fn poolTitleHook(ctx: ?*anyopaque, cwd: []const u8, session: []const u8, title: 
         if (std.mem.eql(u8, ses.name, session) and std.mem.eql(u8, ses.cwd, cwd2)) {
             if (title) |t| {
                 const trimmed = std.mem.trim(u8, t, " \t");
-                ses.agent.title = if (trimmed.len > 0) (ses.agent.alloc.dupe(u8, trimmed) catch null) else null;
+                // dupe 用 page_allocator:这里在 HTTP 线程,而会话 arena 是
+                // worker 线程的常驻分配器,并发分配同一个 arena 会损坏它。
+                // 旧 title 留在 arena 不 free(重复改名泄漏几字节,可忽略),
+                // 读者拿到的指针永远指向有效字符串。
+                ses.agent.title = if (trimmed.len > 0) (std.heap.page_allocator.dupe(u8, trimmed) catch null) else null;
             }
             cur = ses.agent.title;
             break;
@@ -1221,7 +1327,7 @@ fn poolTitleHook(ctx: ?*anyopaque, cwd: []const u8, session: []const u8, title: 
     const ses = pool.getOrCreate(session, cwd2) orelse return null;
     if (title) |t| {
         const trimmed = std.mem.trim(u8, t, " \t");
-        ses.agent.title = if (trimmed.len > 0) (ses.agent.alloc.dupe(u8, trimmed) catch null) else null;
+        ses.agent.title = if (trimmed.len > 0) (std.heap.page_allocator.dupe(u8, trimmed) catch null) else null;
     }
     return ses.agent.title;
 }
@@ -1249,7 +1355,11 @@ fn poolActionHook(ctx: ?*anyopaque, cwd: []const u8, session: []const u8, act: [
     // fork/undo/compact 需要活跃会话
     const ses = pool.getOrCreate(session, cwd2) orelse return null;
     if (std.mem.eql(u8, act, "fork")) {
-        // 派生:复制消息 + 模型/模式/标题到新会话
+        // 派生:复制消息 + 模型/模式/标题到新会话。
+        // 只读 messages 但 saveWebTs 会遍历它 —— 与 worker 的 append 并发
+        // 会序列化进半写消息,也要独占 busy。
+        if (ses.busy.cmpxchgWeak(0, 2, .acq_rel, .acquire) != null) return "{\"ok\":false,\"act\":\"fork\",\"error\":\"busy\"}";
+        defer ses.busy.store(0, .release);
         const new_name = if (name) |n|
             (if (n.len > 0 and sessionmod.webNameOk(n)) n else "")
         else
@@ -1263,10 +1373,11 @@ fn poolActionHook(ctx: ?*anyopaque, cwd: []const u8, session: []const u8, act: [
         return out;
     }
     if (std.mem.eql(u8, act, "undo")) {
-        // worker 正在 send:它的 append 与这里的 shrink 并发改 messages.len,
-        // 是预分配解决不了的真竞态。拒绝而非等待 —— 轮次可能跑几十秒,
-        // HTTP 请求等不了那么久,前端收到 busy 自然知道「跑完再撤」。
-        if (ses.turning.load(.acquire)) return "{\"ok\":false,\"act\":\"undo\",\"error\":\"busy\"}";
+        // CAS 拿忙碌所有权(2=action):失败说明 worker 在 send 或另一 action
+        // 在跑 —— 拒绝而非等待,轮次可能几十秒,前端收到 busy 自然知道
+        // 「跑完再撤」。CAS 无 TOCTOU:检查与占位一步完成。
+        if (ses.busy.cmpxchgWeak(0, 2, .acq_rel, .acquire) != null) return "{\"ok\":false,\"act\":\"undo\",\"error\":\"busy\"}";
+        defer ses.busy.store(0, .release);
         // 删最后 count 个回合(到第 count 个 user 消息为止)
         const n = if (count == 0) 1 else count;
         const msgs = ses.agent.messages.items;
@@ -1285,12 +1396,16 @@ fn poolActionHook(ctx: ?*anyopaque, cwd: []const u8, session: []const u8, act: [
         ses.agent.messages.shrinkRetainingCapacity(msgs.len - cut);
         ses.updated_ns = std.Io.Clock.now(.real, util.io).nanoseconds;
         sessionmod.saveWebTs(alloc, cwd2, session, ses.agent.model, ses.mode.load(.acquire), ses.agent.title, ses.agent.messages.items, ses.updated_ns) catch {};
+        rebuildSnap(ses);
         return std.fmt.allocPrint(alloc, "{{\"ok\":true,\"act\":\"undo\",\"msgs\":{d}}}", .{msgs.len - cut}) catch null;
     }
     if (std.mem.eql(u8, act, "compact")) {
-        // 同 undo:compact 会 clear + 重建 messages,不能与 worker 的 send 并发。
-        if (ses.turning.load(.acquire)) return "{\"ok\":false,\"act\":\"compact\",\"error\":\"busy\"}";
+        // 同 undo:compact 会 clear + 重建 messages,必须独占 busy;
+        // worker 的新消息会等它结束。
+        if (ses.busy.cmpxchgWeak(0, 2, .acq_rel, .acquire) != null) return "{\"ok\":false,\"act\":\"compact\",\"error\":\"busy\"}";
+        defer ses.busy.store(0, .release);
         _ = ses.agent.compact() catch "";
+        rebuildSnap(ses);
         return "{\"ok\":true,\"act\":\"compact\"}";
     }
     return null;
@@ -3029,17 +3144,24 @@ test "web undo/compact are rejected while the worker turn is running" {
     };
     try pool.sessions.append(ses);
 
-    // turning=true(模拟 worker 正在 send):undo/compact 必须拒绝
-    ses.turning.store(true, .release);
+    // busy=1(模拟 worker 正在 send):undo/compact/fork 必须拒绝
+    ses.busy.store(1, .release);
     const busy_undo = poolActionHook(&pool, "/tmp", "s1", "undo", null, 1) orelse return error.Fail;
     try t.expect(std.mem.indexOf(u8, busy_undo, "\"error\":\"busy\"") != null);
     const busy_compact = poolActionHook(&pool, "/tmp", "s1", "compact", null, 0) orelse return error.Fail;
     try t.expect(std.mem.indexOf(u8, busy_compact, "\"error\":\"busy\"") != null);
+    const busy_fork = poolActionHook(&pool, "/tmp", "s1", "fork", null, 0) orelse return error.Fail;
+    try t.expect(std.mem.indexOf(u8, busy_fork, "\"error\":\"busy\"") != null);
 
-    // turning=false:放行(空历史 undo 报 ok:false 而非 busy —— 两者可区分)
-    ses.turning.store(false, .release);
+    // busy=0:放行(空历史 undo 报 ok:false 而非 busy —— 两者可区分)
+    ses.busy.store(0, .release);
     const idle_undo = poolActionHook(&pool, "/tmp", "s1", "undo", null, 1) orelse return error.Fail;
     try t.expect(std.mem.indexOf(u8, idle_undo, "\"error\":\"busy\"") == null);
+    // action 占位期间第二个 action 同样被拒(busy=2)
+    ses.busy.store(2, .release);
+    const busy2 = poolActionHook(&pool, "/tmp", "s1", "undo", null, 1) orelse return error.Fail;
+    try t.expect(std.mem.indexOf(u8, busy2, "\"error\":\"busy\"") != null);
+    ses.busy.store(0, .release);
 }
 
 test "every slash command appears in /help" {

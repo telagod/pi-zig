@@ -312,6 +312,17 @@ pub const Stream = struct {
         }
     }
 
+    /// 底层 socket fd(供跨线程中断用)。无连接返 null。
+    ///
+    /// agent.cur_stream_fd 存的是它而不是 Stream 指针:interrupt 来自 HTTP
+    /// 线程、Stream 活在 worker 线程栈上,指针会在 send 返回后悬垂 ——
+    /// 读旧指针再去 abortRead 是 UAF。fd 数字永不悬垂;最多是 fd 被复用
+    /// 后误 shutdown 一次新连接(概率极低、后果最多一次断连),比 UAF 安全。
+    pub fn fd(self: *const Stream) ?std.posix.fd_t {
+        const conn = self.req.connection orelse return null;
+        return conn.stream_reader.stream.socket.handle;
+    }
+
     /// 读一行(不含换行符),EOF 返回 null。
     pub fn readLine(self: *Stream) !?[]u8 {
 

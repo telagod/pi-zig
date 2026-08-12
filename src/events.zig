@@ -42,20 +42,24 @@ pub const Bus = struct {
 
     /// 触发事件:执行所有匹配 handler,JSON 上下文走 stdin。detach 不等待。
     pub fn emit(self: *Bus, name: []const u8, data_json: []const u8) void {
-        // 组装 {"type":name, ...data}
-        var ww = std.Io.Writer.Allocating.init(self.alloc);
-        defer ww.deinit();
-        ww.writer.print("{{\"type\":{s}", .{util.jsonString(self.alloc, name) catch "\"\""}) catch return;
-        if (data_json.len > 0) {
-            ww.writer.print(",{s}", .{data_json}) catch return;
-        }
-        ww.writer.writeAll("}") catch return;
-        const payload = ww.toOwnedSlice() catch return;
-        defer self.alloc.free(payload);
+        // payload 用栈缓冲组装:emit 可能从 worker 线程(工具回调)与主线程并发
+        // 调用,共享 allocator 的并发分配会损坏 arena 型 allocator。
+        // 事件名是内部常量(不含引号),data_json 上游已截断到 500 字节,
+        // 2048 足够;超长才落到共享 alloc(调用方 allocator 需线程安全)。
+        var stack_buf: [2048]u8 = undefined;
+        const payload = if (data_json.len > 0)
+            std.fmt.bufPrint(&stack_buf, "{{\"type\":\"{s}\",{s}}}", .{ name, data_json }) catch blk: {
+                break :blk std.fmt.allocPrint(self.alloc, "{{\"type\":\"{s}\",{s}}}", .{ name, data_json }) catch return;
+            }
+        else
+            std.fmt.bufPrint(&stack_buf, "{{\"type\":\"{s}\"}}", .{name}) catch blk: {
+                break :blk std.fmt.allocPrint(self.alloc, "{{\"type\":\"{s}\"}}", .{name}) catch return;
+            };
+        defer if (payload.ptr != &stack_buf) self.alloc.free(payload);
 
         for (self.handlers) |h| {
             if (!std.mem.eql(u8, h.event, name)) continue;
-            const child = std.process.spawn(util.io, .{
+            var child = std.process.spawn(util.io, .{
                 .argv = &.{ "bash", "-c", h.command },
                 .stdin = .pipe,
                 .stdout = .ignore,
@@ -67,12 +71,25 @@ pub const Bus = struct {
                 var w = f.writer(util.io, &wbuf);
                 w.interface.writeAll(payload) catch {};
                 w.flush() catch {};
+                // 关完必须置空:回收线程 wait 时 childCleanupPosix 会再关一遍
+                // 同一个 fd,双 close → EBADF → Debug 构建 unreachable 崩溃。
                 f.close(util.io);
+                child.stdin = null;
             }
-            // detach:不 wait(短命令;进程退出后由 init 收养)
+            // 回收线程:detach 后不 wait 的子进程退出后是僵尸,CLI 长驻会话下
+            // 钩子每触发一次积累一个。钩子频率低,一个短命线程换零僵尸,划算。
+            const reaper = std.Thread.spawn(.{}, reapChild, .{child}) catch continue;
+            reaper.detach();
         }
     }
 };
+
+/// 回收一个 detach 子进程(阻塞 wait 一次)。
+fn reapChild(c0: std.process.Child) void {
+    // Zig 函数参数不可变,wait 需要 *Child,拷贝一份即可
+    var c = c0;
+    _ = c.wait(util.io) catch {};
+}
 
 test "bus emit runs commands" {
     const t = std.testing;

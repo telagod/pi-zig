@@ -208,7 +208,11 @@ pub const Registry = struct {
         defer self.mutex.unlock(util.io);
         const e = self.findLocked(id) orelse return error.NoSuchAgent;
         if (e.status.load(.acquire) == .done) return error.AgentClosed;
-        const owned = try e.arena.allocator().dupe(u8, text);
+        // dupe 到 page_allocator 而非 entry arena:send 从父线程调用,而 entry
+        // arena 是 worker 线程的常驻分配器(消息、邮件、agent 自身都在上面)。
+        // 两个线程并发分配同一个 arena = 数据损坏。worker 消费后负责 free。
+        const owned = try std.heap.page_allocator.dupe(u8, text);
+        errdefer std.heap.page_allocator.free(owned);
         if (interrupt) {
             try e.inbox.insert(0, owned);
             // 打断当前轮:ai.run 的流式检查点读这个标志。worker 跑完这一轮
