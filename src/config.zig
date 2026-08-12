@@ -3,7 +3,7 @@
 const std = @import("std");
 const util = @import("util.zig");
 
-pub const Api = enum { openai_completions, anthropic_messages };
+pub const Api = enum { openai_completions, anthropic_messages, openai_responses };
 
 pub const Provider = struct {
     name: []const u8,
@@ -101,6 +101,12 @@ pub const Config = struct {
                             if (p != .object) continue;
                             const api_str = getStr(p, "api") orelse "openai-completions";
                             const base_url = getStr(p, "baseUrl") orelse continue;
+                            const api_enum = if (std.mem.eql(u8, api_str, "anthropic-messages"))
+                                Api.anthropic_messages
+                            else if (std.mem.eql(u8, api_str, "openai-responses"))
+                                Api.openai_responses
+                            else
+                                Api.openai_completions;
                             var models = std.array_list.Managed([]const u8).init(alloc);
                             var windows = std.array_list.Managed(u32).init(alloc);
                             var context_window: u32 = 128 * 1024;
@@ -137,7 +143,7 @@ pub const Config = struct {
                             }
                             try file_providers.append(.{
                                 .name = entry.key_ptr.*,
-                                .api = if (std.mem.eql(u8, api_str, "anthropic-messages")) .anthropic_messages else .openai_completions,
+                                .api = api_enum,
                                 .base_url = base_url,
                                 .api_key = getStr(p, "apiKey"),
                                 .models = try models.toOwnedSlice(),
@@ -395,7 +401,11 @@ pub const Config = struct {
             if (provs.get(p.name)) |existing| {
                 if (existing == .object) po = existing.object;
             }
-            try po.put(alloc, "api", .{ .string = if (p.api == .anthropic_messages) "anthropic-messages" else "openai-completions" });
+            try po.put(alloc, "api", .{ .string = switch (p.api) {
+                .anthropic_messages => "anthropic-messages",
+                .openai_responses => "openai-responses",
+                .openai_completions => "openai-completions",
+            } });
             try po.put(alloc, "baseUrl", .{ .string = p.base_url });
             if (p.api_key) |k| {
                 try po.put(alloc, "apiKey", .{ .string = k });
@@ -425,6 +435,14 @@ pub const Config = struct {
                 url = try std.fmt.allocPrint(alloc, "{s}messages", .{base});
             } else {
                 url = try std.fmt.allocPrint(alloc, "{s}/v1/messages", .{base});
+            }
+        } else if (provider.api == .openai_responses) {
+            if (std.mem.endsWith(u8, base, "v1")) {
+                url = try std.fmt.allocPrint(alloc, "{s}/responses", .{base});
+            } else if (std.mem.endsWith(u8, base, "/v1/")) {
+                url = try std.fmt.allocPrint(alloc, "{s}responses", .{base});
+            } else {
+                url = try std.fmt.allocPrint(alloc, "{s}/v1/responses", .{base});
             }
         } else {
             if (std.mem.endsWith(u8, base, "chat/completions")) {

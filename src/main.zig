@@ -1100,6 +1100,12 @@ fn poolConfigHook(ctx: ?*anyopaque, alloc: std.mem.Allocator, body: ?[]const u8)
                 if (name.len == 0 or base_url.len == 0) return null;
                 const api_str = if (v.object.get("api")) |n| (if (n == .string) n.string else "openai-completions") else "openai-completions";
                 const api_key = if (v.object.get("apiKey")) |n| (if (n == .string) n.string else null) else null;
+                const api_enum = if (std.mem.eql(u8, api_str, "anthropic-messages"))
+                    cfgmod.Api.anthropic_messages
+                else if (std.mem.eql(u8, api_str, "openai-responses"))
+                    cfgmod.Api.openai_responses
+                else
+                    cfgmod.Api.openai_completions;
                 var models = std.array_list.Managed([]const u8).init(alloc);
                 var windows = std.array_list.Managed(u32).init(alloc);
                 if (v.object.get("models")) |ms| {
@@ -1141,7 +1147,7 @@ fn poolConfigHook(ctx: ?*anyopaque, alloc: std.mem.Allocator, body: ?[]const u8)
                 const has_models_field = v.object.get("models") != null;
                 const merged = cfgmod.Provider{
                     .name = name,
-                    .api = if (std.mem.eql(u8, api_str, "anthropic-messages")) .anthropic_messages else .openai_completions,
+                    .api = api_enum,
                     .base_url = base_url,
                     .api_key = api_key,
                     .models = if (has_models_field) (models.toOwnedSlice() catch &.{}) else existing_models,

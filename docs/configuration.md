@@ -96,7 +96,7 @@ piz 用自己的配置目录 `~/.piz`。配置**文件格式**与 pi 兼容（`s
 
 | 字段 | 说明 |
 |------|------|
-| `api` | `openai-completions` 或 `anthropic-messages` |
+| `api` | `openai-completions`、`anthropic-messages` 或 `openai-responses`（OpenAI Responses API） |
 | `baseUrl` | API 基址 |
 | `apiKey` | 可选，也可走 auth.json 或环境变量 |
 | `contextWindow` | provider 默认上下文窗口 token 数，缺省 131072（128K） |

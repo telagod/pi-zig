@@ -188,6 +188,95 @@ fn writeEscaped(writer: *std.Io.Writer, c: u8) !void {
     }
 }
 
+/// 序列化 OpenAI Responses API 请求体(input items 语义,与 Completions 不同)。
+fn serializeResponses(
+    alloc: std.mem.Allocator,
+    model: []const u8,
+    messages: []const Message,
+    tools: []const ToolDef,
+    max_tokens: u32,
+) ![]u8 {
+    var aw = std.Io.Writer.Allocating.init(alloc);
+    defer aw.deinit();
+    const writer = &aw.writer;
+    try writer.writeAll("{\"model\":");
+    try std.json.Stringify.value(model, .{}, writer);
+    try writer.writeAll(",\"stream\":true,\"store\":false,\"max_output_tokens\":");
+    try writer.print("{d}", .{max_tokens});
+    if (tools.len > 0) {
+        try writer.writeAll(",\"tools\":[");
+        for (tools, 0..) |td, i| {
+            if (i > 0) try writer.writeByte(',');
+            try writer.writeAll("{\"type\":\"function\",\"name\":");
+            try std.json.Stringify.value(td.name, .{}, writer);
+            try writer.writeAll(",\"description\":");
+            try std.json.Stringify.value(td.desc, .{}, writer);
+            try writer.writeAll(",\"parameters\":");
+            try writeSchema(writer, td.schema);
+            try writer.writeAll("}");
+        }
+        try writer.writeAll("]");
+    }
+    // system 合并进顶层 instructions;其余进 input 数组
+    var ins = std.Io.Writer.Allocating.init(alloc);
+    defer ins.deinit();
+    var have_ins = false;
+    try writer.writeAll(",\"input\":[");
+    var first = true;
+    for (messages) |m| {
+        if (std.mem.eql(u8, m.role, "system")) {
+            if (have_ins) try ins.writer.writeAll("\n\n");
+            try ins.writer.writeAll(m.content);
+            have_ins = true;
+            continue;
+        }
+        if (!first) try writer.writeByte(',');
+        first = false;
+        if (m.tool_calls) |tcs| {
+            // assistant 的工具调用:每调用一个 function_call item
+            for (tcs, 0..) |tc, j| {
+                if (j > 0) try writer.writeByte(',');
+                try writer.writeAll("{\"type\":\"function_call\",\"call_id\":");
+                try std.json.Stringify.value(tc.id, .{}, writer);
+                try writer.writeAll(",\"name\":");
+                try std.json.Stringify.value(tc.name, .{}, writer);
+                try writer.writeAll(",\"arguments\":");
+                try std.json.Stringify.value(tc.args, .{}, writer);
+                try writer.writeAll("}");
+            }
+        } else if (std.mem.eql(u8, m.role, "tool")) {
+            try writer.writeAll("{\"type\":\"function_call_output\",\"call_id\":");
+            try std.json.Stringify.value(m.tool_call_id orelse "", .{}, writer);
+            try writer.writeAll(",\"output\":");
+            try writeJsonText(writer, m.content);
+            try writer.writeAll("}");
+        } else if (m.image) |img| {
+            try writer.writeAll("{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":");
+            try writeJsonText(writer, m.content);
+            try writer.writeAll("},{\"type\":\"input_image\",\"image_url\":\"data:");
+            try writer.writeAll(m.image_mime orelse "image/png");
+            try writer.writeAll(";base64,");
+            try writer.writeAll(img);
+            try writer.writeAll("\"}]}");
+        } else if (std.mem.eql(u8, m.role, "assistant")) {
+            try writer.writeAll("{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":");
+            try writeJsonText(writer, m.content);
+            try writer.writeAll("}]}");
+        } else {
+            try writer.writeAll("{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":");
+            try writeJsonText(writer, m.content);
+            try writer.writeAll("}]}");
+        }
+    }
+    try writer.writeAll("]");
+    if (have_ins) {
+        try writer.writeAll(",\"instructions\":");
+        try std.json.Stringify.value(ins.written(), .{}, writer);
+    }
+    try writer.writeAll("}");
+    return aw.toOwnedSlice();
+}
+
 /// 序列化 OpenAI 兼容请求体。
 fn serializeOpenAI(
     alloc: std.mem.Allocator,
@@ -588,6 +677,191 @@ fn freeToolAcc(acc: *std.array_list.Managed(ToolAcc)) void {
     acc.deinit();
 }
 
+/// 解析 Responses API 的一个 SSE 事件。
+/// 事件模型与 Completions 完全不同:文本走 response.output_text.delta,
+/// 工具走 output_item.added + function_call_arguments.delta/done,
+/// usage 与结束在 response.completed。
+fn parseResponsesEvent(alloc: std.mem.Allocator, chunk: []const u8, acc: *std.array_list.Managed(ToolAcc), cbs: Callbacks, out_text: *std.array_list.Managed(u8), out_reasoning: *std.array_list.Managed(u8), usage: *Usage, finish: *std.array_list.Managed(u8), err_out: *std.array_list.Managed(u8)) !void {
+    const root = std.json.parseFromSliceLeaky(std.json.Value, alloc, chunk, .{}) catch return;
+    const v = root;
+    if (v != .object) return;
+    const ty = if (v.object.get("type")) |t| (if (t == .string) t.string else "") else "";
+
+    if (std.mem.eql(u8, ty, "response.output_text.delta")) {
+        if (v.object.get("delta")) |d| {
+            if (d == .string and d.string.len > 0) {
+                try out_text.appendSlice(d.string);
+                try emitText(cbs, out_text.items, d.string);
+            }
+        }
+    } else if (std.mem.eql(u8, ty, "response.reasoning_summary_text.delta") or std.mem.eql(u8, ty, "response.reasoning_text.delta")) {
+        // 推理摘要/思维链:展示用,不参与最终文本
+        if (v.object.get("delta")) |d| {
+            if (d == .string and d.string.len > 0) {
+                try out_reasoning.appendSlice(d.string);
+                try emitCallback(cbs, cbs.on_reasoning, d.string);
+            }
+        }
+    } else if (std.mem.eql(u8, ty, "response.output_item.added")) {
+        if (v.object.get("item")) |it| {
+            if (it == .object) {
+                if (it.object.get("type")) |it_t| {
+                    if (it_t == .string and std.mem.eql(u8, it_t.string, "function_call")) {
+                        const slot_idx = acc.items.len;
+                        try acc.append(.{ .id = std.array_list.Managed(u8).init(alloc), .name = std.array_list.Managed(u8).init(alloc), .args = std.array_list.Managed(u8).init(alloc) });
+                        const slot = &acc.items[slot_idx];
+                        slot.started = true; // finalizeToolCalls 只收已开始的调用
+                        if (it.object.get("call_id")) |id| {
+                            if (id == .string) try slot.id.appendSlice(id.string);
+                        }
+                        if (it.object.get("name")) |n| {
+                            if (n == .string) try slot.name.appendSlice(n.string);
+                        }
+                        // 有些实现直接把完整 arguments 放在 item 里
+                        if (it.object.get("arguments")) |a| {
+                            if (a == .string) try slot.args.appendSlice(a.string);
+                        }
+                    }
+                }
+            }
+        }
+    } else if (std.mem.eql(u8, ty, "response.function_call_arguments.delta")) {
+        if (v.object.get("delta")) |d| {
+            if (d == .string and d.string.len > 0) {
+                if (acc.items.len > 0) try acc.items[acc.items.len - 1].args.appendSlice(d.string);
+            }
+        }
+    } else if (std.mem.eql(u8, ty, "response.function_call_arguments.done")) {
+        // done 带全量 arguments —— 以它为准覆盖增量拼接(两全其美:只发 delta 的
+        // 实现也能用,两者都发的实现拿全量)。
+        if (v.object.get("arguments")) |a| {
+            if (a == .string and acc.items.len > 0) {
+                const slot = &acc.items[acc.items.len - 1];
+                slot.args.clearRetainingCapacity();
+                try slot.args.appendSlice(a.string);
+            }
+        }
+    } else if (std.mem.eql(u8, ty, "response.completed")) {
+        try finish.appendSlice("completed");
+        if (v.object.get("response")) |r| {
+            if (r == .object) {
+                if (r.object.get("usage")) |u| {
+                    parseResponsesUsage(u, usage);
+                }
+            }
+        }
+        if (usage.input == null) {
+            if (v.object.get("usage")) |u| parseResponsesUsage(u, usage);
+        }
+    } else if (std.mem.eql(u8, ty, "response.failed")) {
+        if (v.object.get("response")) |r| {
+            if (r == .object) {
+                if (r.object.get("error")) |e| {
+                    if (e == .object) {
+                        if (e.object.get("message")) |m| {
+                            if (m == .string) try err_out.appendSlice(m.string);
+                        }
+                    }
+                }
+            }
+        }
+    } else if (std.mem.eql(u8, ty, "error")) {
+        if (v.object.get("message")) |m| {
+            if (m == .string) try err_out.appendSlice(m.string);
+        }
+    }
+}
+
+fn parseResponsesUsage(u: std.json.Value, usage: *Usage) void {
+    if (u != .object) return;
+    if (u.object.get("input_tokens")) |it| {
+        if (it == .integer) usage.input = @intCast(it.integer);
+    }
+    if (u.object.get("output_tokens")) |ot| {
+        if (ot == .integer) usage.output = @intCast(ot.integer);
+    }
+    if (u.object.get("input_tokens_details")) |d| {
+        if (d == .object) {
+            if (d.object.get("cached_tokens")) |ct| {
+                if (ct == .integer) usage.cache_read = @intCast(ct.integer);
+            }
+        }
+    }
+}
+
+/// Responses API 非流式响应解析(output items)。
+fn parseResponsesJson(alloc: std.mem.Allocator, body: []const u8, cbs: Callbacks, result: *RunResult, out_text: *std.array_list.Managed(u8), out_reasoning: *std.array_list.Managed(u8), usage: *Usage) !void {
+    const root = std.json.parseFromSliceLeaky(std.json.Value, alloc, body, .{}) catch return;
+    if (root != .object) return;
+    if (root.object.get("error")) |e| {
+        if (e == .object) {
+            if (e.object.get("message")) |m| {
+                if (m == .string) {
+                    result.error_msg = try std.fmt.allocPrint(alloc, "{s}", .{m.string});
+                    return;
+                }
+            }
+        }
+    }
+    if (root.object.get("usage")) |u| parseResponsesUsage(u, usage);
+    if (root.object.get("output")) |out| {
+        if (out != .array) return;
+        var acc = std.array_list.Managed(ToolAcc).init(alloc);
+        defer freeToolAcc(&acc);
+        for (out.array.items) |item| {
+            if (item != .object) continue;
+            const it_t = if (item.object.get("type")) |t| (if (t == .string) t.string else "") else "";
+            if (std.mem.eql(u8, it_t, "message")) {
+                if (item.object.get("content")) |c| {
+                    if (c == .array) {
+                        for (c.array.items) |part| {
+                            if (part != .object) continue;
+                            const pt = if (part.object.get("type")) |t| (if (t == .string) t.string else "") else "";
+                            if (std.mem.eql(u8, pt, "output_text") or std.mem.eql(u8, pt, "input_text")) {
+                                if (part.object.get("text")) |tx| {
+                                    if (tx == .string and tx.string.len > 0) {
+                                        try out_text.appendSlice(tx.string);
+                                        try emitText(cbs, out_text.items, tx.string);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            } else if (std.mem.eql(u8, it_t, "function_call")) {
+                const slot_idx = acc.items.len;
+                try acc.append(.{ .id = std.array_list.Managed(u8).init(alloc), .name = std.array_list.Managed(u8).init(alloc), .args = std.array_list.Managed(u8).init(alloc) });
+                const slot = &acc.items[slot_idx];
+                slot.started = true;
+                if (item.object.get("call_id")) |id| {
+                    if (id == .string) try slot.id.appendSlice(id.string);
+                }
+                if (item.object.get("name")) |n| {
+                    if (n == .string) try slot.name.appendSlice(n.string);
+                }
+                if (item.object.get("arguments")) |a| {
+                    if (a == .string) try slot.args.appendSlice(a.string);
+                }
+            } else if (std.mem.eql(u8, it_t, "reasoning")) {
+                if (item.object.get("summary")) |s| {
+                    if (s == .array) {
+                        for (s.array.items) |part| {
+                            if (part != .object) continue;
+                            if (part.object.get("text")) |tx| {
+                                if (tx == .string and tx.string.len > 0) {
+                                    try out_reasoning.appendSlice(tx.string);
+                                    try emitCallback(cbs, cbs.on_reasoning, tx.string);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        result.tool_calls = try finalizeToolCalls(alloc, &acc);
+    }
+}
+
 /// OpenAI 流式主循环。
 fn runOpenAIStream(alloc: std.mem.Allocator, arena: std.mem.Allocator, stream: *httpc.Stream, cbs: Callbacks, result: *RunResult, out_text: *std.array_list.Managed(u8), out_reasoning: *std.array_list.Managed(u8), usage: *Usage) !void {
     var acc = std.array_list.Managed(ToolAcc).init(alloc);
@@ -815,7 +1089,7 @@ fn parseAnthropicEvent(alloc: std.mem.Allocator, arena: std.mem.Allocator, ev: [
 fn maxImagesFor(api: cfgmod.Api) usize {
     return switch (api) {
         .anthropic_messages => 100,
-        .openai_completions => 20,
+        .openai_completions, .openai_responses => 20,
     };
 }
 
@@ -866,6 +1140,8 @@ pub fn run(
 
     const body = if (provider.api == .anthropic_messages)
         try serializeAnthropic(alloc, model, msgs, tools, options.max_tokens)
+    else if (provider.api == .openai_responses)
+        try serializeResponses(alloc, model, msgs, tools, options.max_tokens)
     else
         try serializeOpenAI(alloc, model, msgs, tools, options.max_tokens, options.cache_key);
     defer alloc.free(body);
@@ -877,6 +1153,9 @@ pub fn run(
         try headers.append(.{ .name = "anthropic-version", .value = "2023-06-01" });
     } else {
         if (key) |k| try headers.append(.{ .name = "Authorization", .value = try std.fmt.allocPrint(alloc, "Bearer {s}", .{k}) });
+    }
+    if (provider.api == .openai_responses) {
+        try headers.append(.{ .name = "OpenAI-Beta", .value = "responses=v1" });
     }
 
     // 重试窗口仅覆盖此处:连接 + receiveHead + 状态码判定。
@@ -967,6 +1246,39 @@ pub fn run(
             }
             result.tool_calls = try finalizeToolCalls(alloc, &acc);
             result.finish_reason = try finish.toOwnedSlice();
+        } else if (provider.api == .openai_responses) {
+            var acc = std.array_list.Managed(ToolAcc).init(alloc);
+            defer freeToolAcc(&acc);
+            var finish = std.array_list.Managed(u8).init(alloc);
+            defer finish.deinit();
+            var errs = std.array_list.Managed(u8).init(alloc);
+            defer errs.deinit();
+            var parser = httpc.SseParser.init(stream);
+            defer parser.deinit();
+            while (true) {
+                const ev = parser.nextEvent() catch |err| {
+                    if (abortRequested(options.callbacks)) {
+                        result.aborted = true;
+                        break;
+                    }
+                    if (out_text.items.len == 0 and out_reasoning.items.len == 0 and acc.items.len == 0) return err;
+                    result.stream_interrupted = @errorName(err);
+                    break;
+                };
+                if (ev) |e| {
+                    defer alloc.free(e);
+                    try parseResponsesEvent(alloc, e, &acc, options.callbacks, &out_text, &out_reasoning, &usage, &finish, &errs);
+                } else break;
+                if (abortRequested(options.callbacks)) {
+                    result.aborted = true;
+                    break;
+                }
+            }
+            result.tool_calls = try finalizeToolCalls(alloc, &acc);
+            result.finish_reason = try finish.toOwnedSlice();
+            if (errs.items.len > 0) {
+                result.error_msg = try errs.toOwnedSlice();
+            }
         } else {
             try runOpenAIStream(alloc, arena, stream, options.callbacks, &result, &out_text, &out_reasoning, &usage);
         }
@@ -1038,6 +1350,8 @@ pub fn run(
                     }
                 }
             }
+        } else if (provider.api == .openai_responses) {
+            try parseResponsesJson(alloc, resp_body, options.callbacks, &result, &out_text, &out_reasoning, &usage);
         } else {
             try parseOpenAIJson(alloc, resp_body, options.callbacks, &result, &out_text, &out_reasoning, &usage);
         }

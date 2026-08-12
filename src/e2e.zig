@@ -13,6 +13,7 @@ const httpc = @import("core").httpc;
 const MOCK_PORT: u16 = 18521;
 const MOCK_PORT2: u16 = 18522;
 const MOCK_PORT3: u16 = 18523;
+const MOCK_PORT4: u16 = 18524;
 
 const MockState = struct {
     alloc: std.mem.Allocator,
@@ -28,6 +29,12 @@ const MockState = struct {
     req_image_data_ok: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     /// 视觉模式:第一轮回 read_image 工具调用
     vision_mode: bool = false,
+    /// Responses API 模式:第一轮回 function_call 事件流
+    responses_mode: bool = false,
+    /// Responses e2e:请求体是否 input items 语义(非 messages 数组)
+    responses_input_ok: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    /// Responses e2e:第二轮请求是否带 function_call_output
+    responses_call_output_ok: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     req6_was_compact: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     /// 请求体里 tools 是否排在 messages 之前(缓存前缀稳定性:静态部分在前)
     tools_before_messages: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
@@ -101,6 +108,34 @@ fn handleRequest(state: *MockState, conn: *std.Io.net.Stream) !void {
         try buf.appendSlice(try sseEvent(alloc, "{\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":1}}"));
         try buf.appendSlice("data: [DONE]\n\n");
         resp = try buf.toOwnedSlice();
+    } else if (state.responses_mode) {
+        if (req_no == 1) {
+            // 请求体语义检查:Responses 用 input/instructions 而非 messages
+            if (std.mem.indexOf(u8, body, "\"input\":[") != null and std.mem.indexOf(u8, body, "\"instructions\":") != null) {
+                state.responses_input_ok.store(true, .release);
+            }
+            var buf = std.array_list.Managed(u8).init(alloc);
+            defer buf.deinit();
+            try buf.appendSlice(try sseEvent(alloc, "{\"type\":\"response.created\",\"response\":{}}"));
+            try buf.appendSlice(try sseEvent(alloc, "{\"type\":\"response.output_text.delta\",\"delta\":\"Let me run \"}"));
+            try buf.appendSlice(try sseEvent(alloc, "{\"type\":\"response.output_text.delta\",\"delta\":\"a command.\"}"));
+            try buf.appendSlice(try sseEvent(alloc, "{\"type\":\"response.output_item.added\",\"item\":{\"type\":\"function_call\",\"call_id\":\"fc_1\",\"name\":\"bash\"}}"));
+            try buf.appendSlice(try sseEvent(alloc, "{\"type\":\"response.function_call_arguments.delta\",\"delta\":\"{\\\"command\\\":\\\"echo resp-marker\\\"}\"}"));
+            try buf.appendSlice(try sseEvent(alloc, "{\"type\":\"response.function_call_arguments.done\",\"arguments\":\"{\\\"command\\\":\\\"echo resp-marker\\\"}\"}"));
+            try buf.appendSlice(try sseEvent(alloc, "{\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":100,\"output_tokens\":10,\"input_tokens_details\":{\"cached_tokens\":90}}}}"));
+            try buf.appendSlice("data: [DONE]\n\n");
+            resp = try buf.toOwnedSlice();
+        } else {
+            if (std.mem.indexOf(u8, body, "\"function_call_output\"") != null and std.mem.indexOf(u8, body, "resp-marker") != null) {
+                state.responses_call_output_ok.store(true, .release);
+            }
+            var buf = std.array_list.Managed(u8).init(alloc);
+            defer buf.deinit();
+            try buf.appendSlice(try sseEvent(alloc, "{\"type\":\"response.output_text.delta\",\"delta\":\"RESP-OK\"}"));
+            try buf.appendSlice(try sseEvent(alloc, "{\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":50,\"output_tokens\":5}}}"));
+            try buf.appendSlice("data: [DONE]\n\n");
+            resp = try buf.toOwnedSlice();
+        }
     } else if (state.vision_mode and req_no == 1) {
         // 视觉 e2e 第一轮:read_image 工具调用(路径由测试写好)
         var buf = std.array_list.Managed(u8).init(alloc);
@@ -1372,4 +1407,49 @@ test "read_image compresses and attaches the image to the next request" {
     state.stop.store(true, .release);
     thread.join();
     std.Io.Dir.cwd().deleteFile(util.io, "/tmp/piz-img-e2e.png") catch {};
+}
+
+test "Responses API: function_call events and input items round trip" {
+    const t = std.testing;
+    try util.testInit();
+    var arena = util.Arena.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    pluginsmod.resetEnabledForTest();
+    defer pluginsmod.resetEnabledForTest();
+
+    // endpointUrl 会拼 /v1/responses —— base_url 只传主机
+    const url_buf = try std.fmt.allocPrint(a, "http://127.0.0.1:{d}", .{MOCK_PORT4});
+    var provs = [_]cfgmod.Provider{.{ .name = "mockr", .api = .openai_responses, .base_url = url_buf }};
+    var cfg = cfgmod.Config{ .arena = &arena };
+    cfg.providers = &provs;
+    cfg.default_provider = "mockr";
+    cfg.default_model = "mock-model";
+
+    var state = MockState{ .alloc = std.heap.page_allocator, .port = MOCK_PORT4, .responses_mode = true };
+    const thread = try std.Thread.spawn(.{}, mockServerMain, .{&state});
+    var ready = false;
+    for (0..50) |_| {
+        const addr = std.Io.net.IpAddress.parseIp4("127.0.0.1", MOCK_PORT4) catch break;
+        var s = addr.connect(util.io, .{ .mode = .stream, .protocol = .tcp }) catch {
+            _ = std.Io.sleep(util.io, .{ .nanoseconds = 10 * std.time.ns_per_ms }, .awake) catch {};
+            continue;
+        };
+        s.close(util.io);
+        ready = true;
+        break;
+    }
+    try t.expect(ready);
+    defer state.stop.store(true, .release);
+
+    var agent = try agentmod.Agent.initOpts(a, &cfg, "mockr", "mock-model", "/tmp", .{});
+    const result = agent.send("run the marker command") catch |e| {
+        std.debug.print("send failed: {s} url={s}\n", .{ @errorName(e), url_buf });
+        return error.TestUnexpectedResult;
+    };
+    try t.expect(std.mem.indexOf(u8, result.text, "RESP-OK") != null);
+    try t.expect(state.responses_input_ok.load(.acquire));
+    try t.expect(state.responses_call_output_ok.load(.acquire));
+    state.stop.store(true, .release);
+    thread.join();
 }

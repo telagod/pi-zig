@@ -146,7 +146,7 @@ const VisionSpec = struct {
 fn specFor(api: config.Api) VisionSpec {
     return switch (api) {
         .anthropic_messages => .{ .max_dim = 1568, .images = 100 },
-        .openai_completions => .{ .max_dim = 2048, .images = 20 },
+        .openai_completions, .openai_responses => .{ .max_dim = 2048, .images = 20 },
     };
 }
 
@@ -552,7 +552,7 @@ pub fn estImageTokens(w: u32, h: u32, api: config.Api, ctx_window: u32) usize {
         // anthropic:长边 1568 内 w*h/750 近似
         .anthropic_messages => @as(usize, w) * @as(usize, h) / 750,
         // 1M 窗口(≈Gemini 3 系):768px tile,每 tile 258 token
-        .openai_completions => if (ctx_window >= 1_000_000)
+        .openai_completions, .openai_responses => if (ctx_window >= 1_000_000)
             258 * ((@as(usize, w) + 767) / 768) * ((@as(usize, h) + 767) / 768)
         else
             // openai:先缩 2048×768,512px tile 每块 170 + base 85
