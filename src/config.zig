@@ -11,9 +11,23 @@ pub const Provider = struct {
     base_url: []const u8,
     api_key: ?[]const u8 = null,
     models: []const []const u8 = &.{},
-    /// 模型上下文窗口(token)。压缩/裁剪决策按窗口比例(默认 128K)。
+    /// 模型级上下文窗口(models.json 的 contextWindow),与 models 平行对齐。
+    /// 0 = 该模型未配置,回退 context_window。
+    ///
+    /// 为什么要有:同 provider 下 64K/200K/1M 模型并存(如 GLM/Gemini 系),
+    /// 图片规格与压缩硬线都该按**所选模型**的窗口定,而不是 provider 一刀切。
+    model_windows: []const u32 = &.{},
+    /// provider 默认上下文窗口(token)。模型级未配置时回退到这里(默认 128K)。
     context_window: u32 = 128 * 1024,
 };
+
+/// 查所选模型的上下文窗口:模型级优先,否则 provider 默认。
+pub fn windowFor(provider: *const Provider, model: []const u8) usize {
+    for (provider.models, provider.model_windows) |m, w| {
+        if (w > 0 and std.mem.eql(u8, m, model)) return w;
+    }
+    return provider.context_window;
+}
 
 pub const Resolved = struct {
     provider: *const Provider,
@@ -88,6 +102,7 @@ pub const Config = struct {
                             const api_str = getStr(p, "api") orelse "openai-completions";
                             const base_url = getStr(p, "baseUrl") orelse continue;
                             var models = std.array_list.Managed([]const u8).init(alloc);
+                            var windows = std.array_list.Managed(u32).init(alloc);
                             var context_window: u32 = 128 * 1024;
                             if (p.object.get("models")) |ms| {
                                 if (ms == .array) {
@@ -95,9 +110,20 @@ pub const Config = struct {
                                         // 字符串模型名或 {id,name,contextWindow,...} 对象(取 id)
                                         if (m == .string) {
                                             try models.append(m.string);
+                                            try windows.append(0); // 未配置,回退 provider 默认
                                         } else if (m == .object) {
                                             if (m.object.get("id")) |id| {
-                                                if (id == .string) try models.append(id.string);
+                                                if (id == .string) {
+                                                    try models.append(id.string);
+                                                    // 模型级窗口:0 = 未配置
+                                                    var mw: u32 = 0;
+                                                    if (m.object.get("contextWindow")) |cw| {
+                                                        if (cw == .integer and cw.integer > 0 and cw.integer <= std.math.maxInt(u32)) {
+                                                            mw = @intCast(cw.integer);
+                                                        }
+                                                    }
+                                                    try windows.append(mw);
+                                                }
                                             }
                                             // 上下文窗口:取最大(避免长窗口模型被误压缩)
                                             if (m.object.get("contextWindow")) |cw| {
@@ -115,6 +141,7 @@ pub const Config = struct {
                                 .base_url = base_url,
                                 .api_key = getStr(p, "apiKey"),
                                 .models = try models.toOwnedSlice(),
+                                .model_windows = try windows.toOwnedSlice(),
                                 .context_window = context_window,
                             });
                         }
@@ -529,4 +556,61 @@ test "load reports which config file failed to parse" {
 
     // 加载仍然成功(降级为空配置),不能因为一个坏文件就起不来
     try t.expect(cfg.providers.len >= 3); // 内置 deepseek/openai/anthropic
+}
+
+test "windowFor prefers per-model window then provider default" {
+    const t = std.testing;
+    var arena = util.Arena.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const p = Provider{
+        .name = "glm",
+        .api = .openai_completions,
+        .base_url = "https://x",
+        .models = &.{ "m-64k", "m-200k", "m-1m" },
+        .model_windows = &.{ 64 * 1024, 200 * 1024, 1_000_000 },
+        .context_window = 128 * 1024,
+    };
+    try t.expectEqual(@as(usize, 64 * 1024), windowFor(&p, "m-64k"));
+    try t.expectEqual(@as(usize, 200 * 1024), windowFor(&p, "m-200k"));
+    try t.expectEqual(@as(usize, 1_000_000), windowFor(&p, "m-1m"));
+    // 未配置窗口的模型回退 provider 默认
+    try t.expectEqual(@as(usize, 128 * 1024), windowFor(&p, "m-unknown"));
+    _ = a;
+}
+
+test "models.json parses per-model contextWindow" {
+    const t = std.testing;
+    try util.testInit();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = util.Arena.init(t.allocator);
+    const a = arena.allocator();
+    const cwd_abs = try std.process.currentPathAlloc(util.io, a);
+    const tmp_path = try std.fmt.allocPrint(a, "{s}/.zig-cache/tmp/{s}", .{ cwd_abs, tmp.sub_path });
+    try util.environ_map.?.put("PIZ_DIR", tmp_path);
+
+    const json =
+        \\{"providers":{"glm":{"baseUrl":"https://glm.example","api":"openai-completions",
+        \\"models":[{"id":"glm-64k","contextWindow":65536},{"id":"glm-1m","contextWindow":1000000},"glm-plain"]}}}
+    ;
+    try tmp.dir.writeFile(util.io, .{ .sub_path = "models.json", .data = json });
+
+    var c = Config{ .arena = &arena };
+    defer c.deinit();
+    try c.load();
+    var found = false;
+    for (c.providers) |*p| {
+        if (!std.mem.eql(u8, p.name, "glm")) continue;
+        found = true;
+        try t.expectEqual(@as(usize, 3), p.models.len);
+        try t.expectEqual(@as(u32, 64 * 1024), p.model_windows[0]);
+        try t.expectEqual(@as(u32, 1_000_000), p.model_windows[1]);
+        try t.expectEqual(@as(u32, 0), p.model_windows[2]); // 字符串模型项
+        try t.expectEqual(@as(usize, 64 * 1024), windowFor(p, "glm-64k"));
+        try t.expectEqual(@as(usize, 1_000_000), windowFor(p, "glm-1m"));
+        // provider 默认 = 所有模型窗口的最大值(旧语义保留)
+        try t.expectEqual(@as(u32, 1_000_000), p.context_window);
+    }
+    try t.expect(found);
 }

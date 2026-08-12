@@ -619,13 +619,20 @@ pub const Agent = struct {
     /// **算的范围 = 一次请求真正发出去的全部内容**:系统提示 + 全部消息 +
     /// 工具定义。工具定义曾被漏掉,那是恒定 1024 token 的低估(默认工具集),
     /// 让压缩点从 85% 后移到 85.8%、预算查询虚报同样多的余量。
+    /// 所选模型的上下文窗口:模型级配置优先,否则 provider 默认。
+    /// 同 provider 下 64K/200K/1M 模型并存,压缩硬线、图片规格、
+    /// 预算查询都按它 —— 不再 provider 一刀切。
+    pub fn ctxWindow(self: *const Agent) usize {
+        return cfgmod.windowFor(self.provider, self.model);
+    }
+
     pub fn estTokens(self: *const Agent) usize {
         var n: usize = estTokensOf(self.system_prompt);
         for (self.messages.items) |m| {
             // +16:每条消息的角色/包装开销(role、分隔符、tool_call_id 等)
             n += estTokensOf(m.content) + 16;
             // 图片消息按 provider 视觉计费规则估算(尺寸存于消息,不重复解码)
-            if (m.image != null) n += imgxmod.estImageTokens(m.image_w, m.image_h, self.provider.api, self.provider.context_window);
+            if (m.image != null) n += imgxmod.estImageTokens(m.image_w, m.image_h, self.provider.api, @intCast(self.ctxWindow()));
         }
         // 工具定义每轮都全量重发,是上下文的一部分 —— 实测默认工具集 1024 token。
         // 漏掉它压缩就会晚触发,预算查询也会虚报余量。只读模式不发工具。
@@ -662,7 +669,7 @@ pub const Agent = struct {
     pub fn continueTurn(self: *Agent) !ai.RunResult {
         // 极简核心:插件钩子(prune 等)→ 85% 硬线 → 模型压缩
         pluginsmod.runBeforeTurn(@ptrCast(self));
-        const w0 = @as(usize, self.provider.context_window);
+        const w0 = self.ctxWindow();
         if (self.estTokens() > w0 * CTX_HARD_PERCENT / 100) {
             // 压缩失败不能吞:吞了下一轮就会因超窗撞 provider 400,
             // 而用户看到的报错跟真实原因(压缩失败)毫无关系,无从下手。
@@ -1046,7 +1053,7 @@ pub const Agent = struct {
         // - 边界语义:只总结上次压缩后的增量(boundary = 最后一个旧摘要之后)——迭代压缩"秒"
         // - 增量 ≤ 保留预算(20% 窗口)则全保留,不调模型(无事可总结)
         // - 切点只落在 user/assistant 消息上(绝不切 toolResult),旧摘要不计预算(新摘要替代之)
-        const w = @as(usize, self.provider.context_window);
+        const w = self.ctxWindow();
         // 保留预算按 token 算,不再是「token × 4 当字节」—— 后者对中文会把
         // 20% 的窗口预算缩成实际约 15%,压缩后保留的上下文比设计的少。
         const keep_tokens = w * CTX_KEEP_PERCENT / 100;

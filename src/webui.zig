@@ -692,7 +692,7 @@ pub const WebServer = struct {
         w.print("{{\"port\":{d}", .{self.port}) catch {};
         if (self.agent) |ag| {
             w.print(",\"model\":{s}", .{util.jsonString(a, ag.model) catch "\"\""}) catch {};
-            const cw = @as(usize, ag.provider.context_window);
+            const cw = ag.ctxWindow();
             const used = ag.estTokens();
             const pct = if (cw > 0) used * 100 / cw else 0;
             w.print(",\"pct\":{d}", .{pct}) catch {};

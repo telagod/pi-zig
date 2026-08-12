@@ -577,7 +577,7 @@ fn canonicalBlock(ctx: ?*anyopaque, name: []const u8, args: []const u8) ?[]const
 fn toolContextRemaining(ctx: ?*anyopaque, arena: std.mem.Allocator, args: []const u8) anyerror!toolsmod.Result {
     _ = args;
     const self: *agentmod.Agent = @ptrCast(@alignCast(ctx.?));
-    const w = @as(usize, self.provider.context_window);
+    const w = self.ctxWindow();
     const used = self.estTokens();
     const remain = if (used < w) w - used else 0;
     // 报到压缩线的余量,不是报到窗口尽头 —— 模型该知道还能塞多少才会触发压缩,
@@ -615,7 +615,7 @@ fn toolReadImage(ctx: ?*anyopaque, arena: std.mem.Allocator, args: []const u8) a
     };
     if (input.len == 0) return .{ .content = "error: empty file", .is_error = true };
     // 长边按 provider 上下文窗口推导:小窗自动压小,给文本让 token。
-    const max_dim = imgxmod.maxDimForContext(self.provider.context_window, self.provider.api);
+    const max_dim = imgxmod.maxDimForContext(@intCast(self.ctxWindow()), self.provider.api);
     const out = try imgxmod.process(arena, input, .{ .max_dim = max_dim });
     const dim_note = imgxmod.dimensionNote(out, arena) orelse "";
     // 工具 handler 的 arena 就是会话 arena(self.alloc),分配即常驻 ——

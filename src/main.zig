@@ -152,7 +152,7 @@ const App = struct {
             try w.print(" \x1b[36m{s}\x1b[0m", .{br});
         }
         // ctx%:分级色(绿 <50 / cyan 50-85 / red >85——codex 禁黄)
-        const cw = @as(usize, self.agent.provider.context_window);
+        const cw = self.agent.ctxWindow();
         // 读 worker 发布的估算值,不现场遍历 messages(见 est_ctx 注释)
         const used = self.est_ctx.load(.acquire);
         const pct = if (cw > 0) used * 100 / cw else 0;
@@ -788,7 +788,7 @@ fn rebuildSnap(ses: *WebSession) void {
     w.writeAll("]") catch {};
     const history = stw.toOwnedSlice() catch return;
     const model = a.dupe(u8, ag.model) catch return;
-    const cw = @as(usize, ag.provider.context_window);
+    const cw = ag.ctxWindow();
     const used = ag.estTokens();
     const pct: u32 = @intCast(if (cw > 0) @min(used * 100 / cw, 10000) else 0);
     ses.snap_mutex.lock(util.io) catch return;
@@ -1029,7 +1029,7 @@ fn webOnTurnEnd(ctx: ?*anyopaque) anyerror!void {
     const s: *WebSession = @ptrCast(@alignCast(ctx.?));
     s.agent.cur_stream_fd.store(-1, .release); // 回合结束:running 标志复位
     // 状态栏数据(ctx%/model/cache/tps)——全局(无 session)
-    const cw = @as(usize, s.agent.provider.context_window);
+    const cw = s.agent.ctxWindow();
     const used = s.agent.estTokens();
     const pct = if (cw > 0) used * 100 / cw else 0;
     var cache_pct: usize = 0;
@@ -1101,21 +1101,38 @@ fn poolConfigHook(ctx: ?*anyopaque, alloc: std.mem.Allocator, body: ?[]const u8)
                 const api_str = if (v.object.get("api")) |n| (if (n == .string) n.string else "openai-completions") else "openai-completions";
                 const api_key = if (v.object.get("apiKey")) |n| (if (n == .string) n.string else null) else null;
                 var models = std.array_list.Managed([]const u8).init(alloc);
+                var windows = std.array_list.Managed(u32).init(alloc);
                 if (v.object.get("models")) |ms| {
                     if (ms == .array) {
                         for (ms.array.items) |m| {
-                            if (m == .string) models.append(m.string) catch {};
+                            if (m == .string) {
+                                models.append(m.string) catch {};
+                                windows.append(0) catch {};
+                            } else if (m == .object) {
+                                if (m.object.get("id")) |id| {
+                                    if (id == .string) {
+                                        models.append(id.string) catch {};
+                                        var mw: u32 = 0;
+                                        if (m.object.get("contextWindow")) |cw| {
+                                            if (cw == .integer and cw.integer > 0 and cw.integer <= std.math.maxInt(u32)) mw = @intCast(cw.integer);
+                                        }
+                                        windows.append(mw) catch {};
+                                    }
+                                }
+                            }
                         }
                     }
                 }
                 // 合并现有 provider(未提供的字段保留)
                 var found = false;
                 var existing_models: []const []const u8 = &.{};
+                var existing_windows: []const u32 = &.{};
                 var existing_cw: u32 = 128 * 1024;
                 for (cfg.providers) |*p| {
                     if (std.mem.eql(u8, p.name, name)) {
                         found = true;
                         existing_models = p.models;
+                        existing_windows = p.model_windows;
                         existing_cw = p.context_window;
                         break;
                     }
@@ -1128,6 +1145,7 @@ fn poolConfigHook(ctx: ?*anyopaque, alloc: std.mem.Allocator, body: ?[]const u8)
                     .base_url = base_url,
                     .api_key = api_key,
                     .models = if (has_models_field) (models.toOwnedSlice() catch &.{}) else existing_models,
+                    .model_windows = if (has_models_field) (windows.toOwnedSlice() catch &.{}) else existing_windows,
                     .context_window = if (has_models_field) 128 * 1024 else existing_cw,
                 };
                 if (found) {
@@ -1138,6 +1156,7 @@ fn poolConfigHook(ctx: ?*anyopaque, alloc: std.mem.Allocator, body: ?[]const u8)
                             p.api = merged.api;
                             p.api_key = merged.api_key;
                             p.models = merged.models;
+                            p.model_windows = merged.model_windows;
                             break;
                         }
                     }

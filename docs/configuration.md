@@ -88,7 +88,7 @@ piz 用自己的配置目录 `~/.piz`。配置**文件格式**与 pi 兼容（`s
       "baseUrl": "https://router.example.com/v1",
       "apiKey": "sk-...",
       "contextWindow": 200000,
-      "models": ["gpt-5.6-sol", "claude-opus-5"]
+      "models": ["gpt-5.6-sol", {"id": "glm-1m", "contextWindow": 1000000}, {"id": "glm-64k", "contextWindow": 65536}]
     }
   }
 }
@@ -99,8 +99,10 @@ piz 用自己的配置目录 `~/.piz`。配置**文件格式**与 pi 兼容（`s
 | `api` | `openai-completions` 或 `anthropic-messages` |
 | `baseUrl` | API 基址 |
 | `apiKey` | 可选，也可走 auth.json 或环境变量 |
-| `contextWindow` | 上下文窗口 token 数，缺省 131072（128K） |
-| `models` | 该 provider 下的模型名列表 |
+| `contextWindow` | provider 默认上下文窗口 token 数，缺省 131072（128K） |
+| `models` | 该 provider 下的模型列表：字符串名，或 `{"id", "contextWindow"}` 对象按模型单独设窗口 |
+
+**模型级窗口优先**：同 provider 下 64K/200K/1M 模型并存时，压缩硬线、图片压缩规格、上下文预算都按**当前所选模型**的 `contextWindow` 定；模型未配置窗口时回退 provider 默认。
 
 Claude 兼容（`anthropic-messages`）的第三方端点同理，只是 `api` 换一个值：
 
