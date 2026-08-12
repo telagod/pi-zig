@@ -67,9 +67,13 @@ piz 额外做了 pi 明确声明不做的事：交互式权限门、`/plan` 计�
 ## 开发
 
 ```bash
-zig build test                   # 148 个测试
+zig build test                   # 149 个测试
 zig fmt src build.zig            # 格式化
 ```
+
+`zig build` 默认产出 ReleaseFast；调试用 `zig build -Doptimize=Debug`。
+
+当前仅支持 Linux（`sh -c`、进程组、wl-copy/xclip 等均为 POSIX 语义），macOS 未验证，Windows 不支持。
 
 改代码前先读 [Architecture](docs/architecture.md)，尤其是 Zig 0.16 注意事项那一节 —— 0.16 的标准库与旧版差异很大。
 

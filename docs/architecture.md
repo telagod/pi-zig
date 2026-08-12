@@ -2,7 +2,7 @@
 
 # 架构
 
-piz 是单个静态二进制，零第三方依赖，只用 Zig 标准库。约 1.1 万行 Zig。
+piz 是单个静态二进制，零第三方依赖，只用 Zig 标准库。约 1.9 万行 Zig。
 
 ## 目录
 
@@ -23,7 +23,8 @@ zig build test         # 全量测试
 zig fmt src build.zig  # 格式化
 ```
 
-需要 Zig **0.16**。`build.zig` 里 optimize 模式固定为 `ReleaseFast`（测试目标固定 Debug），所以没有 `-Doptimize` 选项。
+需要 Zig **0.16**。`zig build` 默认产出 `ReleaseFast`；调试需显式
+`zig build -Doptimize=Debug`（测试目标固定 Debug）。
 
 产物：
 
@@ -164,6 +165,7 @@ sequenceDiagram
 1. **结果顺序必须等于调用顺序。** 并行执行但按槽位下标写回。模型看到的顺序不稳定会让同一对话重放得到不同上下文。
 2. **权限询问必须串行。** 在 preflight 阶段跑完所有询问，再并行执行获准的。并行弹多个提示是灾难。
 3. **写类工具按路径互斥。** `write`/`edit`/`multi_edit` 对同一 `path` 加锁，否则两个工具各读旧内容、后写覆盖前写，丢掉一次修改。`multi_edit` 锁住 `files[]` 的每个路径（按字典序获取以避免死锁，重复路径先去重），只在超过 16 个文件时才退化为全局锁。
+4. **消息列表跨线程读靠预分配契约。** `agent.messages` 预分配 8192 条容量（`MESSAGES_PRECAP`），append 永不触发 realloc；每条消息先写数据再 `len += 1`。HTTP 侧（/api/state、/api/sessions）与 CLI 状态栏因此可以无锁读 —— 最多看到「多一条刚写完的消息」，看不到半截数据。但 **HTTP 侧改 messages 的动作（undo/compact）必须过 `WebSession.turning` 门**：worker 在 send 期间 append、HTTP 在 shrink，两个线程同时改 len 是预分配解决不了的真竞态。
 
 `before_turn` 钩子会改 `messages`，**不在并行区调用**。`on_tool_before` / `on_tool_result` 在串行阶段，可安全触碰共享状态。
 

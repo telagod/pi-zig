@@ -441,9 +441,20 @@ fn workerMain(wctx: *WorkerCtx) void {
             buf.appendSlice(emsg) catch {};
             app.tui.appendLine("", "\x1b[31m", buf.items) catch {};
         } else {
-            // 保存会话增量
+            // 保存会话增量。失败要提醒(只一次,防刷屏):磁盘满/权限错时
+            // 静默吞掉会让用户在重启后丢历史而不自知。
+            var save_warned = false;
             for (app.agent.messages.items[n_before..]) |*m| {
-                app.sess.saveMessage(m) catch {};
+                app.sess.saveMessage(m) catch |e| {
+                    if (save_warned) continue;
+                    save_warned = true;
+                    var wbuf = std.array_list.Managed(u8).init(app.alloc);
+                    defer wbuf.deinit();
+                    wbuf.appendSlice("⚠ 会话保存失败(") catch {};
+                    wbuf.appendSlice(@errorName(e)) catch {};
+                    wbuf.appendSlice("),重启后可能丢失 —— 检查磁盘空间与 ~/.piz/sessions 权限") catch {};
+                    app.tui.appendLine("", "\x1b[31m", wbuf.items) catch {};
+                };
             }
         }
         app.agent.aborted.store(false, .release);
@@ -605,6 +616,14 @@ const WebSession = struct {
     /// 请 worker 退出。没有它,worker 在 ChatQueue 上永久 100ms 轮询 ——
     /// 会话从池里摘掉了,线程还在,实测建删三轮 3 个会话涨到 9 个空转线程。
     stopping: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    /// worker 正在跑一轮(send 进行中,会写 agent.messages)。
+    ///
+    /// undo/compact 这类 HTTP 侧会改 messages 的动作必须先看它:
+    /// worker 在 append、HTTP 在 shrink,两个线程同时改 len 是真数据竞态
+    /// (预分配只解决了 items 指针移动,解不了 len 并发写)。
+    /// 读历史(无锁)不用等它 —— 预分配下 items 稳定、每条消息先写后加 len,
+    /// 读者最多看到「多一条刚写完的消息」,永远看不到半截数据。
+    turning: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 };
 
 const SessionPool = struct {
@@ -733,9 +752,11 @@ fn poolSessionsHook(ctx: ?*anyopaque, cwd: []const u8, alloc: std.mem.Allocator)
         const cw = @as(usize, ag.provider.context_window);
         const used = ag.estTokens();
         const pct = if (cw > 0) used * 100 / cw else 0;
+        // 无锁读:items 预分配永不移动,len 单次读(见 poolStateHook 注释)
+        const msgs_n = ag.messages.items.len;
         w.print("{{\"name\":{s},\"msgs\":{d},\"pct\":{d},\"model\":{s},\"auto\":{s},\"title\":{s},\"ts\":{d}}}", .{
             util.jsonString(alloc, ses.name) catch "\"\"",
-            ag.messages.items.len,
+            msgs_n,
             pct,
             util.jsonString(alloc, ag.model) catch "\"\"",
             if (ses.mode.load(.acquire)) "true" else "false",
@@ -772,25 +793,22 @@ fn poolSessionsHook(ctx: ?*anyopaque, cwd: []const u8, alloc: std.mem.Allocator)
                 var meta_title: []const u8 = "";
                 var meta_ts: i128 = 0;
                 var lines = std.mem.splitScalar(u8, content, '\n');
+                // meta 行用 std.json 解析 —— 曾经的 indexOf("\"model\":\"") 手工解析
+                // 遇到字段重排/转义即错,而首行是 saveWebTs 自己写的 JSON,直接解析。
                 if (lines.next()) |first_line| {
-                    if (std.mem.indexOf(u8, first_line, "\"model\":\"")) |p| {
-                        const start = p + 9;
-                        if (std.mem.indexOfScalar(u8, first_line[start..], '"')) |q| {
-                            meta_model = alloc.dupe(u8, first_line[start .. start + q]) catch "";
+                    if (std.json.parseFromSliceLeaky(std.json.Value, alloc, first_line, .{})) |meta| {
+                        if (meta == .object) {
+                            if (meta.object.get("model")) |v| {
+                                if (v == .string) meta_model = alloc.dupe(u8, v.string) catch "";
+                            }
+                            if (meta.object.get("title")) |v| {
+                                if (v == .string) meta_title = alloc.dupe(u8, v.string) catch "";
+                            }
+                            if (meta.object.get("updated")) |v| {
+                                if (v == .integer) meta_ts = v.integer;
+                            }
                         }
-                    }
-                    if (std.mem.indexOf(u8, first_line, "\"title\":\"")) |p| {
-                        const start = p + 9;
-                        if (std.mem.indexOfScalar(u8, first_line[start..], '"')) |q| {
-                            meta_title = alloc.dupe(u8, first_line[start .. start + q]) catch "";
-                        }
-                    }
-                    if (std.mem.indexOf(u8, first_line, "\"updated\":")) |p| {
-                        const rest = first_line[p + 10 ..];
-                        var e: usize = 0;
-                        while (e < rest.len and rest[e] >= '0' and rest[e] <= '9') e += 1;
-                        if (e > 0) meta_ts = std.fmt.parseInt(i128, rest[0..e], 10) catch 0;
-                    }
+                    } else |_| {}
                 }
                 while (lines.next()) |l| {
                     if (std.mem.trim(u8, l, " \t\r\n").len > 0) count += 1;
@@ -842,11 +860,17 @@ fn poolStateHook(ctx: ?*anyopaque, cwd: []const u8, session: []const u8, alloc: 
     const used = ag.estTokens();
     const pct = if (cw > 0) used * 100 / cw else 0;
     w.print(",\"pct\":{d},\"running\":{s},\"history\":[", .{ pct, if (ag.cur_stream != null) "true" else "false" }) catch {};
+    // 无锁读 worker 的消息列表,靠 agent.zig 的预分配契约:
+    // items 指针永不移动(容量预分配),每条消息先写数据后加 len。
+    // len 快照成局部变量 —— 若用 msgs.len 直接进 while 条件,每次迭代
+    // 重新读 len,worker 恰好 append 时会把新消息也卷进遍历(无害但乱),
+    // 不如一次定界。
     const msgs = ag.messages.items;
-    const hist_start = if (msgs.len > 20) msgs.len - 20 else 0;
+    const msgs_len = msgs.len;
+    const hist_start = if (msgs_len > 20) msgs_len - 20 else 0;
     var first = true;
     var i = hist_start;
-    while (i < msgs.len) : (i += 1) {
+    while (i < msgs_len) : (i += 1) {
         const m = &msgs[i];
         // 空文本 assistant(纯工具调用回合)不渲染,工具经 tool 卡体现
         if (m.content.len == 0 and std.mem.eql(u8, m.role, "assistant")) continue;
@@ -865,14 +889,23 @@ fn webWorker(ses: *WebSession) void {
         // 新消息清除上一轮残留的中断标志
         ses.agent.aborted.store(false, .release);
         ses.updated_ns = std.Io.Clock.now(.real, util.io).nanoseconds;
+        // turning 门:undo/compact 等 HTTP 侧动作见这个标志才敢动 messages。
+        // 用 atomic 而非普通 bool —— HTTP 线程读、本线程写,跨线程必须成对
+        // release/acquire,否则编译器完全有权把写滞后到 send 之后。
+        ses.turning.store(true, .release);
         const result = ses.agent.send(item.text) catch null;
         if (result) |r| {
             const u = r.usage;
             ses.tokens_total += (u.input orelse 0) + (u.output orelse 0) + (u.cache_read orelse 0);
             ses.agent.last_usage = u;
         }
-        // 持久化:全量重写(消息 + model + 审批模式 + 标题)
-        sessionmod.saveWebTs(ses.agent.alloc, ses.cwd, ses.name, ses.agent.model, ses.mode.load(.acquire), ses.agent.title, ses.agent.messages.items, ses.updated_ns) catch {};
+        // 持久化:全量重写(消息 + model + 审批模式 + 标题)。
+        // 失败必须说:静默成功假象会让用户在重启后丢历史而不自知。
+        sessionmod.saveWebTs(ses.agent.alloc, ses.cwd, ses.name, ses.agent.model, ses.mode.load(.acquire), ses.agent.title, ses.agent.messages.items, ses.updated_ns) catch |err| {
+            const msg = std.fmt.allocPrint(ses.agent.alloc, "会话保存失败({s}):本轮内容在重启后会丢失", .{@errorName(err)}) catch "session save failed";
+            ses.hub.push("{{\"type\":\"notice\",\"session\":{s},\"text\":{s}}}", .{ util.jsonString(ses.agent.alloc, ses.name) catch "\"\"", util.jsonString(ses.agent.alloc, msg) catch "\"\"" });
+        };
+        ses.turning.store(false, .release);
         ses.hub.push("{{\"type\":\"turn_end\",\"session\":{s}}}", .{util.jsonString(ses.agent.alloc, ses.name) catch "\"\""});
     }
 }
@@ -1230,6 +1263,10 @@ fn poolActionHook(ctx: ?*anyopaque, cwd: []const u8, session: []const u8, act: [
         return out;
     }
     if (std.mem.eql(u8, act, "undo")) {
+        // worker 正在 send:它的 append 与这里的 shrink 并发改 messages.len,
+        // 是预分配解决不了的真竞态。拒绝而非等待 —— 轮次可能跑几十秒,
+        // HTTP 请求等不了那么久,前端收到 busy 自然知道「跑完再撤」。
+        if (ses.turning.load(.acquire)) return "{\"ok\":false,\"act\":\"undo\",\"error\":\"busy\"}";
         // 删最后 count 个回合(到第 count 个 user 消息为止)
         const n = if (count == 0) 1 else count;
         const msgs = ses.agent.messages.items;
@@ -1251,6 +1288,8 @@ fn poolActionHook(ctx: ?*anyopaque, cwd: []const u8, session: []const u8, act: [
         return std.fmt.allocPrint(alloc, "{{\"ok\":true,\"act\":\"undo\",\"msgs\":{d}}}", .{msgs.len - cut}) catch null;
     }
     if (std.mem.eql(u8, act, "compact")) {
+        // 同 undo:compact 会 clear + 重建 messages,不能与 worker 的 send 并发。
+        if (ses.turning.load(.acquire)) return "{\"ok\":false,\"act\":\"compact\",\"error\":\"busy\"}";
         _ = ses.agent.compact() catch "";
         return "{\"ok\":true,\"act\":\"compact\"}";
     }
@@ -2957,6 +2996,50 @@ test "copyToClipboard does not double-close the child stdin" {
     // 系统没装 wl-copy/xclip 时返回 false,同样不该崩 —— 两条路径都走一遍。
     _ = copyToClipboard(arena.allocator(), "clipboard round trip\n");
     _ = copyToClipboard(arena.allocator(), "");
+}
+
+test "web undo/compact are rejected while the worker turn is running" {
+    const t = std.testing;
+    try util.testInit();
+    var arena = util.Arena.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var cfg = cfgmod.Config{ .arena = &arena };
+    var provs = [_]cfgmod.Provider{.{ .name = "mock", .api = .openai_completions, .base_url = "http://127.0.0.1:1", .api_key = "k" }};
+    cfg.providers = &provs;
+
+    // 构造池 + 会话(worker 线程不存在,只验 busy 门)
+    var hub = webui_mod.EventHub.init(a);
+    var pool = SessionPool{ .alloc = a, .hub = &hub, .cfg = &cfg, .sessions = std.array_list.Managed(*WebSession).init(a), .workspaces = std.array_list.Managed([]const u8).init(a) };
+    const agent = try a.create(agentmod.Agent);
+    agent.* = try agentmod.Agent.init(a, &cfg, "mock", "m", "/tmp");
+    const ses_arena = try a.create(util.Arena);
+    ses_arena.* = util.Arena.init(a);
+    const sa = ses_arena.allocator();
+    const ses = try sa.create(WebSession);
+    ses.* = .{
+        .name = "s1",
+        .cwd = "/tmp",
+        .qkey = "q",
+        .agent = agent,
+        .hub = &hub,
+        .start_ns = 0,
+        .worker = undefined,
+        .arena = ses_arena,
+    };
+    try pool.sessions.append(ses);
+
+    // turning=true(模拟 worker 正在 send):undo/compact 必须拒绝
+    ses.turning.store(true, .release);
+    const busy_undo = poolActionHook(&pool, "/tmp", "s1", "undo", null, 1) orelse return error.Fail;
+    try t.expect(std.mem.indexOf(u8, busy_undo, "\"error\":\"busy\"") != null);
+    const busy_compact = poolActionHook(&pool, "/tmp", "s1", "compact", null, 0) orelse return error.Fail;
+    try t.expect(std.mem.indexOf(u8, busy_compact, "\"error\":\"busy\"") != null);
+
+    // turning=false:放行(空历史 undo 报 ok:false 而非 busy —— 两者可区分)
+    ses.turning.store(false, .release);
+    const idle_undo = poolActionHook(&pool, "/tmp", "s1", "undo", null, 1) orelse return error.Fail;
+    try t.expect(std.mem.indexOf(u8, idle_undo, "\"error\":\"busy\"") == null);
 }
 
 test "every slash command appears in /help" {

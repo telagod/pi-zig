@@ -8,6 +8,24 @@ const pluginsmod = @import("plugins.zig");
 const httpcmod = @import("httpc.zig");
 
 pub const MAX_TOOL_ITER = 24;
+/// 消息列表的预分配容量。
+///
+/// 跨线程读安全契约:worker 线程 append 消息的同时,HTTP/主线程会无锁读
+/// `messages.items`(web 的 /api/state、/api/sessions,CLI 状态栏)。
+/// 唯一的危险是 append 触发 realloc —— 旧 buffer 被 free,读者拿到悬垂指针。
+/// 预分配后 append 只写 `items[len]` 再 `len += 1`(先写数据后加 len),
+/// items 指针永不移动、读者拿到的每条消息都完整。
+///
+/// 8192 条 ≈ 数千轮对话,而 85% 窗口硬线在这之前早就触发 compact
+/// (compact 只 clear 不缩小容量),所以容量耗尽在实际上不可达。
+const MESSAGES_PRECAP = 8192;
+
+/// 新建消息列表(预分配容量,见 MESSAGES_PRECAP 的并发契约)。
+fn newMsgList(alloc: std.mem.Allocator) !std.array_list.Managed(ai.Message) {
+    var msgs = std.array_list.Managed(ai.Message).init(alloc);
+    try msgs.ensureTotalCapacity(MESSAGES_PRECAP);
+    return msgs;
+}
 /// 极简核心:单档——总 token 超 85% 窗口 → compact(增量边界 + cut point)。
 /// 增强能力(工具输出预剪枝等)由内置插件承担(plugins.zig)。
 pub const CTX_HARD_PERCENT = 85;
@@ -486,7 +504,7 @@ pub const Agent = struct {
                 .key = resolved.key,
                 .url = url,
                 .cwd = cwd,
-                .messages = std.array_list.Managed(ai.Message).init(alloc),
+                .messages = try newMsgList(alloc),
                 .system_prompt = try spw2.toOwnedSlice(),
                 .read_only = opts.read_only,
                 .plugins = enabled,
@@ -512,7 +530,7 @@ pub const Agent = struct {
                     .key = resolved.key,
                     .url = url,
                     .cwd = cwd,
-                    .messages = std.array_list.Managed(ai.Message).init(alloc),
+                    .messages = try newMsgList(alloc),
                     .system_prompt = try spw2.toOwnedSlice(),
                     .read_only = opts.read_only,
                     .plugins = enabled,
@@ -534,7 +552,7 @@ pub const Agent = struct {
             .key = resolved.key,
             .url = url,
             .cwd = cwd,
-            .messages = std.array_list.Managed(ai.Message).init(alloc),
+            .messages = try newMsgList(alloc),
             .system_prompt = try spw.toOwnedSlice(),
             .read_only = opts.read_only,
             .plugins = enabled,

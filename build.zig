@@ -2,7 +2,11 @@ const std = @import("std");
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
-    const optimize = b.standardOptimizeOption(.{ .preferred_optimize_mode = .ReleaseFast });
+    // 默认 ReleaseFast:标准库的 standardOptimizeOption 的 preferred 模式
+    // 只在传 --release 时才生效,裸 `zig build` 会静默产出 Debug ——
+    // README 安装指引就是裸 `zig build`,用户照做拿到的是带调试信息的
+    // 46MB 慢二进制。这里反过来:默认快,想调试传 -Doptimize=Debug。
+    const optimize = b.option(std.builtin.OptimizeMode, "optimize", "Override the default ReleaseFast (e.g. -Doptimize=Debug)") orelse .ReleaseFast;
 
     // ---- 模块拆分(对齐 pi 子包结构) ----
     // core:agent 循环、AI 客户端、工具、会话、配置、包管理
