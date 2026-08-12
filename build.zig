@@ -15,6 +15,14 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    // stb 图像编解码实现单元(无 libc:内存/内存拷贝全由 imgx.zig 导出函数供给)
+    core_mod.addCSourceFile(.{
+        .file = b.path("vendor/stb_impl.c"),
+        .flags = &.{ "-std=c99", "-O2" },
+    });
+    // shim 在前:无 libc 时 <stdlib.h> 等落到 shim,不碰系统头
+    core_mod.addIncludePath(b.path("vendor/shim"));
+    core_mod.addIncludePath(b.path("vendor"));
     // tui:终端界面
     const tui_mod = b.createModule(.{
         .root_source_file = b.path("src/tui.zig"),
@@ -68,6 +76,13 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = .Debug,
     });
+    // test 模块是独立 createModule,不会继承 core_mod 的 C 单元 —— 重复挂载
+    test_core.addCSourceFile(.{
+        .file = b.path("vendor/stb_impl.c"),
+        .flags = &.{ "-std=c99", "-O2" },
+    });
+    test_core.addIncludePath(b.path("vendor/shim"));
+    test_core.addIncludePath(b.path("vendor"));
     const test_tui = b.createModule(.{
         .root_source_file = b.path("src/tui.zig"),
         .target = target,

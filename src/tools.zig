@@ -39,9 +39,23 @@ pub fn rootForSpawn() ?[]const u8 {
     return if (tool_root.len > 0) tool_root else null;
 }
 
+/// 工具产出的图片附件(如 read_image):数据、mime、像素尺寸、给模型看的说明。
+/// data 必须与会话同寿(工具 handler 负责 dupe 到 agent 的常驻 allocator),
+/// note 是给模型读的文本说明。
+pub const ImageAttach = struct {
+    data: []const u8,
+    mime: []const u8,
+    w: u32,
+    h: u32,
+    note: []const u8,
+};
+
 pub const Result = struct {
     content: []const u8, // 给模型看的内容(arena 所有)
     is_error: bool = false,
+    /// 随本条工具结果附上的图片(agent 会把它们挂成 user 消息;
+    /// 协议限制:image block 不能出现在 tool 消息里)
+    images: ?[]const ImageAttach = null,
 };
 
 fn jstr(v: std.json.Value, key: []const u8) ?[]const u8 {

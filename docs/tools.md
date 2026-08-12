@@ -62,6 +62,7 @@ piz --plugin lsp               # 本次开启 lsp
 | `web_search` | `web-search` | 网页搜索（需自建 SearXNG 端点） |
 | `fetch_url` | `web-search` | 取网页正文，去标签（**不需要搜索端点**） |
 | `git_status` | `git-awareness` | git status 与 diff stat |
+| `read_image` | `vision-input` | 读图并附图给视觉模型（自动压缩/缩放） |
 | `get_context_remaining` | `context-budget` | 剩余上下文预算 |
 | `ask_user` | `elicitation` | 向用户提问 |
 
@@ -518,3 +519,27 @@ tool definitions), remaining ~129901. Auto-compaction triggers at 85%
 新增工具时 `.schema` 字段是必填的，`src/ai.zig` 有测试校验所有 schema 是合法 JSON object 且 `type == "object"` —— 写坏了测试会红。无参数工具用 `toolsmod.EMPTY_SCHEMA`。
 
 参数解析对模型的常见偏差有容错：`jint` 接受 integer、float 和字符串数字，`jbool` 接受 bool 和 `"true"` / `"false"` 字符串。
+
+## read_image（图片输入）
+
+`vision-input` 插件的工具：读图、压缩、以 image block 附到消息上，让视觉模型直接看。
+
+```
+read_image { "path": "screenshot.png" }
+```
+
+图片处理管线（`src/imgx.zig`，借鉴 oh-my-pi 的 image-resize 并改进）：
+
+- **预算**：压缩后目标 ≤ 500KB；长边 ≤ 1568px（Anthropic 内部上限）/ 2048px（OpenAI）
+- **token 预算驱动**：长边按 provider 上下文窗口反推 —— 128K 大窗用满 API 上限，8K/16K 小窗自动把图压得更小，给文本让 token
+- **小图放大**：短边 < 200px 的退化图（如 1×1 空图表）放大重编 —— 视觉后端按 28px patch 分块，退化图会硬 400 毒化整个请求
+- **内容自适应**：颜色数少（线稿/UI 截图）PNG 直出保真；照片走 JPEG；都不达标才双格式竞标取最小
+- **质量二分 + 尺寸阶梯**：JPEG 质量对数收敛（比固定 4 档阶梯少一半编码），仍超预算再走 0.75→0.25 尺寸阶梯
+- **降级路径**：解码失败原样回传（手工解析 PNG/JPEG/GIF 头拿尺寸），不丢图
+- **坐标映射说明**：缩放后注入「原图 X×Y、发出 x×y、坐标乘 Z 映射回原图」，模型看缩放图也能算原图坐标
+- **WebP 自动转码**：多数本地后端（llama.cpp/STB）不解 WebP，源图是 WebP 时强制转 PNG/JPEG
+- **数量预算**：请求内图片超 provider 上限（OpenAI 20 / Anthropic 100）时丢最老图、原位换成 `[image omitted]`，不毒化请求
+
+支持格式：PNG、JPEG、GIF、BMP、WebP（解码）；输出 PNG/JPEG。源图 ≤ 20MB。
+
+CLI 与 web 会话同用此管线；会话落盘时图片不写入历史文件（重载后不带图）。

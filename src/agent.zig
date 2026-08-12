@@ -6,6 +6,7 @@ pub const cfgmod = @import("config.zig");
 const toolsmod = @import("tools.zig");
 const pluginsmod = @import("plugins.zig");
 const httpcmod = @import("httpc.zig");
+const imgxmod = @import("imgx.zig");
 
 pub const MAX_TOOL_ITER = 24;
 /// 消息列表的预分配容量。
@@ -623,6 +624,8 @@ pub const Agent = struct {
         for (self.messages.items) |m| {
             // +16:每条消息的角色/包装开销(role、分隔符、tool_call_id 等)
             n += estTokensOf(m.content) + 16;
+            // 图片消息按 provider 视觉计费规则估算(尺寸存于消息,不重复解码)
+            if (m.image != null) n += imgxmod.estImageTokens(m.image_w, m.image_h, self.provider.api);
         }
         // 工具定义每轮都全量重发,是上下文的一部分 —— 实测默认工具集 1024 token。
         // 漏掉它压缩就会晚触发,预算查询也会虚报余量。只读模式不发工具。
@@ -963,6 +966,21 @@ pub const Agent = struct {
                     .content = tres.content,
                     .tool_call_id = slot.call.id,
                 });
+                // 工具产出的图片附件挂成 user 消息(协议:image block 只能在
+                // user/assistant 消息上;tool 消息是纯文本)。data 由工具 dupe
+                // 到会话 arena,这里只引指针,安全。
+                if (tres.images) |imgs| {
+                    for (imgs) |im| {
+                        try self.messages.append(.{
+                            .role = "user",
+                            .content = im.note,
+                            .image = im.data,
+                            .image_mime = im.mime,
+                            .image_w = im.w,
+                            .image_h = im.h,
+                        });
+                    }
+                }
             }
             // 工具批次结束后跑一次 before_turn 钩子(它会改 messages,不能在并行区跑)
             pluginsmod.runBeforeTurn(@ptrCast(self));

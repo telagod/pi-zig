@@ -7,6 +7,8 @@ const activity = @import("activity.zig");
 const agentsmod = @import("agents.zig");
 const toolsmod = @import("tools.zig");
 const aimod = @import("ai.zig");
+const imgxmod = @import("imgx.zig");
+const util = @import("util.zig");
 
 /// 内置插件定义。
 pub const Plugin = struct {
@@ -589,6 +591,44 @@ fn toolContextRemaining(ctx: ?*anyopaque, arena: std.mem.Allocator, args: []cons
         "Context budget: window {d} tokens, used ~{d} (of which ~{d} is the fixed tool definitions), remaining ~{d}. Auto-compaction triggers at {d}% ({d} tokens) — ~{d} tokens of headroom before that.",
         .{ w, used, tools_share, remain, agentmod.CTX_HARD_PERCENT, limit, until_compact },
     ) };
+}
+
+// =====================================================================
+// 图片输入插件:read_image 走 imgx 压缩管线后以 user 消息附图。
+// =====================================================================
+
+/// 单图输入上限(压缩前的源文件体积)。
+const MAX_IMAGE_INPUT_BYTES = 20 * 1024 * 1024;
+
+fn toolReadImage(ctx: ?*anyopaque, arena: std.mem.Allocator, args: []const u8) anyerror!toolsmod.Result {
+    const self: *agentmod.Agent = @ptrCast(@alignCast(ctx.?));
+    const v = try std.json.parseFromSliceLeaky(std.json.Value, arena, args, .{});
+    const path: []const u8 = if (v == .object) blk: {
+        const p = v.object.get("path") orelse break :blk "";
+        break :blk if (p == .string) p.string else "";
+    } else "";
+    if (path.len == 0) return .{ .content = "error: path is required", .is_error = true };
+    // 相对路径按 agent cwd 解析(root 是 thread-local,工具线程内可用)
+    const resolved = toolsmod.resolvePath(arena, path);
+    const input = std.Io.Dir.cwd().readFileAlloc(util.io, resolved, arena, .limited(MAX_IMAGE_INPUT_BYTES)) catch {
+        return .{ .content = try std.fmt.allocPrint(arena, "error: cannot read image file: {s}", .{path}), .is_error = true };
+    };
+    if (input.len == 0) return .{ .content = "error: empty file", .is_error = true };
+    // 长边按 provider 上下文窗口推导:小窗自动压小,给文本让 token。
+    const max_dim = imgxmod.maxDimForContext(self.provider.context_window, self.provider.api);
+    const out = try imgxmod.process(arena, input, .{ .max_dim = max_dim });
+    const dim_note = imgxmod.dimensionNote(out, arena) orelse "";
+    // 工具 handler 的 arena 就是会话 arena(self.alloc),分配即常驻 ——
+    // 消息历史里会长期引用这些字符串,不能落在单轮 arena。
+    const content = if (out.passthrough)
+        try std.fmt.allocPrint(arena, "Read image file [{s}] ({d}x{d}, {d} bytes; decoder could not process it, sent as-is)", .{ out.mime, out.w, out.h, out.bytes })
+    else if (dim_note.len > 0)
+        try std.fmt.allocPrint(arena, "Read image file [{s}] ({d}x{d}, {d} bytes; source was {d}x{d}).\n{s}", .{ out.mime, out.w, out.h, out.bytes, out.orig_w, out.orig_h, dim_note })
+    else
+        try std.fmt.allocPrint(arena, "Read image file [{s}] ({d}x{d}, {d} bytes; source was {d}x{d})", .{ out.mime, out.w, out.h, out.bytes, out.orig_w, out.orig_h });
+    const imgs = try arena.create([1]toolsmod.ImageAttach);
+    imgs[0] = .{ .data = out.data, .mime = out.mime, .w = out.w, .h = out.h, .note = content };
+    return .{ .content = content, .images = imgs };
 }
 
 // =====================================================================
@@ -2647,6 +2687,17 @@ pub const builtin_plugins = [_]Plugin{
     .{ .name = "artifact-store", .on_tool_result = artifactStore },
     .{ .name = "compact-resilience", .on_compact_failed = compactFallback },
     .{ .name = "concept-graph", .on_compact = conceptExtract },
+    .{ .name = "vision-input", .enabled_by_default = false, .tools = &.{
+        .{
+            .name = "read_image",
+            .desc = "Read an image file and attach it to the conversation so a vision-capable model can see it. The image is automatically resized and recompressed to fit the provider's vision budget (no size math needed). Use this whenever the user asks about or references an image, screenshot, chart, or diagram.",
+            .schema =
+            \\{"type":"object","properties":{"path":{"type":"string","description":"Path to the image file (PNG, JPEG, GIF, WebP, BMP)."}},"required":["path"]}
+            ,
+            .handler = toolCtxStub,
+            .ctx_handler = toolReadImage,
+        },
+    } },
 
     // ---- 默认关闭:按需开启的场景化工具 ----
     .{ .name = "skills", .enabled_by_default = false, .tools = &.{

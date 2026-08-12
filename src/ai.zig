@@ -27,6 +27,13 @@ pub const Message = struct {
     /// 会话树:消息 id 与父消息 id(落盘时由 Session 生成,可选字段)
     id: ?[]const u8 = null,
     parent_id: ?[]const u8 = null,
+    /// 图片附件(base64 数据 + mime + 像素尺寸)。协议只在 user/assistant
+    /// 消息上支持 image block;tool 消息必须保持纯文本。
+    /// 生命周期:与会话同寿(挂在会话 arena),不随单轮 arena 重置。
+    image: ?[]const u8 = null,
+    image_mime: ?[]const u8 = null,
+    image_w: u32 = 0,
+    image_h: u32 = 0,
 };
 
 pub const Usage = struct {
@@ -244,6 +251,21 @@ fn serializeOpenAI(
                 try writer.writeAll("}}");
             }
             try writer.writeAll("]}");
+        } else if (m.image) |img| {
+            // 带图消息:content 数组 [text, image_url](openai 协议)
+            try writer.writeAll(",\"content\":[{\"type\":\"text\",\"text\":");
+            try writeJsonText(writer, m.content);
+            try writer.writeAll("},{\"type\":\"image_url\",\"image_url\":{\"url\":\"data:");
+            try writer.writeAll(m.image_mime orelse "image/png");
+            try writer.writeAll(";base64,");
+            try writer.writeAll(img);
+            try writer.writeAll("\"}}]");
+
+            if (m.tool_call_id) |id| {
+                try writer.writeAll(",\"tool_call_id\":");
+                try std.json.Stringify.value(id, .{}, writer);
+            }
+            try writer.writeAll("}");
         } else {
             try writer.writeAll(",\"content\":");
             try writeJsonText(writer, m.content);
@@ -362,9 +384,20 @@ fn serializeAnthropic(alloc: std.mem.Allocator, model: []const u8, messages: []c
         if (!first) try writer.writeByte(',');
         try writer.writeAll("{\"role\":");
         try std.json.Stringify.value(m.role, .{}, writer);
-        try writer.writeAll(",\"content\":");
-        try writeJsonText(writer, m.content);
-        try writer.writeAll("}");
+        if (m.image) |img| {
+            // 带图 user 消息:content 数组 [text, image block]
+            try writer.writeAll(",\"content\":[{\"type\":\"text\",\"text\":");
+            try writeJsonText(writer, m.content);
+            try writer.writeAll("},{\"type\":\"image\",\"source\":{\"type\":\"base64\",\"media_type\":");
+            try std.json.Stringify.value(m.image_mime orelse "image/png", .{}, writer);
+            try writer.writeAll(",\"data\":\"");
+            try writer.writeAll(img);
+            try writer.writeAll("\"}}]}");
+        } else {
+            try writer.writeAll(",\"content\":");
+            try writeJsonText(writer, m.content);
+            try writer.writeAll("}");
+        }
         first = false;
     }
     try writer.writeAll("]");
@@ -773,6 +806,40 @@ fn parseAnthropicEvent(alloc: std.mem.Allocator, arena: std.mem.Allocator, ev: [
 }
 
 /// 主入口:发送请求并流式解析,结果写 result(arena 或调用方 allocator)。
+/// 图片数量预算:视觉请求里图片太多会被 provider 硬拒(且常是毒化整请求
+/// 的 400)。超限丢最老的图、原位换成省略标记 —— 与 omp 的
+/// provider-image-budget 同策。在浅拷贝上做,不改会话历史(历史里的
+/// 图还可能在后续轮次因为更少的新图而重新纳入)。
+///
+/// 上限:openai 兼容视觉端点实践上限 20 张/请求;anthropic 100 个 image block。
+fn maxImagesFor(api: cfgmod.Api) usize {
+    return switch (api) {
+        .anthropic_messages => 100,
+        .openai_completions => 20,
+    };
+}
+
+fn clampProviderImages(alloc: std.mem.Allocator, messages: []const Message, api: cfgmod.Api) ![]const Message {
+    const limit = maxImagesFor(api);
+    var total: usize = 0;
+    for (messages) |m| {
+        if (m.image != null) total += 1;
+    }
+    if (total <= limit) return messages;
+    const out = try alloc.alloc(Message, messages.len);
+    var drops = total - limit;
+    for (messages, 0..) |m, i| {
+        out[i] = m;
+        if (m.image != null and drops > 0) {
+            drops -= 1;
+            out[i].image = null;
+            out[i].image_mime = null;
+            out[i].content = "[image omitted: provider image limit]";
+        }
+    }
+    return out;
+}
+
 pub fn run(
     alloc: std.mem.Allocator,
     arena: std.mem.Allocator,
@@ -791,10 +858,16 @@ pub fn run(
     defer out_reasoning.deinit();
     var usage = Usage{};
 
+    // 图片数量预算:视觉请求里图片太多会被 provider 硬拒(且常是毒化整请求
+    // 的 400)。超限丢最老的图、原位换成省略标记 —— 与 omp 的
+    // provider-image-budget 同策。在浅拷贝上做,不改会话历史(历史里的
+    // 图还可能在后续轮次因为更少的新图而重新纳入)。
+    const msgs = clampProviderImages(alloc, messages, provider.api) catch messages;
+
     const body = if (provider.api == .anthropic_messages)
-        try serializeAnthropic(alloc, model, messages, tools, options.max_tokens)
+        try serializeAnthropic(alloc, model, msgs, tools, options.max_tokens)
     else
-        try serializeOpenAI(alloc, model, messages, tools, options.max_tokens, options.cache_key);
+        try serializeOpenAI(alloc, model, msgs, tools, options.max_tokens, options.cache_key);
     defer alloc.free(body);
 
     var headers = std.array_list.Managed(httpc.Header).init(alloc);
@@ -1546,4 +1619,43 @@ test "reasoning arrives under either field name, never doubled" {
         // 推理不许漏进正文 —— 那会让思考过程冒充答案
         try t.expectEqualStrings("", out_text.items);
     }
+}
+
+test "image messages serialize to content arrays on both protocols" {
+    const t = std.testing;
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const msgs = [_]Message{
+        .{ .role = "user", .content = "look at this", .image = "AAAA", .image_mime = "image/png", .image_w = 10, .image_h = 20 },
+    };
+    const body = try serializeOpenAI(a, "m", &msgs, &.{}, 100, null);
+    try t.expect(std.mem.indexOf(u8, body, "\"content\":[{\"type\":\"text\"") != null);
+    try t.expect(std.mem.indexOf(u8, body, "\"type\":\"image_url\",\"image_url\":{\"url\":\"data:image/png;base64,AAAA\"}") != null);
+
+    const body2 = try serializeAnthropic(a, "m", &msgs, &.{}, 100);
+    try t.expect(std.mem.indexOf(u8, body2, "\"type\":\"image\",\"source\":{\"type\":\"base64\",\"media_type\":\"image/png\",\"data\":\"AAAA\"}") != null);
+}
+
+test "clampProviderImages drops oldest images past the cap" {
+    const t = std.testing;
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    var msgs: [25]Message = undefined;
+    for (&msgs, 0..) |*m, i| m.* = .{ .role = "user", .content = "x", .image = if (i < 25) "img" else null };
+    const clamped = try clampProviderImages(a, &msgs, .openai_completions);
+    // 20 张上限:5 张最老的被替换为省略标记
+    var kept: usize = 0;
+    var omitted: usize = 0;
+    for (clamped) |m| {
+        if (m.image != null) kept += 1;
+        if (std.mem.eql(u8, m.content, "[image omitted: provider image limit]")) omitted += 1;
+    }
+    try t.expectEqual(@as(usize, 20), kept);
+    try t.expectEqual(@as(usize, 5), omitted);
+    // 原消息未被修改(浅拷贝)
+    try t.expect(msgs[0].image != null);
 }

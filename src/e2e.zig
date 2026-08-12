@@ -12,6 +12,7 @@ const httpc = @import("core").httpc;
 
 const MOCK_PORT: u16 = 18521;
 const MOCK_PORT2: u16 = 18522;
+const MOCK_PORT3: u16 = 18523;
 
 const MockState = struct {
     alloc: std.mem.Allocator,
@@ -21,6 +22,12 @@ const MockState = struct {
     req2_had_tool: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     req3_no_tools: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     req5_had_declined: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    /// 视觉 e2e:第二轮请求体里是否带 image_url 附件
+    req_had_image: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    /// 视觉 e2e:请求里 image block 是否带 data: 前缀与 base64 数据
+    req_image_data_ok: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    /// 视觉模式:第一轮回 read_image 工具调用
+    vision_mode: bool = false,
     req6_was_compact: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     /// 请求体里 tools 是否排在 messages 之前(缓存前缀稳定性:静态部分在前)
     tools_before_messages: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
@@ -80,6 +87,28 @@ fn handleRequest(state: *MockState, conn: *std.Io.net.Stream) !void {
         defer buf.deinit();
         try buf.appendSlice(try sseEvent(alloc, "{\"choices\":[{\"delta\":{\"content\":\"summarized.\"},\"finish_reason\":null}]}"));
         try buf.appendSlice(try sseEvent(alloc, "{\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1}}"));
+        try buf.appendSlice("data: [DONE]\n\n");
+        resp = try buf.toOwnedSlice();
+    } else if (std.mem.indexOf(u8, body, "data:image/") != null and std.mem.indexOf(u8, body, "base64,") != null) {
+        // 视觉 e2e:请求体带图(openai 协议 image_url data URI)。
+        state.req_had_image.store(true, .release);
+        if (std.mem.indexOf(u8, body, "\"image_url\"") != null) {
+            state.req_image_data_ok.store(true, .release);
+        }
+        var buf = std.array_list.Managed(u8).init(alloc);
+        defer buf.deinit();
+        try buf.appendSlice(try sseEvent(alloc, "{\"choices\":[{\"delta\":{\"content\":\"IMG-OK\"},\"finish_reason\":null}]}"));
+        try buf.appendSlice(try sseEvent(alloc, "{\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":1}}"));
+        try buf.appendSlice("data: [DONE]\n\n");
+        resp = try buf.toOwnedSlice();
+    } else if (state.vision_mode and req_no == 1) {
+        // 视觉 e2e 第一轮:read_image 工具调用(路径由测试写好)
+        var buf = std.array_list.Managed(u8).init(alloc);
+        defer buf.deinit();
+        try buf.appendSlice(try sseEvent(alloc, "{\"choices\":[{\"delta\":{\"content\":\"Let me look. \"},\"finish_reason\":null}]}"));
+        try buf.appendSlice(try sseEvent(alloc, "{\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_img1\",\"function\":{\"name\":\"read_image\",\"arguments\":\"\"}}]},\"finish_reason\":null}]}"));
+        try buf.appendSlice(try sseEvent(alloc, "{\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{\\\"path\\\":\\\"/tmp/piz-img-e2e.png\\\"}\"}}]},\"finish_reason\":null}]}"));
+        try buf.appendSlice(try sseEvent(alloc, "{\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":5}}"));
         try buf.appendSlice("data: [DONE]\n\n");
         resp = try buf.toOwnedSlice();
     } else if (req_no == 1) {
@@ -1285,4 +1314,62 @@ test "nested in-process delegation is stopped by the depth gate" {
 
     // 深度闸门的错误文本本身由 plugins.zig 的单元测试守着 —— 它在 subagent
     // 内部,父 agent 只看到那一路的最终答复。这里守的是「递归会停」。
+}
+
+test "read_image compresses and attaches the image to the next request" {
+    const t = std.testing;
+    try util.testInit();
+    var arena = util.Arena.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    pluginsmod.resetEnabledForTest();
+    try t.expect(pluginsmod.enable("vision-input"));
+    defer pluginsmod.resetEnabledForTest();
+
+    // 1×1 红色 PNG(69 字节):走 min_dim 放大路径 → 200×200 重编码
+    const png = [_]u8{ 137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 2, 0, 0, 0, 144, 119, 83, 222, 0, 0, 0, 12, 73, 68, 65, 84, 120, 156, 99, 248, 207, 192, 0, 0, 3, 1, 1, 0, 201, 254, 146, 239, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130 };
+    try std.Io.Dir.cwd().writeFile(util.io, .{ .sub_path = "/tmp/piz-img-e2e.png", .data = &png });
+
+    const url_buf = try std.fmt.allocPrint(a, "http://127.0.0.1:{d}/v1/chat/completions", .{MOCK_PORT3});
+    var provs = [_]cfgmod.Provider{.{ .name = "mock", .api = .openai_completions, .base_url = url_buf }};
+    var cfg = cfgmod.Config{ .arena = &arena };
+    cfg.providers = &provs;
+    cfg.default_provider = "mock";
+    cfg.default_model = "mock-model";
+
+    var state = MockState{ .alloc = std.heap.page_allocator, .port = MOCK_PORT3, .vision_mode = true };
+    const thread = try std.Thread.spawn(.{}, mockServerMain, .{&state});
+    var ready = false;
+    for (0..50) |_| {
+        const addr = std.Io.net.IpAddress.parseIp4("127.0.0.1", MOCK_PORT3) catch break;
+        var s = addr.connect(util.io, .{ .mode = .stream, .protocol = .tcp }) catch {
+            _ = std.Io.sleep(util.io, .{ .nanoseconds = 10 * std.time.ns_per_ms }, .awake) catch {};
+            continue;
+        };
+        s.close(util.io);
+        ready = true;
+        break;
+    }
+    try t.expect(ready);
+    defer state.stop.store(true, .release);
+
+    var agent = try agentmod.Agent.initOpts(a, &cfg, "mock", "mock-model", "/tmp", .{});
+    const result = try agent.send("look at /tmp/piz-img-e2e.png and describe it");
+    try t.expect(std.mem.indexOf(u8, result.text, "IMG-OK") != null);
+    // 第二轮请求体带 data URI 图片附件
+    try t.expect(state.req_had_image.load(.acquire));
+    try t.expect(state.req_image_data_ok.load(.acquire));
+    // 消息历史里有图片消息(附在 user 消息上),且 token 估算计入图片
+    var found = false;
+    for (agent.messages.items) |m| {
+        if (m.image != null) {
+            found = true;
+            try t.expect(m.image_w >= 200); // 1×1 被放大到 min_dim
+        }
+    }
+    try t.expect(found);
+    // 清理:先停服再 join(server 循环看 stop 才退出)
+    state.stop.store(true, .release);
+    thread.join();
+    std.Io.Dir.cwd().deleteFile(util.io, "/tmp/piz-img-e2e.png") catch {};
 }
