@@ -137,17 +137,32 @@ pub const Out = struct {
     passthrough: bool,
 };
 
-/// 按 provider 上下文窗口反推图片长边上限。
-/// 图片 token 预算取窗口 15%(与压缩硬线 85% 互补);
-/// anthropic 图 token ≈ w*h/750(长边 1568 内),openai 近似 512px tile 计费。
-/// 结果 clamp 在 [512, api 上限]。128K 大窗 = api 上限;小窗自动压小。
-pub fn maxDimForContext(ctx_window: u32, api: config.Api) u32 {
-    const api_max: u32 = switch (api) {
-        .openai_completions => 2048, // openai 输入像素上限 2048×2048 内有效
-        else => 1568, // anthropic 内部上限;未知 provider 保守取 anthropic 值
+/// 视觉规格表:按 API 的输入上限与数量上限。
+const VisionSpec = struct {
+    max_dim: u32, // 该 API 长边像素上限(服务端内缩阈值)
+    images: usize, // 单请求图片数量上限
+};
+
+fn specFor(api: config.Api) VisionSpec {
+    return switch (api) {
+        .anthropic_messages => .{ .max_dim = 1568, .images = 100 },
+        .openai_completions => .{ .max_dim = 2048, .images = 20 },
     };
+}
+
+/// 按 provider 上下文窗口反推图片长边上限。
+///
+/// 现实修正:如今主流是 200K/1M 窗口 —— 15% 预算反推的长边恒超 API
+/// 上限,窗口驱动只对 ≤16K 小窗有意义。所以规则反过来:
+///   - 1M 窗口的 openai 兼容端点基本是 Gemini 3 系,视觉上限 3072 —— 给满;
+///   - 其余按 API 规格上限(anthropic 1568 / openai 2048);
+///   - 窗口小到图片预算吃紧(<32K)时才下调长边,给文本让 token。
+/// 大窗下分辨率由体积预算(500KB)主导,不再伪调像素。
+pub fn maxDimForContext(ctx_window: u32, api: config.Api) u32 {
+    const spec = specFor(api);
+    const api_max: u32 = if (api == .openai_completions and ctx_window >= 1_000_000) 3072 else spec.max_dim;
+    // 窗口预算:15% 给图(与压缩硬线 85% 互补);anthropic 近似 tok ≈ w*h/750。
     const budget = ctx_window * 15 / 100;
-    // anthropic 近似:tok ≈ (w*h)/750,反推 w=h=sqrt(tok*750)
     const dim_f: f64 = @sqrt(@as(f64, @floatFromInt(budget)) * 750.0);
     var dim: u32 = @intFromFloat(dim_f);
     dim = @max(dim, 512);
@@ -530,13 +545,18 @@ pub fn dimensionNote(o: Out, alloc: std.mem.Allocator) ?[]const u8 {
 }
 
 /// 图片消息的 token 估算(存 message 尺寸,序列化前与 estTokens 共用)。
-pub fn estImageTokens(w: u32, h: u32, api: config.Api) usize {
+/// ctx_window 参与:1M 窗口的 openai 兼容端点按 Gemini 768px tile 计费。
+pub fn estImageTokens(w: u32, h: u32, api: config.Api, ctx_window: u32) usize {
     if (w == 0 or h == 0) return 0;
     return switch (api) {
         // anthropic:长边 1568 内 w*h/750 近似
-        else => @as(usize, w) * @as(usize, h) / 750,
-        // openai:先缩 2048×768,512px tile 每块 170 + base 85
-        .openai_completions => 85 + 170 * (@as(usize, @max(w, 1)) + 511) / 512 * ((@as(usize, @max(h, 1)) + 511) / 512),
+        .anthropic_messages => @as(usize, w) * @as(usize, h) / 750,
+        // 1M 窗口(≈Gemini 3 系):768px tile,每 tile 258 token
+        .openai_completions => if (ctx_window >= 1_000_000)
+            258 * ((@as(usize, w) + 767) / 768) * ((@as(usize, h) + 767) / 768)
+        else
+            // openai:先缩 2048×768,512px tile 每块 170 + base 85
+            85 + 170 * ((@as(usize, @max(w, 1)) + 511) / 512) * ((@as(usize, @max(h, 1)) + 511) / 512),
     };
 }
 
@@ -557,16 +577,28 @@ test "imgx: 1x1 退化图放大 + PNG 头解析" {
     try std.testing.expectEqual(@as(u32, 200), d.h);
 }
 
-test "imgx: maxDimForContext 小窗自动压小" {
-    // 128K 窗口 = API 上限
+test "imgx: maxDimForContext 按 API 规格与窗口" {
+    // 常规窗口 = API 规格上限
     try std.testing.expectEqual(@as(u32, 1568), maxDimForContext(128 * 1024, .anthropic_messages));
     try std.testing.expectEqual(@as(u32, 2048), maxDimForContext(128 * 1024, .openai_completions));
-    // 16K 窗口:预算 2458 token → sqrt(2458*750) ≈ 1358 → clamp 512..1568
+    try std.testing.expectEqual(@as(u32, 1568), maxDimForContext(200 * 1024, .anthropic_messages));
+    // 1M 窗口 openai 兼容端点(≈Gemini):3072 上限给满
+    try std.testing.expectEqual(@as(u32, 3072), maxDimForContext(1_000_000, .openai_completions));
+    // 1M 窗口 anthropic:仍是 1568(API 硬上限,窗口再大也放不开)
+    try std.testing.expectEqual(@as(u32, 1568), maxDimForContext(1_000_000, .anthropic_messages));
+    // 小窗(<32K)才下调:16K 预算 2458 tok → sqrt(2458*750) ≈ 1358
     const d16 = maxDimForContext(16 * 1024, .anthropic_messages);
     try std.testing.expect(d16 < 1568 and d16 >= 512);
-    // 8K 窗口更小
     const d8 = maxDimForContext(8 * 1024, .anthropic_messages);
     try std.testing.expect(d8 < d16 and d8 >= 512);
+}
+
+test "imgx: estImageTokens 1M 窗口走 Gemini tile 计费" {
+    // 512×512 图:openai tile = 85+170 = 255;Gemini tile = 258
+    try std.testing.expectEqual(@as(usize, 255), estImageTokens(512, 512, .openai_completions, 128 * 1024));
+    try std.testing.expectEqual(@as(usize, 258), estImageTokens(512, 512, .openai_completions, 1_000_000));
+    // anthropic 公式与窗口无关
+    try std.testing.expectEqual(@as(usize, 1568 * 1568 / 750), estImageTokens(1568, 1568, .anthropic_messages, 1_000_000));
 }
 
 test "imgx: 线稿 PNG 直出、照片 JPEG 达标" {

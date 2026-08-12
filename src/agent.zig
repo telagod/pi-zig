@@ -625,7 +625,7 @@ pub const Agent = struct {
             // +16:每条消息的角色/包装开销(role、分隔符、tool_call_id 等)
             n += estTokensOf(m.content) + 16;
             // 图片消息按 provider 视觉计费规则估算(尺寸存于消息,不重复解码)
-            if (m.image != null) n += imgxmod.estImageTokens(m.image_w, m.image_h, self.provider.api);
+            if (m.image != null) n += imgxmod.estImageTokens(m.image_w, m.image_h, self.provider.api, self.provider.context_window);
         }
         // 工具定义每轮都全量重发,是上下文的一部分 —— 实测默认工具集 1024 token。
         // 漏掉它压缩就会晚触发,预算查询也会虚报余量。只读模式不发工具。
