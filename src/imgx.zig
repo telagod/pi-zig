@@ -244,6 +244,14 @@ fn encodePng(alloc: std.mem.Allocator, rgba: []const u8, w: u32, h: u32) ![]cons
     return eb.buf.toOwnedSlice() catch "";
 }
 
+/// 密图快压:RGBA 像素 → base64 PNG(供 compress.snap 挂到消息上)。
+pub fn encodeRgbaPngB64(alloc: std.mem.Allocator, rgba: []const u8, w: u32, h: u32) !struct { data: []const u8, bytes: usize } {
+    const png = try encodePng(alloc, rgba, w, h);
+    defer if (png.len > 0) alloc.free(png);
+    if (png.len == 0) return error.EncodeFailed;
+    return .{ .data = try b64(alloc, png), .bytes = png.len };
+}
+
 fn encodeJpeg(alloc: std.mem.Allocator, rgba: []const u8, w: u32, h: u32, quality: u8) ![]const u8 {
     var eb = EncBuf{ .buf = std.array_list.Managed(u8).init(alloc) };
     errdefer eb.buf.deinit();

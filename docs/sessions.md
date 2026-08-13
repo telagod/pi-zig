@@ -122,7 +122,7 @@ pi 有真正的会话树（可视化导航、任意节点跳转续写、分支�
 
 上下文总 token 超过窗口 **85%** 时自动压缩：
 
-1. `tool-output-pruner` 插件先尝试裁剪早期工具输出（不调模型，免费）
+1. `tool-output-pruner` 先跑快压三件套（prune → 70% shake → 80% snap → 85% shake 救援），不调模型
 2. 仍然超限则调模型生成摘要，替换掉早期消息
 3. 保留最近 **20%** 窗口预算的消息
 4. 摘要通过 `cross-session-memory` 插件落盘，下次同目录启动时注入
@@ -131,7 +131,7 @@ pi 有真正的会话树（可视化导航、任意节点跳转续写、分支�
 
 压缩失败（模型不可用）时，若 provider 配了多个模型，`compact-resilience` 插件会换第二个模型重试一次。
 
-手动触发：`/compact`。
+手动触发：`/compact`（LLM 摘要）、`/shake`（机械裁，可 `/shake images`）、`/snap`（ASCII 密图 + 原文摘，无 vision 跳过）、`/fast-compress`（看快压状态）。
 
 > 压缩是增量的：只总结上次压缩边界之后的新增内容，不重复总结已压缩部分。
 

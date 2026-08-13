@@ -49,6 +49,7 @@ graph TD
     tui --> core
 
     core --> agent["agent.zig — 工具循环 / 压缩"]
+    core --> compress["compress.zig — prune/shake/snap"]
     core --> ai["ai.zig — provider 协议 / SSE"]
     core --> tools["tools.zig — 8 个核心工具"]
     core --> plugins["plugins.zig — 14 个内置插件"]
@@ -82,6 +83,7 @@ graph TD
 | 文件 | 职责 |
 |------|------|
 | `agent.zig` | 工具循环编排、消息组装、压缩、并行执行与写锁 |
+| `compress.zig` | 快压三件套：prune / shake / snap，无 LLM |
 | `ai.zig` | 两种 provider 协议的序列化与 SSE 流式解析 |
 | `tools.zig` | 核心工具实现、glob 匹配、最小正则引擎、目录遍历 |
 | `plugins.zig` | 内置插件表与钩子分发、插件工具 |
@@ -139,9 +141,12 @@ sequenceDiagram
 
 ## 上下文管理
 
-三层，从便宜到贵：
+四层，从便宜到贵：
 
-1. **工具输出预剪枝**（`tool-output-pruner` 插件，`before_turn`）— 裁早期工具输出，保护最近 40K token，只在能省 ≥20K 时动手。不调模型。
+1. **快压**（`compress.zig`，`tool-output-pruner` 的 `before_turn`）— 无 LLM。
+   - **prune**：同 path 再 read 立刻 supersede 旧结果；年龄裁优先动 cache 廉价尾（suffix ≤ 8K），不够才深裁。保护最近 16K，能省 ≥4K 才动手。skill 永不裁，最新一次 read 保留。
+   - **shake**（用量 >70% 或 `/shake`）：撕掉旧 tool 结果与大 fence/XML。硬线前（>85%）再跑一次 protect=0 救援，避免单轮过大切不动。`/shake images` 只丢图。
+   - **snap**（用量 >80% 或 `/snap`）：大段高 ASCII 打成多带密图并留 head/tail 摘。优先廉价尾（suffix ≤ 8K），无货才深打，少炸 prompt cache。无 vision / CJK / 图 token 不过关则跳过。tool 上的图在发请求时拆成 user 图块。`/fast-compress` 看用量与下一层。
 2. **压缩**（`agent.zig` 的 `compact`）— 总 token 超窗口 85% 时触发，调模型生成摘要，保留最近 20% 窗口预算。切点只落在 `user`/`assistant`，绝不切断 tool 结果对。增量式：只总结上次边界之后的内容。
 3. **跨会话记忆**（`cross-session-memory` 插件，`on_compact`）— 复用压缩摘要落盘，下次同目录启动注入。零额外调用。
 
@@ -426,7 +431,7 @@ piz 保留「置前」，理由是两者的压缩语义不同：codex 保留 use
 ## 测试
 
 ```bash
-zig build test          # 148 个测试
+zig build test          # 177 个测试
 ```
 
 两个测试目标：`core.zig` 为根（收集全部 core 模块的 test 块）、`main.zig` 为根（含 `e2e.zig`）。Zig 的 `zig test` 只收集根模块的测试，所以要分两个目标。

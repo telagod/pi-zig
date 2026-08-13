@@ -9,6 +9,7 @@ const ai = @import("core").ai;
 const toolsmod = @import("core").tools;
 const activity = @import("core").activity;
 const httpc = @import("core").httpc;
+const mcpmod = @import("core").mcp;
 
 const MOCK_PORT: u16 = 18521;
 const MOCK_PORT2: u16 = 18522;
@@ -1452,4 +1453,16 @@ test "Responses API: function_call events and input items round trip" {
     try t.expect(state.responses_call_output_ok.load(.acquire));
     state.stop.store(true, .release);
     thread.join();
+}
+
+test "mcp: parse tool name (first __ after prefix)" {
+    const p = mcpmod.parseToolName("mcp__my_srv__do_it") orelse return error.ParseFailed;
+    try std.testing.expectEqualStrings("my_srv", p.server);
+    try std.testing.expectEqualStrings("do_it", p.tool);
+    try std.testing.expect(mcpmod.parseToolName("bash") == null);
+    try std.testing.expect(mcpmod.parseToolName("mcp__only") == null);
+}
+
+test "mcp: script server roundtrip (stdout streaming + tool dispatch)" {
+    try mcpmod.runScriptServerTest(std.testing);
 }

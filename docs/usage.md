@@ -93,7 +93,11 @@ piz -n           # 新会话，不续载
 | `/fork <n>` | 从第 n 条消息分叉出新会话 |
 | `/undo` | 撤销最近一轮（删除最后一条 user 消息及其后全部） |
 | `/redo` | 重发上一次输入 |
-| `/compact` | 立即压缩上下文 |
+| `/compact` | 立即压缩上下文（调模型写摘要） |
+| `/shake` | 机械裁掉旧 tool 结果与大 fence/XML，不调模型 |
+| `/shake images` | 只丢掉消息上的图片附件 |
+| `/snap` | 把大段 ASCII tool 输出打成密图并留原文摘（无 vision 则跳过） |
+| `/fast-compress` | 看快压状态：用量、下一层、vision、已裁计数 |
 | `/memory` | 查看跨会话记忆内容 |
 | `/memory set <text>` | 写入一条跨会话记忆 |
 | `/memory clear` | 清空跨会话记忆 |

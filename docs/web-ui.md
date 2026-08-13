@@ -134,7 +134,7 @@ root 设成 `Agent.cwd`，`bash` 则直接以它作为子进程的工作目录�
 | `/api/mode` | 读写审批模式（自动 / 逐次询问） |
 | `/api/model` | 读写当前模型 |
 | `/api/title` | 读写会话标题（写入裁到 256 字节，见 [Sessions](sessions.md)） |
-| `/api/action` | 会话动作：`fork` / `undo` / `compact` / `archive` / `restore` / `delete` |
+| `/api/action` | 会话动作：`fork` / `undo` / `compact` / `shake` / `snap` / `archive` / `restore` / `delete` |
 | `/api/config` | 写配置 |
 | `/api/workspaces` | 注册工作区 |
 

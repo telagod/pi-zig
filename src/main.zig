@@ -10,6 +10,7 @@ const toolsmod = @import("core").tools;
 const pkgsmod = @import("core").pkgs;
 const eventsmod = @import("core").events;
 const pluginsmod = @import("core").plugins;
+const compress = @import("core").compress;
 const tui_mod = @import("tui");
 const webui_mod = @import("webui.zig");
 
@@ -59,7 +60,7 @@ const HELP =
 /// 每个真实存在的命令都必须在这里出现 —— 漏掉的等于没实现:
 /// /dump /export /plan /queue 四条一直可用,却从不出现在帮助里,
 /// 用户没有任何途径发现它们。下面有测试盯着这份清单与实际分发的一致性。
-const SLASH_HELP = "/help /status /model <m> /new /sessions /resume <n> /title <t> /tree /fork <n> /copy /undo /redo /memory /compact /clear /plan <goal> /queue /export /dump /quit";
+const SLASH_HELP = "/help /status /model <m> /new /sessions /resume <n> /title <t> /tree /fork <n> /copy /undo /redo /memory /compact /shake [images] /snap /fast-compress /clear /plan <goal> /queue /export /dump /quit";
 
 // ---------- 交互模式 ----------
 
@@ -1433,6 +1434,24 @@ fn poolActionHook(ctx: ?*anyopaque, cwd: []const u8, session: []const u8, act: [
         rebuildSnap(ses);
         return "{\"ok\":true,\"act\":\"compact\"}";
     }
+    if (std.mem.eql(u8, act, "shake") or std.mem.eql(u8, act, "shake-images") or std.mem.eql(u8, act, "snap")) {
+        if (ses.busy.cmpxchgWeak(0, 2, .acq_rel, .acquire) != null) return "{\"ok\":false,\"error\":\"busy\"}";
+        defer ses.busy.store(0, .release);
+        const drop_images = std.mem.eql(u8, act, "shake-images") or (name != null and std.mem.eql(u8, name.?, "images"));
+        const in = compress.Input{
+            .alloc = ses.agent.alloc,
+            .messages = &ses.agent.messages,
+            .window = ses.agent.ctxWindow(),
+            .api = ses.agent.provider.api,
+            .vision = compress.modelHasVision(ses.agent.model),
+        };
+        const r = if (std.mem.eql(u8, act, "snap"))
+            compress.snap(in)
+        else
+            compress.shake(in, .{ .protect_tokens = 0, .min_savings = 0, .drop_images = drop_images });
+        rebuildSnap(ses);
+        return std.fmt.allocPrint(alloc, "{{\"ok\":true,\"act\":\"{s}\",\"saved\":{d}}}", .{ act, r.tokens_saved }) catch null;
+    }
     return null;
 }
 
@@ -1759,6 +1778,54 @@ fn onSubmit(tui: *tui_mod.Tui, line: []const u8) anyerror!void {
         if (std.mem.eql(u8, cmd, "compact")) {
             app.tui.appendLine("", "\x1b[2m", "compacting conversation…") catch {};
             spawnWorker(app, "", true);
+            return;
+        }
+        if (std.mem.eql(u8, cmd, "shake") or std.mem.startsWith(u8, cmd, "shake ")) {
+            if (app.worker_active.load(.acquire)) {
+                app.tui.appendLine("", "\x1b[31m", "cannot shake while a turn is running") catch {};
+                return;
+            }
+            const args = if (std.mem.startsWith(u8, cmd, "shake ")) std.mem.trim(u8, cmd["shake ".len..], " ") else "";
+            const r = compress.shake(.{
+                .alloc = app.alloc,
+                .messages = &app.agent.messages,
+                .window = app.agent.ctxWindow(),
+                .api = app.agent.provider.api,
+                .vision = compress.modelHasVision(app.agent.model),
+            }, .{ .protect_tokens = 0, .min_savings = 0, .drop_images = std.mem.eql(u8, args, "images") });
+            const msg = compress.formatNotice(app.alloc, r) orelse "shake: nothing to elide";
+            app.tui.appendLine("", "\x1b[2m", msg) catch {};
+            return;
+        }
+        if (std.mem.eql(u8, cmd, "snap")) {
+            if (app.worker_active.load(.acquire)) {
+                app.tui.appendLine("", "\x1b[31m", "cannot snap while a turn is running") catch {};
+                return;
+            }
+            const vision = compress.modelHasVision(app.agent.model);
+            const r = compress.snap(.{
+                .alloc = app.alloc,
+                .messages = &app.agent.messages,
+                .window = app.agent.ctxWindow(),
+                .api = app.agent.provider.api,
+                .vision = vision,
+            });
+            const msg = compress.formatNotice(app.alloc, r) orelse if (!vision)
+                "snap: model has no vision"
+            else
+                "snap: nothing eligible (need large ASCII tool output + vision)";
+            app.tui.appendLine("", "\x1b[2m", msg) catch {};
+            return;
+        }
+        if (std.mem.eql(u8, cmd, "fast-compress")) {
+            const msg = compress.formatStatus(app.alloc, .{
+                .alloc = app.alloc,
+                .messages = &app.agent.messages,
+                .window = app.agent.ctxWindow(),
+                .api = app.agent.provider.api,
+                .vision = compress.modelHasVision(app.agent.model),
+            });
+            app.tui.appendLine("", "\x1b[2m", msg) catch {};
             return;
         }
         if (std.mem.eql(u8, cmd, "redo")) {
@@ -3198,10 +3265,10 @@ test "every slash command appears in /help" {
     //
     // 命令名取自 onSubmit 里的 `eql(u8, cmd, "…")` / `startsWith(u8, cmd, "… ")`。
     const dispatched = [_][]const u8{
-        "help",   "status",  "model", "new",  "sessions", "resume",
-        "title",  "tree",    "fork",  "copy", "undo",     "redo",
-        "memory", "compact", "clear", "plan", "queue",    "export",
-        "dump",   "quit",
+        "help",   "status",  "model",  "new",  "sessions",      "resume",
+        "title",  "tree",    "fork",   "copy", "undo",          "redo",
+        "memory", "compact", "shake",  "snap", "fast-compress", "clear",
+        "plan",   "queue",   "export", "dump", "quit",
     };
     for (dispatched) |cmd| {
         var buf: [32]u8 = undefined;

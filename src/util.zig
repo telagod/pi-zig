@@ -435,6 +435,25 @@ pub fn estTokens(s: []const u8) usize {
     return n / 4 + 1;
 }
 
+/// 上下文预算用的分档估算。ASCII 4 字节/token;2 字节序列约 1.5 字符/token;宽字符(CJK/emoji) 1:1。
+/// Agent.estTokensOf 与 compress 必须走同一套,否则裁剪门槛与硬线估算会漂。
+pub fn estTokensUtf8(text: []const u8) usize {
+    var ascii: usize = 0;
+    var two: usize = 0;
+    var wide: usize = 0;
+    var i: usize = 0;
+    while (i < text.len) {
+        const len = std.unicode.utf8ByteSequenceLength(text[i]) catch 1;
+        switch (len) {
+            1 => ascii += 1,
+            2 => two += 1,
+            else => wide += 1,
+        }
+        i += len;
+    }
+    return ascii / 4 + two * 2 / 3 + wide;
+}
+
 /// 按字节上限把 s 截到最近的 UTF-8 边界,返回子切片(不分配)。
 /// 切在多字节序列中间会产生非法 UTF-8,让 JSON 序列化吐出坏字符串 --
 /// 中文每字 3 字节,盲切几乎必然踩中。

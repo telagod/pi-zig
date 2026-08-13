@@ -202,7 +202,7 @@ piz --models
 
 `contextWindow` 决定何时触发压缩：总 token 超过窗口的 **85%** 时压缩，压缩后保留最近 **20%** 窗口预算的消息。
 
-压缩前会先由 `tool-output-pruner` 插件尝试裁剪早期工具输出 —— 裁剪不用调模型，比压缩便宜。详见 [Plugins](plugins.md#tool-output-pruner)。
+压缩前会先由 `tool-output-pruner` 跑快压三件套（prune / shake / snap）—— 不用调模型，比压缩便宜。详见 [Plugins](plugins.md#tool-output-pruner)。
 
 token 数是**估算**的（不请求 provider 的 tokenizer）：按 UTF-8 序列长度分档 —— ASCII 4 字节/token，CJK 1 字符/token。早先按「4 字节 = 1 token」一刀切，对中文低估约 23%，会让压缩迟迟不触发直到请求被 provider 以超窗拒绝。估算宁可略高：高了只是早压缩一点，低了会把请求打过去被拒。
 

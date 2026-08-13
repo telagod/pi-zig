@@ -642,21 +642,7 @@ pub const Agent = struct {
 
     /// 单段文本的 token 估算。按 UTF-8 序列长度分档计权。
     pub fn estTokensOf(text: []const u8) usize {
-        var ascii: usize = 0;
-        var two: usize = 0;
-        var wide: usize = 0; // 3-4 字节:CJK / emoji,按 1 字符 1 token
-        var i: usize = 0;
-        while (i < text.len) {
-            const len = std.unicode.utf8ByteSequenceLength(text[i]) catch 1;
-            switch (len) {
-                1 => ascii += 1,
-                2 => two += 1,
-                else => wide += 1,
-            }
-            i += len;
-        }
-        // ASCII 4 字节/token;2 字节序列约 1 token 每 1.5 字符;宽字符 1:1
-        return ascii / 4 + two * 2 / 3 + wide;
+        return util.estTokensUtf8(text);
     }
 
     /// 追加用户消息并跑完一轮(含工具循环)。
@@ -717,7 +703,8 @@ pub const Agent = struct {
             var all = std.array_list.Managed(ai.Message).init(self.alloc);
             defer all.deinit();
             try all.append(.{ .role = "system", .content = self.system_prompt });
-            try all.appendSlice(self.messages.items);
+            const compress = @import("compress.zig");
+            for (self.messages.items) |m| try compress.appendForRequest(&all, m);
 
             // 工具定义(核心 + 插件;带真 JSON Schema)
             var tool_defs = std.array_list.Managed(ai.ToolDef).init(self.alloc);

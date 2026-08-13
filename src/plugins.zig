@@ -9,6 +9,7 @@ const toolsmod = @import("tools.zig");
 const aimod = @import("ai.zig");
 const imgxmod = @import("imgx.zig");
 const util = @import("util.zig");
+const compress = @import("compress.zig");
 
 /// 内置插件定义。
 pub const Plugin = struct {
@@ -45,61 +46,20 @@ pub const SlashCommand = struct {
     handler: *const fn (ctx: ?*anyopaque, args: []const u8) anyerror![]const u8,
 };
 
-/// 工具输出预剪枝(omp fork 式增强;pi 官方无此机制)。
-/// 只裁早期工具输出,占位替换,不碰轮结构:
-/// - 保护最新 40K token 的工具输出(尾部倒推)
-/// - 可节省 ≥ 20K token 才动手
-/// - 不裁 read/skill 类工具结果(模型需要原文)
+/// 快压入口(before_turn):prune → shake → snap → 硬线救援。
+/// 纯机械,不调模型。实现见 compress.zig。
 fn pruneHook(ctx: ?*anyopaque) void {
     const self: *agentmod.Agent = @ptrCast(@alignCast(ctx.?));
-    const PROTECT_TOKENS = 40 * 1024;
-    const MIN_SAVINGS_TOKENS = 20 * 1024;
-    // 统一用 Agent.estTokensOf 估算,不再「token × 4 当字节」:
-    // 那个换算对中文低估约 25%,会让保护窗口实际比 40K token 小、
-    // 也让「够不够 20K 可省」的判断偏保守(该裁的时候不裁)。
-    const estTok = agentmod.Agent.estTokensOf;
-    // 尾部倒推:累计受保护工具输出,得首个受保护索引
-    var protected: usize = 0;
-    var first_protected: usize = self.messages.items.len;
-    var i = self.messages.items.len;
-    while (i > 0) {
-        i -= 1;
-        const m = self.messages.items[i];
-        if (!std.mem.eql(u8, m.role, "tool")) continue;
-        if (protected >= PROTECT_TOKENS) break;
-        protected += estTok(m.content);
-        first_protected = i;
+    const r = compress.runAuto(.{
+        .alloc = self.alloc,
+        .messages = &self.messages,
+        .window = self.ctxWindow(),
+        .api = self.provider.api,
+        .vision = compress.modelHasVision(self.model),
+    });
+    if (compress.formatNotice(self.alloc, r)) |msg| {
+        if (self.cbs.on_notice) |f| f(self.cbs.ctx, msg) catch {};
     }
-    // 可裁量(排除 read/skill 与已裁占位)
-    var savings: usize = 0;
-    for (0..first_protected) |j| {
-        const m = self.messages.items[j];
-        if (!std.mem.eql(u8, m.role, "tool")) continue;
-        if (isProtectedTool(self, m) or m.content.len == 0) continue;
-        savings += estTok(m.content);
-    }
-    if (savings < MIN_SAVINGS_TOKENS) return;
-    // 裁剪:占位替换(注意 items[j] 是值拷贝,须直接索引赋值)
-    for (0..first_protected) |j| {
-        if (!std.mem.eql(u8, self.messages.items[j].role, "tool")) continue;
-        if (isProtectedTool(self, self.messages.items[j]) or self.messages.items[j].content.len == 0) continue;
-        self.messages.items[j].content = std.fmt.allocPrint(self.alloc, "[Output truncated - {d} tokens]", .{estTok(self.messages.items[j].content)}) catch continue;
-    }
-}
-
-/// 工具结果是否受保护(其归属工具名 ∈ {read, skill})。
-fn isProtectedTool(self: *agentmod.Agent, m: agentmod.ai.Message) bool {
-    const id = m.tool_call_id orelse return false;
-    for (self.messages.items) |mm| {
-        if (!std.mem.eql(u8, mm.role, "assistant")) continue;
-        const tcs = mm.tool_calls orelse continue;
-        for (tcs) |tc| {
-            if (std.mem.eql(u8, tc.id, id)) {
-                return std.mem.eql(u8, tc.name, "read") or std.mem.eql(u8, tc.name, "skill");
-            }
-        }
-    }
-    return false;
 }
 
 test "command canonicalization blocks dangerous patterns" {
@@ -469,21 +429,22 @@ test "prune plugin trims old tool outputs only" {
     // 旧 bash 轮 ×8(240KB)+ read 轮(30KB,不裁)+ 新 bash 轮(30KB,尾部保护)
     const big = "z" ** (30 * 1024);
     for (0..8) |i| {
+        const id = try std.fmt.allocPrint(a, "c_bash{d}", .{i});
+        const tcs = try a.alloc(agentmod.ai.ToolCall, 1);
+        tcs[0] = .{ .id = id, .name = "bash", .args = "{}" };
         try agent.messages.append(.{ .role = "user", .content = "old q" });
-        try agent.messages.append(.{ .role = "assistant", .content = "a", .tool_calls = &.{
-            .{ .id = try std.fmt.allocPrint(a, "c_bash{d}", .{i}), .name = "bash", .args = "{}" },
-        } });
-        try agent.messages.append(.{ .role = "tool", .content = big, .tool_call_id = try std.fmt.allocPrint(a, "c_bash{d}", .{i}) });
+        try agent.messages.append(.{ .role = "assistant", .content = "a", .tool_calls = tcs });
+        try agent.messages.append(.{ .role = "tool", .content = big, .tool_call_id = id });
     }
+    const read_tcs = try a.alloc(agentmod.ai.ToolCall, 1);
+    read_tcs[0] = .{ .id = "c_read1", .name = "read", .args = "{\"path\":\"keep.zig\"}" };
     try agent.messages.append(.{ .role = "user", .content = "old read q" });
-    try agent.messages.append(.{ .role = "assistant", .content = "a", .tool_calls = &.{
-        .{ .id = "c_read1", .name = "read", .args = "{}" },
-    } });
+    try agent.messages.append(.{ .role = "assistant", .content = "a", .tool_calls = read_tcs });
     try agent.messages.append(.{ .role = "tool", .content = big, .tool_call_id = "c_read1" });
+    const recent_tcs = try a.alloc(agentmod.ai.ToolCall, 1);
+    recent_tcs[0] = .{ .id = "c_bash9", .name = "bash", .args = "{}" };
     try agent.messages.append(.{ .role = "user", .content = "new q" });
-    try agent.messages.append(.{ .role = "assistant", .content = "a", .tool_calls = &.{
-        .{ .id = "c_bash9", .name = "bash", .args = "{}" },
-    } });
+    try agent.messages.append(.{ .role = "assistant", .content = "a", .tool_calls = recent_tcs });
     try agent.messages.append(.{ .role = "tool", .content = big, .tool_call_id = "c_bash9" });
 
     pruneHook(@ptrCast(&agent));
@@ -2297,6 +2258,8 @@ const LspSession = struct {
     /// 超时返回 error.LspTimeout —— 绝不无限等。
     fn awaitResponse(self: *LspSession, want_id: i64) ![]const u8 {
         const stdout = self.child.stdout orelse return error.NoStdout;
+        const act = activity.begin(.tool, "lsp", "await", LSP_TIMEOUT_MS);
+        defer act.release();
         var chunk: [8192]u8 = undefined;
         var cursor: usize = 0;
         while (true) {
@@ -2315,6 +2278,7 @@ const LspSession = struct {
                 return frame.body;
             }
             if (std.Io.Clock.now(.awake, agentmod.util.io).nanoseconds > self.deadline_ns) return error.LspTimeout;
+            if (act.cancelled()) return error.Canceled;
             // 读更多
             var pfd = [_]std.posix.pollfd{.{ .fd = stdout.handle, .events = std.posix.POLL.IN, .revents = 0 }};
             const n = std.posix.poll(&pfd, 100) catch 0;

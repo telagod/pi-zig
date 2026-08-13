@@ -86,14 +86,14 @@ piz --plugin lsp --plugin todo    # 本次开启（可重复）
 
 ### tool-output-pruner
 
-上下文压力下先裁工具输出，而不是直接触发全量压缩 —— 压缩要额外调一次模型，裁剪不要钱。
+上下文压力下先跑快压三件套，而不是直接触发全量压缩 —— 压缩要额外调一次模型，这三层不要钱。实现在 `compress.zig`。
 
-- 保护最近 40K token 的工具输出（从尾部倒推累计）
-- 只在能省下 ≥20K token 时才动手，否则不折腾
-- **不裁** `read` / `skill` 类结果（模型需要原文）
-- 被裁的内容替换为 `[Output truncated - N tokens]` 占位，不破坏轮结构
+- **prune**：同 path 再 read 立刻 supersede 旧结果（保护窗内也裁）；年龄裁优先动 suffix ≤ 8K 的廉价尾，不够才深裁。保护最近 16K，能省 ≥4K 才动手。skill 永不裁，最新一次 read 保留。消息数不再卡 8192。
+- **shake**（用量 >70% 或 `/shake`）：撕掉旧 tool 结果与大 fence/XML。硬线前再救援一次。`/shake images` 只丢图。WebUI 可用 `act=shake-images` 或 `name=images`。
+- **snap**（用量 >80% 或 `/snap`）：多带密图 + 原文摘；优先廉价尾护 cache；无 vision / CJK / 图 token 不过关则跳过。`/fast-compress` 看状态。
+- 被裁内容换成占位，不破坏轮结构
 
-pi 没有这个机制。
+比 omp 更狠的点：不永保全部 read；廉价尾不够省就深裁；snap 不拿汉字赌 OCR。
 
 ### cross-session-memory
 
