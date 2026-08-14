@@ -48,6 +48,7 @@ piz 用自己的配置目录 `~/.piz`。配置**文件格式**与 pi 兼容（`s
   "defaultProvider": "anthropic",
   "defaultModel": "claude-sonnet-5",
   "defaultThinkingLevel": "high",
+  "thinkingBudgets": { "high": 32768 },
   "plugins": ["lsp", "todo"]
 }
 ```
@@ -57,6 +58,7 @@ piz 用自己的配置目录 `~/.piz`。配置**文件格式**与 pi 兼容（`s
 | `defaultProvider` | 默认 provider |
 | `defaultModel` | 默认模型 |
 | `defaultThinkingLevel` | 默认思考等级（pi 同名字段）。`/think` 与 `Alt+,/.` 会写回这里 |
+| `thinkingBudgets` | 旧 Claude 预算思考每档 token。缺省 `minimal:1024` / `low:2048` / `medium:8192` / `high:16384`（pi `adjustMaxTokensForThinking`）。`xhigh`/`max` 夹到 `high` |
 | `plugins` | 要开启的可选插件名数组，见 [Plugins](plugins.md#开启方式) |
 | `disabled_plugins` | 要从出厂集关掉的插件名数组（撤钩 / 工具 / schema） |
 
@@ -117,6 +119,8 @@ piz 用自己的配置目录 `~/.piz`。配置**文件格式**与 pi 兼容（`s
 | `thinkingLevelMap` | 见下 | 该模型有哪些思考档、发给 API 的字符串 |
 | `compat.thinkingFormat` | 按渠道探测 | `openai` / `openrouter` / `deepseek` / `zai` / `together` / `qwen` |
 | `compat.requiresReasoningContentOnAssistantMessages` | DeepSeek 为 true | 回放 `reasoning_content` |
+| `compat.forceAdaptiveThinking` | 按模型 id 探测 | Anthropic：发 `thinking.type: adaptive` + `output_config.effort`。自定义代理别名须显式写 `true` |
+| `compat.allowEmptySignature` | `false` | 无 signature 时仍回放 thinking 块；默认改成 text |
 
 也认 `vision: true` 和 OpenRouter 的 `architecture.modality`。
 
@@ -149,9 +153,30 @@ DeepSeek 官方请求形状（[Thinking Mode](https://api-docs.deepseek.com/guid
 | `zai` / `api.z.ai` / `open.bigmodel.cn` | `zai` | `thinking: {type}` |
 | `together` | `together` | `reasoning: {enabled}` |
 | `qwen`（须在 compat 里显式写） | `qwen` | `enable_thinking` + `reasoning_effort` |
-| 其他 | `openai` | 顶层 `reasoning_effort` |
+| 其他 Chat Completions | `openai` | 顶层 `reasoning_effort` |
+
+OpenAI 官方有两条 API，思考字段不一样（pi `openai-completions.ts` / `openai-responses.ts`）：
+
+| `api` | 思考开 | 思考关 |
+|-------|--------|--------|
+| `openai-completions` | 顶层 `reasoning_effort`（渠道格式见上表） | `thinkingLevelMap.off` 是字符串才发；省略则不写 |
+| `openai-responses` | `reasoning: {effort, summary: "auto"}` + `include: ["reasoning.encrypted_content"]` | off 未隐藏则发 `effort: map.off ?? "none"`，不带 include |
+
+GPT 档抄 pi `generate-models.ts`：`gpt-5.2`–`5.6` 有 `xhigh`；`gpt-5.6` 在 Completions 与 Responses 都有 `max`。Responses 上 `gpt-5*` 默认藏 `off`，但 `gpt-5.1` / `gpt-5.2` / `gpt-5.4` / `gpt-5.5` 等（`OPENAI_RESPONSES_NONE_REASONING_MODELS`）的 off 发 `none`。`gpt-5.5` 藏 `minimal`；`gpt-5.5-pro` 藏 off / minimal / low。
+
+Responses 设了 `store: false`，工具轮必须把上一轮的 reasoning item（含 `encrypted_content`）原样推进 `input`，否则下一轮 400/404。会话把整段 item JSON 存在 `thinking_signature`。
 
 DeepSeek（含 id 带 `deepseek-v4` 的网关）会回放 assistant 的 `reasoning_content`：有思考写原文，没有写 `""`。这是官方 tool-call 多轮的硬要求，缺了会 400。
+
+Anthropic Messages 抄 pi `anthropic-messages.ts`：
+
+| 模型 | 请求 |
+|------|------|
+| adaptive（id 含 opus-4-6/4-7/4-8/5、sonnet-4-6/5、fable-5，或 `forceAdaptiveThinking`） | `thinking: {type: adaptive, display: summarized}` + `output_config.effort` |
+| 其他 `reasoning: true` | `thinking: {type: enabled, budget_tokens, display: summarized}`，并把 `max_tokens` 撑到预算+正文（正文至少留 1024） |
+| `off` | `thinking: {type: disabled}`（`thinkingLevelMap.off` 为 `null` 的模型不写，如 fable-5） |
+
+effort 字符串走该模型的 `thinkingLevelMap`。pi 给 sonnet-4-6 显式 `max`；opus-4-7 / sonnet-5 / fable-5 显式 `xhigh` 与 `max`。工具轮必须回放上一轮的 `thinking` + `signature`（或 `redacted_thinking`）；没有 signature 就改成 text，避免 400。
 
 自定义模型可在对象上写 `thinkingLevelMap`，会盖在目录表上面：
 

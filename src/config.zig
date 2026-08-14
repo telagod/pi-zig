@@ -121,7 +121,44 @@ pub const Compat = struct {
     think_format: ?ThinkFormat = null,
     requires_reasoning_content: ?bool = null,
     supports_reasoning_effort: ?bool = null,
+    /// anthropic-messages:`thinking.type: adaptive` + `output_config.effort`。
+    /// 抄 pi `forceAdaptiveThinking`;未写则按模型 id 探测。
+    force_adaptive_thinking: ?bool = null,
+    /// 无 signature 时仍回放 thinking 块(部分兼容端点)。默认改成 text。
+    allow_empty_signature: ?bool = null,
 };
+
+/// pi `thinkingBudgets`:预算思考(旧 Claude)每档 token。xhigh/max 夹到 high。
+pub const ThinkingBudgets = struct {
+    minimal: u32 = 1024,
+    low: u32 = 2048,
+    medium: u32 = 8192,
+    high: u32 = 16384,
+
+    pub fn forLevel(self: ThinkingBudgets, level: ThinkLevel) u32 {
+        return switch (level) {
+            .off => 0,
+            .minimal => self.minimal,
+            .low => self.low,
+            .medium => self.medium,
+            .high, .xhigh, .max => self.high,
+        };
+    }
+};
+
+/// 留给正文的下限。抄 pi `MIN_ANSWER_TOKENS`。
+pub const MIN_ANSWER_TOKENS: u32 = 1024;
+
+/// 抄 pi `adjustMaxTokensForThinking`。
+pub fn adjustMaxTokensForThinking(base: u32, model_max: u32, level: ThinkLevel, budgets: ThinkingBudgets) struct { max_tokens: u32, thinking_budget: u32 } {
+    var thinking_budget = budgets.forLevel(level);
+    const cap = if (model_max > 0) model_max else base + thinking_budget;
+    const max_tokens = if (base == 0) cap else @min(base + thinking_budget, cap);
+    if (max_tokens <= thinking_budget) {
+        thinking_budget = if (max_tokens > MIN_ANSWER_TOKENS) max_tokens - MIN_ANSWER_TOKENS else 0;
+    }
+    return .{ .max_tokens = max_tokens, .thinking_budget = thinking_budget };
+}
 
 pub const Provider = struct {
     name: []const u8,
@@ -220,6 +257,12 @@ fn parseCompat(obj: std.json.ObjectMap) Compat {
     if (src.get("supportsReasoningEffort")) |v| {
         if (v == .bool) c.supports_reasoning_effort = v.bool;
     }
+    if (src.get("forceAdaptiveThinking")) |v| {
+        if (v == .bool) c.force_adaptive_thinking = v.bool;
+    }
+    if (src.get("allowEmptySignature")) |v| {
+        if (v == .bool) c.allow_empty_signature = v.bool;
+    }
     return c;
 }
 
@@ -253,11 +296,34 @@ pub fn detectCompat(provider: *const Provider, model: []const u8) Compat {
     else
         .openai;
 
+    if (provider.api == .anthropic_messages) {
+        return .{
+            .force_adaptive_thinking = isAnthropicAdaptiveThinkingModel(model),
+        };
+    }
+
     return .{
         .think_format = format,
         .requires_reasoning_content = is_deepseek or std.mem.indexOf(u8, model, "deepseek-v4") != null,
         .supports_reasoning_effort = !(is_grok or is_zai or is_moonshot or is_together or is_cf_gw or is_nvidia or is_ant),
     };
+}
+
+/// 抄 pi `generate-models.ts` `isAnthropicAdaptiveThinkingModel`。
+pub fn isAnthropicAdaptiveThinkingModel(model: []const u8) bool {
+    return std.mem.indexOf(u8, model, "opus-4-6") != null or
+        std.mem.indexOf(u8, model, "opus-4.6") != null or
+        std.mem.indexOf(u8, model, "opus-4-7") != null or
+        std.mem.indexOf(u8, model, "opus-4.7") != null or
+        std.mem.indexOf(u8, model, "opus-4-8") != null or
+        std.mem.indexOf(u8, model, "opus-4.8") != null or
+        std.mem.indexOf(u8, model, "opus-5") != null or
+        std.mem.indexOf(u8, model, "opus.5") != null or
+        std.mem.indexOf(u8, model, "sonnet-4-6") != null or
+        std.mem.indexOf(u8, model, "sonnet-4.6") != null or
+        std.mem.indexOf(u8, model, "sonnet-5") != null or
+        std.mem.indexOf(u8, model, "sonnet.5") != null or
+        std.mem.indexOf(u8, model, "fable-5") != null;
 }
 
 fn containsIgnoreCase(hay: []const u8, needle: []const u8) bool {
@@ -274,6 +340,8 @@ fn overlayCompat(base: Compat, over: Compat) Compat {
         .think_format = over.think_format orelse base.think_format,
         .requires_reasoning_content = over.requires_reasoning_content orelse base.requires_reasoning_content,
         .supports_reasoning_effort = over.supports_reasoning_effort orelse base.supports_reasoning_effort,
+        .force_adaptive_thinking = over.force_adaptive_thinking orelse base.force_adaptive_thinking,
+        .allow_empty_signature = over.allow_empty_signature orelse base.allow_empty_signature,
     };
 }
 
@@ -281,6 +349,23 @@ fn overlayCompat(base: Compat, over: Compat) Compat {
 pub fn resolveCompat(provider: *const Provider, model: []const u8) Compat {
     const meta = metaFor(provider, model);
     return overlayCompat(overlayCompat(detectCompat(provider, model), provider.compat), meta.compat);
+}
+
+fn parseThinkingBudgets(obj: std.json.ObjectMap) ThinkingBudgets {
+    var b = ThinkingBudgets{};
+    if (obj.get("minimal")) |v| {
+        if (parsePositiveU32(v)) |n| b.minimal = n;
+    }
+    if (obj.get("low")) |v| {
+        if (parsePositiveU32(v)) |n| b.low = n;
+    }
+    if (obj.get("medium")) |v| {
+        if (parsePositiveU32(v)) |n| b.medium = n;
+    }
+    if (obj.get("high")) |v| {
+        if (parsePositiveU32(v)) |n| b.high = n;
+    }
+    return b;
 }
 
 fn parseThinkMap(obj: std.json.ObjectMap) ThinkingLevelMap {
@@ -316,6 +401,15 @@ pub fn catalogMeta(model: []const u8) ModelMeta {
             .reasoning = true,
         };
     }
+    // adaptive Claude:generate-models 给这些 id 标了 reasoning + forceAdaptiveThinking。
+    // 窗口仍走 models.json / provider,不在这里编数字。
+    if (isAnthropicAdaptiveThinkingModel(model)) {
+        return .{ .reasoning = true };
+    }
+    // GPT-5.2+ 在 generate-models 里拿 xhigh(以及 5.6 的 max)。窗口不在这里编。
+    if (supportsOpenAiXhigh(model)) {
+        return .{ .reasoning = true };
+    }
     return .{};
 }
 
@@ -328,6 +422,8 @@ pub fn catalogMeta(model: []const u8) ModelMeta {
 /// openrouter: { ...Pro, xhigh:"xhigh", max:null }
 /// ```
 pub fn catalogThinkMap(provider: *const Provider, model: []const u8) ?ThinkingLevelMap {
+    if (catalogAnthropicThinkMap(model)) |m| return m;
+    if (catalogOpenAiThinkMap(provider, model)) |m| return m;
     if (provider.api != .openai_completions) return null;
     if (std.mem.indexOf(u8, model, "deepseek-v4") == null) return null;
 
@@ -348,6 +444,107 @@ pub fn catalogThinkMap(provider: *const Provider, model: []const u8) ?ThinkingLe
         return map;
     }
     return map;
+}
+
+/// pi `applyThinkingLevelMetadata` 里按模型 id 套的 Anthropic adaptive 表。
+fn catalogAnthropicThinkMap(model: []const u8) ?ThinkingLevelMap {
+    var map = ThinkingLevelMap{};
+    var set = false;
+    if (std.mem.indexOf(u8, model, "opus-4-6") != null or
+        std.mem.indexOf(u8, model, "opus-4.6") != null or
+        std.mem.indexOf(u8, model, "sonnet-4-6") != null or
+        std.mem.indexOf(u8, model, "sonnet-4.6") != null)
+    {
+        map.put(.max, .{ .send = "max" });
+        set = true;
+    }
+    if (std.mem.indexOf(u8, model, "opus-4-7") != null or
+        std.mem.indexOf(u8, model, "opus-4.7") != null or
+        std.mem.indexOf(u8, model, "opus-4-8") != null or
+        std.mem.indexOf(u8, model, "opus-4.8") != null or
+        std.mem.indexOf(u8, model, "opus-5") != null or
+        std.mem.indexOf(u8, model, "opus.5") != null or
+        std.mem.indexOf(u8, model, "sonnet-5") != null or
+        std.mem.indexOf(u8, model, "sonnet.5") != null)
+    {
+        map.put(.xhigh, .{ .send = "xhigh" });
+        map.put(.max, .{ .send = "max" });
+        set = true;
+    }
+    if (std.mem.indexOf(u8, model, "fable-5") != null) {
+        map.put(.off, .hidden);
+        map.put(.xhigh, .{ .send = "xhigh" });
+        map.put(.max, .{ .send = "max" });
+        set = true;
+    }
+    return if (set) map else null;
+}
+
+/// pi `generate-models.ts` `supportsOpenAiXhigh`。
+fn supportsOpenAiXhigh(model: []const u8) bool {
+    return std.mem.indexOf(u8, model, "gpt-5.2") != null or
+        std.mem.indexOf(u8, model, "gpt-5.3") != null or
+        std.mem.indexOf(u8, model, "gpt-5.4") != null or
+        std.mem.indexOf(u8, model, "gpt-5.5") != null or
+        std.mem.indexOf(u8, model, "gpt-5.6") != null;
+}
+
+/// pi `OPENAI_RESPONSES_NONE_REASONING_MODELS`。Responses 上这些 id 的 off 发 `none`。
+fn openaiResponsesOffSendsNone(model: []const u8) bool {
+    const ids = [_][]const u8{
+        "gpt-5.1",
+        "gpt-5.2",
+        "gpt-5.3-codex",
+        "gpt-5.4",
+        "gpt-5.4-mini",
+        "gpt-5.4-nano",
+        "gpt-5.5",
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+        "gpt-5.6-luna",
+    };
+    const name = modelBareId(model);
+    for (ids) |id| {
+        if (std.mem.eql(u8, model, id) or std.mem.eql(u8, name, id)) return true;
+    }
+    return false;
+}
+
+/// pi `applyThinkingLevelMetadata` 的 OpenAI 段。Chat Completions 与 Responses 共用 xhigh/max;
+/// `off: null` / `off: "none"` 只套 Responses。
+fn catalogOpenAiThinkMap(provider: *const Provider, model: []const u8) ?ThinkingLevelMap {
+    var map = ThinkingLevelMap{};
+    var set = false;
+    const responses = provider.api == .openai_responses;
+    if (responses and std.mem.startsWith(u8, modelBareId(model), "gpt-5")) {
+        map.put(.off, .hidden);
+        set = true;
+    }
+    if (responses and std.mem.eql(u8, provider.name, "openai") and openaiResponsesOffSendsNone(model)) {
+        map.put(.off, .{ .send = "none" });
+        set = true;
+    }
+    if (supportsOpenAiXhigh(model)) {
+        map.put(.xhigh, .{ .send = "xhigh" });
+        set = true;
+    }
+    if (std.mem.indexOf(u8, model, "gpt-5.6") != null and
+        (provider.api == .openai_responses or provider.api == .openai_completions))
+    {
+        map.put(.max, .{ .send = "max" });
+        set = true;
+    }
+    if (std.mem.eql(u8, provider.name, "openai") and std.mem.eql(u8, modelBareId(model), "gpt-5.5")) {
+        map.put(.minimal, .hidden);
+        set = true;
+    }
+    if (std.mem.endsWith(u8, model, "gpt-5.5-pro")) {
+        map.put(.off, .hidden);
+        map.put(.minimal, .hidden);
+        map.put(.low, .hidden);
+        set = true;
+    }
+    return if (set) map else null;
 }
 
 fn overlayThinkMap(base: ThinkingLevelMap, over: ThinkingLevelMap) ThinkingLevelMap {
@@ -492,6 +689,8 @@ pub const Config = struct {
     default_model: ?[]const u8 = null,
     /// settings.json 的 `defaultThinkingLevel`。字段名抄 pi。
     default_think_level: ?ThinkLevel = null,
+    /// settings.json 的 `thinkingBudgets`。未写用 pi 缺省。
+    thinking_budgets: ThinkingBudgets = .{},
     /// settings.json 的 `plugins` 数组:要额外开启的可选插件名。
     enabled_plugins: []const []const u8 = &.{},
     /// settings.json 的 `disabled_plugins` 数组:要从出厂集关掉的插件名。
@@ -680,6 +879,9 @@ pub const Config = struct {
                 self.default_model = getStr(root, "defaultModel");
                 if (getStr(root, "defaultThinkingLevel")) |s| {
                     self.default_think_level = ThinkLevel.parse(s);
+                }
+                if (root.object.get("thinkingBudgets")) |raw| {
+                    if (raw == .object) self.thinking_budgets = parseThinkingBudgets(raw.object);
                 }
                 // plugins: 要额外开启的可选插件名数组
                 if (root.object.get("plugins")) |arr| {
@@ -1366,4 +1568,88 @@ test "settings.json defaultThinkingLevel loads" {
     defer c.deinit();
     try c.load();
     try t.expectEqual(ThinkLevel.low, c.default_think_level.?);
+}
+
+test "Anthropic adaptive maps and detect match pi generate-models.ts" {
+    const t = std.testing;
+    const ant = Provider{
+        .name = "anthropic",
+        .api = .anthropic_messages,
+        .base_url = "https://api.anthropic.com",
+    };
+    try t.expectEqual(true, resolveCompat(&ant, "claude-sonnet-4-6").force_adaptive_thinking.?);
+    try t.expectEqual(true, resolveCompat(&ant, "claude-opus-4-7").force_adaptive_thinking.?);
+    try t.expectEqual(false, resolveCompat(&ant, "claude-sonnet-4-20250514").force_adaptive_thinking orelse false);
+
+    try expectLevels(metaFor(&ant, "claude-sonnet-4-6"), &.{ .off, .minimal, .low, .medium, .high, .max });
+    try expectLevels(metaFor(&ant, "claude-opus-4-7"), &.{ .off, .minimal, .low, .medium, .high, .xhigh, .max });
+    try expectLevels(metaFor(&ant, "claude-fable-5"), &.{ .minimal, .low, .medium, .high, .xhigh, .max });
+    try t.expectEqualStrings("max", thinkEffort(metaFor(&ant, "claude-sonnet-4-6"), .max).?);
+    try t.expectEqualStrings("xhigh", thinkEffort(metaFor(&ant, "claude-opus-4-7"), .xhigh).?);
+}
+
+test "OpenAI GPT thinkingLevelMap matches pi generate-models.ts for chat and responses" {
+    const t = std.testing;
+    const chat = Provider{
+        .name = "openai",
+        .api = .openai_completions,
+        .base_url = "https://api.openai.com/v1",
+    };
+    const resp = Provider{
+        .name = "openai",
+        .api = .openai_responses,
+        .base_url = "https://api.openai.com/v1",
+    };
+
+    try t.expectEqual(true, catalogMeta("gpt-5.4").reasoning.?);
+    try t.expectEqual(@as(u32, 0), catalogMeta("gpt-5.4").context_window);
+    try expectLevels(metaFor(&chat, "gpt-5.4"), &.{ .off, .minimal, .low, .medium, .high, .xhigh });
+    try expectLevels(metaFor(&resp, "gpt-5.4"), &.{ .off, .minimal, .low, .medium, .high, .xhigh });
+    try t.expectEqualStrings("xhigh", thinkEffort(metaFor(&chat, "gpt-5.4"), .xhigh).?);
+    try t.expectEqualStrings("none", switch (metaFor(&resp, "gpt-5.4").think_map.get(.off)) {
+        .send => |s| s,
+        else => "",
+    });
+
+    try expectLevels(metaFor(&chat, "gpt-5.6"), &.{ .off, .minimal, .low, .medium, .high, .xhigh, .max });
+    try expectLevels(metaFor(&resp, "gpt-5.6"), &.{ .minimal, .low, .medium, .high, .xhigh, .max });
+    try expectLevels(metaFor(&resp, "gpt-5.6-sol"), &.{ .off, .minimal, .low, .medium, .high, .xhigh, .max });
+    try expectLevels(metaFor(&resp, "gpt-5.5"), &.{ .off, .low, .medium, .high, .xhigh });
+    try expectLevels(metaFor(&resp, "gpt-5.5-pro"), &.{ .medium, .high, .xhigh });
+    try expectLevels(metaFor(&chat, "gpt-5.5-pro"), &.{ .medium, .high, .xhigh });
+    try t.expectEqual(ThinkLevel.xhigh, clampThinkLevel(metaFor(&chat, "gpt-5.4"), .max));
+}
+
+test "Anthropic proxy forceAdaptiveThinking and thinkingBudgets math" {
+    const t = std.testing;
+    const proxy = Provider{
+        .name = "anthropic-proxy",
+        .api = .anthropic_messages,
+        .base_url = "https://proxy.example.com",
+        .models = &.{"anthropic--claude-opus-latest"},
+        .model_metas = &.{.{ .reasoning = true, .compat = .{ .force_adaptive_thinking = true } }},
+    };
+    try t.expectEqual(true, resolveCompat(&proxy, "anthropic--claude-opus-latest").force_adaptive_thinking.?);
+
+    const adj = adjustMaxTokensForThinking(8192, 64000, .high, .{});
+    try t.expectEqual(@as(u32, 16384), adj.thinking_budget);
+    try t.expectEqual(@as(u32, 8192 + 16384), adj.max_tokens);
+}
+
+test "settings.json thinkingBudgets loads" {
+    const t = std.testing;
+    try util.testInit();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = util.Arena.init(t.allocator);
+    const a = arena.allocator();
+    const cwd_abs = try std.process.currentPathAlloc(util.io, a);
+    const tmp_path = try std.fmt.allocPrint(a, "{s}/.zig-cache/tmp/{s}", .{ cwd_abs, tmp.sub_path });
+    try util.environ_map.?.put("PIZ_DIR", tmp_path);
+    try tmp.dir.writeFile(util.io, .{ .sub_path = "settings.json", .data = "{\"thinkingBudgets\":{\"high\":32768}}" });
+    var c = Config{ .arena = &arena };
+    defer c.deinit();
+    try c.load();
+    try t.expectEqual(@as(u32, 32768), c.thinking_budgets.high);
+    try t.expectEqual(@as(u32, 1024), c.thinking_budgets.minimal);
 }

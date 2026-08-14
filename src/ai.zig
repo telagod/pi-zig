@@ -36,6 +36,10 @@ pub const Message = struct {
     image_h: u32 = 0,
     /// 上一轮的 chain-of-thought。DeepSeek 等渠道要求回放 `reasoning_content`。
     reasoning: ?[]const u8 = null,
+    /// Anthropic thinking 块的 signature;下一轮必须原样回放,否则 400。
+    thinking_signature: ?[]const u8 = null,
+    /// 上一轮是 `redacted_thinking`,回放走 `data` 而不是 thinking 文本。
+    thinking_redacted: bool = false,
 };
 
 pub const Usage = struct {
@@ -59,6 +63,8 @@ pub const Usage = struct {
 pub const RunResult = struct {
     text: []const u8 = "", // 最终回复正文(不含推理)
     reasoning: []const u8 = "",
+    thinking_signature: []const u8 = "",
+    thinking_redacted: bool = false,
     tool_calls: []const ToolCall = &.{},
     usage: Usage = .{},
     finish_reason: []const u8 = "",
@@ -107,6 +113,9 @@ pub const Options = struct {
     /// false 时不写 thinking / reasoning_effort(模型没有 reasoning)。
     reasoning: bool = true,
     compat: cfgmod.Compat = .{},
+    thinking_budgets: cfgmod.ThinkingBudgets = .{},
+    /// 模型 maxTokens,给 Anthropic 预算思考撑 max_tokens 用。0 = 不另加帽。
+    max_output: u32 = 0,
     callbacks: Callbacks = .{},
     /// HTTP 重试策略(缺省开启;compact 等内部调用亦受益)。
     retry_policy: httpc.RetryPolicy = .{},
@@ -311,21 +320,38 @@ fn writeReasoningContent(writer: *std.Io.Writer, m: Message, require: bool) !voi
     try writeJsonText(writer, text);
 }
 
-/// OpenAI / DeepSeek Responses:`reasoning.effort`。
-/// DeepSeek 文档:`none/low/high/max`;OpenAI:`none/minimal/low/medium/high/xhigh/max`。
-/// 发 map 后的字符串,没有 map 就发等级名。
+/// OpenAI Responses。抄 pi `openai-responses.ts` `buildParams`:
+/// 思考开:`reasoning: {effort, summary:"auto"}` + `include: ["reasoning.encrypted_content"]`;
+/// 思考关:off 未隐藏则发 `effort: map.off ?? "none"`,不带 include。
 fn writeThinkResponses(writer: *std.Io.Writer, level: ThinkLevel, map: cfgmod.ThinkingLevelMap, reasoning: bool) !void {
     if (!reasoning) return;
-    const effort: []const u8 = if (level == .off)
-        "none"
-    else switch (map.get(level)) {
+    if (level == .off) {
+        const effort = switch (map.get(.off)) {
+            .hidden => return,
+            .send => |s| s,
+            .omitted => "none",
+        };
+        try writer.writeAll(",\"reasoning\":{\"effort\":");
+        try std.json.Stringify.value(effort, .{}, writer);
+        try writer.writeAll("}");
+        return;
+    }
+    const effort = switch (map.get(level)) {
         .send => |s| s,
         .omitted => level.label(),
         .hidden => return,
     };
     try writer.writeAll(",\"reasoning\":{\"effort\":");
     try std.json.Stringify.value(effort, .{}, writer);
-    try writer.writeAll("}");
+    try writer.writeAll(",\"summary\":\"auto\"},\"include\":[\"reasoning.encrypted_content\"]");
+}
+
+/// pi 把整条 reasoning item 存进 thinkingSignature,下一轮原样推进 input。
+fn writeResponsesReasoningReplay(writer: *std.Io.Writer, m: Message) !bool {
+    const sig = m.thinking_signature orelse return false;
+    if (sig.len == 0 or sig[0] != '{') return false;
+    try writer.writeAll(sig);
+    return true;
 }
 
 fn serializeResponses(
@@ -377,9 +403,10 @@ fn serializeResponses(
         if (!first) try writer.writeByte(',');
         first = false;
         if (m.tool_calls) |tcs| {
-            // assistant 的工具调用:每调用一个 function_call item
+            // store:false 时必须先回放 reasoning item,再写 function_call。
+            const replayed = try writeResponsesReasoningReplay(writer, m);
             for (tcs, 0..) |tc, j| {
-                if (j > 0) try writer.writeByte(',');
+                if (replayed or j > 0) try writer.writeByte(',');
                 try writer.writeAll("{\"type\":\"function_call\",\"call_id\":");
                 try std.json.Stringify.value(tc.id, .{}, writer);
                 try writer.writeAll(",\"name\":");
@@ -403,6 +430,7 @@ fn serializeResponses(
             try writer.writeAll(img);
             try writer.writeAll("\"}]}");
         } else if (std.mem.eql(u8, m.role, "assistant")) {
+            if (try writeResponsesReasoningReplay(writer, m)) try writer.writeByte(',');
             try writer.writeAll("{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":");
             try writeJsonText(writer, m.content);
             try writer.writeAll("}]}");
@@ -533,14 +561,103 @@ fn serializeOpenAIThink(
 }
 
 /// 序列化 Anthropic Messages 请求体。
+fn hasAnthropicThinkingReplay(m: Message) bool {
+    const sig = m.thinking_signature orelse "";
+    if (m.thinking_redacted) return sig.len > 0;
+    const text = m.reasoning orelse "";
+    return text.len > 0 or sig.len > 0;
+}
+
+fn writeAnthropicThinkingBlock(writer: *std.Io.Writer, m: Message, allow_empty: bool) !bool {
+    if (m.thinking_redacted) {
+        const sig = m.thinking_signature orelse return false;
+        if (sig.len == 0) return false;
+        try writer.writeAll("{\"type\":\"redacted_thinking\",\"data\":");
+        try std.json.Stringify.value(sig, .{}, writer);
+        try writer.writeByte('}');
+        return true;
+    }
+    const text = m.reasoning orelse "";
+    const sig = m.thinking_signature orelse "";
+    if (text.len == 0 and sig.len == 0) return false;
+    if (sig.len == 0 and !allow_empty) {
+        try writer.writeAll("{\"type\":\"text\",\"text\":");
+        try writeJsonText(writer, text);
+        try writer.writeByte('}');
+        return true;
+    }
+    try writer.writeAll("{\"type\":\"thinking\",\"thinking\":");
+    try writeJsonText(writer, text);
+    try writer.writeAll(",\"signature\":");
+    try std.json.Stringify.value(sig, .{}, writer);
+    try writer.writeByte('}');
+    return true;
+}
+
+/// 抄 pi `anthropic-messages.ts` buildParams 的 thinking 分支。
+fn writeAnthropicThinkParams(
+    writer: *std.Io.Writer,
+    level: ThinkLevel,
+    map: cfgmod.ThinkingLevelMap,
+    reasoning: bool,
+    compat: cfgmod.Compat,
+    budget_tokens: u32,
+) !void {
+    if (!reasoning) return;
+    if (level == .off) {
+        if (map.get(.off) != .hidden)
+            try writer.writeAll(",\"thinking\":{\"type\":\"disabled\"}");
+        return;
+    }
+    const adaptive = compat.force_adaptive_thinking orelse false;
+    if (adaptive) {
+        try writer.writeAll(",\"thinking\":{\"type\":\"adaptive\",\"display\":\"summarized\"}");
+        const effort = cfgmod.thinkEffort(.{ .think_map = map }, level) orelse switch (level) {
+            .minimal, .low => "low",
+            .medium => "medium",
+            else => "high",
+        };
+        try writer.writeAll(",\"output_config\":{\"effort\":");
+        try std.json.Stringify.value(effort, .{}, writer);
+        try writer.writeByte('}');
+        return;
+    }
+    try writer.writeAll(",\"thinking\":{\"type\":\"enabled\",\"budget_tokens\":");
+    try writer.print("{d}", .{if (budget_tokens > 0) budget_tokens else 1024});
+    try writer.writeAll(",\"display\":\"summarized\"}");
+}
+
 fn serializeAnthropic(alloc: std.mem.Allocator, model: []const u8, messages: []const Message, tools: []const ToolDef, max_tokens: u32) ![]u8 {
+    return serializeAnthropicThink(alloc, model, messages, tools, max_tokens, .off, .{}, false, .{}, .{}, 0);
+}
+
+fn serializeAnthropicThink(
+    alloc: std.mem.Allocator,
+    model: []const u8,
+    messages: []const Message,
+    tools: []const ToolDef,
+    max_tokens: u32,
+    think_level: ThinkLevel,
+    think_map: cfgmod.ThinkingLevelMap,
+    reasoning: bool,
+    compat: cfgmod.Compat,
+    budgets: cfgmod.ThinkingBudgets,
+    max_output: u32,
+) ![]u8 {
     var aw = std.Io.Writer.Allocating.init(alloc);
     defer aw.deinit();
     const writer = &aw.writer;
+    var send_max = max_tokens;
+    var budget_tokens: u32 = 0;
+    if (reasoning and think_level != .off and (compat.force_adaptive_thinking orelse false) == false) {
+        const adj = cfgmod.adjustMaxTokensForThinking(max_tokens, max_output, think_level, budgets);
+        send_max = adj.max_tokens;
+        budget_tokens = adj.thinking_budget;
+    }
     try writer.writeAll("{\"model\":");
     try std.json.Stringify.value(model, .{}, writer);
     try writer.writeAll(",\"max_tokens\":");
-    try writer.print("{d}", .{max_tokens});
+    try writer.print("{d}", .{send_max});
     // tools 写在 system 之前,与 Anthropic 计算缓存前缀的语义顺序
     // (tools → system → messages)一致。服务端按语义位置处理,不看字面顺序,
     // 但写成一致的更好读。
@@ -603,13 +720,17 @@ fn serializeAnthropic(alloc: std.mem.Allocator, model: []const u8, messages: []c
             if (tcs.len == 0) continue;
             if (!first) try writer.writeByte(',');
             try writer.writeAll("{\"role\":\"assistant\",\"content\":[");
+            const allow_empty = compat.allow_empty_signature orelse false;
+            var need_comma = try writeAnthropicThinkingBlock(writer, m, allow_empty);
             if (m.content.len > 0) {
+                if (need_comma) try writer.writeByte(',');
                 try writer.writeAll("{\"type\":\"text\",\"text\":");
                 try writeJsonText(writer, m.content);
-                try writer.writeByte(',');
+                try writer.writeByte('}');
+                need_comma = true;
             }
             for (tcs, 0..) |tc, i| {
-                if (i > 0 or m.content.len > 0) try writer.writeByte(',');
+                if (i > 0 or need_comma) try writer.writeByte(',');
                 try writer.writeAll("{\"type\":\"tool_use\",\"id\":");
                 try std.json.Stringify.value(tc.id, .{}, writer);
                 try writer.writeAll(",\"name\":");
@@ -643,6 +764,16 @@ fn serializeAnthropic(alloc: std.mem.Allocator, model: []const u8, messages: []c
             try writer.writeAll(",\"data\":\"");
             try writer.writeAll(img);
             try writer.writeAll("\"}}]}");
+        } else if (std.mem.eql(u8, m.role, "assistant") and hasAnthropicThinkingReplay(m)) {
+            try writer.writeAll(",\"content\":[");
+            const wrote = try writeAnthropicThinkingBlock(writer, m, compat.allow_empty_signature orelse false);
+            if (m.content.len > 0) {
+                if (wrote) try writer.writeByte(',');
+                try writer.writeAll("{\"type\":\"text\",\"text\":");
+                try writeJsonText(writer, m.content);
+                try writer.writeByte('}');
+            }
+            try writer.writeAll("]}");
         } else {
             try writer.writeAll(",\"content\":");
             try writeJsonText(writer, m.content);
@@ -651,6 +782,7 @@ fn serializeAnthropic(alloc: std.mem.Allocator, model: []const u8, messages: []c
         first = false;
     }
     try writer.writeAll("]");
+    try writeAnthropicThinkParams(writer, think_level, think_map, reasoning, compat, budget_tokens);
     if (tools.len > 0) {
         try writer.writeAll(",\"tools\":[");
         for (tools, 0..) |td, i| {
@@ -834,11 +966,45 @@ fn freeToolAcc(acc: *std.array_list.Managed(ToolAcc)) void {
     acc.deinit();
 }
 
+fn responsesItemEncrypted(obj: std.json.ObjectMap) bool {
+    if (obj.get("encrypted_content")) |v| {
+        return v == .string and v.string.len > 0;
+    }
+    return false;
+}
+
+/// 把 reasoning item 整段 JSON 存进 thinking_signature,下一轮原样回放。
+fn captureResponsesReasoning(alloc: std.mem.Allocator, item: std.json.Value, out_signature: *std.array_list.Managed(u8)) !void {
+    if (item != .object) return;
+    const ty = if (item.object.get("type")) |t| (if (t == .string) t.string else "") else "";
+    if (!std.mem.eql(u8, ty, "reasoning")) return;
+    const incoming_enc = responsesItemEncrypted(item.object);
+    if (out_signature.items.len > 0) {
+        const old = std.json.parseFromSliceLeaky(std.json.Value, alloc, out_signature.items, .{}) catch {
+            out_signature.clearRetainingCapacity();
+            const json = try std.json.Stringify.valueAlloc(alloc, item, .{});
+            try out_signature.appendSlice(json);
+            return;
+        };
+        if (old == .object and responsesItemEncrypted(old.object) and !incoming_enc) return;
+    }
+    out_signature.clearRetainingCapacity();
+    const json = try std.json.Stringify.valueAlloc(alloc, item, .{});
+    try out_signature.appendSlice(json);
+}
+
+fn backfillResponsesReasoning(alloc: std.mem.Allocator, output: std.json.Value, out_signature: *std.array_list.Managed(u8)) !void {
+    if (output != .array) return;
+    for (output.array.items) |item| {
+        try captureResponsesReasoning(alloc, item, out_signature);
+    }
+}
+
 /// 解析 Responses API 的一个 SSE 事件。
 /// 事件模型与 Completions 完全不同:文本走 response.output_text.delta,
 /// 工具走 output_item.added + function_call_arguments.delta/done,
 /// usage 与结束在 response.completed。
-fn parseResponsesEvent(alloc: std.mem.Allocator, chunk: []const u8, acc: *std.array_list.Managed(ToolAcc), cbs: Callbacks, out_text: *std.array_list.Managed(u8), out_reasoning: *std.array_list.Managed(u8), usage: *Usage, finish: *std.array_list.Managed(u8), err_out: *std.array_list.Managed(u8)) !void {
+fn parseResponsesEvent(alloc: std.mem.Allocator, chunk: []const u8, acc: *std.array_list.Managed(ToolAcc), cbs: Callbacks, out_text: *std.array_list.Managed(u8), out_reasoning: *std.array_list.Managed(u8), out_signature: *std.array_list.Managed(u8), usage: *Usage, finish: *std.array_list.Managed(u8), err_out: *std.array_list.Managed(u8)) !void {
     const root = std.json.parseFromSliceLeaky(std.json.Value, alloc, chunk, .{}) catch return;
     const v = root;
     if (v != .object) return;
@@ -888,6 +1054,10 @@ fn parseResponsesEvent(alloc: std.mem.Allocator, chunk: []const u8, acc: *std.ar
                 if (acc.items.len > 0) try acc.items[acc.items.len - 1].args.appendSlice(d.string);
             }
         }
+    } else if (std.mem.eql(u8, ty, "response.output_item.done")) {
+        if (v.object.get("item")) |it| {
+            try captureResponsesReasoning(alloc, it, out_signature);
+        }
     } else if (std.mem.eql(u8, ty, "response.function_call_arguments.done")) {
         // done 带全量 arguments —— 以它为准覆盖增量拼接(两全其美:只发 delta 的
         // 实现也能用,两者都发的实现拿全量)。
@@ -904,6 +1074,10 @@ fn parseResponsesEvent(alloc: std.mem.Allocator, chunk: []const u8, acc: *std.ar
             if (r == .object) {
                 if (r.object.get("usage")) |u| {
                     parseResponsesUsage(u, usage);
+                }
+                // Azure 有时只在 completed.output 给 encrypted_content(pi #6409)。
+                if (r.object.get("output")) |out| {
+                    try backfillResponsesReasoning(alloc, out, out_signature);
                 }
             }
         }
@@ -947,7 +1121,7 @@ fn parseResponsesUsage(u: std.json.Value, usage: *Usage) void {
 }
 
 /// Responses API 非流式响应解析(output items)。
-fn parseResponsesJson(alloc: std.mem.Allocator, body: []const u8, cbs: Callbacks, result: *RunResult, out_text: *std.array_list.Managed(u8), out_reasoning: *std.array_list.Managed(u8), usage: *Usage) !void {
+fn parseResponsesJson(alloc: std.mem.Allocator, body: []const u8, cbs: Callbacks, result: *RunResult, out_text: *std.array_list.Managed(u8), out_reasoning: *std.array_list.Managed(u8), out_signature: *std.array_list.Managed(u8), usage: *Usage) !void {
     const root = std.json.parseFromSliceLeaky(std.json.Value, alloc, body, .{}) catch return;
     if (root != .object) return;
     if (root.object.get("error")) |e| {
@@ -1000,6 +1174,7 @@ fn parseResponsesJson(alloc: std.mem.Allocator, body: []const u8, cbs: Callbacks
                     if (a == .string) try slot.args.appendSlice(a.string);
                 }
             } else if (std.mem.eql(u8, it_t, "reasoning")) {
+                try captureResponsesReasoning(alloc, item, out_signature);
                 if (item.object.get("summary")) |s| {
                     if (s == .array) {
                         for (s.array.items) |part| {
@@ -1142,7 +1317,7 @@ fn parseOpenAIJson(alloc: std.mem.Allocator, body: []const u8, cbs: Callbacks, r
 }
 
 /// Anthropic 事件解析。
-fn parseAnthropicEvent(alloc: std.mem.Allocator, arena: std.mem.Allocator, ev: []const u8, acc: *std.array_list.Managed(ToolAcc), cbs: Callbacks, out_text: *std.array_list.Managed(u8), out_reasoning: *std.array_list.Managed(u8), usage: *Usage, finish: *std.array_list.Managed(u8)) !void {
+fn parseAnthropicEvent(alloc: std.mem.Allocator, arena: std.mem.Allocator, ev: []const u8, acc: *std.array_list.Managed(ToolAcc), cbs: Callbacks, out_text: *std.array_list.Managed(u8), out_reasoning: *std.array_list.Managed(u8), out_signature: *std.array_list.Managed(u8), redacted: *bool, usage: *Usage, finish: *std.array_list.Managed(u8)) !void {
     const root = std.json.parseFromSliceLeaky(std.json.Value, alloc, ev, .{}) catch return;
     const v = root;
     if (v != .object) return;
@@ -1182,6 +1357,17 @@ fn parseAnthropicEvent(alloc: std.mem.Allocator, arena: std.mem.Allocator, ev: [
                         if (cb.object.get("id")) |id| if (id == .string) try slot.id.appendSlice(id.string);
                         if (cb.object.get("name")) |n| if (n == .string) try slot.name.appendSlice(n.string);
                         slot.started = true;
+                    } else if (t == .string and std.mem.eql(u8, t.string, "thinking")) {
+                        if (cb.object.get("signature")) |s| {
+                            if (s == .string and s.string.len > 0) try out_signature.appendSlice(s.string);
+                        }
+                    } else if (t == .string and std.mem.eql(u8, t.string, "redacted_thinking")) {
+                        redacted.* = true;
+                        if (cb.object.get("data")) |d| {
+                            if (d == .string) try out_signature.appendSlice(d.string);
+                        }
+                        try out_reasoning.appendSlice("[Reasoning redacted]");
+                        try emitCallback(cbs, cbs.on_reasoning, "[Reasoning redacted]");
                     }
                 }
             }
@@ -1214,6 +1400,10 @@ fn parseAnthropicEvent(alloc: std.mem.Allocator, arena: std.mem.Allocator, ev: [
                                     try out_reasoning.appendSlice(th.string);
                                     try emitCallback(cbs, cbs.on_reasoning, th.string);
                                 }
+                            }
+                        } else if (std.mem.eql(u8, t.string, "signature_delta")) {
+                            if (d.object.get("signature")) |s| {
+                                if (s == .string) try out_signature.appendSlice(s.string);
                             }
                         }
                     }
@@ -1290,6 +1480,9 @@ pub fn run(
     defer out_text.deinit();
     var out_reasoning = std.array_list.Managed(u8).init(alloc);
     defer out_reasoning.deinit();
+    var out_signature = std.array_list.Managed(u8).init(alloc);
+    defer out_signature.deinit();
+    var thinking_redacted = false;
     var usage = Usage{};
 
     // 图片数量预算:视觉请求里图片太多会被 provider 硬拒(且常是毒化整请求
@@ -1299,7 +1492,7 @@ pub fn run(
     const msgs = clampProviderImages(alloc, messages, provider.api) catch messages;
 
     const body = if (provider.api == .anthropic_messages)
-        try serializeAnthropic(alloc, model, msgs, tools, options.max_tokens)
+        try serializeAnthropicThink(alloc, model, msgs, tools, options.max_tokens, options.think_level, options.think_map, options.reasoning, options.compat, options.thinking_budgets, options.max_output)
     else if (provider.api == .openai_responses)
         try serializeResponses(alloc, model, msgs, tools, options.max_tokens, options.think_level, options.think_map, options.reasoning, options.compat)
     else
@@ -1397,7 +1590,7 @@ pub fn run(
                 };
                 if (ev) |e| {
                     defer alloc.free(e);
-                    try parseAnthropicEvent(alloc, arena, e, &acc, options.callbacks, &out_text, &out_reasoning, &usage, &finish);
+                    try parseAnthropicEvent(alloc, arena, e, &acc, options.callbacks, &out_text, &out_reasoning, &out_signature, &thinking_redacted, &usage, &finish);
                 } else break;
                 if (abortRequested(options.callbacks)) {
                     result.aborted = true;
@@ -1427,7 +1620,7 @@ pub fn run(
                 };
                 if (ev) |e| {
                     defer alloc.free(e);
-                    try parseResponsesEvent(alloc, e, &acc, options.callbacks, &out_text, &out_reasoning, &usage, &finish, &errs);
+                    try parseResponsesEvent(alloc, e, &acc, options.callbacks, &out_text, &out_reasoning, &out_signature, &usage, &finish, &errs);
                 } else break;
                 if (abortRequested(options.callbacks)) {
                     result.aborted = true;
@@ -1489,6 +1682,23 @@ pub fn run(
                                             try emitText(options.callbacks, out_text.items, txt.string);
                                         }
                                     }
+                                } else if (std.mem.eql(u8, t.string, "thinking")) {
+                                    if (block.object.get("thinking")) |th| {
+                                        if (th == .string) {
+                                            try out_reasoning.appendSlice(th.string);
+                                            try emitCallback(options.callbacks, options.callbacks.on_reasoning, th.string);
+                                        }
+                                    }
+                                    if (block.object.get("signature")) |s| {
+                                        if (s == .string) try out_signature.appendSlice(s.string);
+                                    }
+                                } else if (std.mem.eql(u8, t.string, "redacted_thinking")) {
+                                    thinking_redacted = true;
+                                    if (block.object.get("data")) |d| {
+                                        if (d == .string) try out_signature.appendSlice(d.string);
+                                    }
+                                    try out_reasoning.appendSlice("[Reasoning redacted]");
+                                    try emitCallback(options.callbacks, options.callbacks.on_reasoning, "[Reasoning redacted]");
                                 } else if (std.mem.eql(u8, t.string, "tool_use")) {
                                     var id: []const u8 = "";
                                     var name: []const u8 = "";
@@ -1511,7 +1721,7 @@ pub fn run(
                 }
             }
         } else if (provider.api == .openai_responses) {
-            try parseResponsesJson(alloc, resp_body, options.callbacks, &result, &out_text, &out_reasoning, &usage);
+            try parseResponsesJson(alloc, resp_body, options.callbacks, &result, &out_text, &out_reasoning, &out_signature, &usage);
         } else {
             try parseOpenAIJson(alloc, resp_body, options.callbacks, &result, &out_text, &out_reasoning, &usage);
         }
@@ -1519,6 +1729,8 @@ pub fn run(
 
     result.text = try out_text.toOwnedSlice();
     result.reasoning = try out_reasoning.toOwnedSlice();
+    result.thinking_signature = try out_signature.toOwnedSlice();
+    result.thinking_redacted = thinking_redacted;
     result.usage = usage;
     return result;
 }
@@ -1572,7 +1784,9 @@ test "serializeOpenAI think level maps to DeepSeek fields after messages" {
     try t.expect(std.mem.indexOf(u8, deep, "\"reasoning_effort\":\"max\"") != null);
 
     const resp = try serializeResponses(a, "m", &msgs, &.{}, 100, .max, .{}, true, .{});
-    try t.expect(std.mem.indexOf(u8, resp, "\"reasoning\":{\"effort\":\"max\"}") != null);
+    try t.expect(std.mem.indexOf(u8, resp, "\"effort\":\"max\"") != null);
+    try t.expect(std.mem.indexOf(u8, resp, "\"summary\":\"auto\"") != null);
+    try t.expect(std.mem.indexOf(u8, resp, "\"include\":[\"reasoning.encrypted_content\"]") != null);
 
     const silent = try serializeOpenAIThink(a, "m", &msgs, &.{}, 100, null, .high, .{}, false, ds_c);
     try t.expect(std.mem.indexOf(u8, silent, "thinking") == null);
@@ -1693,6 +1907,142 @@ test "non-stream JSON keeps reasoning_content for replay" {
     try parseOpenAIJson(a, body, .{}, &result, &out_text, &out_reasoning, &usage);
     try t.expectEqualStrings("hi", out_text.items);
     try t.expectEqualStrings("cot", out_reasoning.items);
+}
+
+test "Anthropic adaptive and budget thinking match pi anthropic-messages.ts" {
+    const t = std.testing;
+    var arena = util.Arena.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const msgs = [_]Message{.{ .role = "user", .content = "hi" }};
+    const ant = cfgmod.Provider{
+        .name = "anthropic",
+        .api = .anthropic_messages,
+        .base_url = "https://api.anthropic.com",
+    };
+    const sonnet = cfgmod.metaFor(&ant, "claude-sonnet-4-6");
+    const sonnet_c = cfgmod.resolveCompat(&ant, "claude-sonnet-4-6");
+    const adaptive = try serializeAnthropicThink(a, "claude-sonnet-4-6", &msgs, &.{}, 8192, .high, sonnet.think_map, true, sonnet_c, .{}, sonnet.max_output);
+    try t.expect(std.mem.indexOf(u8, adaptive, "\"thinking\":{\"type\":\"adaptive\",\"display\":\"summarized\"}") != null);
+    try t.expect(std.mem.indexOf(u8, adaptive, "\"output_config\":{\"effort\":\"high\"}") != null);
+    try t.expect(std.mem.indexOf(u8, adaptive, "budget_tokens") == null);
+
+    const opus = cfgmod.metaFor(&ant, "claude-opus-4-7");
+    const opus_c = cfgmod.resolveCompat(&ant, "claude-opus-4-7");
+    const xhigh = try serializeAnthropicThink(a, "claude-opus-4-7", &msgs, &.{}, 8192, .xhigh, opus.think_map, true, opus_c, .{}, 0);
+    try t.expect(std.mem.indexOf(u8, xhigh, "\"effort\":\"xhigh\"") != null);
+
+    const off = try serializeAnthropicThink(a, "claude-sonnet-4-6", &msgs, &.{}, 8192, .off, sonnet.think_map, true, sonnet_c, .{}, 0);
+    try t.expect(std.mem.indexOf(u8, off, "\"thinking\":{\"type\":\"disabled\"}") != null);
+
+    const silent = try serializeAnthropicThink(a, "claude-sonnet-4-6", &msgs, &.{}, 8192, .high, sonnet.think_map, false, sonnet_c, .{}, 0);
+    try t.expect(std.mem.indexOf(u8, silent, "thinking") == null);
+
+    const budget_c = cfgmod.Compat{};
+    const budget = try serializeAnthropicThink(a, "claude-sonnet-4-20250514", &msgs, &.{}, 8192, .high, .{}, true, budget_c, .{}, 64000);
+    try t.expect(std.mem.indexOf(u8, budget, "\"thinking\":{\"type\":\"enabled\",\"budget_tokens\":16384") != null);
+    try t.expect(std.mem.indexOf(u8, budget, "\"max_tokens\":24576") != null);
+
+    const replay_msgs = [_]Message{.{
+        .role = "assistant",
+        .content = "",
+        .tool_calls = &.{.{ .id = "c1", .name = "bash", .args = "{}" }},
+        .reasoning = "step",
+        .thinking_signature = "sig",
+    }};
+    const replay = try serializeAnthropicThink(a, "claude-sonnet-4-6", &replay_msgs, &.{}, 100, .high, sonnet.think_map, true, sonnet_c, .{}, 0);
+    try t.expect(std.mem.indexOf(u8, replay, "\"type\":\"thinking\",\"thinking\":\"step\",\"signature\":\"sig\"") != null);
+
+    const nosig = [_]Message{.{
+        .role = "assistant",
+        .content = "hi",
+        .reasoning = "step",
+    }};
+    const as_text = try serializeAnthropicThink(a, "m", &nosig, &.{}, 100, .off, .{}, false, .{}, .{}, 0);
+    try t.expect(std.mem.indexOf(u8, as_text, "\"type\":\"text\",\"text\":\"step\"") != null);
+    try t.expect(std.mem.indexOf(u8, as_text, "\"type\":\"thinking\"") == null);
+}
+
+test "OpenAI chat and responses thinking match pi" {
+    const t = std.testing;
+    var arena = util.Arena.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const msgs = [_]Message{.{ .role = "user", .content = "hi" }};
+    const chat = cfgmod.Provider{
+        .name = "openai",
+        .api = .openai_completions,
+        .base_url = "https://api.openai.com/v1",
+    };
+    const resp = cfgmod.Provider{
+        .name = "openai",
+        .api = .openai_responses,
+        .base_url = "https://api.openai.com/v1",
+    };
+    const chat_meta = cfgmod.metaFor(&chat, "gpt-5.4");
+    const chat_c = cfgmod.resolveCompat(&chat, "gpt-5.4");
+    const chat_xhigh = try serializeOpenAIThink(a, "gpt-5.4", &msgs, &.{}, 100, null, .xhigh, chat_meta.think_map, true, chat_c);
+    try t.expect(std.mem.indexOf(u8, chat_xhigh, "\"reasoning_effort\":\"xhigh\"") != null);
+    try t.expect(std.mem.indexOf(u8, chat_xhigh, "\"thinking\"") == null);
+    const chat_off = try serializeOpenAIThink(a, "gpt-5.4", &msgs, &.{}, 100, null, .off, chat_meta.think_map, true, chat_c);
+    try t.expect(std.mem.indexOf(u8, chat_off, "reasoning_effort") == null);
+
+    const resp_meta = cfgmod.metaFor(&resp, "gpt-5.4");
+    const on = try serializeResponses(a, "gpt-5.4", &msgs, &.{}, 100, .high, resp_meta.think_map, true, .{});
+    try t.expect(std.mem.indexOf(u8, on, "\"effort\":\"high\"") != null);
+    try t.expect(std.mem.indexOf(u8, on, "\"summary\":\"auto\"") != null);
+    try t.expect(std.mem.indexOf(u8, on, "\"include\":[\"reasoning.encrypted_content\"]") != null);
+    const off = try serializeResponses(a, "gpt-5.4", &msgs, &.{}, 100, .off, resp_meta.think_map, true, .{});
+    try t.expect(std.mem.indexOf(u8, off, "\"reasoning\":{\"effort\":\"none\"}") != null);
+    try t.expect(std.mem.indexOf(u8, off, "include") == null);
+
+    const hidden_off = cfgmod.metaFor(&resp, "gpt-5.6");
+    const hidden = try serializeResponses(a, "gpt-5.6", &msgs, &.{}, 100, .off, hidden_off.think_map, true, .{});
+    try t.expect(std.mem.indexOf(u8, hidden, "\"reasoning\"") == null);
+
+    const item =
+        \\{"type":"reasoning","id":"rs_1","summary":[{"type":"summary_text","text":"cot"}],"encrypted_content":"enc"}
+    ;
+    const replay_msgs = [_]Message{.{
+        .role = "assistant",
+        .content = "",
+        .tool_calls = &.{.{ .id = "c1", .name = "bash", .args = "{}" }},
+        .thinking_signature = item,
+    }};
+    const replay = try serializeResponses(a, "gpt-5.4", &replay_msgs, &.{}, 100, .high, resp_meta.think_map, true, .{});
+    try t.expect(std.mem.indexOf(u8, replay, item) != null);
+    try t.expect(std.mem.indexOf(u8, replay, "\"type\":\"function_call\"").? > std.mem.indexOf(u8, replay, "\"encrypted_content\":\"enc\"").?);
+
+    var out_text = std.array_list.Managed(u8).init(a);
+    var out_reasoning = std.array_list.Managed(u8).init(a);
+    var out_signature = std.array_list.Managed(u8).init(a);
+    var usage = Usage{};
+    var finish = std.array_list.Managed(u8).init(a);
+    var errs = std.array_list.Managed(u8).init(a);
+    var acc = std.array_list.Managed(ToolAcc).init(a);
+    const done =
+        \\{"type":"response.output_item.done","item":{"type":"reasoning","id":"rs_1","summary":[{"type":"summary_text","text":"cot"}]}}
+    ;
+    try parseResponsesEvent(a, done, &acc, .{}, &out_text, &out_reasoning, &out_signature, &usage, &finish, &errs);
+    try t.expect(std.mem.indexOf(u8, out_signature.items, "\"id\":\"rs_1\"") != null);
+    try t.expect(std.mem.indexOf(u8, out_signature.items, "encrypted_content") == null);
+    const completed =
+        \\{"type":"response.completed","response":{"output":[{"type":"reasoning","id":"rs_1","encrypted_content":"enc","summary":[]}]}}
+    ;
+    try parseResponsesEvent(a, completed, &acc, .{}, &out_text, &out_reasoning, &out_signature, &usage, &finish, &errs);
+    try t.expect(std.mem.indexOf(u8, out_signature.items, "\"encrypted_content\":\"enc\"") != null);
+
+    var result = RunResult{};
+    var json_text = std.array_list.Managed(u8).init(a);
+    var json_reason = std.array_list.Managed(u8).init(a);
+    var json_sig = std.array_list.Managed(u8).init(a);
+    const body =
+        \\{"output":[{"type":"reasoning","id":"rs_2","summary":[{"type":"summary_text","text":"why"}],"encrypted_content":"blob"},{"type":"message","content":[{"type":"output_text","text":"hi"}]}]}
+    ;
+    try parseResponsesJson(a, body, .{}, &result, &json_text, &json_reason, &json_sig, &usage);
+    try t.expectEqualStrings("hi", json_text.items);
+    try t.expectEqualStrings("why", json_reason.items);
+    try t.expect(std.mem.indexOf(u8, json_sig.items, "\"encrypted_content\":\"blob\"") != null);
 }
 
 test "invalid utf8 in tool output still serializes as a JSON string" {
@@ -1974,12 +2324,15 @@ test "anthropic cache usage fields are parsed from message_start" {
     defer out_reasoning.deinit();
     var finish = std.array_list.Managed(u8).init(a);
     defer finish.deinit();
+    var out_sig = std.array_list.Managed(u8).init(a);
+    defer out_sig.deinit();
+    var redacted = false;
     var usage: Usage = .{};
 
     // 缓存命中的 message_start:input_tokens 不含缓存部分,读写分列
     const ev =
         "{\"type\":\"message_start\",\"message\":{\"id\":\"m1\",\"role\":\"assistant\",\"usage\":{\"input_tokens\":12,\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":3200,\"output_tokens\":1}}}";
-    try parseAnthropicEvent(a, a, ev, &acc, .{}, &out_text, &out_reasoning, &usage, &finish);
+    try parseAnthropicEvent(a, a, ev, &acc, .{}, &out_text, &out_reasoning, &out_sig, &redacted, &usage, &finish);
     try t.expectEqual(@as(?u64, 12), usage.input);
     try t.expectEqual(@as(?u64, 3200), usage.cache_read);
     try t.expectEqual(@as(?u64, 0), usage.cache_write);
@@ -1988,7 +2341,7 @@ test "anthropic cache usage fields are parsed from message_start" {
     var usage2: Usage = .{};
     const ev2 =
         "{\"type\":\"message_start\",\"message\":{\"id\":\"m2\",\"role\":\"assistant\",\"usage\":{\"input_tokens\":12,\"cache_creation_input_tokens\":3200,\"cache_read_input_tokens\":0,\"output_tokens\":1}}}";
-    try parseAnthropicEvent(a, a, ev2, &acc, .{}, &out_text, &out_reasoning, &usage2, &finish);
+    try parseAnthropicEvent(a, a, ev2, &acc, .{}, &out_text, &out_reasoning, &out_sig, &redacted, &usage2, &finish);
     try t.expectEqual(@as(?u64, 3200), usage2.cache_write);
     try t.expectEqual(@as(?u64, 0), usage2.cache_read);
 }

@@ -317,6 +317,17 @@ done-42
 DeepSeek 等渠道要求下一轮把这段思考以 `reasoning_content` 回放；有字写原文，
 没有写 `""`。缺字段会 400。会话 JSONL 存 `reasoning`，读也认 `reasoning_content`。
 
+Anthropic 工具轮要回放 `thinking` 块和 `signature`（或 `redacted_thinking` 的 `data`）。
+会话多存 `thinking_signature` / `thinking_redacted`。没有 signature 的思考改成
+普通 text，和 pi 一样，避免 API 拒收。
+
+OpenAI Responses（`store: false`）工具轮要回放整条 `type: reasoning` item，
+里面必须有 `encrypted_content`。请求开思考时带
+`include: ["reasoning.encrypted_content"]`；流式从 `output_item.done` 收下，
+Azure 有时只在 `response.completed.output` 给密文，缺了就从那里补（pi #6409）。
+同一字段 `thinking_signature` 存这条 item 的 JSON。Chat Completions 不走这套，
+只发顶层 `reasoning_effort`。
+
 推理与正文严格分流：TUI 用 dim 斜体，print 模式走 stderr（stdout 留给管道下游），
 jsonl 是独立的 `{"type":"reasoning"}` 事件。用 `2>&1` 观察会看到两者混在一起，
 那是观察方式造成的，不是分流坏了。

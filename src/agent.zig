@@ -670,6 +670,8 @@ pub const Agent = struct {
         o.think_map = meta.think_map;
         o.reasoning = meta.reasoning orelse false;
         o.compat = cfgmod.resolveCompat(self.provider, self.model);
+        o.thinking_budgets = self.cfg.thinking_budgets;
+        o.max_output = meta.max_output;
         return o;
     }
 
@@ -790,6 +792,8 @@ pub const Agent = struct {
                         .role = "assistant",
                         .content = result.text,
                         .reasoning = if (result.reasoning.len > 0) result.reasoning else null,
+                        .thinking_signature = if (result.thinking_signature.len > 0) result.thinking_signature else null,
+                        .thinking_redacted = result.thinking_redacted,
                     });
                 }
                 self.cur_stream_fd.store(-1, .release);
@@ -809,6 +813,8 @@ pub const Agent = struct {
                 .content = result.text,
                 .tool_calls = if (result.tool_calls.len > 0) result.tool_calls else null,
                 .reasoning = if (result.reasoning.len > 0) result.reasoning else null,
+                .thinking_signature = if (result.thinking_signature.len > 0) result.thinking_signature else null,
+                .thinking_redacted = result.thinking_redacted,
             });
 
             // 流中途断了(网络抖动,非用户中止)。partial 已经存进历史,

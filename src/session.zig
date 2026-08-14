@@ -134,6 +134,11 @@ pub fn saveWebTs(alloc: std.mem.Allocator, cwd: []const u8, name: []const u8, mo
                 if (r.len > 0)
                     jwtr.print(",\"reasoning\":{s}", .{util.jsonString(alloc, r) catch "\"\""}) catch return error.WriteFailed;
             }
+            if (m.thinking_signature) |s| {
+                if (s.len > 0)
+                    jwtr.print(",\"thinking_signature\":{s}", .{util.jsonString(alloc, s) catch "\"\""}) catch return error.WriteFailed;
+            }
+            if (m.thinking_redacted) jwtr.writeAll(",\"thinking_redacted\":true") catch return error.WriteFailed;
             jwtr.writeAll("}\n") catch return error.WriteFailed;
             const line = jw.toOwnedSlice() catch return error.WriteFailed;
             defer alloc.free(line);
@@ -231,6 +236,12 @@ pub fn loadWeb(alloc: std.mem.Allocator, cwd: []const u8, name: []const u8) !?st
         }
         if (v.object.get("reasoning") orelse v.object.get("reasoning_content")) |r| {
             if (r == .string and r.string.len > 0) m.reasoning = alloc.dupe(u8, r.string) catch null;
+        }
+        if (v.object.get("thinking_signature")) |s| {
+            if (s == .string and s.string.len > 0) m.thinking_signature = alloc.dupe(u8, s.string) catch null;
+        }
+        if (v.object.get("thinking_redacted")) |r| {
+            if (r == .bool) m.thinking_redacted = r.bool;
         }
         list.append(m) catch continue;
     }
@@ -580,6 +591,11 @@ pub const Session = struct {
             if (r.len > 0)
                 try ww.writer.print(",\"reasoning\":{s}", .{try util.jsonString(self.alloc, r)});
         }
+        if (msg.thinking_signature) |s| {
+            if (s.len > 0)
+                try ww.writer.print(",\"thinking_signature\":{s}", .{try util.jsonString(self.alloc, s)});
+        }
+        if (msg.thinking_redacted) try ww.writer.writeAll(",\"thinking_redacted\":true");
         try ww.writer.writeAll("}\n");
         const line = try ww.toOwnedSlice();
         defer self.alloc.free(line);
@@ -655,6 +671,12 @@ pub const Session = struct {
             }
             if (v.object.get("reasoning") orelse v.object.get("reasoning_content")) |r| {
                 if (r == .string and r.string.len > 0) msg.reasoning = try self.alloc.dupe(u8, r.string);
+            }
+            if (v.object.get("thinking_signature")) |s| {
+                if (s == .string and s.string.len > 0) msg.thinking_signature = try self.alloc.dupe(u8, s.string);
+            }
+            if (v.object.get("thinking_redacted")) |r| {
+                if (r == .bool) msg.thinking_redacted = r.bool;
             }
             try out.append(msg);
         }
@@ -775,7 +797,7 @@ test "session roundtrip" {
         } else |_| {}
     }
     try sess.saveMessage(&.{ .role = "user", .content = "hi" });
-    try sess.saveMessage(&.{ .role = "assistant", .content = "hello", .tool_calls = &.{.{ .id = "c1", .name = "bash", .args = "{}" }}, .reasoning = "cot" });
+    try sess.saveMessage(&.{ .role = "assistant", .content = "hello", .tool_calls = &.{.{ .id = "c1", .name = "bash", .args = "{}" }}, .reasoning = "cot", .thinking_signature = "sig1" });
     try sess.saveMessage(&.{ .role = "tool", .content = "out", .tool_call_id = "c1" });
 
     const msgs = try sess.loadMessages();
@@ -783,6 +805,7 @@ test "session roundtrip" {
     try t.expectEqualStrings("hi", msgs[0].content);
     try t.expectEqualStrings("bash", msgs[1].tool_calls.?[0].name);
     try t.expectEqualStrings("cot", msgs[1].reasoning.?);
+    try t.expectEqualStrings("sig1", msgs[1].thinking_signature.?);
     try t.expectEqualStrings("c1", msgs[2].tool_call_id.?);
 }
 
