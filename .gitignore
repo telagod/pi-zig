@@ -1,6 +1,11 @@
 # Zig 构建产物
 .zig-cache/
+.zig-tmp-cache/
 zig-out/
+
+# 本地索引 / 本机跑 agent 留下的目录
+.code-abyss/
+.pi/
 
 # 编辑器 / 系统
 *.swp

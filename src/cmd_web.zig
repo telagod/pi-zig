@@ -8,15 +8,6 @@ const pluginsmod = @import("core").plugins;
 const compress = @import("core").compress;
 const webui_mod = @import("webui.zig");
 
-fn warnBrokenConfig(cfg: *cfgmod.Config) void {
-    for (cfg.broken_files) |name| {
-        std.debug.print(
-            "piz: ~/.piz/{s} 有语法错误,已按「不存在」处理。修好它才会生效。\n",
-            .{name},
-        );
-    }
-}
-
 pub fn runWebCmd(alloc: std.mem.Allocator, args: *std.process.Args.Iterator) void {
     var wopts = webui_mod.WebOptions{};
     var no_token = false;
@@ -70,7 +61,7 @@ pub fn runWebCmd(alloc: std.mem.Allocator, args: *std.process.Args.Iterator) voi
         std.debug.print("piz: config load failed\n", .{});
         std.process.exit(1);
     };
-    warnBrokenConfig(&cfg);
+    cfg.warnBroken();
     const abs_cwd = std.process.currentPathAlloc(util.io, arena.allocator()) catch "";
     wopts.project_cwd = abs_cwd;
     // HTTP 线程会并发分配 SessionPool/WebServer 的 allocator(每请求拼 JSON、
@@ -941,4 +932,3 @@ test "web undo/compact are rejected while the worker turn is running" {
     try t.expect(std.mem.indexOf(u8, busy2, "\"error\":\"busy\"") != null);
     ses.busy.store(0, .release);
 }
-

@@ -1,4 +1,4 @@
-// main.zig — piz 入口:CLI 解析、交互模式(线程编排)、会话挂载。print/web 见 cmd_*.zig。
+// main.zig — piz 入口:CLI 解析、交互模式(线程编排)、会话挂载。print/web/pkg 见 cmd_*.zig。
 const std = @import("std");
 const util = @import("core").util;
 const activity = @import("core").activity;
@@ -7,7 +7,6 @@ const ai = @import("core").ai;
 const agentmod = @import("core").agent;
 const sessionmod = @import("core").session;
 const toolsmod = @import("core").tools;
-const pkgsmod = @import("core").pkgs;
 const eventsmod = @import("core").events;
 const pluginsmod = @import("core").plugins;
 const compress = @import("core").compress;
@@ -15,6 +14,7 @@ const tui_mod = @import("tui");
 const webui_mod = @import("webui.zig");
 const cmd_web = @import("cmd_web.zig");
 const cmd_print = @import("cmd_print.zig");
+const cmd_pkg = @import("cmd_pkg.zig");
 const runopts = @import("runopts.zig");
 
 const VERSION = "0.1.0";
@@ -476,155 +476,6 @@ fn workerMain(wctx: *WorkerCtx) void {
         app.tui.setStatus("\x1b[2m", st) catch {};
         if (err_msg != null) break; // 出错停止投递后续队列
     }
-}
-
-/// 确认包目录声明的 events 钩子。返回 true 表示可以继续。
-///
-/// 包里的 `extensions.events` 会由 events.Bus 以 `bash -c` 执行,`startup` 钩子
-/// 在下次启动时立刻跑 —— 装包等于授权本机命令执行。没有钩子的包直接放行
-/// (大多数包如此),有钩子就把命令原文列出来让用户看。
-///
-/// stdin 不是终端时(脚本、管道)拒绝而非默认同意:静默授权任意命令执行
-/// 比让脚本报错糟得多。需要非交互装包就显式加 `-y`。
-///
-/// 两个调用时机:本地源在拷贝**之前**问(干净,不用回滚);git 源那时还没 clone、
-/// 拿不到 pkg.json,只能装完再问,拒绝时由调用方删掉包目录 —— 钩子要到下次启动
-/// 才跑,此刻撤销仍然来得及。
-fn confirmPkgHooks(alloc: std.mem.Allocator, pkg_dir: []const u8, prompt: []const u8, assume_yes: bool) bool {
-    const hooks = pkgsmod.declaredHooks(alloc, pkg_dir) catch return true;
-    if (hooks.len == 0) return true;
-
-    std.debug.print("\n这个包声明了 {d} 个生命周期钩子,会以 `bash -c` 执行:\n\n", .{hooks.len});
-    for (hooks) |h| {
-        std.debug.print("  [{s}] {s}\n", .{ h.event, h.command });
-    }
-    std.debug.print("\n其中 startup 钩子会在下次启动 piz 时立刻运行。\n", .{});
-    if (assume_yes) {
-        std.debug.print("(-y 已指定,继续)\n\n", .{});
-        return true;
-    }
-    if (!util.stdinIsTty()) {
-        std.debug.print("stdin 不是终端,无法确认。确认要装请加 -y。\n", .{});
-        return false;
-    }
-    std.debug.print("{s} [y/N] ", .{prompt});
-    var buf: [16]u8 = undefined;
-    const line = util.readLineStdin(&buf) orelse return false;
-    const ans = std.mem.trim(u8, line, " \t\r\n");
-    return std.mem.eql(u8, ans, "y") or std.mem.eql(u8, ans, "Y") or std.mem.eql(u8, ans, "yes");
-}
-
-/// pkg 子命令:install <path> [-l] | list | remove <name> [-l]
-fn runPkgCmd(alloc: std.mem.Allocator, args: *std.process.Args.Iterator) void {
-    const sub = args.next() orelse {
-        std.debug.print("piz pkg: usage: install <path> [-l] | list | remove <name> [-l]\n", .{});
-        std.process.exit(1);
-    };
-    const proj_cwd = std.process.currentPathAlloc(util.io, alloc) catch null;
-    if (std.mem.eql(u8, sub, "list")) {
-        const user = pkgsmod.list(alloc, .user, proj_cwd) catch &.{};
-        const proj = pkgsmod.list(alloc, .project, proj_cwd) catch &.{};
-        std.debug.print("user packages ({d}):\n", .{user.len});
-        for (user) |p| {
-            std.debug.print("  {s}  skills:{d} prompts:{d}{s}{s}\n", .{ p.name, p.skills, p.prompts, if (p.has_agents) " agents:yes" else "", if (p.has_web) " web:yes" else "" });
-        }
-        std.debug.print("project packages ({d}):\n", .{proj.len});
-        for (proj) |p| {
-            std.debug.print("  {s}  skills:{d} prompts:{d}{s}{s}\n", .{ p.name, p.skills, p.prompts, if (p.has_agents) " agents:yes" else "", if (p.has_web) " web:yes" else "" });
-        }
-        if (user.len + proj.len == 0) std.debug.print("  (none)\n", .{});
-        std.process.exit(0);
-    }
-    if (std.mem.eql(u8, sub, "install")) {
-        const src = args.next() orelse {
-            std.debug.print("piz pkg install: usage: piz pkg install <path> [-l] [-y]\n", .{});
-            std.process.exit(1);
-        };
-        var scope = pkgsmod.Scope.user;
-        var assume_yes = false;
-        while (args.next()) |extra| {
-            if (std.mem.eql(u8, extra, "-l") or std.mem.eql(u8, extra, "--local")) {
-                scope = .project;
-            } else if (std.mem.eql(u8, extra, "-y") or std.mem.eql(u8, extra, "--yes")) {
-                assume_yes = true;
-            } else {
-                std.debug.print("piz pkg install: unknown option {s}\n", .{extra});
-                std.process.exit(1);
-            }
-        }
-        // 包声明的 events 钩子会在 agent 生命周期各点跑 `bash -c <command>`,
-        // startup 钩子在下次启动时立刻执行。装包因此等于授权本机命令执行 ——
-        // 装之前必须让用户看见到底授权了什么。
-        //
-        // 本地源在这里问(拒绝就直接不装);git 源此刻还没 clone,见下面装后那一步。
-        const local_src: ?[]const u8 = switch (pkgsmod.detectSource(src)) {
-            .path => |p| p,
-            .git => null,
-        };
-        if (local_src) |p| {
-            if (!confirmPkgHooks(alloc, p, "继续安装?", assume_yes)) {
-                std.debug.print("piz pkg install: 已取消。\n", .{});
-                std.process.exit(1);
-            }
-        }
-        const dest = pkgsmod.install(alloc, src, scope, proj_cwd) catch |err| {
-            std.debug.print("piz pkg install: failed: {s}\n", .{@errorName(err)});
-            std.process.exit(1);
-        };
-        // git 源在上一步还没 clone,只能装完再看(本地源已经问过,那时 hooks
-        // 已确认,这里 declaredHooks 会再列一次 —— 所以只对 git 源做)。
-        // 用户拒绝就删掉:钩子要到下次启动才跑,此刻撤销来得及。
-        if (local_src == null and !confirmPkgHooks(alloc, dest, "保留这个包?", assume_yes)) {
-            std.Io.Dir.cwd().deleteTree(util.io, dest) catch |err| {
-                std.debug.print("piz pkg install: 已取消,但删除 {s} 失败({s})——请手动删除。\n", .{ dest, @errorName(err) });
-                std.process.exit(1);
-            };
-            std.debug.print("piz pkg install: 已取消,已移除 {s}。\n", .{dest});
-            std.process.exit(1);
-        }
-        std.debug.print("installed {s} → {s}\n", .{ src, dest });
-        std.process.exit(0);
-    }
-    if (std.mem.eql(u8, sub, "update")) {
-        var scope = pkgsmod.Scope.user;
-        if (args.next()) |extra| {
-            if (std.mem.eql(u8, extra, "-l") or std.mem.eql(u8, extra, "--local")) {
-                scope = .project;
-            } else {
-                std.debug.print("piz pkg update: unknown option {s}\n", .{extra});
-                std.process.exit(1);
-            }
-        }
-        const n = pkgsmod.update(alloc, scope, proj_cwd) catch |err| {
-            std.debug.print("piz pkg update: failed: {s}\n", .{@errorName(err)});
-            std.process.exit(1);
-        };
-        std.debug.print("updated {d} packages\n", .{n});
-        std.process.exit(0);
-    }
-    if (std.mem.eql(u8, sub, "remove")) {
-        const name = args.next() orelse {
-            std.debug.print("piz pkg remove: usage: piz pkg remove <name> [-l]\n", .{});
-            std.process.exit(1);
-        };
-        var scope = pkgsmod.Scope.user;
-        if (args.next()) |extra| {
-            if (std.mem.eql(u8, extra, "-l") or std.mem.eql(u8, extra, "--local")) {
-                scope = .project;
-            } else {
-                std.debug.print("piz pkg remove: unknown option {s}\n", .{extra});
-                std.process.exit(1);
-            }
-        }
-        pkgsmod.remove(alloc, name, scope, proj_cwd) catch |err| {
-            std.debug.print("piz pkg remove: failed: {s}\n", .{@errorName(err)});
-            std.process.exit(1);
-        };
-        std.debug.print("removed {s}\n", .{name});
-        std.process.exit(0);
-    }
-    std.debug.print("piz pkg: unknown subcommand {s}\n", .{sub});
-    std.process.exit(1);
 }
 
 /// 复制文本到剪贴板:wl-copy(Wayland) → xclip(X11);均不可用返回 false。
@@ -1364,19 +1215,6 @@ pub fn runInteractive(alloc: std.mem.Allocator, cfg: *cfgmod.Config, cwd: []cons
     }
 }
 
-/// 配置文件解析失败时提示用户。
-///
-/// 语法坏了的配置会被当成不存在,于是用户看到的是「unknown provider」这类
-/// 下游症状,猜不到是自己的 JSON 少了个逗号。走 stderr:stdout 留给管道下游。
-fn warnBrokenConfig(cfg: *cfgmod.Config) void {
-    for (cfg.broken_files) |name| {
-        std.debug.print(
-            "piz: ~/.piz/{s} 有语法错误,已按「不存在」处理。修好它才会生效。\n",
-            .{name},
-        );
-    }
-}
-
 // ---------- CLI ----------
 
 pub fn main(init: std.process.Init) !void {
@@ -1493,7 +1331,7 @@ pub fn main(init: std.process.Init) !void {
             std.debug.print("{s}", .{HELP});
             std.process.exit(0);
         } else if (std.mem.eql(u8, arg, "pkg")) {
-            runPkgCmd(alloc, &args); // 不返回
+            cmd_pkg.runPkgCmd(alloc, &args); // 不返回
         } else if (std.mem.eql(u8, arg, "web")) {
             cmd_web.runWebCmd(alloc, &args); // 不返回
         } else if (std.mem.eql(u8, arg, "--")) {
@@ -1558,7 +1396,7 @@ pub fn main(init: std.process.Init) !void {
     var cfg = cfgmod.Config{ .arena = &cfg_arena };
     defer cfg.deinit();
     try cfg.load();
-    warnBrokenConfig(&cfg);
+    cfg.warnBroken();
 
     // 插件启用:settings.json 的 plugins 数组,再叠加 --plugin 参数。
     // settings 里的未知名字只警告(配置可能为更新版本写的);CLI 里的直接失败。
@@ -1597,7 +1435,7 @@ pub fn main(init: std.process.Init) !void {
         var all_args = std.array_list.Managed([]const u8).init(alloc);
         var ait = std.process.Args.Iterator.init(init.minimal.args);
         while (ait.next()) |a| try all_args.append(a);
-        runAsync(alloc, cwd, print_prompt orelse "", all_args.items) catch |e| explainAndExit(e, &cfg, opts);
+        cmd_print.runAsync(alloc, cwd, print_prompt orelse "", all_args.items) catch |e| explainAndExit(e, &cfg, opts);
     } else if (print_mode) {
         cmd_print.runPrint(alloc, &cfg, cwd, print_prompt orelse "", opts) catch |e| explainAndExit(e, &cfg, opts);
     } else {
@@ -1635,69 +1473,6 @@ fn explainAndExit(e: anyerror, cfg: *cfgmod.Config, opts: RunOptions) noreturn {
     std.process.exit(1);
 }
 
-/// -a 异步:建新会话 → spawn 自身(去 -a,加 -s <id> -n) → 立即返回。
-fn runAsync(alloc: std.mem.Allocator, cwd: []const u8, prompt: []const u8, orig_args: []const []const u8) !void {
-    if (prompt.len == 0) {
-        std.debug.print("piz: -a requires a prompt (argument or -i file)\n", .{});
-        std.process.exit(1);
-    }
-    const abs_cwd = std.process.currentPathAlloc(util.io, alloc) catch cwd;
-    const sess = try sessionmod.Session.fresh(alloc, abs_cwd);
-    const base = std.fs.path.basename(sess.path);
-    const id = base[0 .. base.len - ".jsonl".len];
-
-    // 日志:<configDir>/logs/piz-<id>.log
-    const cfg_dir = try util.configDir(alloc);
-    const logs_dir = try util.joinPath(alloc, cfg_dir, "logs");
-    std.Io.Dir.cwd().createDirPath(util.io, logs_dir) catch {};
-    const log_path = try std.fmt.allocPrint(alloc, "{s}/piz-{s}.log", .{ logs_dir, id });
-    var logf = try std.Io.Dir.cwd().createFile(util.io, log_path, .{ .truncate = true, .permissions = @enumFromInt(0o600) });
-    defer logf.close(util.io);
-
-    // 重建 argv:原参数(含 argv[0])去 -a/--async,加 -s <id> 让子进程写此会话。
-    //
-    // `-s` 等必须插在 `--` **之前**:`--` 之后全是字面量,追加到尾部会被
-    // 当成提示词的一部分 —— 实测子进程收到的提示词变成
-    // `ASYNC-OK -s 1786375593575 -n -c`,会话选项则完全没生效。
-    var argv = std.array_list.Managed([]const u8).init(alloc);
-    defer argv.deinit();
-    var tail = std.array_list.Managed([]const u8).init(alloc);
-    defer tail.deinit();
-    var after_dashdash = false;
-    for (orig_args) |a| {
-        if (std.mem.eql(u8, a, "-a") or std.mem.eql(u8, a, "--async")) continue;
-        if (after_dashdash) {
-            try tail.append(a);
-            continue;
-        }
-        if (std.mem.eql(u8, a, "--")) {
-            after_dashdash = true;
-            continue;
-        }
-        try argv.append(a);
-    }
-    try argv.append("-s");
-    try argv.append(id);
-    try argv.append("-n");
-    try argv.append("-c"); // -s 优先于 -n;-c 覆盖前序 -n(防御)
-    if (tail.items.len > 0) {
-        try argv.append("--");
-        try argv.appendSlice(tail.items);
-    }
-
-    const child = try std.process.spawn(util.io, .{
-        .argv = argv.items,
-        .stdin = .ignore,
-        .stdout = .{ .file = logf },
-        .stderr = .{ .file = logf },
-        .pgid = 0, // 新进程组,脱离终端信号
-        .expand_arg0 = .expand,
-    });
-    _ = child;
-    std.debug.print("async: session {s} started — resume with: piz -s {s} -p \"...\"\nlog: {s}\n", .{ id, id, log_path });
-    std.process.exit(0);
-}
-
 /// 列出全部内置插件与启用状态(--plugins)。
 fn printPlugins(alloc: std.mem.Allocator) void {
     var arena = util.Arena.init(alloc);
@@ -1723,7 +1498,7 @@ fn printModels() void {
         std.debug.print("piz: failed to load config\n", .{});
         std.process.exit(1);
     };
-    warnBrokenConfig(&cfg);
+    cfg.warnBroken();
     defer cfg.deinit();
     for (cfg.providers) |p| {
         std.debug.print("{s}:", .{p.name});
@@ -1745,6 +1520,7 @@ test {
     _ = @import("tui");
     _ = @import("cmd_web.zig");
     _ = cmd_print;
+    _ = cmd_pkg;
     // webui 只被 main 引入(HTTP 服务属 app 层,不在 core 库里)。Zig 只收集
     // 显式列出的测试 —— 少了这行,webui.zig 的 test 块一个都不会跑。
     // 用已有的 webui_mod 别名,不能再 @import 一次:同一文件同时属于

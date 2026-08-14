@@ -50,6 +50,16 @@ pub const Config = struct {
     /// 之类的下游症状,完全猜不到是自己的 JSON 少了个逗号。记下来在启动时提示。
     broken_files: []const []const u8 = &.{},
 
+    /// 启动时点名解析失败的配置文件。走 stderr:stdout 留给管道下游。
+    pub fn warnBroken(self: *const Config) void {
+        for (self.broken_files) |name| {
+            std.debug.print(
+                "piz: ~/.piz/{s} 有语法错误,已按「不存在」处理。修好它才会生效。\n",
+                .{name},
+            );
+        }
+    }
+
     pub fn deinit(self: *Config) void {
         self.arena.deinit();
     }

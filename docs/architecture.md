@@ -42,10 +42,18 @@ zig fmt src build.zig  # 格式化
 graph TD
     app["app — src/main.zig<br/>CLI 入口 / 交互编排"]
     tui["tui — src/tui.zig<br/>raw mode / ANSI 渲染"]
+    cmdw["cmd_web.zig"]
+    cmdp["cmd_print.zig"]
+    cmdk["cmd_pkg.zig"]
+    webui["webui.zig — HTTP + SSE"]
     core["core — src/core.zig<br/>聚合入口"]
 
     app --> tui
     app --> core
+    app --> cmdw
+    app --> cmdp
+    app --> cmdk
+    cmdw --> webui
     tui --> core
 
     core --> agent["agent.zig — 工具循环 / 压缩"]
@@ -61,8 +69,8 @@ graph TD
     core --> activity["activity.zig — 在跑活动登记表"]
     core --> pkgs["pkgs.zig — 资源包"]
     core --> events["events.zig — 事件总线"]
-    core --> webui["webui.zig — HTTP + SSE 服务"]
     core --> webplugins["webplugins.zig — 前端插件"]
+    core --> seams["seams.zig — fs / llm 能力缝"]
 
     agent --> ai
     agent --> tools
@@ -100,7 +108,8 @@ graph TD
 | `webplugins.zig` | 前端插件清单与资源服务 |
 | `main.zig` | argv 解析、交互态编排 |
 | `cmd_web.zig` | Web 会话池、`piz web` 命令 |
-| `cmd_print.zig` | print/jsonl 输出与 `runPrint` |
+| `cmd_print.zig` | print/jsonl 输出、`runPrint`、`-a` 异步 |
+| `cmd_pkg.zig` | `piz pkg` 子命令 |
 | `runopts.zig` | 交互/print 共用的运行选项 |
 | `tui.zig` | raw mode、ANSI 渲染、输入解析、历史 |
 | `e2e.zig` | 端到端测试（内嵌 mock provider，仅网络边界打桩） |
@@ -451,7 +460,7 @@ piz 保留「置前」，理由是两者的压缩语义不同：codex 保留 use
 ## 测试
 
 ```bash
-zig build test          # 184 个测试
+zig build test          # 185 个测试
 ```
 
 两个测试目标：`core.zig` 为根（收集全部 core 模块的 test 块）、`main.zig` 为根（含 `e2e.zig`）。Zig 的 `zig test` 只收集根模块的测试，所以要分两个目标。
@@ -466,7 +475,7 @@ zig build test          # 184 个测试
 - **新模块必须显式加进 test 块才会被收集。** Zig 只跑 `_ = @import(…)` 列出的测试；
   引用一个模块（`const m = @import("x.zig")`）不会自动收集它的测试。`webui.zig` 的
   `parseChatText` 测试因此从写下起就没跑过。core 里的模块加到 `core.zig` 的 test 块，
-  只被 main 引用的（`webui.zig` / `cmd_web.zig` / `cmd_print.zig`）在 `main.zig`
+  只被 main 引用的（`webui.zig` / `cmd_web.zig` / `cmd_print.zig` / `cmd_pkg.zig`）在 `main.zig`
   的 test 块里列出 —— 不能再 `@import` 一次，同一文件同时属于 root 与 core
   两个模块会编译失败。
 

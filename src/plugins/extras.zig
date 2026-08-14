@@ -3,7 +3,7 @@ const std = @import("std");
 const agentmod = @import("../agent.zig");
 const imgxmod = @import("../imgx.zig");
 const toolsmod = @import("../tools.zig");
-const util = @import("../util.zig");
+const seams = @import("../seams.zig");
 
 // =====================================================================
 // 图片输入插件:read_image 走 imgx 压缩管线后以 user 消息附图。
@@ -22,7 +22,8 @@ pub fn toolReadImage(ctx: ?*anyopaque, arena: std.mem.Allocator, args: []const u
     if (path.len == 0) return .{ .content = "error: path is required", .is_error = true };
     // 相对路径按 agent cwd 解析(root 是 thread-local,工具线程内可用)
     const resolved = toolsmod.resolvePath(arena, path);
-    const input = std.Io.Dir.cwd().readFileAlloc(util.io, resolved, arena, .limited(MAX_IMAGE_INPUT_BYTES)) catch {
+    const f = seams.fs();
+    const input = f.readFile(f.ctx, arena, resolved, MAX_IMAGE_INPUT_BYTES) catch {
         return .{ .content = try std.fmt.allocPrint(arena, "error: cannot read image file: {s}", .{path}), .is_error = true };
     };
     if (input.len == 0) return .{ .content = "error: empty file", .is_error = true };

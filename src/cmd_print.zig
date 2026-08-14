@@ -368,3 +368,90 @@ test "concurrent print callbacks never interleave a line" {
     }
     try t.expectEqual(@as(usize, 600), lines);
 }
+
+/// 重建 -a 子进程 argv:去掉 -a/--async,在 `--` 之前插入 -s <id> -n -c。
+///
+/// `-s` 等必须插在 `--` **之前**:`--` 之后全是字面量,追加到尾部会被
+/// 当成提示词的一部分 —— 实测子进程收到的提示词变成
+/// `ASYNC-OK -s 1786375593575 -n -c`,会话选项则完全没生效。
+fn rebuildAsyncArgv(alloc: std.mem.Allocator, orig_args: []const []const u8, id: []const u8) !std.array_list.Managed([]const u8) {
+    var argv = std.array_list.Managed([]const u8).init(alloc);
+    errdefer argv.deinit();
+    var tail = std.array_list.Managed([]const u8).init(alloc);
+    defer tail.deinit();
+    var after_dashdash = false;
+    for (orig_args) |a| {
+        if (std.mem.eql(u8, a, "-a") or std.mem.eql(u8, a, "--async")) continue;
+        if (after_dashdash) {
+            try tail.append(a);
+            continue;
+        }
+        if (std.mem.eql(u8, a, "--")) {
+            after_dashdash = true;
+            continue;
+        }
+        try argv.append(a);
+    }
+    try argv.append("-s");
+    try argv.append(id);
+    try argv.append("-n");
+    try argv.append("-c"); // -s 优先于 -n;-c 覆盖前序 -n(防御)
+    if (tail.items.len > 0) {
+        try argv.append("--");
+        try argv.appendSlice(tail.items);
+    }
+    return argv;
+}
+
+test "async argv inserts session flags before dashdash" {
+    const t = std.testing;
+    try util.testInit();
+    var arena = util.Arena.init(t.allocator);
+    defer arena.deinit();
+    var argv = try rebuildAsyncArgv(arena.allocator(), &.{ "piz", "-p", "-a", "--", "-rf" }, "42");
+    defer argv.deinit();
+    try t.expectEqual(@as(usize, 8), argv.items.len);
+    try t.expectEqualStrings("piz", argv.items[0]);
+    try t.expectEqualStrings("-p", argv.items[1]);
+    try t.expectEqualStrings("-s", argv.items[2]);
+    try t.expectEqualStrings("42", argv.items[3]);
+    try t.expectEqualStrings("-n", argv.items[4]);
+    try t.expectEqualStrings("-c", argv.items[5]);
+    try t.expectEqualStrings("--", argv.items[6]);
+    try t.expectEqualStrings("-rf", argv.items[7]);
+}
+
+/// -a 异步:建新会话 → spawn 自身(去 -a,加 -s <id> -n) → 立即返回。
+pub fn runAsync(alloc: std.mem.Allocator, cwd: []const u8, prompt: []const u8, orig_args: []const []const u8) !void {
+    if (prompt.len == 0) {
+        std.debug.print("piz: -a requires a prompt (argument or -i file)\n", .{});
+        std.process.exit(1);
+    }
+    const abs_cwd = std.process.currentPathAlloc(util.io, alloc) catch cwd;
+    const sess = try sessionmod.Session.fresh(alloc, abs_cwd);
+    const base = std.fs.path.basename(sess.path);
+    const id = base[0 .. base.len - ".jsonl".len];
+
+    // 日志:<configDir>/logs/piz-<id>.log
+    const cfg_dir = try util.configDir(alloc);
+    const logs_dir = try util.joinPath(alloc, cfg_dir, "logs");
+    std.Io.Dir.cwd().createDirPath(util.io, logs_dir) catch {};
+    const log_path = try std.fmt.allocPrint(alloc, "{s}/piz-{s}.log", .{ logs_dir, id });
+    var logf = try std.Io.Dir.cwd().createFile(util.io, log_path, .{ .truncate = true, .permissions = @enumFromInt(0o600) });
+    defer logf.close(util.io);
+
+    var argv = try rebuildAsyncArgv(alloc, orig_args, id);
+    defer argv.deinit();
+
+    const child = try std.process.spawn(util.io, .{
+        .argv = argv.items,
+        .stdin = .ignore,
+        .stdout = .{ .file = logf },
+        .stderr = .{ .file = logf },
+        .pgid = 0, // 新进程组,脱离终端信号
+        .expand_arg0 = .expand,
+    });
+    _ = child;
+    std.debug.print("async: session {s} started — resume with: piz -s {s} -p \"...\"\nlog: {s}\n", .{ id, id, log_path });
+    std.process.exit(0);
+}

@@ -16,7 +16,7 @@ dsh 原句：**everything is a plugin**。无特权内核；扩展是把插件�
 | 注册是可逆副作用（`ctx.effect`） | `enable`/`disable` 成对；关位撤钩、撤工具、撤 schema | **已摘** |
 | 事件即扩展点 | 编译期钩子 + Packages `events.Bus` | 半摘。钩子已是点；Bus 是观察，不是策略 |
 | waterfall 须 `next()`，不调即短路 | `BeforeChain` / `AfterChain`：须 `next()` 才放行 | **已摘** |
-| 能力 seam = Definition + Provider + Consumer | `seams.zig`：fs / llm 默认 Provider；`Agent.find_tool` / `llm_run` / `fs` 可换 | **已摘接口**，默认仍是本地实现 |
+| 能力 seam = Definition + Provider + Consumer | `seams.zig`：fs / llm 默认 Provider；`Agent.find_tool` / `llm_run` / `fs` 可换；loop 与工具已接入 | **已摘并接入**，默认仍是本地实现 |
 | 模型可见 ⟺ 已记录 | `Session.reconstructModelVisible` + `architecture.md` 清单 | **已摘纪律**。系统提示仍是每轮重装 |
 | 改 loop 须改架构文档 | 有 `architecture.md`，无硬门禁 | 可摘纪律，不必抄 Cordis |
 | profile + bundle + patch 叠层 | settings / `--plugin` / Packages 目录 | 不可摘 YAML 组装树。叠层语义可借鉴：默认核 + 可选插件 + 用户包 |
@@ -70,7 +70,7 @@ dsh 选事件域是改动的第一个决定。本仓对应如下。
 
 1. **纪律** — 已摘。见上表与 `architecture.md`「模型可见清单」。
 2. **挂钩形态** — 已摘。`BeforeChain` / `AfterChain`。
-3. **seam 切口** — 已摘接口。`seams.Fs` / `seams.LlmRun` / `Agent.find_tool`。loop 未动。
+3. **seam 切口** — 已摘并接入。`seams.Fs` / `seams.LlmRun` / `Agent.find_tool`；`runToolSlot` 绑定 fs，loop 走 `llm_run` / `find_tool`，核心工具与 `read_image` 走 `seams.fs()`。默认仍是本地实现。
 4. **可逆** — 已摘。`enable`/`disable` 成对；关位后钩子、工具、schema 一并消失。`--no-plugin` 与 `disabled_plugins`。
 
 对照到此为止。要动代码，另下差遣，并点明上表第几条。
