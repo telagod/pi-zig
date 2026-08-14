@@ -8,9 +8,9 @@
 </p>
 
 <p align="center">
-  <img src="docs/images/tui.png" width="720" alt="piz 交互模式：欢迎行、全部斜杠命令、状态栏">
+  <img src="docs/images/tui.png" width="720" alt="piz 交互模式：会话卡、对话、boxed composer">
 </p>
-<p align="center"><sub>交互模式。PTY 里跑 <code>piz -n</code> 再打 <code>/help</code>。上面是版本和目录，中间全部斜杠和 <code>@./</code> <code>!</code>，模型和占用在底下状态栏。</sub></p>
+<p align="center"><sub>交互模式。开场是会话卡，对话用 <code>›</code> / <code>•</code>，输入在底栏框。页脚左侧提示、右侧上下文占用。空框按 <code>?</code> 看快捷键。</sub></p>
 
 <p align="center">
   <img src="docs/images/web.png" width="720" alt="piz Web UI：项目侧栏、对话、工具卡、斜杠命令">

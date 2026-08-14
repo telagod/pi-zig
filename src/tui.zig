@@ -1,8 +1,21 @@
-// tui.zig — 极简交互终端:raw mode、alt screen、流式渲染、行编辑、历史、斜杠命令。
-// 设计取舍:无鼠标、无补全。输入和状态钉在屏幕底,对话在上面滚。
-// 软换行,思考可折叠。铬层不用表情符号。PageUp/PageDown 滚历史。
-// /permissions /model /think 无参数时弹出选择器。
-// 底栏永远画状态;有提示时写在状态前面,不把状态换掉。
+// tui.zig — Codex layout grammar, Zig + ANSI.
+//
+// Transcript is a list of typed Cells. Gutters (`› ` / `• ` / `└ `) are
+// applied at paint time from Cell.kind — never stored in cell text.
+// Session header / status cards store fields and render at the current
+// width (not a baked 56-col string).
+//
+// Layout: measure BottomPane first (working + picker + composer + footer),
+// transcript gets the remaining rows, pin-to-bottom scroll.
+//
+// Bottom pane:
+//   Working (Ns • esc to interrupt)   // 1 status + ≤2 └ details
+//   picker overlay if open
+//   boxed composer (min 3 rows, grows with wrap)
+//   footer: hint LEFT, context% RIGHT
+//
+// Proven pieces kept: raw mode, alt screen, emergency SIGTERM restore,
+// UTF-8 edit, CSI/mouse scroll, picker, history file, slash-command keys.
 const std = @import("std");
 const util = @import("core").util;
 const activity = @import("core").activity;
@@ -11,11 +24,73 @@ const cfgmod = @import("core").config;
 
 const ANSI_RESET = "\x1b[0m";
 const ANSI_DIM = "\x1b[2m";
+const ANSI_REV = "\x1b[7m";
+const ANSI_ITALIC = "\x1b[3m";
 
 pub const Style = enum { normal, fence, code };
 
-/// 对话块。用来在用户 / 思考 / 正文 / 工具之间留空，而不是把所有字糊成一段。
-pub const Block = enum { none, user, think, text, chrome };
+/// Codex session header 内宽上限。见 history_cell.rs SESSION_HEADER_MAX_INNER_WIDTH。
+pub const CARD_MAX_INNER: usize = 56;
+
+pub const CellKind = enum {
+    session_header,
+    status_card,
+    user,
+    think,
+    assistant,
+    tool,
+    tool_end,
+    chrome,
+};
+
+/// One transcript item. `text` never contains `› ` / `• ` / `└ `.
+pub const Cell = struct {
+    kind: CellKind,
+    text: std.array_list.Managed(u8),
+    color: []const u8 = "",
+    card: ?CardFields = null,
+};
+
+pub const CardFields = struct {
+    version: []u8,
+    model: []u8,
+    think: []u8,
+    cwd: []u8,
+    session: []u8,
+    perms: []u8 = &.{},
+    context: []u8 = &.{},
+    usage: []u8 = &.{},
+
+    fn deinit(self: CardFields, alloc: std.mem.Allocator) void {
+        alloc.free(self.version);
+        alloc.free(self.model);
+        alloc.free(self.think);
+        alloc.free(self.cwd);
+        alloc.free(self.session);
+        alloc.free(self.perms);
+        alloc.free(self.context);
+        alloc.free(self.usage);
+    }
+};
+
+pub const SessionInfo = struct {
+    version: []const u8,
+    model: []const u8,
+    think: []const u8,
+    cwd: []const u8,
+    session: []const u8,
+};
+
+pub const StatusInfo = struct {
+    version: []const u8,
+    model: []const u8,
+    think: []const u8,
+    cwd: []const u8,
+    session: []const u8,
+    perms: []const u8,
+    context: []const u8,
+    usage: []const u8,
+};
 
 /// 选择器一行。label 是看见的,value 是确认后拼进斜杠命令的参数。
 pub const PickerItem = struct {
@@ -125,14 +200,134 @@ pub const Picker = struct {
     }
 };
 
-/// 底栏指令优先于状态。perm > picker > quit > esc > scrolled。
-pub fn footerHint(perm: bool, picker: bool, quit_armed: bool, esc_armed: bool, scrolled: bool) ?[]const u8 {
-    if (perm) return "y 允许  n 拒绝  a 全权  s 会话";
-    if (picker) return "up/down 选择  Enter 确认  Esc 取消";
-    if (quit_armed) return "再按一次退出";
-    if (esc_armed) return "再按 Esc 编辑上一条";
-    if (scrolled) return "PgUp/PgDn 滚动";
+/// 页脚状态。Codex:瞬时指令盖过环境;空闲空框才出 `? for shortcuts`。
+pub const FooterState = struct {
+    perm: bool = false,
+    picker: bool = false,
+    quit_armed: bool = false,
+    esc_armed: bool = false,
+    scrolled: bool = false,
+    shortcuts: bool = false,
+    has_draft: bool = false,
+    running: bool = false,
+};
+
+/// 底栏左侧提示。perm > picker > quit > esc > shortcuts > scrolled > queue > idle。
+pub fn footerHint(s: FooterState) ?[]const u8 {
+    if (s.perm) return "y allow  n deny  a always  s skip";
+    if (s.picker) return "up/down select  enter confirm  esc cancel";
+    if (s.quit_armed) return "ctrl+c again to quit";
+    if (s.esc_armed) return "esc again to edit last";
+    if (s.shortcuts) return "? hide shortcuts";
+    if (s.scrolled) return "pgup/pgdn to scroll";
+    if (s.running and s.has_draft) return "tab to queue";
+    if (!s.has_draft) return "? for shortcuts";
     return null;
+}
+
+/// 左提示 + 右上下文,宽不够先丢右边。
+pub fn layoutFooter(alloc: std.mem.Allocator, left: ?[]const u8, right: []const u8, width: usize) ![]u8 {
+    const l = left orelse "";
+    const lw = visibleCols(l);
+    const rw = visibleCols(right);
+    if (l.len == 0 and right.len == 0) return alloc.dupe(u8, "");
+    if (l.len == 0) {
+        if (rw >= width) return alloc.dupe(u8, truncateToVisible(right, width));
+        const pad = width - rw;
+        var out = try alloc.alloc(u8, pad + right.len);
+        @memset(out[0..pad], ' ');
+        @memcpy(out[pad..], right);
+        return out;
+    }
+    if (right.len == 0 or lw + 2 + rw > width) {
+        const cut = truncateToVisible(l, width);
+        return alloc.dupe(u8, cut);
+    }
+    const pad = width - lw - rw;
+    var out = try alloc.alloc(u8, l.len + pad + right.len);
+    @memcpy(out[0..l.len], l);
+    @memset(out[l.len .. l.len + pad], ' ');
+    @memcpy(out[l.len + pad ..], right);
+    return out;
+}
+
+pub fn cardInner(width: usize) usize {
+    if (width < 8) return 0;
+    return @min(CARD_MAX_INNER, width - 4);
+}
+
+/// Codex session / status 卡:内容按 inner 截断,外框跟内容走。
+pub fn formatCard(alloc: std.mem.Allocator, lines: []const []const u8, width: usize) ![]u8 {
+    const inner = cardInner(width);
+    if (inner == 0) {
+        var w = std.Io.Writer.Allocating.init(alloc);
+        errdefer w.deinit();
+        for (lines, 0..) |line, i| {
+            if (i > 0) try w.writer.writeByte('\n');
+            try w.writer.writeAll(line);
+        }
+        return w.toOwnedSlice();
+    }
+    var w = std.Io.Writer.Allocating.init(alloc);
+    errdefer w.deinit();
+    try writeCardEdge(&w.writer, "╭", "╮", inner);
+    for (lines) |line| {
+        try w.writer.writeAll(ANSI_DIM ++ "│ " ++ ANSI_RESET);
+        const cut = truncateToVisible(line, inner);
+        try w.writer.writeAll(cut);
+        var pad = inner - visibleCols(cut);
+        while (pad > 0) : (pad -= 1) try w.writer.writeByte(' ');
+        try w.writer.writeAll(ANSI_DIM ++ " │" ++ ANSI_RESET ++ "\n");
+    }
+    try writeCardEdge(&w.writer, "╰", "╯", inner);
+    const out = try w.toOwnedSlice();
+    if (out.len > 0 and out[out.len - 1] == '\n') {
+        const trimmed = try alloc.dupe(u8, out[0 .. out.len - 1]);
+        alloc.free(out);
+        return trimmed;
+    }
+    return out;
+}
+
+pub fn formatSessionCard(alloc: std.mem.Allocator, info: SessionInfo, width: usize) ![]u8 {
+    const title = try std.fmt.allocPrint(alloc, "\x1b[2m>_ \x1b[0m\x1b[1mpiz\x1b[0m  \x1b[2m(v{s})\x1b[0m", .{info.version});
+    defer alloc.free(title);
+    const model = try std.fmt.allocPrint(alloc, "\x1b[2mmodel:      \x1b[0m{s}  \x1b[2m{s}  /model\x1b[0m", .{ info.model, info.think });
+    defer alloc.free(model);
+    const dir = try std.fmt.allocPrint(alloc, "\x1b[2mdirectory:  \x1b[0m{s}", .{info.cwd});
+    defer alloc.free(dir);
+    const session = try std.fmt.allocPrint(alloc, "\x1b[2msession:    \x1b[0m{s}", .{info.session});
+    defer alloc.free(session);
+    const lines = [_][]const u8{ title, "", model, dir, session };
+    return formatCard(alloc, &lines, width);
+}
+
+pub fn formatStatusCard(alloc: std.mem.Allocator, info: StatusInfo, width: usize) ![]u8 {
+    const title = try std.fmt.allocPrint(alloc, "\x1b[2m>_ \x1b[0m\x1b[1mpiz\x1b[0m  \x1b[2m(v{s})\x1b[0m", .{info.version});
+    defer alloc.free(title);
+    const model = try std.fmt.allocPrint(alloc, "\x1b[2mmodel:       \x1b[0m{s}  \x1b[2m{s}\x1b[0m", .{ info.model, info.think });
+    defer alloc.free(model);
+    const dir = try std.fmt.allocPrint(alloc, "\x1b[2mdirectory:   \x1b[0m{s}", .{info.cwd});
+    defer alloc.free(dir);
+    const session = try std.fmt.allocPrint(alloc, "\x1b[2msession:     \x1b[0m{s}", .{info.session});
+    defer alloc.free(session);
+    const perms = try std.fmt.allocPrint(alloc, "\x1b[2mpermissions: \x1b[0m{s}", .{info.perms});
+    defer alloc.free(perms);
+    const ctx = try std.fmt.allocPrint(alloc, "\x1b[2mcontext:     \x1b[0m{s}", .{info.context});
+    defer alloc.free(ctx);
+    const usage = try std.fmt.allocPrint(alloc, "\x1b[2musage:       \x1b[0m{s}", .{info.usage});
+    defer alloc.free(usage);
+    const lines = [_][]const u8{ title, "", model, dir, session, perms, ctx, usage };
+    return formatCard(alloc, &lines, width);
+}
+
+fn writeCardEdge(wr: *std.Io.Writer, left: []const u8, right: []const u8, inner: usize) !void {
+    try wr.writeAll(ANSI_DIM);
+    try wr.writeAll(left);
+    var i: usize = 0;
+    while (i < inner + 2) : (i += 1) try wr.writeAll("─");
+    try wr.writeAll(right);
+    try wr.writeAll(ANSI_RESET ++ "\n");
 }
 
 /// skip = 从对话顶裁掉的行数。off=0 钉住底。
@@ -142,54 +337,62 @@ pub fn scrollSkip(off: usize, total: usize, view: usize) usize {
     return pin - o;
 }
 
+/// Working 行数:关=0,开=1 状态 + ≤2 详情。
+pub fn workingRows(nact: usize, streaming: bool) usize {
+    if (nact == 0 and !streaming) return 0;
+    return 1 + @min(nact, 2);
+}
+
+/// 底栏一次量完。对话区拿剩下的行。
+pub const BottomPane = struct {
+    working_rows: usize = 0,
+    perm_rows: usize = 0,
+    picker_rows: usize = 0,
+    composer_rows: usize = 0,
+    footer_rows: usize = 0,
+    boxed: bool = true,
+    input_inner: usize = 1,
+    comp_inner: usize = 1,
+
+    pub fn height(self: BottomPane) usize {
+        return self.working_rows + self.perm_rows + self.picker_rows + self.composer_rows + self.footer_rows;
+    }
+};
+
 pub const Tui = struct {
     alloc: std.mem.Allocator,
-    // --- 渲染缓冲 ---
-    text: std.array_list.Managed(u8),
-    line_starts: std.array_list.Managed(usize),
+    cells: std.array_list.Managed(Cell),
     mutex: std.Io.Mutex = .init,
     dirty: std.atomic.Value(bool) = std.atomic.Value(bool).init(true),
     style: Style = .normal,
-    // --- 输入 ---
     input: std.array_list.Managed(u8),
     cursor: usize = 0,
     history: std.array_list.Managed([]const u8),
     hist_idx: ?usize = null,
-    // --- 终端 ---
     orig_tio: std.posix.termios,
     in_fd: std.posix.fd_t,
     out_fd: std.posix.fd_t,
     width: usize = 80,
     height: usize = 24,
     raw: bool = false,
-    // --- 状态 ---
     streaming: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     ctx: ?*anyopaque = null,
-    /// 权限询问提示行(工作线程写入,指向稳定的 slice 变量;主循环只读)
     perm_prompt: std.atomic.Value(?*const []const u8) = std.atomic.Value(?*const []const u8).init(null),
     status: std.array_list.Managed(u8),
     status_style: []const u8 = ANSI_DIM,
     history_path: []u8,
-    block: Block = .none,
-    think_buf: std.array_list.Managed(u8),
-    /// 思考插在这条 line_starts 下标之前。之后追加的正文在思考下面。
-    think_at: ?usize = null,
     think_open: bool = true,
+    think_live: bool = false,
     last_think_len: usize = 0,
-    /// 用户选的思考等级。状态栏用文字显示它,不是按思考字数猜。
     think_level: ai.ThinkLevel = .high,
     think_meta: cfgmod.ModelMeta = .{ .reasoning = true },
-    /// Codex:空 composer 上 Ctrl+C/D 先武装 1 秒,再按同一键才退出。
     quit_arm_ns: i64 = 0,
     quit_arm_key: u8 = 0,
-    /// Codex:空 composer 上 Esc 武装,再按 Esc 把上一条载回输入框。
     esc_armed: bool = false,
-    /// 斜杠命令弹出的选择器。有值时键盘不进 composer。
     picker: ?Picker = null,
-    /// 相对钉住底部往上滚了多少行。0 = 跟着最新。
     scroll_off: usize = 0,
-    /// 上一帧能滚的最大偏移,给 PageUp 用。
     last_pin: usize = 0,
+    shortcuts_open: bool = false,
 
     pub fn init(alloc: std.mem.Allocator) !Tui {
         const in_fd = std.posix.STDIN_FILENO;
@@ -204,22 +407,26 @@ pub const Tui = struct {
             .ispeed = @enumFromInt(0),
             .ospeed = @enumFromInt(0),
         };
-        // 历史文件
-        const cfg_dir = try util.configDir(alloc);
-        const hist_path = try util.joinPath(alloc, cfg_dir, "history.txt");
+        const hist_path = blk: {
+            if (util.configDir(alloc)) |cfg_dir| {
+                defer alloc.free(cfg_dir);
+                break :blk util.joinPath(alloc, cfg_dir, "history.txt") catch try alloc.dupe(u8, "");
+            } else |_| {
+                break :blk try alloc.dupe(u8, "");
+            }
+        };
         var hist = std.array_list.Managed([]const u8).init(alloc);
-        if (std.Io.Dir.cwd().readFileAlloc(util.io, hist_path, alloc, .limited(4 * 1024 * 1024))) |content| {
+        if (hist_path.len > 0) if (std.Io.Dir.cwd().readFileAlloc(util.io, hist_path, alloc, .limited(4 * 1024 * 1024))) |content| {
             defer alloc.free(content);
             var lines = std.mem.splitScalar(u8, content, '\n');
             while (lines.next()) |line| {
                 if (line.len > 0) try hist.append(try alloc.dupe(u8, line));
                 if (hist.items.len >= 2000) break;
             }
-        } else |_| {}
-        var t = Tui{
+        } else |_| {} else {}
+        return .{
             .alloc = alloc,
-            .text = std.array_list.Managed(u8).init(alloc),
-            .line_starts = std.array_list.Managed(usize).init(alloc),
+            .cells = std.array_list.Managed(Cell).init(alloc),
             .input = std.array_list.Managed(u8).init(alloc),
             .history = hist,
             .orig_tio = orig_tio,
@@ -227,21 +434,24 @@ pub const Tui = struct {
             .out_fd = out_fd,
             .status = std.array_list.Managed(u8).init(alloc),
             .history_path = hist_path,
-            .think_buf = std.array_list.Managed(u8).init(alloc),
         };
-        try t.line_starts.append(0);
-        return t;
     }
 
     pub fn deinit(self: *Tui) void {
         self.restoreTerminal();
         self.closePicker();
-        self.text.deinit();
-        self.line_starts.deinit();
+        self.freeCells();
+        self.cells.deinit();
         self.input.deinit();
+        for (self.history.items) |line| self.alloc.free(line);
         self.history.deinit();
         self.status.deinit();
-        self.think_buf.deinit();
+        self.alloc.free(self.history_path);
+    }
+
+    fn freeCells(self: *Tui) void {
+        for (self.cells.items) |*c| deinitCell(c, self.alloc);
+        self.cells.clearRetainingCapacity();
     }
 
     pub fn openPicker(self: *Tui, cmd: []const u8, title: []const u8, items: []const PickerItem, selected: usize) !void {
@@ -249,6 +459,7 @@ pub const Tui = struct {
         self.picker = try Picker.init(self.alloc, cmd, title, items, selected);
         self.disarmQuit();
         self.esc_armed = false;
+        self.shortcuts_open = false;
         self.dirty.store(true, .release);
     }
 
@@ -259,8 +470,6 @@ pub const Tui = struct {
             self.dirty.store(true, .release);
         }
     }
-
-    // ---------- 终端控制 ----------
 
     pub fn enterRaw(self: *Tui) !void {
         const tio = std.posix.tcgetattr(self.in_fd) catch {
@@ -284,44 +493,29 @@ pub const Tui = struct {
         try std.posix.tcsetattr(self.in_fd, .NOW, raw);
         self.raw = true;
         self.armEmergencyRestore();
-        try self.writeAll("\x1b[?1049h"); // alt screen
+        try self.writeAll("\x1b[?1049h");
+        try self.writeAll("\x1b[?1000h\x1b[?1006h");
         try self.querySize();
     }
 
     pub fn restoreTerminal(self: *Tui) void {
         if (self.raw) {
             self.raw = false;
-            _ = self.writeAll("\x1b[?1049l\x1b[0m") catch {};
+            _ = self.writeAll("\x1b[?1006l\x1b[?1000l\x1b[?1049l\x1b[0m") catch {};
             _ = std.posix.tcsetattr(self.in_fd, .NOW, self.orig_tio) catch {};
-            // 正常恢复完就解除急救:之后再收到信号不该对已复位的终端二次写入
             emergency_tio = null;
         }
     }
 
-    // ---------- 信号安全的终端急救 ----------
-    //
-    // restoreTerminal 靠 defer 调用,而 defer 只在正常控制流上跑。外部 `kill <pid>`、
-    // 关终端窗口(SIGHUP)、系统关机、supervisor 停服务发来的 SIGTERM 走内核默认动作,
-    // 进程直接死掉,defer 一个都不执行 —— 终端被留在 raw mode,用户 shell 从此
-    // 没有回显和行编辑,只能 `reset`。实测确认可触发。
-    //
-    // 所以把恢复所需的最小状态放在全局,由信号处理器直接用裸 syscall 复位。
-    // 处理器里只做这一件事:终端是唯一「不救就会伤到用户」的资源,刷会话/释放内存
-    // 都不是 async-signal-safe,放进来只会换一种死法。
     var emergency_fd: std.posix.fd_t = -1;
     var emergency_tio: ?std.posix.termios = null;
 
-    // 0.16:handler 参数是 SIG 枚举而非 i32,`std.posix.write` 已移除
-    // (裸 fd 写走 std.os.linux.write)。两处都踩过。
     fn emergencyRestore(signo: std.posix.SIG) callconv(.c) void {
         if (emergency_tio) |tio| {
             _ = std.posix.tcsetattr(emergency_fd, .NOW, tio) catch {};
-            // 退出 alt screen + 复位属性,否则用户看到的是一屏残留
-            const seq = "\x1b[?1049l\x1b[0m";
+            const seq = "\x1b[?1006l\x1b[?1000l\x1b[?1049l\x1b[0m";
             _ = std.os.linux.write(emergency_fd, seq.ptr, seq.len);
         }
-        // 恢复默认动作后重发:退出码保持 128+signo,waitpid 的调用方能正确判断死因。
-        // 这里不能直接 exit —— 那会把「被 SIGTERM 杀掉」伪装成正常退出。
         std.posix.sigaction(signo, &.{
             .handler = .{ .handler = std.posix.SIG.DFL },
             .mask = std.posix.sigemptyset(),
@@ -330,7 +524,6 @@ pub const Tui = struct {
         _ = std.posix.raise(signo) catch {};
     }
 
-    /// 注册终端急救处理器。enterRaw 成功后调用。
     fn armEmergencyRestore(self: *Tui) void {
         emergency_fd = self.in_fd;
         emergency_tio = self.orig_tio;
@@ -339,8 +532,6 @@ pub const Tui = struct {
             .mask = std.posix.sigemptyset(),
             .flags = 0,
         };
-        // raw mode 关了 ISIG,交互式 Ctrl+C 走应用层字节 0x03 不经这里;
-        // 但外部 `kill -INT` 仍会送真信号进来,所以 INT 也要接。
         const sigs = [_]@TypeOf(std.posix.SIG.TERM){
             std.posix.SIG.TERM,
             std.posix.SIG.HUP,
@@ -372,72 +563,56 @@ pub const Tui = struct {
         try w.flush();
     }
 
-    // ---------- 文本追加(工作线程调用,持锁) ----------
-
-    fn ensureNlLocked(self: *Tui) !void {
-        if (self.text.items.len == 0) return;
-        if (self.text.items[self.text.items.len - 1] != '\n') {
-            try self.text.append('\n');
-            try self.line_starts.append(self.text.items.len);
-        }
+    fn pushCell(self: *Tui, kind: CellKind) !*Cell {
+        try self.cells.append(.{
+            .kind = kind,
+            .text = std.array_list.Managed(u8).init(self.alloc),
+        });
+        return &self.cells.items[self.cells.items.len - 1];
     }
 
-    fn beginBlockLocked(self: *Tui, to: Block) !void {
-        if (self.block == to) return;
-        const from = self.block;
-        try self.ensureNlLocked();
-        const gap = from != .none and switch (to) {
-            .user => true,
-            .think => from == .user,
-            .text => from == .user or from == .think or from == .chrome,
-            .chrome => from == .text or from == .user,
-            .none => false,
-        };
-        if (gap) {
-            try self.text.append('\n');
-            try self.line_starts.append(self.text.items.len);
-        }
-        self.block = to;
+    fn lastCell(self: *Tui, kind: CellKind) ?*Cell {
+        if (self.cells.items.len == 0) return null;
+        const c = &self.cells.items[self.cells.items.len - 1];
+        return if (c.kind == kind) c else null;
     }
 
-    fn appendStyledLocked(self: *Tui, s: []const u8) !void {
+    fn appendStyledTo(self: *Tui, buf: *std.array_list.Managed(u8), s: []const u8) !void {
         var i: usize = 0;
         while (i < s.len) {
             const c = s[i];
             if (c == '\n') {
-                try self.text.appendSlice(ANSI_RESET);
-                try self.text.append('\n');
-                try self.line_starts.append(self.text.items.len);
+                try buf.appendSlice(ANSI_RESET);
+                try buf.append('\n');
                 self.style = .normal;
                 i += 1;
                 continue;
             }
             if (c == '`') {
                 if (self.style == .normal) {
-                    try self.text.appendSlice(ANSI_DIM);
+                    try buf.appendSlice(ANSI_DIM);
                     self.style = .code;
                 } else if (self.style == .code) {
-                    try self.text.appendSlice(ANSI_RESET);
+                    try buf.appendSlice(ANSI_RESET);
                     self.style = .normal;
                 } else {
-                    try self.text.append(c);
+                    try buf.append(c);
                 }
                 i += 1;
                 continue;
             }
-            // 代码围栏:行首 ``` 或 ~~~
             if ((c == '`' or c == '~') and i + 2 < s.len and s[i + 1] == c and s[i + 2] == c) {
                 if (self.style == .fence) {
-                    try self.text.appendSlice(ANSI_RESET);
+                    try buf.appendSlice(ANSI_RESET);
                     self.style = .normal;
                 } else {
-                    try self.text.appendSlice(ANSI_DIM);
+                    try buf.appendSlice(ANSI_DIM);
                     self.style = .fence;
                 }
                 i += 3;
                 continue;
             }
-            try self.text.append(c);
+            try buf.append(c);
             i += 1;
         }
     }
@@ -445,80 +620,116 @@ pub const Tui = struct {
     pub fn appendText(self: *Tui, s: []const u8) !void {
         self.mutex.lock(util.io) catch {};
         defer self.mutex.unlock(util.io);
-        try self.beginBlockLocked(.text);
-        try self.appendStyledLocked(s);
+        const cell = self.lastCell(.assistant) orelse try self.pushCell(.assistant);
+        try self.appendStyledTo(&cell.text, s);
         self.dirty.store(true, .release);
     }
 
-    /// 思考进独立缓冲,渲染时按折叠/展开画。默认展开,Ctrl+T 切换。
     pub fn appendThink(self: *Tui, s: []const u8) !void {
         self.mutex.lock(util.io) catch {};
         defer self.mutex.unlock(util.io);
-        if (self.think_buf.items.len == 0) {
-            try self.ensureNlLocked();
-            try self.beginBlockLocked(.think);
-            self.think_at = self.line_starts.items.len;
+        const cell = if (self.think_live) self.lastCell(.think) else null;
+        const dest = cell orelse blk: {
             self.think_open = true;
-        }
-        try self.think_buf.appendSlice(s);
-        self.last_think_len = self.think_buf.items.len;
+            break :blk try self.pushCell(.think);
+        };
+        self.think_live = true;
+        try dest.text.appendSlice(s);
+        self.last_think_len = dest.text.items.len;
         self.dirty.store(true, .release);
     }
 
     pub fn toggleThink(self: *Tui) void {
         self.mutex.lock(util.io) catch {};
         defer self.mutex.unlock(util.io);
-        if (self.think_buf.items.len == 0) return;
+        var any = false;
+        for (self.cells.items) |c| {
+            if (c.kind == .think and c.text.items.len > 0) any = true;
+        }
+        if (!any) return;
         self.think_open = !self.think_open;
         self.dirty.store(true, .release);
     }
 
-    fn bakeThinkLocked(self: *Tui) !void {
-        if (self.think_buf.items.len == 0) return;
-        self.last_think_len = self.think_buf.items.len;
-        var baked = std.array_list.Managed(u8).init(self.alloc);
-        defer baked.deinit();
-        try baked.appendSlice(ANSI_DIM);
-        try baked.appendSlice("  v 思考\n");
-        try baked.appendSlice(self.think_buf.items);
-        if (baked.items[baked.items.len - 1] != '\n') try baked.append('\n');
-        try baked.appendSlice(ANSI_RESET);
-        const at = if (self.think_at) |idx|
-            if (idx < self.line_starts.items.len) self.line_starts.items[idx] else self.text.items.len
-        else
-            self.text.items.len;
-        try self.text.insertSlice(at, baked.items);
-        try rebuildLineStarts(&self.line_starts, self.text.items);
-        self.think_buf.clearRetainingCapacity();
-        self.think_at = null;
+    /// 关掉当前思考格,下一段思考另起一格。续载每条 assistant 之后要调用。
+    pub fn bakeThink(self: *Tui) void {
+        self.mutex.lock(util.io) catch {};
+        defer self.mutex.unlock(util.io);
+        if (self.lastCell(.think)) |c| {
+            self.last_think_len = c.text.items.len;
+        }
+        self.think_live = false;
+        self.style = .normal;
+        self.dirty.store(true, .release);
     }
 
     pub fn appendUser(self: *Tui, s: []const u8) !void {
         self.mutex.lock(util.io) catch {};
         defer self.mutex.unlock(util.io);
-        try self.bakeThinkLocked();
-        try self.beginBlockLocked(.user);
-        try self.text.appendSlice(ANSI_DIM);
-        try self.text.appendSlice("> ");
-        try self.text.appendSlice(ANSI_RESET);
+        self.think_live = false;
+        self.style = .normal;
+        const cell = try self.pushCell(.user);
+        try self.appendStyledTo(&cell.text, s);
         self.scroll_off = 0;
-        try self.appendStyledLocked(s);
-        try self.text.appendSlice(ANSI_RESET);
-        try self.ensureNlLocked();
         self.dirty.store(true, .release);
     }
 
     pub fn appendLine(self: *Tui, prefix: []const u8, color: []const u8, s: []const u8) !void {
         self.mutex.lock(util.io) catch {};
         defer self.mutex.unlock(util.io);
-        try self.beginBlockLocked(.chrome);
-        try self.text.appendSlice(color);
-        try self.text.appendSlice(prefix);
-        try self.text.appendSlice(ANSI_RESET);
-        try self.appendStyledLocked(s);
-        try self.text.appendSlice(ANSI_RESET);
-        try self.text.append('\n');
-        try self.line_starts.append(self.text.items.len);
+        self.style = .normal;
+        const cell = try self.pushCell(.chrome);
+        cell.color = color;
+        try cell.text.appendSlice(prefix);
+        try self.appendStyledTo(&cell.text, s);
+        self.dirty.store(true, .release);
+    }
+
+    pub fn appendTool(self: *Tui, s: []const u8) !void {
+        try self.appendRoleCell(.tool, s);
+    }
+
+    pub fn appendToolEnd(self: *Tui, s: []const u8) !void {
+        try self.appendRoleCell(.tool_end, s);
+    }
+
+    fn appendRoleCell(self: *Tui, kind: CellKind, s: []const u8) !void {
+        self.mutex.lock(util.io) catch {};
+        defer self.mutex.unlock(util.io);
+        self.style = .normal;
+        const cell = try self.pushCell(kind);
+        try self.appendStyledTo(&cell.text, s);
+        self.dirty.store(true, .release);
+    }
+
+    pub fn setSessionHeader(self: *Tui, info: SessionInfo) !void {
+        self.mutex.lock(util.io) catch {};
+        defer self.mutex.unlock(util.io);
+        const fields = try dupeSession(self.alloc, info);
+        errdefer fields.deinit(self.alloc);
+        if (self.cells.items.len > 0 and self.cells.items[0].kind == .session_header) {
+            if (self.cells.items[0].card) |old| old.deinit(self.alloc);
+            self.cells.items[0].card = fields;
+        } else {
+            try self.cells.insert(0, .{
+                .kind = .session_header,
+                .text = std.array_list.Managed(u8).init(self.alloc),
+                .card = fields,
+            });
+        }
+        self.dirty.store(true, .release);
+    }
+
+    pub fn appendStatusCard(self: *Tui, info: StatusInfo) !void {
+        self.mutex.lock(util.io) catch {};
+        defer self.mutex.unlock(util.io);
+        const fields = try dupeStatus(self.alloc, info);
+        errdefer fields.deinit(self.alloc);
+        try self.cells.append(.{
+            .kind = .status_card,
+            .text = std.array_list.Managed(u8).init(self.alloc),
+            .card = fields,
+        });
         self.dirty.store(true, .release);
     }
 
@@ -534,197 +745,193 @@ pub const Tui = struct {
     pub fn clearScroll(self: *Tui) void {
         self.mutex.lock(util.io) catch {};
         defer self.mutex.unlock(util.io);
-        self.text.clearRetainingCapacity();
-        self.line_starts.clearRetainingCapacity();
-        self.line_starts.append(0) catch {};
+        self.freeCells();
         self.style = .normal;
-        self.block = .none;
-        self.think_buf.clearRetainingCapacity();
-        self.think_at = null;
         self.think_open = true;
+        self.think_live = false;
         self.scroll_off = 0;
         self.dirty.store(true, .release);
     }
 
-    // ---------- 渲染 ----------
+    /// 测试用:正文里有没有这段字。不搜 gutter。
+    pub fn contains(self: *const Tui, needle: []const u8) bool {
+        for (self.cells.items) |c| {
+            if (std.mem.indexOf(u8, c.text.items, needle) != null) return true;
+            if (c.card) |card| {
+                if (std.mem.indexOf(u8, card.session, needle) != null) return true;
+                if (std.mem.indexOf(u8, card.model, needle) != null) return true;
+                if (std.mem.indexOf(u8, card.cwd, needle) != null) return true;
+            }
+        }
+        return false;
+    }
+
+    fn measureBottom(self: *Tui, nact: usize, streaming: bool) BottomPane {
+        const w = self.width;
+        const h = self.height;
+        var perm_rows: usize = 0;
+        if (self.perm_prompt.load(.acquire)) |pp| {
+            perm_rows = 1;
+            for (pp.*) |c| {
+                if (c == '\n') perm_rows += 1;
+            }
+        }
+        const picker_rows: usize = if (self.picker) |*p| p.displayRows(h) else 0;
+        const boxed = w >= 8;
+        const input_inner = if (boxed) @max(w, 5) - 5 else @max(w, 2) - 2;
+        const wrap_n = wrapRowCount(self.input.items, input_inner);
+        const cap = @max(1, h / 4);
+        const comp_inner = if (boxed) @max(1, @min(cap, wrap_n)) else 1;
+        const composer_rows: usize = if (boxed) 2 + comp_inner else 1;
+        const footer_rows: usize = if (self.shortcuts_open) 3 else 1;
+        return .{
+            .working_rows = workingRows(nact, streaming),
+            .perm_rows = perm_rows,
+            .picker_rows = picker_rows,
+            .composer_rows = composer_rows,
+            .footer_rows = footer_rows,
+            .boxed = boxed,
+            .input_inner = input_inner,
+            .comp_inner = comp_inner,
+        };
+    }
 
     fn renderFrame(self: *Tui) !void {
         var fw = std.Io.Writer.Allocating.init(self.alloc);
         defer fw.deinit();
         const w = self.width;
         const h = self.height;
-        // 活动快照先取:活动行要占屏幕行数,滚动区高度得先把它们扣掉,
-        // 否则活动一多就把消息挤出屏幕外。
         var views: [activity.MAX_SLOTS]activity.View = undefined;
-        var nact = activity.snapshot(&views);
-        // 活动行最多占屏幕的三分之一 —— 8 个并行工具不该淹掉对话内容
-        const act_cap = @max(1, h / 3);
-        if (nact > act_cap) nact = act_cap;
-        // 输入和状态钉在屏幕底。对话占剩下的行,太长从顶裁。
-        var perm_lines: usize = 0;
-        if (self.perm_prompt.load(.acquire)) |pp| {
-            perm_lines = 1;
-            for (pp.*) |c| {
-                if (c == '\n') perm_lines += 1;
-            }
-        }
-        const picker_rows: usize = if (self.picker) |*p| p.displayRows(h) else 0;
-        // 底栏永远一行:指令提示替换状态,不另占一行。
-        const footer_rows: usize = 1;
-        const reserved = 1 + footer_rows + nact + perm_lines + picker_rows;
+        const nact = activity.snapshot(&views);
+        const streaming = self.streaming.load(.acquire);
+        const bottom = self.measureBottom(nact, streaming);
+        const reserved = bottom.height();
         const scroll_h = if (h > reserved) h - reserved else 1;
 
         self.mutex.lock(util.io) catch {};
         defer self.mutex.unlock(util.io);
-        const nlines = self.line_starts.items.len;
 
-        try fw.writer.writeAll("\x1b[H\x1b[2J\x1b[?25h");
-        var total_vis: usize = 0;
-        var li: usize = 0;
-        while (li < nlines) : (li += 1) {
-            if (self.think_at == li) total_vis += thinkRowCount(self.think_buf.items, self.think_open, w);
-            total_vis += wrapRowCount(lineSlice(self.text.items, self.line_starts.items, li), w);
+        var cards = std.array_list.Managed([]u8).init(self.alloc);
+        defer {
+            for (cards.items) |s| self.alloc.free(s);
+            cards.deinit();
         }
-        if (self.think_at == nlines) total_vis += thinkRowCount(self.think_buf.items, self.think_open, w);
+        for (self.cells.items) |c| {
+            if (c.card) |card| {
+                const painted = try paintCard(self.alloc, c.kind, card, w);
+                try cards.append(painted);
+            }
+        }
+
+        try fw.writer.writeAll("\x1b[?25l\x1b[H");
+        var total_vis: usize = 0;
+        var card_i: usize = 0;
+        var ci: usize = 0;
+        while (ci < self.cells.items.len) : (ci += 1) {
+            if (ci > 0 and gapBetween(self.cells.items[ci - 1].kind, self.cells.items[ci].kind)) total_vis += 1;
+            const painted = cardSlice(self.cells.items[ci], cards.items, &card_i);
+            total_vis += cellRowCount(self.cells.items[ci], painted, self.think_open, w);
+        }
 
         const pin = if (total_vis > scroll_h) total_vis - scroll_h else 0;
         if (self.scroll_off > pin) self.scroll_off = pin;
         self.last_pin = pin;
         var skip = pin - self.scroll_off;
         var emitted: usize = 0;
-        li = 0;
-        while (li < nlines) : (li += 1) {
-            if (self.think_at == li) {
-                const n = thinkRowCount(self.think_buf.items, self.think_open, w);
-                if (skip >= n) {
-                    skip -= n;
-                } else {
-                    emitted += try emitThink(&fw.writer, self.think_buf.items, self.think_open, w, skip, scroll_h - emitted);
-                    skip = 0;
+        card_i = 0;
+        ci = 0;
+        while (ci < self.cells.items.len) : (ci += 1) {
+            if (ci > 0 and gapBetween(self.cells.items[ci - 1].kind, self.cells.items[ci].kind)) {
+                if (skip > 0) {
+                    skip -= 1;
+                } else if (emitted < scroll_h) {
+                    try fw.writer.writeAll("\x1b[K\r\n");
+                    emitted += 1;
                 }
             }
-            const line = lineSlice(self.text.items, self.line_starts.items, li);
-            const n = wrapRowCount(line, w);
+            const painted = cardSlice(self.cells.items[ci], cards.items, &card_i);
+            if (emitted >= scroll_h) continue;
+            const n = cellRowCount(self.cells.items[ci], painted, self.think_open, w);
             if (skip >= n) {
                 skip -= n;
             } else {
-                emitted += try emitWrapped(&fw.writer, line, w, skip, scroll_h - emitted);
+                emitted += try emitCell(&fw.writer, self.cells.items[ci], painted, self.think_open, w, skip, scroll_h - emitted);
                 skip = 0;
             }
         }
-        if (self.think_at == nlines) {
-            const n = thinkRowCount(self.think_buf.items, self.think_open, w);
-            if (skip >= n) {
-                skip -= n;
-            } else {
-                emitted += try emitThink(&fw.writer, self.think_buf.items, self.think_open, w, skip, scroll_h - emitted);
-            }
-        }
         while (emitted < scroll_h) : (emitted += 1) {
-            try fw.writer.writeAll("\r\n");
+            try fw.writer.writeAll("\x1b[K\r\n");
         }
-        // 活动行紧贴输入。
-        if (nact > 0) {
+        if (bottom.working_rows > 0) {
             const frame_ms = @as(i64, @intCast(@divTrunc(std.Io.Clock.now(.awake, util.io).nanoseconds, std.time.ns_per_ms)));
-            for (views[0..nact]) |v| {
-                try fw.writer.writeAll(ANSI_RESET);
-                try writeActivityLine(&fw.writer, v, frame_ms, w);
-                try fw.writer.writeAll("\r\n");
-            }
+            try writeStatusIndicator(&fw.writer, views[0..nact], streaming, frame_ms, w);
         }
-        // 权限提示行(若有)
         if (self.perm_prompt.load(.acquire)) |pp| {
             var rest = pp.*;
             while (rest.len > 0) {
                 const nl = std.mem.indexOfScalar(u8, rest, '\n');
                 const line = if (nl) |n| rest[0..n] else rest;
                 rest = if (nl) |n| rest[n + 1 ..] else &.{};
-                try fw.writer.writeAll(line[0..@min(line.len, w)]);
-                try fw.writer.writeAll(ANSI_RESET);
-                try fw.writer.writeAll("\r\n");
+                try writeTrunc(&fw.writer, line, w);
+                try fw.writer.writeAll(ANSI_RESET ++ "\x1b[K\r\n");
             }
         }
         if (self.picker) |*p| {
-            const win = p.window(h);
-            try fw.writer.writeAll(ANSI_DIM);
-            try writeTrunc(&fw.writer, p.title, w);
-            try fw.writer.writeAll(ANSI_RESET ++ "\r\n");
-            var pi: usize = win.start;
-            while (pi < win.start + win.count) : (pi += 1) {
-                const it = p.items[pi];
-                const selected = pi == p.sel;
-                if (selected) {
-                    try fw.writer.writeAll("> ");
-                } else {
-                    try fw.writer.writeAll(ANSI_DIM ++ "  ");
-                }
-                var used: usize = 2;
-                const label_room = if (w > used) w - used else 0;
-                try writeTrunc(&fw.writer, it.label, label_room);
-                used += visibleCols(it.label);
-                if (it.hint.len > 0 and used + 3 < w) {
-                    try fw.writer.writeAll(ANSI_DIM ++ "  ");
-                    used += 2;
-                    try writeTrunc(&fw.writer, it.hint, w - used);
-                }
-                try fw.writer.writeAll(ANSI_RESET ++ "\r\n");
-            }
+            try writePicker(&fw.writer, p, h, w);
         }
-        try fw.writer.writeAll(ANSI_DIM ++ "> " ++ ANSI_RESET);
-        try fw.writer.writeAll(self.input.items);
-        try fw.writer.writeAll("\x1b[K\r\n");
-        try fw.writer.writeAll(ANSI_RESET);
-        const hint = footerHint(
-            self.perm_prompt.load(.acquire) != null,
-            self.picker != null,
-            self.quit_arm_ns != 0,
-            self.esc_armed,
-            self.scroll_off > 0,
-        );
-        var foot_used: usize = 0;
-        if (hint) |msg| {
-            try fw.writer.writeAll(ANSI_DIM);
-            try writeTrunc(&fw.writer, msg, w);
-            try fw.writer.writeAll(ANSI_RESET);
-            foot_used = visibleCols(msg);
-            if (foot_used + 2 < w) {
-                try fw.writer.writeAll("  ");
-                foot_used += 2;
-            }
+        const cur = wrapCursor(self.input.items, self.cursor, bottom.input_inner);
+        if (bottom.boxed) {
+            try writeBoxEdge(&fw.writer, "╭", "╮", w);
+            try emitComposer(&fw.writer, self.input.items, bottom.input_inner, bottom.comp_inner);
+            try writeBoxEdge(&fw.writer, "╰", "╯", w);
+        } else {
+            try fw.writer.writeAll(ANSI_DIM ++ "› " ++ ANSI_RESET);
+            try writeTrunc(&fw.writer, self.input.items, bottom.input_inner);
+            try fw.writer.writeAll("\x1b[K\r\n");
         }
-        if (foot_used < w) {
-            try fw.writer.writeAll(self.status_style);
-            try writeTrunc(&fw.writer, self.status.items, w - foot_used);
-            try fw.writer.writeAll(ANSI_RESET);
+        const hint = footerHint(.{
+            .perm = self.perm_prompt.load(.acquire) != null,
+            .picker = self.picker != null,
+            .quit_armed = self.quit_arm_ns != 0,
+            .esc_armed = self.esc_armed,
+            .scrolled = self.scroll_off > 0,
+            .shortcuts = self.shortcuts_open,
+            .has_draft = self.input.items.len > 0,
+            .running = streaming or nact > 0,
+        });
+        const transient = self.perm_prompt.load(.acquire) != null or self.picker != null or self.quit_arm_ns != 0 or self.esc_armed;
+        const right = if (transient) "" else self.status.items;
+        const foot = try layoutFooter(self.alloc, hint, right, w);
+        defer self.alloc.free(foot);
+        try fw.writer.writeAll(ANSI_DIM);
+        try fw.writer.writeAll(foot);
+        try fw.writer.writeAll(ANSI_RESET ++ "\x1b[K");
+        if (self.shortcuts_open) {
+            try fw.writer.writeAll("\r\n" ++ ANSI_DIM);
+            try writeTrunc(&fw.writer, "enter send   tab queue   esc abort   ctrl+c quit", w);
+            try fw.writer.writeAll(ANSI_RESET ++ "\x1b[K\r\n" ++ ANSI_DIM);
+            try writeTrunc(&fw.writer, "/model  /permissions  /think  /help", w);
+            try fw.writer.writeAll(ANSI_RESET ++ "\x1b[K");
         }
-        const input_row = @max(@as(usize, 1), h -| 1);
-        const typed = activity.displayWidth(self.input.items[0..@min(self.cursor, self.input.items.len)]);
-        const col = @max(@as(usize, 1), @min(w, 3 + typed));
-        try fw.writer.print("\x1b[{d};{d}H", .{ input_row, col });
+        try fw.writer.writeAll("\x1b[J");
+        const composer_top = @max(@as(usize, 1), h -| (bottom.footer_rows + bottom.composer_rows) + 1);
+        const input_row = if (bottom.boxed) composer_top + 1 + cur.row else composer_top;
+        const col = @max(@as(usize, 1), @min(w, (if (bottom.boxed) @as(usize, 5) else 3) + cur.col));
+        try fw.writer.print("\x1b[{d};{d}H\x1b[?25h", .{ input_row, col });
         try self.writeAll(try fw.toOwnedSlice());
     }
 
-    /// 主循环的回调集。
     pub const Handlers = struct {
-        /// 收到整行输入。
         on_submit: *const fn (tui: *Tui, line: []const u8) anyerror!void,
-        /// 返回 true 时退出主循环。
         is_quit: *const fn (ctx: ?*anyopaque) bool,
-        /// 流式/工具执行期间 Ctrl+C。
         on_abort: ?*const fn (ctx: ?*anyopaque) void = null,
-        /// 流式/工具执行期间 Ctrl+B:把在跑的活动转后台。
         on_detach: ?*const fn (ctx: ?*anyopaque) void = null,
-        /// 权限提示激活期间的按键(y/n/a/s/Ctrl+C)。
         on_perm: ?*const fn (ctx: ?*anyopaque, key: u8) void = null,
-        /// 每帧重绘前刷新状态(思考长度、速率会变)。
         on_paint: ?*const fn (ctx: ?*anyopaque) void = null,
-        /// 思考等级被快捷键改过:App 把 tui.think_level 抄到 agent。
         on_think: ?*const fn (ctx: ?*anyopaque) void = null,
         ctx: ?*anyopaque = null,
     };
 
-    /// 主循环:轮询 stdin 与活动状态。
-    /// 50ms 一圈 —— 既是输入延迟上限,也是 spinner 的重绘节拍。
     pub fn run(self: *Tui, h: Handlers) !void {
         const ctx = h.ctx;
         const on_submit = h.on_submit;
@@ -735,6 +942,9 @@ pub const Tui = struct {
         const on_paint = h.on_paint;
         const on_think = h.on_think;
         self.ctx = ctx;
+        if (on_paint) |f| f(ctx);
+        try self.renderFrame();
+        self.dirty.store(false, .release);
         var poll_fds = [_]std.posix.pollfd{.{ .fd = self.in_fd, .events = std.posix.POLL.IN, .revents = 0 }};
         while (true) {
             if (is_quit(ctx)) return;
@@ -743,7 +953,6 @@ pub const Tui = struct {
                 var buf: [256]u8 = undefined;
                 const got = std.posix.read(self.in_fd, &buf) catch 0;
                 if (got > 0) {
-                    // 权限提示激活:y/n/a/s 直接路由,其余忽略
                     if (self.perm_prompt.load(.acquire) != null) {
                         if (on_perm) |f| {
                             var pi: usize = 0;
@@ -780,9 +989,6 @@ pub const Tui = struct {
                     }
                 }
             }
-            // 有活动在跑时按 spinner 帧率重绘,而不是只等 dirty。
-            // dirty 只在有新文本时置位 —— 一条 300 秒的 bash 期间没人碰它,
-            // 屏幕会像素级静止,用户无法区分「在干活」和「挂死了」。
             if (self.quit_arm_ns != 0) {
                 const now = nowNs();
                 if (now - self.quit_arm_ns >= std.time.ns_per_s) {
@@ -809,7 +1015,6 @@ pub const Tui = struct {
         self.dirty.store(true, .release);
     }
 
-    /// Codex 空 composer:第一次武装并提示,1 秒内再按同一键才退出。
     fn armOrQuit(self: *Tui, key: u8) Action {
         const now = nowNs();
         if (self.quit_arm_key == key and self.quit_arm_ns != 0 and now - self.quit_arm_ns < std.time.ns_per_s) {
@@ -830,6 +1035,7 @@ pub const Tui = struct {
         self.hist_idx = null;
         self.disarmQuit();
         self.esc_armed = false;
+        self.shortcuts_open = false;
         return .{ .submit = line };
     }
 
@@ -851,11 +1057,14 @@ pub const Tui = struct {
                     const params = bytes[i..k];
                     const final = bytes[k];
                     i = k + 1;
+                    if (self.applyMouseScroll(params, final, bytes, &i)) continue;
                     switch (classifyCsi(params, final)) {
                         .up => self.historyPrev(),
                         .down => self.historyNext(),
                         .page_up => self.scrollBy(@intCast(self.pageRows())),
                         .page_down => self.scrollBy(-@as(isize, @intCast(self.pageRows()))),
+                        .ctrl_up => self.scrollBy(3),
+                        .ctrl_down => self.scrollBy(-3),
                         .shift_up => {
                             self.cycleThink(true);
                             return .think;
@@ -902,7 +1111,6 @@ pub const Tui = struct {
                     self.cycleThink(true);
                     return .think;
                 }
-                // 孤立 Esc = Codex interrupt_turn;空闲空行再按一次载回上一条
                 if (streaming) return .abort;
                 if (self.input.items.len == 0) {
                     if (self.esc_armed) {
@@ -952,46 +1160,47 @@ pub const Tui = struct {
 
             self.disarmQuit();
             self.esc_armed = false;
+            if (b != '?') self.shortcuts_open = false;
 
             switch (b) {
                 '\n', '\r' => {
                     const act = try self.takeSubmit();
                     if (act != .none) return act;
                 },
-                0x02 => { // Ctrl+B:空闲时左移(emacs/Codex);忙碌已在上面转后台
+                0x02 => {
                     if (self.cursor > 0) self.cursor -= utf8PrevLen(self.input.items, self.cursor);
                     self.dirty.store(true, .release);
                 },
-                0x06 => { // Ctrl+F 右移
+                0x06 => {
                     if (self.cursor < self.input.items.len) {
                         self.cursor += utf8LenAt(self.input.items, self.cursor);
                     }
                     self.dirty.store(true, .release);
                 },
-                0x10 => self.historyPrev(), // Ctrl+P
-                0x0e => self.historyNext(), // Ctrl+N
-                0x08, 0x7f => { // BS / DEL:按码点删,不能逐字节 —— 中文 3 字节时旧写法会 OOB 崩掉
+                0x10 => self.historyPrev(),
+                0x0e => self.historyNext(),
+                0x08, 0x7f => {
                     deleteUtf8Before(&self.input, &self.cursor);
                     self.dirty.store(true, .release);
                 },
-                0x01 => { // Ctrl+A
+                0x01 => {
                     self.cursor = 0;
                     self.dirty.store(true, .release);
                 },
-                0x05 => { // Ctrl+E
+                0x05 => {
                     self.cursor = self.input.items.len;
                     self.dirty.store(true, .release);
                 },
-                0x0b => { // Ctrl+K kill to end
+                0x0b => {
                     self.input.shrinkRetainingCapacity(self.cursor);
                     self.dirty.store(true, .release);
                 },
-                0x15 => { // Ctrl+U kill line
+                0x15 => {
                     self.input.clearRetainingCapacity();
                     self.cursor = 0;
                     self.dirty.store(true, .release);
                 },
-                0x17 => { // Ctrl+W kill word
+                0x17 => {
                     while (self.cursor > 0 and self.input.items[self.cursor - 1] == ' ') {
                         deleteUtf8Before(&self.input, &self.cursor);
                     }
@@ -1000,14 +1209,28 @@ pub const Tui = struct {
                     }
                     self.dirty.store(true, .release);
                 },
-                0x0c => { // Ctrl+L 清屏
+                0x0c => {
                     self.clearScroll();
+                },
+                '?' => {
+                    if (self.input.items.len == 0 and !streaming) {
+                        self.shortcuts_open = !self.shortcuts_open;
+                        self.dirty.store(true, .release);
+                    } else {
+                        if (self.cursor >= self.input.items.len) {
+                            try self.input.append('?');
+                        } else {
+                            try self.input.insert(self.cursor, '?');
+                        }
+                        self.cursor += 1;
+                        self.shortcuts_open = false;
+                        self.dirty.store(true, .release);
+                    }
                 },
                 else => {
                     if (b >= 0x20) {
-                        const w = std.unicode.utf8ByteSequenceLength(b) catch 1;
-                        // 截断到可用字节
-                        const avail = @min(w, bytes.len - i);
+                        const word = std.unicode.utf8ByteSequenceLength(b) catch 1;
+                        const avail = @min(word, bytes.len - i);
                         if (self.cursor >= self.input.items.len) {
                             try self.input.appendSlice(bytes[i .. i + avail]);
                         } else {
@@ -1041,12 +1264,18 @@ pub const Tui = struct {
                     const params = bytes[i..k];
                     const final = bytes[k];
                     i = k + 1;
+                    if (self.applyMouseScroll(params, final, bytes, &i)) {
+                        self.dirty.store(true, .release);
+                        continue;
+                    }
                     if (self.picker) |*p| {
                         switch (classifyCsi(params, final)) {
                             .up => p.move(-1),
                             .down => p.move(1),
                             .page_up => self.scrollBy(@intCast(self.pageRows())),
                             .page_down => self.scrollBy(-@as(isize, @intCast(self.pageRows()))),
+                            .ctrl_up => self.scrollBy(3),
+                            .ctrl_down => self.scrollBy(-3),
                             else => {},
                         }
                     }
@@ -1089,6 +1318,22 @@ pub const Tui = struct {
 
     fn pageRows(self: *const Tui) usize {
         return @max(1, self.height / 2);
+    }
+
+    fn applyMouseScroll(self: *Tui, params: []const u8, final: u8, bytes: []const u8, i: *usize) bool {
+        if (sgrWheel(params)) |dir| {
+            self.scrollBy(if (dir == .up) 3 else -3);
+            return true;
+        }
+        if (params.len == 0 and final == 'M' and i.* + 3 <= bytes.len) {
+            const btn: u16 = bytes[i.*];
+            i.* += 3;
+            const base = (btn -% 32) & ~@as(u16, 0x1C);
+            if (base == 64) self.scrollBy(3);
+            if (base == 65) self.scrollBy(-3);
+            return true;
+        }
+        return false;
     }
 
     fn scrollBy(self: *Tui, delta: isize) void {
@@ -1137,18 +1382,17 @@ pub const Tui = struct {
         if (line.len == 0) return;
         if (self.history.items.len > 0 and std.mem.eql(u8, self.history.items[self.history.items.len - 1], line)) return;
         self.history.append(self.alloc.dupe(u8, line) catch return) catch return;
-        // 追加到文件
         var f = std.Io.Dir.cwd().createFile(util.io, self.history_path, .{ .permissions = @enumFromInt(0o600) }) catch |e| switch (e) {
             error.PathAlreadyExists => std.Io.Dir.cwd().openFile(util.io, self.history_path, .{ .mode = .write_only }) catch null,
             else => null,
         } orelse return;
         defer f.close(util.io);
         var wbuf: [4096]u8 = undefined;
-        var w = f.writer(util.io, &wbuf);
-        w.seekTo(f.length(util.io) catch return) catch return;
-        w.interface.writeAll(line) catch return;
-        w.interface.writeAll("\n") catch return;
-        w.flush() catch return;
+        var wr = f.writer(util.io, &wbuf);
+        wr.seekTo(f.length(util.io) catch return) catch return;
+        wr.interface.writeAll(line) catch return;
+        wr.interface.writeAll("\n") catch return;
+        wr.flush() catch return;
     }
 };
 
@@ -1156,23 +1400,202 @@ fn nowNs() i64 {
     return @intCast(std.Io.Clock.now(.real, util.io).nanoseconds);
 }
 
-fn lineSlice(text: []const u8, starts: []const usize, i: usize) []const u8 {
-    const from = starts[i];
-    const to = if (i + 1 < starts.len) starts[i + 1] else text.len;
-    var line = text[from..to];
-    while (line.len > 0 and (line[line.len - 1] == '\n' or line[line.len - 1] == '\r')) {
-        line = line[0 .. line.len - 1];
-    }
-    return line;
+fn deinitCell(cell: *Cell, alloc: std.mem.Allocator) void {
+    cell.text.deinit();
+    if (cell.card) |card| card.deinit(alloc);
+    cell.card = null;
 }
 
-fn rebuildLineStarts(starts: *std.array_list.Managed(usize), text: []const u8) !void {
-    starts.clearRetainingCapacity();
-    try starts.append(0);
-    var i: usize = 0;
-    while (i < text.len) : (i += 1) {
-        if (text[i] == '\n' and i + 1 < text.len) try starts.append(i + 1);
+fn dupeCard(
+    alloc: std.mem.Allocator,
+    version: []const u8,
+    model: []const u8,
+    think: []const u8,
+    cwd: []const u8,
+    session: []const u8,
+    perms: []const u8,
+    context: []const u8,
+    usage: []const u8,
+) !CardFields {
+    const v = try alloc.dupe(u8, version);
+    errdefer alloc.free(v);
+    const m = try alloc.dupe(u8, model);
+    errdefer alloc.free(m);
+    const th = try alloc.dupe(u8, think);
+    errdefer alloc.free(th);
+    const d = try alloc.dupe(u8, cwd);
+    errdefer alloc.free(d);
+    const s = try alloc.dupe(u8, session);
+    errdefer alloc.free(s);
+    const p = try alloc.dupe(u8, perms);
+    errdefer alloc.free(p);
+    const c = try alloc.dupe(u8, context);
+    errdefer alloc.free(c);
+    const u = try alloc.dupe(u8, usage);
+    errdefer alloc.free(u);
+    return .{ .version = v, .model = m, .think = th, .cwd = d, .session = s, .perms = p, .context = c, .usage = u };
+}
+
+fn dupeSession(alloc: std.mem.Allocator, info: SessionInfo) !CardFields {
+    return dupeCard(alloc, info.version, info.model, info.think, info.cwd, info.session, "", "", "");
+}
+
+fn dupeStatus(alloc: std.mem.Allocator, info: StatusInfo) !CardFields {
+    return dupeCard(alloc, info.version, info.model, info.think, info.cwd, info.session, info.perms, info.context, info.usage);
+}
+
+fn paintCard(alloc: std.mem.Allocator, kind: CellKind, card: CardFields, width: usize) ![]u8 {
+    return switch (kind) {
+        .status_card => formatStatusCard(alloc, .{
+            .version = card.version,
+            .model = card.model,
+            .think = card.think,
+            .cwd = card.cwd,
+            .session = card.session,
+            .perms = card.perms,
+            .context = card.context,
+            .usage = card.usage,
+        }, width),
+        else => formatSessionCard(alloc, .{
+            .version = card.version,
+            .model = card.model,
+            .think = card.think,
+            .cwd = card.cwd,
+            .session = card.session,
+        }, width),
+    };
+}
+
+fn cardSlice(cell: Cell, cards: []const []u8, card_i: *usize) []const u8 {
+    if (cell.card == null) return "";
+    if (card_i.* >= cards.len) return "";
+    const s = cards[card_i.*];
+    card_i.* += 1;
+    return s;
+}
+
+fn gapBetween(prev: CellKind, next: CellKind) bool {
+    if (next == .user) return true;
+    if (next == .think) return prev == .user;
+    if (next == .assistant) return prev == .user or prev == .think or prev == .session_header or prev == .status_card;
+    if (next == .session_header or next == .status_card) return prev == .assistant or prev == .user or prev == .chrome;
+    if (next == .chrome) return prev == .assistant or prev == .user;
+    return false;
+}
+
+fn gutter(kind: CellKind) struct { first: []const u8, rest: []const u8, pad: usize } {
+    return switch (kind) {
+        .user => .{ .first = ANSI_DIM ++ "› " ++ ANSI_RESET, .rest = "  ", .pad = 2 },
+        .assistant, .tool => .{ .first = ANSI_DIM ++ "• " ++ ANSI_RESET, .rest = "  ", .pad = 2 },
+        .think => .{ .first = ANSI_DIM ++ ANSI_ITALIC ++ "• ", .rest = ANSI_DIM ++ ANSI_ITALIC ++ "  ", .pad = 2 },
+        .tool_end => .{ .first = ANSI_DIM ++ "  └ " ++ ANSI_RESET, .rest = "    ", .pad = 4 },
+        .session_header, .status_card, .chrome => .{ .first = "", .rest = "", .pad = 0 },
+    };
+}
+
+fn gutterInner(kind: CellKind, width: usize) usize {
+    const pad = gutter(kind).pad;
+    return if (width > pad) width - pad else 1;
+}
+
+fn countNewlines(s: []const u8) usize {
+    var n: usize = 0;
+    for (s) |c| {
+        if (c == '\n') n += 1;
     }
+    return n;
+}
+
+fn cellRowCount(cell: Cell, painted: []const u8, think_open: bool, width: usize) usize {
+    if (cell.kind == .session_header or cell.kind == .status_card) {
+        if (painted.len == 0) return 0;
+        return countNewlines(painted) + 1;
+    }
+    if (cell.kind == .think) return thinkRowCount(cell.text.items, think_open, width);
+    const inner = gutterInner(cell.kind, width);
+    if (cell.text.items.len == 0) return 1;
+    var rows: usize = 0;
+    var it = std.mem.splitScalar(u8, cell.text.items, '\n');
+    while (it.next()) |part| {
+        rows += wrapRowCount(part, inner);
+    }
+    return if (rows == 0) 1 else rows;
+}
+
+fn emitCell(wr: *std.Io.Writer, cell: Cell, painted: []const u8, think_open: bool, width: usize, skip: usize, limit: usize) !usize {
+    if (limit == 0) return 0;
+    if (cell.kind == .session_header or cell.kind == .status_card) {
+        return emitPainted(wr, painted, width, skip, limit);
+    }
+    if (cell.kind == .think) {
+        return emitThink(wr, cell.text.items, think_open, width, skip, limit);
+    }
+    const g = gutter(cell.kind);
+    const inner = gutterInner(cell.kind, width);
+    if (cell.kind == .chrome and cell.color.len > 0) {
+        return emitChrome(wr, cell.color, cell.text.items, inner, skip, limit);
+    }
+    if (cell.text.items.len == 0) {
+        if (skip > 0) return 0;
+        try wr.writeAll(g.first);
+        try wr.writeAll(ANSI_RESET ++ "\x1b[K\r\n");
+        return 1;
+    }
+    var emitted: usize = 0;
+    var skipped: usize = 0;
+    var it = std.mem.splitScalar(u8, cell.text.items, '\n');
+    var first = true;
+    while (it.next()) |part| {
+        const n = wrapRowCount(part, inner);
+        if (skipped + n <= skip) {
+            skipped += n;
+            first = false;
+            continue;
+        }
+        const local = if (skipped < skip) skip - skipped else 0;
+        skipped += n;
+        const first_g = if (first) g.first else g.rest;
+        emitted += try emitWrappedGutter(wr, first_g, g.rest, part, inner, local, limit - emitted);
+        first = false;
+        if (emitted >= limit) return emitted;
+    }
+    return emitted;
+}
+
+fn emitPainted(wr: *std.Io.Writer, painted: []const u8, width: usize, skip: usize, limit: usize) !usize {
+    var emitted: usize = 0;
+    var skipped: usize = 0;
+    var it = std.mem.splitScalar(u8, painted, '\n');
+    while (it.next()) |line| {
+        if (skipped < skip) {
+            skipped += 1;
+            continue;
+        }
+        try writeTrunc(wr, line, width);
+        try wr.writeAll(ANSI_RESET ++ "\x1b[K\r\n");
+        emitted += 1;
+        if (emitted == limit) return emitted;
+    }
+    return emitted;
+}
+
+fn emitChrome(wr: *std.Io.Writer, color: []const u8, text: []const u8, width: usize, skip: usize, limit: usize) !usize {
+    var emitted: usize = 0;
+    var skipped: usize = 0;
+    var it = std.mem.splitScalar(u8, text, '\n');
+    while (it.next()) |part| {
+        const n = wrapRowCount(part, width);
+        if (skipped + n <= skip) {
+            skipped += n;
+            continue;
+        }
+        const local = if (skipped < skip) skip - skipped else 0;
+        skipped += n;
+        const prefix = if (color.len > 0) color else "";
+        emitted += try emitWrappedGutter(wr, prefix, prefix, part, width, local, limit - emitted);
+        if (emitted >= limit) return emitted;
+    }
+    return emitted;
 }
 
 fn skipAnsi(s: []const u8, i: usize) usize {
@@ -1189,7 +1612,6 @@ fn charCols(s: []const u8, i: usize) struct { n: usize, cols: usize } {
     const n = std.unicode.utf8ByteSequenceLength(s[i]) catch 1;
     return .{ .n = @min(n, s.len - i), .cols = if (n >= 3) 2 else 1 };
 }
-
 fn visibleCols(s: []const u8) usize {
     var cols: usize = 0;
     var i: usize = 0;
@@ -1279,13 +1701,14 @@ fn wrapRowCount(line: []const u8, width: usize) usize {
     return rows;
 }
 
-fn emitWrappedPrefixed(wr: *std.Io.Writer, prefix: []const u8, line: []const u8, width: usize, skip: usize, limit: usize) !usize {
+fn emitWrappedGutter(wr: *std.Io.Writer, first: []const u8, rest: []const u8, line: []const u8, width: usize, skip: usize, limit: usize) !usize {
     if (limit == 0) return 0;
     const w = @max(width, 1);
     var emitted: usize = 0;
     var skipped: usize = 0;
     var cols: usize = 0;
     var row_from: usize = 0;
+    var row: usize = 0;
     var i: usize = 0;
     while (i < line.len) {
         const next = skipAnsi(line, i);
@@ -1298,12 +1721,13 @@ fn emitWrappedPrefixed(wr: *std.Io.Writer, prefix: []const u8, line: []const u8,
             if (skipped < skip) {
                 skipped += 1;
             } else {
-                try wr.writeAll(prefix);
+                try wr.writeAll(if (row == 0) first else rest);
                 try wr.writeAll(line[row_from..i]);
-                try wr.writeAll(ANSI_RESET ++ "\r\n");
+                try wr.writeAll(ANSI_RESET ++ "\x1b[K\r\n");
                 emitted += 1;
                 if (emitted == limit) return emitted;
             }
+            row += 1;
             row_from = i;
             cols = 0;
         }
@@ -1311,30 +1735,47 @@ fn emitWrappedPrefixed(wr: *std.Io.Writer, prefix: []const u8, line: []const u8,
         i += ch.n;
     }
     if (skipped < skip) return emitted;
-    try wr.writeAll(prefix);
+    try wr.writeAll(if (row == 0) first else rest);
     try wr.writeAll(line[row_from..line.len]);
-    try wr.writeAll(ANSI_RESET ++ "\r\n");
+    try wr.writeAll(ANSI_RESET ++ "\x1b[K\r\n");
     return emitted + 1;
 }
 
-fn emitWrapped(wr: *std.Io.Writer, line: []const u8, width: usize, skip: usize, limit: usize) !usize {
-    return emitWrappedPrefixed(wr, "", line, width, skip, limit);
+const CsiKey = enum { up, down, left, right, home, end, delete, page_up, page_down, shift_up, shift_down, ctrl_up, ctrl_down, other };
+
+fn csiMod(params: []const u8) []const u8 {
+    if (std.mem.lastIndexOfScalar(u8, params, ';')) |i| return params[i + 1 ..];
+    return params;
 }
 
-const CsiKey = enum { up, down, left, right, home, end, delete, page_up, page_down, shift_up, shift_down, other };
-
 fn csiShift(params: []const u8) bool {
-    if (std.mem.lastIndexOfScalar(u8, params, ';')) |i| {
-        return std.mem.eql(u8, params[i + 1 ..], "2");
-    }
-    return std.mem.eql(u8, params, "2");
+    return std.mem.eql(u8, csiMod(params), "2");
+}
+
+fn csiCtrl(params: []const u8) bool {
+    return std.mem.eql(u8, csiMod(params), "5");
+}
+
+const WheelDir = enum { up, down };
+
+fn sgrWheel(params: []const u8) ?WheelDir {
+    if (params.len < 2 or params[0] != '<') return null;
+    const rest = params[1..];
+    const semi = std.mem.indexOfScalar(u8, rest, ';') orelse rest.len;
+    const btn = std.fmt.parseInt(u16, rest[0..semi], 10) catch return null;
+    return switch (btn & ~@as(u16, 0x1C)) {
+        64 => .up,
+        65 => .down,
+        else => null,
+    };
 }
 
 fn classifyCsi(params: []const u8, final: u8) CsiKey {
     const shift = csiShift(params);
+    const ctrl = csiCtrl(params);
     return switch (final) {
-        'A' => if (shift) .shift_up else .up,
-        'B' => if (shift) .shift_down else .down,
+        'A' => if (shift) .shift_up else if (ctrl) .ctrl_up else .up,
+        'B' => if (shift) .shift_down else if (ctrl) .ctrl_down else .down,
         'C' => .right,
         'D' => .left,
         'H' => .home,
@@ -1378,46 +1819,176 @@ pub fn thinkLabel(level: ThinkLevel) []const u8 {
 fn thinkRowCount(buf: []const u8, open: bool, width: usize) usize {
     if (buf.len == 0) return 0;
     if (!open) return 1;
-    var rows: usize = 1;
+    var rows: usize = 0;
     const inner = @max(width, 3) - 2;
     var it = std.mem.splitScalar(u8, buf, '\n');
     while (it.next()) |p| {
         rows += wrapRowCount(p, inner);
     }
-    return rows;
+    return if (rows == 0) 1 else rows;
 }
 
 fn emitThink(wr: *std.Io.Writer, buf: []const u8, open: bool, width: usize, skip: usize, limit: usize) !usize {
     if (buf.len == 0 or limit == 0) return 0;
+    if (!open) {
+        if (skip == 0) {
+            try wr.writeAll(ANSI_DIM ++ "• thought" ++ ANSI_RESET ++ "\x1b[K\r\n");
+            return 1;
+        }
+        return 0;
+    }
+    const inner = @max(width, 3) - 2;
     var emitted: usize = 0;
     var skipped: usize = 0;
-    const level = classifyThink(buf.len);
-    const header: []const u8 = if (open) "  v 思考  ^T" else "  > 思考了一下  ^T";
-    if (skipped < skip) {
-        skipped += 1;
-    } else {
-        try wr.writeAll(thinkColor(level));
-        try wr.writeAll(header);
-        try wr.writeAll(ANSI_RESET);
-        try wr.writeAll("\r\n");
-        emitted += 1;
-        if (emitted == limit or !open) return emitted;
-    }
-    if (!open) return emitted;
-    const inner = @max(width, 3) - 2;
     var it = std.mem.splitScalar(u8, buf, '\n');
+    var first = true;
     while (it.next()) |p| {
         const n = wrapRowCount(p, inner);
         if (skipped + n <= skip) {
             skipped += n;
+            first = false;
             continue;
         }
         const local_skip = if (skipped < skip) skip - skipped else 0;
         skipped += n;
-        emitted += try emitWrappedPrefixed(wr, ANSI_DIM ++ "  ", p, inner, local_skip, limit - emitted);
+        const first_pfx = if (first) ANSI_DIM ++ ANSI_ITALIC ++ "• " else ANSI_DIM ++ ANSI_ITALIC ++ "  ";
+        emitted += try emitWrappedGutter(wr, first_pfx, ANSI_DIM ++ ANSI_ITALIC ++ "  ", p, inner, local_skip, limit - emitted);
+        first = false;
         if (emitted >= limit) return emitted;
     }
     return emitted;
+}
+
+fn wrapCursor(s: []const u8, cursor: usize, width: usize) struct { row: usize, col: usize } {
+    const w = @max(width, 1);
+    const end = @min(cursor, s.len);
+    var row: usize = 0;
+    var cols: usize = 0;
+    var i: usize = 0;
+    while (i < end) {
+        const next = skipAnsi(s, i);
+        if (next != i) {
+            i = next;
+            continue;
+        }
+        const ch = charCols(s, i);
+        if (cols > 0 and cols + ch.cols > w) {
+            row += 1;
+            cols = 0;
+        }
+        cols += ch.cols;
+        i += ch.n;
+    }
+    return .{ .row = row, .col = cols };
+}
+
+fn emitComposer(wr: *std.Io.Writer, input: []const u8, inner: usize, rows: usize) !void {
+    var emitted: usize = 0;
+    var cols: usize = 0;
+    var row_from: usize = 0;
+    var i: usize = 0;
+    const first = ANSI_DIM ++ "│ › " ++ ANSI_RESET;
+    const rest = ANSI_DIM ++ "│   " ++ ANSI_RESET;
+    while (i < input.len) {
+        const next = skipAnsi(input, i);
+        if (next != i) {
+            i = next;
+            continue;
+        }
+        const ch = charCols(input, i);
+        if (cols > 0 and cols + ch.cols > inner) {
+            try wr.writeAll(if (emitted == 0) first else rest);
+            try wr.writeAll(input[row_from..i]);
+            var pad = if (inner > cols) inner - cols else 0;
+            while (pad > 0) : (pad -= 1) try wr.writeByte(' ');
+            try wr.writeAll(ANSI_DIM ++ "│" ++ ANSI_RESET ++ "\r\n");
+            emitted += 1;
+            if (emitted == rows) return;
+            row_from = i;
+            cols = 0;
+        }
+        cols += ch.cols;
+        i += ch.n;
+    }
+    if (emitted < rows) {
+        try wr.writeAll(if (emitted == 0) first else rest);
+        try wr.writeAll(input[row_from..input.len]);
+        var pad = if (inner > cols) inner - cols else 0;
+        while (pad > 0) : (pad -= 1) try wr.writeByte(' ');
+        try wr.writeAll(ANSI_DIM ++ "│" ++ ANSI_RESET ++ "\r\n");
+        emitted += 1;
+    }
+    while (emitted < rows) : (emitted += 1) {
+        try wr.writeAll(rest);
+        var pad = inner;
+        while (pad > 0) : (pad -= 1) try wr.writeByte(' ');
+        try wr.writeAll(ANSI_DIM ++ "│" ++ ANSI_RESET ++ "\r\n");
+    }
+}
+
+fn writePicker(wr: *std.Io.Writer, p: *Picker, height: usize, width: usize) !void {
+    const win = p.window(height);
+    try wr.writeAll(ANSI_DIM);
+    try writeTrunc(wr, p.title, width);
+    try wr.writeAll(ANSI_RESET ++ "\x1b[K\r\n");
+    var pi: usize = win.start;
+    while (pi < win.start + win.count) : (pi += 1) {
+        const it = p.items[pi];
+        const selected = pi == p.sel;
+        if (selected) {
+            try wr.writeAll(ANSI_DIM ++ "› " ++ ANSI_RESET ++ ANSI_REV);
+        } else {
+            try wr.writeAll(ANSI_DIM ++ "  ");
+        }
+        var used: usize = 2;
+        try writeTrunc(wr, it.label, if (width > used) width - used else 0);
+        used += visibleCols(it.label);
+        if (it.hint.len > 0 and used + 3 < width) {
+            try wr.writeAll("  ");
+            used += 2;
+            try writeTrunc(wr, it.hint, width - used);
+        }
+        try wr.writeAll(ANSI_RESET ++ "\x1b[K\r\n");
+    }
+}
+
+fn writeStatusIndicator(wr: *std.Io.Writer, views: []const activity.View, streaming: bool, frame_ms: i64, width: usize) !void {
+    _ = streaming;
+    var elapsed: i64 = 0;
+    for (views) |v| {
+        if (!v.detached and v.elapsed_ms > elapsed) elapsed = v.elapsed_ms;
+    }
+    var eb: [24]u8 = undefined;
+    const el = activity.formatElapsed(&eb, elapsed);
+    try wr.writeAll(ANSI_DIM);
+    try wr.writeAll(activity.spinnerFrame(frame_ms));
+    try wr.writeAll(ANSI_RESET ++ " Working " ++ ANSI_DIM ++ "(");
+    try wr.writeAll(el);
+    try wr.writeAll(" • esc to interrupt)" ++ ANSI_RESET ++ "\x1b[K\r\n");
+    const cap = @min(views.len, 2);
+    var i: usize = 0;
+    while (i < cap) : (i += 1) {
+        const v = views[i];
+        try wr.writeAll(ANSI_DIM ++ " └ " ++ ANSI_RESET);
+        var used: usize = 3;
+        try writeTrunc(wr, v.name, if (width > used) width - used else 0);
+        used += visibleCols(v.name);
+        if (v.detail.len > 0 and used + 3 < width) {
+            try wr.writeAll(ANSI_DIM ++ "  ");
+            used += 2;
+            try writeTrunc(wr, v.detail, width - used);
+        }
+        try wr.writeAll(ANSI_RESET ++ "\x1b[K\r\n");
+    }
+}
+
+fn writeBoxEdge(wr: *std.Io.Writer, left: []const u8, right: []const u8, width: usize) !void {
+    try wr.writeAll(ANSI_DIM);
+    try wr.writeAll(left);
+    var i: usize = 2;
+    while (i < width) : (i += 1) try wr.writeAll("─");
+    try wr.writeAll(right);
+    try wr.writeAll(ANSI_RESET ++ "\r\n");
 }
 
 fn writeTrunc(wr: *std.Io.Writer, s: []const u8, width: usize) !void {
@@ -1438,16 +2009,8 @@ fn writeTrunc(wr: *std.Io.Writer, s: []const u8, width: usize) !void {
     }
 }
 
-/// 渲染一行活动。形如:
-///   ⠹ bash  12.4s/30s  4.2KB  npm install --legacy-peer-deps
-///   ⠹ task  1m05s/10m  2 running  refactor the parser
-///   ⠹ model 3.1s  retry 2/3 · waiting 4s
-///
-/// 顺序是刻意的:spinner 让眼睛知道「在动」,耗时紧跟其后回答「多久了」,
-/// 再往后才是身份细节。宽度不够时砍详情,绝不砍 spinner 和耗时。
 pub fn writeActivityLine(wr: *std.Io.Writer, v: activity.View, frame_ms: i64, width: usize) !void {
     var used: usize = 0;
-    // spinner:转后台的活动不转 —— 它不再占用前台注意力
     if (v.detached) {
         try wr.writeAll(ANSI_DIM ++ "~" ++ ANSI_RESET ++ " ");
     } else {
@@ -1465,7 +2028,6 @@ pub fn writeActivityLine(wr: *std.Io.Writer, v: activity.View, frame_ms: i64, wi
     try wr.writeAll(label);
     used += label.len;
 
-    // 耗时 / 上限。上限存在时显示分母,让用户知道还有多久会被杀。
     var eb: [24]u8 = undefined;
     const el = activity.formatElapsed(&eb, v.elapsed_ms);
     try wr.writeAll(" " ++ ANSI_DIM);
@@ -1480,7 +2042,6 @@ pub fn writeActivityLine(wr: *std.Io.Writer, v: activity.View, frame_ms: i64, wi
     }
     try wr.writeAll(ANSI_RESET);
 
-    // 已搬字节:证明命令真的在产出,不是卡在某个系统调用上
     if (v.bytes > 0) {
         var bb: [24]u8 = undefined;
         const bs = activity.formatBytes(&bb, v.bytes);
@@ -1490,7 +2051,6 @@ pub fn writeActivityLine(wr: *std.Io.Writer, v: activity.View, frame_ms: i64, wi
         used += 2 + bs.len;
     }
 
-    // 重试次数:退避等待期间最需要的信息,否则用户以为网络挂了
     if (v.attempt > 1) {
         var ab: [24]u8 = undefined;
         const as = std.fmt.bufPrint(&ab, "  retry {d}", .{v.attempt - 1}) catch "";
@@ -1505,7 +2065,6 @@ pub fn writeActivityLine(wr: *std.Io.Writer, v: activity.View, frame_ms: i64, wi
         used += 6;
     }
 
-    // 详情放最后,按剩余**显示列**截断 —— 中文任务描述按字节算会白留三分之二屏幕
     if (v.detail.len > 0 and used + 3 < width) {
         const room = width - used - 3;
         try wr.writeAll("  " ++ ANSI_DIM);
@@ -1552,6 +2111,38 @@ fn utf8LenAt(s: []const u8, pos: usize) usize {
     return std.unicode.utf8ByteSequenceLength(s[pos]) catch 1;
 }
 
+test "gutters are unique and not baked into cells" {
+    const t = std.testing;
+    try t.expect(std.mem.indexOf(u8, gutter(.user).first, "› ") != null);
+    try t.expect(std.mem.indexOf(u8, gutter(.assistant).first, "• ") != null);
+    try t.expect(std.mem.indexOf(u8, gutter(.tool).first, "• ") != null);
+    try t.expect(std.mem.indexOf(u8, gutter(.think).first, "• ") != null);
+    try t.expect(std.mem.indexOf(u8, gutter(.tool_end).first, "└ ") != null);
+    try t.expectEqualStrings("  ", gutter(.assistant).rest);
+    try t.expectEqual(@as(usize, 2), gutter(.user).pad);
+    try t.expectEqual(@as(usize, 4), gutter(.tool_end).pad);
+    try t.expectEqual(@as(usize, 0), gutter(.chrome).pad);
+    try t.expectEqual(@as(usize, 78), gutterInner(.user, 80));
+    try t.expectEqual(@as(usize, 80), gutterInner(.chrome, 80));
+
+    var ui = try Tui.init(t.allocator);
+    defer ui.deinit();
+    try ui.appendUser("hello");
+    try ui.appendText("world");
+    try ui.appendThink("hmm");
+    try ui.appendTool("bash  ls");
+    try ui.appendToolEnd("4B");
+    for (ui.cells.items) |c| {
+        try t.expect(std.mem.indexOf(u8, c.text.items, "› ") == null);
+        try t.expect(std.mem.indexOf(u8, c.text.items, "• ") == null);
+        try t.expect(std.mem.indexOf(u8, c.text.items, "└ ") == null);
+    }
+    try t.expect(ui.cells.items[0].kind == .user);
+    try t.expectEqualStrings("hello", ui.cells.items[0].text.items);
+    try t.expect(ui.cells.items[1].kind == .assistant);
+    try t.expectEqualStrings("world", ui.cells.items[1].text.items);
+}
+
 test "utf8 helpers" {
     const t = std.testing;
     const s = "a中b";
@@ -1581,11 +2172,10 @@ test "soft wrap counts CJK columns and does not truncate" {
     const t = std.testing;
     try t.expectEqual(@as(usize, 1), wrapRowCount("hello", 80));
     try t.expectEqual(@as(usize, 2), wrapRowCount("0123456789", 5));
-    // 中文双宽:10 个字在宽度 10 上正好一行,宽度 8 上两行
     try t.expectEqual(@as(usize, 1), wrapRowCount("工作目录是哪里啊", 20));
     try t.expectEqual(@as(usize, 2), wrapRowCount("工作目录是哪里啊", 8));
     try t.expectEqual(@as(usize, 1), thinkRowCount("abc", false, 80));
-    try t.expectEqual(@as(usize, 2), thinkRowCount("abc", true, 80));
+    try t.expectEqual(@as(usize, 1), thinkRowCount("abc", true, 80));
     try t.expect(classifyThink(0) == .off);
     try t.expect(classifyThink(100) == .low);
     try t.expect(classifyThink(800) == .medium);
@@ -1602,17 +2192,91 @@ test "CSI shift arrows and delete" {
     try t.expect(classifyCsi("3", '~') == .delete);
     try t.expect(classifyCsi("5", '~') == .page_up);
     try t.expect(classifyCsi("6", '~') == .page_down);
+    try t.expect(classifyCsi("1;5", 'A') == .ctrl_up);
+    try t.expect(classifyCsi("1;5", 'B') == .ctrl_down);
     try t.expect(classifyCsi("", 'H') == .home);
+    try t.expect(sgrWheel("<64;10;5") == .up);
+    try t.expect(sgrWheel("<65;10;5") == .down);
+    try t.expect(sgrWheel("<80;1;1") == .up);
+    try t.expect(sgrWheel("<0;1;1") == null);
 }
 
 test "footer hint wins over status" {
     const t = std.testing;
-    try t.expectEqualStrings("y 允许  n 拒绝  a 全权  s 会话", footerHint(true, true, true, true, true).?);
-    try t.expectEqualStrings("up/down 选择  Enter 确认  Esc 取消", footerHint(false, true, true, true, true).?);
-    try t.expectEqualStrings("再按一次退出", footerHint(false, false, true, true, true).?);
-    try t.expectEqualStrings("再按 Esc 编辑上一条", footerHint(false, false, false, true, true).?);
-    try t.expectEqualStrings("PgUp/PgDn 滚动", footerHint(false, false, false, false, true).?);
-    try t.expect(footerHint(false, false, false, false, false) == null);
+    try t.expectEqualStrings("y allow  n deny  a always  s skip", footerHint(.{ .perm = true, .picker = true, .quit_armed = true }).?);
+    try t.expectEqualStrings("up/down select  enter confirm  esc cancel", footerHint(.{ .picker = true, .quit_armed = true }).?);
+    try t.expectEqualStrings("ctrl+c again to quit", footerHint(.{ .quit_armed = true, .esc_armed = true }).?);
+    try t.expectEqualStrings("esc again to edit last", footerHint(.{ .esc_armed = true, .scrolled = true }).?);
+    try t.expectEqualStrings("pgup/pgdn to scroll", footerHint(.{ .scrolled = true }).?);
+    try t.expectEqualStrings("? for shortcuts", footerHint(.{}).?);
+    try t.expectEqualStrings("tab to queue", footerHint(.{ .has_draft = true, .running = true }).?);
+    try t.expect(footerHint(.{ .has_draft = true }) == null);
+}
+
+test "layoutFooter keeps context on the right" {
+    const t = std.testing;
+    const a = try layoutFooter(t.allocator, "? for shortcuts", "12%", 24);
+    defer t.allocator.free(a);
+    try t.expectEqualStrings("? for shortcuts      12%", a);
+    const b = try layoutFooter(t.allocator, "? for shortcuts", "12%", 10);
+    defer t.allocator.free(b);
+    try t.expectEqualStrings("? for shor", b);
+    const c = try layoutFooter(t.allocator, null, "12%", 8);
+    defer t.allocator.free(c);
+    try t.expectEqualStrings("     12%", c);
+}
+
+test "session card renders at paint width" {
+    const t = std.testing;
+    const info = SessionInfo{
+        .version = "0.1.0",
+        .model = "deepseek/flash",
+        .think = "high",
+        .cwd = "~/pi-zig",
+        .session = "1786735635034",
+    };
+    const wide = try formatSessionCard(t.allocator, info, 80);
+    defer t.allocator.free(wide);
+    const narrow = try formatSessionCard(t.allocator, info, 40);
+    defer t.allocator.free(narrow);
+    try t.expect(std.mem.indexOf(u8, wide, "╭") != null);
+    try t.expect(std.mem.indexOf(u8, wide, "╰") != null);
+    try t.expect(std.mem.indexOf(u8, wide, ">_ ") != null);
+    try t.expect(std.mem.indexOf(u8, wide, "piz") != null);
+    try t.expect(std.mem.indexOf(u8, wide, "model:") != null);
+    try t.expect(std.mem.indexOf(u8, wide, "/model") != null);
+    try t.expect(std.mem.indexOf(u8, wide, "1786735635034") != null);
+    try t.expect(std.mem.indexOf(u8, narrow, "piz") != null);
+    try t.expect(cardInner(80) == 56);
+    try t.expect(cardInner(40) == 36);
+    try t.expect(wide.len != narrow.len);
+
+    var ui = try Tui.init(t.allocator);
+    defer ui.deinit();
+    try ui.setSessionHeader(info);
+    try t.expect(ui.cells.items.len == 1);
+    try t.expect(ui.cells.items[0].kind == .session_header);
+    try t.expectEqual(@as(usize, 0), ui.cells.items[0].text.items.len);
+    try t.expect(ui.contains("1786735635034"));
+}
+
+test "working rows are one status plus at most two details" {
+    const t = std.testing;
+    try t.expectEqual(@as(usize, 0), workingRows(0, false));
+    try t.expectEqual(@as(usize, 1), workingRows(0, true));
+    try t.expectEqual(@as(usize, 2), workingRows(1, false));
+    try t.expectEqual(@as(usize, 3), workingRows(2, true));
+    try t.expectEqual(@as(usize, 3), workingRows(8, true));
+}
+
+test "wrapCursor follows soft-wrapped composer rows" {
+    const t = std.testing;
+    const pos = wrapCursor("0123456789", 7, 5);
+    try t.expectEqual(@as(usize, 1), pos.row);
+    try t.expectEqual(@as(usize, 2), pos.col);
+    const home = wrapCursor("hello", 0, 80);
+    try t.expectEqual(@as(usize, 0), home.row);
+    try t.expectEqual(@as(usize, 0), home.col);
 }
 
 test "scrollSkip pins to bottom then walks up" {
@@ -1661,4 +2325,23 @@ test "picker moves, confirms, and stays exclusive" {
     try t.expectEqualStrings("/permissions ask", line);
     try t.expectEqual(@as(usize, 4), p.displayRows(24));
     try t.expectEqual(@as(usize, 2), p.displayRows(3));
+}
+
+test "bottom pane is reserved before transcript" {
+    const t = std.testing;
+    var ui = try Tui.init(t.allocator);
+    defer ui.deinit();
+    ui.width = 80;
+    ui.height = 24;
+    const idle = ui.measureBottom(0, false);
+    try t.expectEqual(@as(usize, 0), idle.working_rows);
+    try t.expectEqual(@as(usize, 3), idle.composer_rows);
+    try t.expectEqual(@as(usize, 1), idle.footer_rows);
+    try t.expect(idle.height() < 24);
+    const busy = ui.measureBottom(5, true);
+    try t.expectEqual(@as(usize, 3), busy.working_rows);
+    try t.expect(busy.height() > idle.height());
+    ui.shortcuts_open = true;
+    const help = ui.measureBottom(0, false);
+    try t.expectEqual(@as(usize, 3), help.footer_rows);
 }

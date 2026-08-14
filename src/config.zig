@@ -86,9 +86,9 @@ pub const ApprovalMode = enum {
 
     pub fn uiLabel(self: ApprovalMode) []const u8 {
         return switch (self) {
-            .yolo => "全权",
-            .ask => "询问",
-            .read_only => "只读",
+            .yolo => "yolo",
+            .ask => "ask",
+            .read_only => "read-only",
         };
     }
 };
@@ -1627,7 +1627,7 @@ test "ApprovalMode parse matches Codex aliases" {
     try t.expect(ApprovalMode.parse("ro").? == .read_only);
     try t.expect(ApprovalMode.parse("nope") == null);
     try t.expectEqualStrings("yolo", ApprovalMode.yolo.label());
-    try t.expectEqualStrings("全权", ApprovalMode.yolo.uiLabel());
+    try t.expectEqualStrings("yolo", ApprovalMode.yolo.uiLabel());
 }
 
 test "settings.json defaultThinkingLevel loads" {

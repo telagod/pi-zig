@@ -360,17 +360,46 @@ pub const Session = struct {
 
     /// 创建新会话文件(带标题)。
     /// 布局与 pi 兼容:sessions/<cwd-slug>/<ts>.jsonl(可看到 pi 的会话)。
+    /// 文件名是毫秒时间戳;已被占用就 +1,避免 `/new` 连打写回同一个文件。
     pub fn freshTitle(alloc: std.mem.Allocator, cwd: []const u8, title: ?[]const u8) !Session {
         const cfg_dir = try util.configDir(alloc);
+        defer alloc.free(cfg_dir);
         const slug = try util.cwdSlug(alloc, cwd);
+        defer alloc.free(slug);
         const sess_dir = try util.joinPath(alloc, cfg_dir, "sessions");
+        defer alloc.free(sess_dir);
         const sub = try util.joinPath(alloc, sess_dir, slug);
+        defer alloc.free(sub);
         std.Io.Dir.cwd().createDirPath(util.io, sub) catch {};
-        var buf: [64]u8 = undefined;
-        const ts = @divTrunc(std.Io.Clock.now(.real, util.io).nanoseconds, std.time.ns_per_ms); // 毫秒粒度,避免同秒同名覆盖
-        const name = std.fmt.bufPrint(&buf, "{d}.jsonl", .{ts}) catch "session.jsonl";
-        const path = try util.joinPath(alloc, sub, name);
+        var ts: i128 = @divTrunc(std.Io.Clock.now(.real, util.io).nanoseconds, std.time.ns_per_ms);
+        var path: []u8 = undefined;
+        var n: usize = 0;
+        while (n < 1000) : (n += 1) {
+            var buf: [64]u8 = undefined;
+            const name = std.fmt.bufPrint(&buf, "{d}.jsonl", .{ts}) catch return error.Overflow;
+            path = try util.joinPath(alloc, sub, name);
+            var f = std.Io.Dir.cwd().createFile(util.io, path, .{
+                .exclusive = true,
+                .permissions = @enumFromInt(0o600),
+            }) catch |err| switch (err) {
+                error.PathAlreadyExists => {
+                    alloc.free(path);
+                    ts += 1;
+                    continue;
+                },
+                else => {
+                    alloc.free(path);
+                    return err;
+                },
+            };
+            f.close(util.io);
+            break;
+        } else return error.Overflow;
         var self = Session{ .alloc = alloc, .path = path, .cwd = try alloc.dupe(u8, cwd) };
+        errdefer {
+            std.Io.Dir.cwd().deleteFile(util.io, self.path) catch {};
+            self.deinit();
+        }
         if (title) |t| self.title = try alloc.dupe(u8, t);
         try self.writeMeta();
         return self;
@@ -600,6 +629,15 @@ pub const Session = struct {
         const line = try ww.toOwnedSlice();
         defer self.alloc.free(line);
         try self.append(line);
+    }
+
+    /// 会话 id:文件名去掉 .jsonl,与 `-s` / findById 同一套。
+    pub fn sessionId(self: *const Session) []const u8 {
+        const base = std.fs.path.basename(self.path);
+        return if (std.mem.endsWith(u8, base, ".jsonl"))
+            base[0 .. base.len - ".jsonl".len]
+        else
+            base;
     }
 
     /// 按 id(文件名去 .jsonl)寻找会话。
@@ -859,7 +897,10 @@ test "session title + list + setTitle" {
     const tmp_path = try std.fmt.allocPrint(a, "{s}/.zig-cache/tmp/{s}", .{ cwd_abs, tmp.sub_path });
     try util.environ_map.?.put("PIZ_DIR", tmp_path);
 
+    var s0 = try Session.fresh(a, "/tmp");
     var s1 = try Session.freshTitle(a, "/tmp", "my title");
+    try t.expect(!std.mem.eql(u8, s0.sessionId(), s1.sessionId()));
+    std.Io.Dir.cwd().deleteFile(util.io, s0.path) catch {};
     defer {
         std.Io.Dir.cwd().deleteFile(util.io, s1.path) catch {};
         if (std.fmt.allocPrint(a, "{s}/sessions/--tmp--", .{tmp_path})) |sd1| {
@@ -1042,6 +1083,7 @@ test "session listing, latest and lookup by id" {
     // findById:带/不带 .jsonl 均可命中
     const b1 = std.fs.path.basename(s1.path);
     const id1 = b1[0 .. b1.len - ".jsonl".len];
+    try t.expectEqualStrings(id1, s1.sessionId());
     try t.expectEqualStrings(s1.path, (try Session.findById(a, "/tmp", id1)).?.path);
     try t.expectEqualStrings(s1.path, (try Session.findById(a, "/tmp", b1)).?.path);
     try t.expect((try Session.findById(a, "/tmp", "nope")) == null);

@@ -25,30 +25,47 @@ piz ~/code/api   # 指定目录
 piz -n           # 新会话，不续载
 ```
 
-默认续载该目录最近一次会话。输入和状态钉在屏幕底，对话在上面软换行。`PageUp` / `PageDown` 翻历史。不用表情符号。
+默认续载该目录最近一次会话，并把历史画进对话区。输入和状态钉在屏幕底，对话在上面软换行。`PageUp` / `PageDown`、滚轮、`Ctrl+↑/↓` 翻历史。不用表情符号。
+
+开场是 Codex 式会话卡：标题、模型、目录。会话、授权、上下文占用在 `/status`。输入是底栏框，不是壳上的 `>`。空框按 `?` 看快捷键。
+
+槽位对齐 Codex：用户 `›`，正文 `•`，思考同槽但淡且斜体，工具 `•` 起、`└` 收。忙碌时输入框上方一行 `Working`，不是一列活动。
 
 ```
-> 你的话
-  v 思考                         Ctrl+T 折叠
-模型正文
-  bash  zig test src/foo.zig
-  bash  4.2KB
-> _
-pi-zig  deepseek/flash  high  yolo  12% 1k/128k
+╭──────────────────────────────────────────╮
+│ >_ piz (v0.1.0)                          │
+│                                          │
+│ model:      deepseek/flash  high  /model │
+│ directory:  ~/project/pi-zig             │
+│ session:    1786741809022                │
+╰──────────────────────────────────────────╯
+
+› your message
+• dim italic thinking
+• assistant text
+• bash  zig test src/foo.zig
+  └ 4.2KB
+⠹ Working (12s • esc to interrupt)
+ └ bash  zig test src/foo.zig
+╭──────────────────────────────────────────╮
+│ › _                                      │
+╰──────────────────────────────────────────╯
+? for shortcuts                        12%
 ```
 
-底栏一直是状态（目录、模型、思考档、授权、上下文）。有提示时写在状态前面，不把状态换掉。思考档是当前选的（默认 `high`），`/think` 或 `Alt+,/.` 改。
+页脚左侧是下一步提示，右侧是上下文占用。思考档是当前选的（默认 `high`），`/think` 或 `Alt+,/.` 改。
 
 上下文窗口按 pi 的声明解析：DeepSeek 只有 `deepseek-v4-flash` / `deepseek-v4-pro`（窗 1000000）；未写窗口的自定义模型缺省 128000。不是 131k。
 
-**默认全权（yolo）。** 对齐 Codex Full Access：命令和写文件不弹窗。状态栏写 `yolo`。要先问再用 `/permissions ask` 或 `--ask`；只读用 `/permissions read-only` 或 `-r`。
+**默认全权（yolo）。** 对齐 Codex Full Access：命令和写文件不弹窗。`/status` 写 `yolo`。要先问再用 `/permissions ask` 或 `--ask`；只读用 `/permissions read-only` 或 `-r`。
 
 询问档下会改文件、跑 shell、出网或委派子 agent 时才弹出授权：
 
 ```
 ? bash  zig test src/parser.zig
-  y 允许   n/Esc 拒绝   a 本会话总是   s 跳过
 ```
+
+页脚同时写 `y allow  n deny  a always  s skip`。
 
 `read` / `grep` / `find` / `ls` 只读工具三档都直接跑。`-x` / `--yolo` 显式全权（已是默认）。
 
@@ -56,22 +73,17 @@ pi-zig  deepseek/flash  high  yolo  12% 1k/128k
 
 ### 执行中你会看到什么
 
-工具跑着的时候，输入行上方每个在跑的活动占一行，50ms 刷一次：
+工具跑着的时候，输入框上方一行 Working，底下最多两行当前活动：
 
 ```
-⠹ bash 12s/30s  4.1KB  npm install --legacy-peer-deps
-⠹ agent 3m05s/10m  2.0KB  重构解析器，把递归下降改成 Pratt
-⠹ model 3.1s  retry 2  HTTP 429 rate limited · retrying in 1.8s
-~ bash 1m05s  1.4MB  [bg]  cargo build --release
+⠹ Working (12s • esc to interrupt)
+ └ bash  npm install --legacy-peer-deps
+ └ agent  重构解析器，把递归下降改成 Pratt
 ```
 
-从左到右：转动的 spinner（还在动）、已耗时与墙钟上限、已收到的输出字节、正在做的事。
-`retry N` 是请求重试次数，后面跟退避倒计时。`~` 加 `[bg]` 是已转后台的活动。
+对话区里工具已经按 `•` / `└` 落成历史。Working 只回答「还在动、多久了、Esc 能停」。并行超过两路的活动仍在跑，只是不把输入框顶出屏幕。
 
-读这几个数字就能判断该等还是该动手：字节在涨说明命令在产出；`12s/30s` 说明还有 18 秒会被超时杀掉；
-`retry 2` 说明是网络在抖而不是 piz 卡住了。
-
-执行中按 `Esc` 取消（长命令在 100ms 内停下，整个进程组一起收掉），按 `Ctrl+B` 转后台。空闲时 `Ctrl+C` 清空输入；输入为空再按一次（1 秒内）退出。
+执行中按 `Esc` 取消（长命令在 100ms 内停下，整个进程组一起收掉），按 `Ctrl+B` 转后台。空闲时 `Ctrl+C` 清空输入；输入为空再按一次（1 秒内）退出。退出后终端印 `resume: piz -s <id>`，下次用这条回来。
 
 引擎自己做的动作以 `piz` 开头单独打一行，与模型的输出区分开：
 
@@ -101,7 +113,7 @@ pi-zig  deepseek/flash  high  yolo  12% 1k/128k
 | 命令 | 作用 |
 |------|------|
 | `/help` | 列出全部命令 |
-| `/status` | 刷新状态栏（目录、分支、上下文占用、模型） |
+| `/status` | 把会话卡画进对话（模型、目录、授权、上下文） |
 | `/think` | 弹出思考等级选择器（↑↓ Enter Esc）。只列出**这个模型**能选的档 |
 | `/think off\|minimal\|low\|medium\|high\|xhigh\|max` | 直接设定。该模型没有的档会夹到最近的可用档。`浅`/`中`/`深` 仍认，分别是 low / medium / max |
 | `/permissions` | 弹出授权选择器。对齐 Codex `/permissions` |
@@ -211,7 +223,7 @@ piz web [选项]                 # Web UI
 | `-c`, `--continue` | 续载最近会话（默认行为） |
 | `-n`, `--new` | 新会话，不续载 |
 | `-t`, `--title <T>` | 新会话并设置标题（隐含 `-n`） |
-| `-s`, `--session <ID>` | 恢复指定会话，id 见 `/sessions` 或 `-a` 输出 |
+| `-s`, `--session <ID>` | 恢复指定会话，id 见退出提示、`/sessions` 或 `-a` 输出 |
 
 ### 工具与插件
 
@@ -270,7 +282,7 @@ piz web [--port N] [--no-open] [--token T | --no-token]
 
 键位当前是硬编码的，暂不支持自定义配置。
 
-键位对齐 [Codex TUI](https://developers.openai.com/codex/cli/slash-commands) 的默认表：Esc 中止、Ctrl+C/D 空行再按一次才退出。piz 多出来的是 `Ctrl+B` 转后台、`Ctrl+T` 折叠思考、`PageUp`/`PageDown` 滚对话。思考等级（`Alt+,/.`）与 Codex 相同。
+键位对齐 [Codex TUI](https://developers.openai.com/codex/cli/slash-commands) 的默认表：Esc 中止、Ctrl+C/D 空行再按一次才退出、空框 `?` 出快捷键。piz 多出来的是 `Ctrl+B` 转后台、`Ctrl+T` 折叠思考、`PageUp`/`PageDown` / 滚轮 / `Ctrl+↑↓` 滚对话。思考等级（`Alt+,/.`）与 Codex 相同。
 
 | 键 | 作用 |
 |----|------|
@@ -279,7 +291,7 @@ piz web [--port N] [--no-open] [--token T | --no-token]
 | `Esc` | 执行中：中止本轮；空闲空行再按一次：把上一条载回输入框 |
 | `Ctrl+C` | 有字：清空输入；空行：提示「再按一次退出」，1 秒内再按才退出 |
 | `Ctrl+D` | 空行：与 Ctrl+C 相同的两步退出 |
-| `/quit` `/exit` `/q` | 立刻退出 |
+| `/quit` `/exit` `/q` | 立刻退出；离开备用屏后印 `resume: piz -s <id>` |
 | `Ctrl+B` | 执行中：把在跑的活动转后台；空闲：光标左移 |
 | `Ctrl+F` | 光标右移 |
 | `Ctrl+P` / `Ctrl+N` | 上 / 下一条输入历史 |
@@ -291,9 +303,12 @@ piz web [--port N] [--no-open] [--token T | --no-token]
 | `Ctrl+L` | 清屏重绘 |
 | `Ctrl+T` | 折叠 / 展开本轮思考（不改等级；不是 Codex 的 transcript overlay） |
 | `PageUp` / `PageDown` | 向上 / 向下滚对话（半页） |
+| 鼠标滚轮 | 向上 / 向下滚对话（3 行） |
+| `Ctrl+↑` / `Ctrl+↓` | 向上 / 向下滚对话（3 行） |
 | `Home` / `End` | 光标到行首 / 行尾 |
 | `Alt+,` / `Alt+.` | 思考更浅 / 更深（只走当前模型支持的档，例如 Flash 是 off→low→high→max，Pro 是 off→high→max） |
 | `Shift+↓` / `Shift+↑` | 同上 |
+| `?` | 空输入框：打开 / 关闭快捷键叠层 |
 | `↑` / `↓` | 翻输入历史 |
 | `←` / `→` | 移动光标 |
 | `y` / `n` / `Esc` / `a` / `s` | 权限提示：允许 / 拒绝 / 拒绝 / 总是 / 跳过 |

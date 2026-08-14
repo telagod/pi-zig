@@ -93,6 +93,8 @@ pub fn build(b: *std.Build) void {
     });
     const core_tests = b.addTest(.{ .root_module = test_core });
     core_tests.root_module.link_libc = true; // 测试需进程环境(std.c.environ)
+    const tui_tests = b.addTest(.{ .root_module = test_tui });
+    tui_tests.root_module.link_libc = true;
     const app_tests = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/main.zig"),
@@ -106,6 +108,7 @@ pub fn build(b: *std.Build) void {
     });
     app_tests.root_module.link_libc = true; // 测试需进程环境(std.c.environ)
     const run_core_tests = b.addRunArtifact(core_tests);
+    const run_tui_tests = b.addRunArtifact(tui_tests);
     const run_app_tests = b.addRunArtifact(app_tests);
     // 委托的 e2e 测试要 spawn 真实 piz 子进程(zig-out/bin/piz)。
     // 依赖 install:否则首次 `zig build test` 时产物不存在,那条测试静默
@@ -114,6 +117,7 @@ pub fn build(b: *std.Build) void {
     // 测试后清理 .zig-cache/tmp(测试并行/zig build 探测进程的 tmpDir 残留)
     const clean_tmp = b.addSystemCommand(&.{ "rm", "-rf", ".zig-cache/tmp" });
     clean_tmp.step.dependOn(&run_core_tests.step);
+    clean_tmp.step.dependOn(&run_tui_tests.step);
     clean_tmp.step.dependOn(&run_app_tests.step);
     const test_step = b.step("test", "Run unit + e2e tests");
     test_step.dependOn(&clean_tmp.step);
