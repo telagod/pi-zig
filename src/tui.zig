@@ -356,6 +356,11 @@ pub const Tui = struct {
                     j += 1;
                     continue;
                 }
+                if (line[j] == '\n' or line[j] == '\r') {
+                    if (end == line.len) end = j;
+                    j += 1;
+                    continue;
+                }
                 if (cols >= w) {
                     end = j;
                     break;
@@ -363,7 +368,11 @@ pub const Tui = struct {
                 cols += 1;
                 j += 1;
             }
-            try fw.writer.writeAll(line[0..end]);
+            var vis = line[0..end];
+            while (vis.len > 0 and (vis[vis.len - 1] == '\n' or vis[vis.len - 1] == '\r')) {
+                vis = vis[0 .. vis.len - 1];
+            }
+            try fw.writer.writeAll(vis);
             try fw.writer.writeAll("\r\n");
         }
         // 活动行:每个在跑的工具/请求/子 agent 一行,带 spinner + 耗时 + 进度。
@@ -411,8 +420,8 @@ pub const Tui = struct {
                 try fw.writer.writeAll("\r\n");
             }
         }
-        // 输入行:品牌蓝,不是绿 —— 绿留给「允许 / 成功」
-        try fw.writer.writeAll("\x1b[38;2;77;107;254m❯ \x1b[0m");
+        // 输入行:默认色,绿留给「允许 / 成功」
+        try fw.writer.writeAll("❯ ");
         try fw.writer.writeAll(self.input.items);
         try fw.writer.print("\x1b[{d};{d}H", .{ h, 2 + self.cursor });
         try self.writeAll(try fw.toOwnedSlice());

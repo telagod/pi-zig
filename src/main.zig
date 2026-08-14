@@ -59,12 +59,41 @@ const HELP =
     \\
 ;
 
-/// `/help` 输出的斜杠命令清单。
-///
-/// 每个真实存在的命令都必须在这里出现 —— 漏掉的等于没实现:
-/// /dump /export /plan /queue 四条一直可用,却从不出现在帮助里,
-/// 用户没有任何途径发现它们。下面有测试盯着这份清单与实际分发的一致性。
-const SLASH_HELP = "/help /status /model <m> /new /sessions /resume <n> /title <t> /tree /fork <n> /copy /undo /redo /memory /compact /shake [images] /snap /fast-compress /clear /plan <goal> /queue /export /dump /quit";
+/// `/help` 输出。每个真实存在的命令都必须在这里出现 —— 漏掉的等于没实现。
+/// 下面有测试盯着这份清单与实际分发的一致性。
+const SLASH_HELP =
+    \\斜杠命令
+    \\  /help              列出命令
+    \\  /status            刷新状态栏
+    \\  /model <m>         切换模型
+    \\  /new               新会话
+    \\  /sessions          列出本目录会话
+    \\  /resume <n>        切到第 n 个会话
+    \\  /title <t>         改会话标题
+    \\  /tree              消息列表，供 /fork
+    \\  /fork <n>          从第 n 条分叉
+    \\  /copy              复制最后一条回复
+    \\  /undo              撤销上一轮
+    \\  /redo              重发上一次输入
+    \\  /memory            跨会话记忆
+    \\  /compact           压缩上下文
+    \\  /shake [images]    裁旧工具输出
+    \\  /snap              大段输出打成密图
+    \\  /fast-compress     快压状态
+    \\  /clear             清空并重开
+    \\  /plan <goal>       写 PLAN.md 再执行
+    \\  /queue             清空输入队列
+    \\  /export            导出 HTML
+    \\  /dump              整段会话到剪贴板
+    \\  /quit              退出
+    \\
+    \\编辑
+    \\  @./path            把文件贴进消息
+    \\  !cmd               跑 shell，输出给模型
+    \\  !!cmd              跑 shell，只给你看
+    \\  Ctrl+C             取消当前轮
+    \\  Ctrl+B             活动转后台
+;
 
 // ---------- 交互模式 ----------
 
@@ -253,17 +282,41 @@ fn tuiOnReasoning(ctx: ?*anyopaque, text: []const u8) anyerror!void {
     if (app.abort.load(.acquire)) return error.Aborted;
 }
 
+/// 工具参数预览:优先抽出 command / path / pattern,别整段 JSON 糊在一行上。
+fn toolArgsPreview(args: []const u8) []const u8 {
+    const keys = [_][]const u8{ "\"command\":\"", "\"pattern\":\"", "\"query\":\"", "\"path\":\"" };
+    for (keys) |k| {
+        if (std.mem.indexOf(u8, args, k)) |i| {
+            const start = i + k.len;
+            var end = start;
+            while (end < args.len) : (end += 1) {
+                if (args[end] == '\\') {
+                    end += 1;
+                    continue;
+                }
+                if (args[end] == '"') break;
+            }
+            if (end > start) return args[start..end];
+        }
+    }
+    return args;
+}
+
 fn tuiOnToolStart(ctx: ?*anyopaque, name: []const u8, args: []const u8) anyerror!void {
     const app: *App = @ptrCast(@alignCast(ctx.?));
     var buf = std.array_list.Managed(u8).init(app.alloc);
     defer buf.deinit();
-    buf.appendSlice("⚙ ") catch {};
+    buf.appendSlice("\x1b[2m⚙\x1b[0m ") catch {};
     buf.appendSlice(name) catch {};
-    buf.appendSlice(" ") catch {};
-    const head = args[0..@min(args.len, 120)];
-    buf.appendSlice(head) catch {};
-    if (args.len > 120) buf.appendSlice("…") catch {};
-    app.tui.appendLine("", "\x1b[36m", buf.items) catch {};
+    const preview = toolArgsPreview(args);
+    if (preview.len > 0) {
+        buf.appendSlice("  \x1b[2m") catch {};
+        const head = preview[0..@min(preview.len, 120)];
+        buf.appendSlice(head) catch {};
+        if (preview.len > 120) buf.appendSlice("…") catch {};
+        buf.appendSlice("\x1b[0m") catch {};
+    }
+    app.tui.appendLine("", "", buf.items) catch {};
     // 事件 payload 用临时 arena:emit 不接管所有权,jsonString 也各自分配
     var ea = util.Arena.init(app.alloc);
     defer ea.deinit();
@@ -349,7 +402,7 @@ fn tuiOnRequirePermission(ctx: ?*anyopaque, name: []const u8, args: []const u8) 
     if (app.read_only) return false;
     // 构建提示(截断 args)
     app.perm.buf.clearRetainingCapacity();
-    try app.perm.buf.appendSlice("\x1b[38;2;77;107;254m?\x1b[0m ");
+    try app.perm.buf.appendSlice("? ");
     try app.perm.buf.appendSlice(name);
     try app.perm.buf.appendSlice("  ");
     const head = args[0..@min(args.len, 160)];
@@ -928,7 +981,7 @@ fn onSubmit(tui: *tui_mod.Tui, line: []const u8) anyerror!void {
             return;
         }
         if (std.mem.eql(u8, cmd, "help")) {
-            app.tui.appendLine("", "\x1b[36m", SLASH_HELP) catch {};
+            app.tui.appendLine("", "\x1b[0m", SLASH_HELP) catch {};
             return;
         }
         // 未知斜杠命令:尝试 prompt 模板(/name [args])
@@ -981,13 +1034,17 @@ fn onSubmit(tui: *tui_mod.Tui, line: []const u8) anyerror!void {
         }
         return;
     }
-    const expanded = expandRefs(app.alloc, line) catch line;
+    const expanded = util.expandRefs(app.alloc, line, app.agent.cwd) catch line;
     if (app.worker_active.load(.acquire)) {
         // worker 忙:入队(steering),轮次间自动投递
         app.enqueue(expanded);
         var bw = std.Io.Writer.Allocating.init(app.alloc);
         defer bw.deinit();
-        bw.writer.print("⏳ queued ({d} pending) — /queue to clear", .{app.queue.items.len}) catch {};
+        const head = expanded[0..@min(expanded.len, 72)];
+        if (app.queue.items.len == 1)
+            bw.writer.print("→ 待发  {s}", .{head}) catch {}
+        else
+            bw.writer.print("→ 待发 {d}  {s}", .{ app.queue.items.len, head }) catch {};
         app.tui.appendLine("", "\x1b[2m", bw.written()) catch {};
         return;
     }
@@ -1004,39 +1061,6 @@ fn onSubmit(tui: *tui_mod.Tui, line: []const u8) anyerror!void {
     app.last_line = app.alloc.dupe(u8, expanded) catch expanded;
     if (old.len > 0 and old.ptr != expanded.ptr) app.alloc.free(old);
     spawnWorker(app, expanded, false);
-}
-
-/// 展开行内 @path 引用(仅限 @/、@./、@../ 前缀,防误伤);文件嵌入 ``` 代码块,截断 8KB。
-fn expandRefs(alloc: std.mem.Allocator, line: []const u8) ![]u8 {
-    var out = std.array_list.Managed(u8).init(alloc);
-    var i: usize = 0;
-    while (i < line.len) {
-        const is_path_ref = line[i] == '@' and i + 1 < line.len and
-            (line[i + 1] == '/' or
-                (line[i + 1] == '.' and i + 2 < line.len and (line[i + 2] == '/' or line[i + 2] == '.')));
-        if (is_path_ref) {
-            var j = i + 1;
-            while (j < line.len and !std.ascii.isWhitespace(line[j])) j += 1;
-            const path = line[i + 1 .. j];
-            const content = std.Io.Dir.cwd().readFileAlloc(util.io, path, alloc, .limited(8 * 1024)) catch {
-                try out.append('@');
-                i += 1;
-                continue;
-            };
-            defer alloc.free(content);
-            try out.appendSlice("\n```");
-            try out.appendSlice(path);
-            try out.appendSlice("\n");
-            try out.appendSlice(content);
-            if (content.len >= 8 * 1024) try out.appendSlice("\n…(truncated)");
-            try out.appendSlice("```\n");
-            i = j;
-            continue;
-        }
-        try out.append(line[i]);
-        i += 1;
-    }
-    return out.toOwnedSlice();
 }
 
 fn spawnWorker(app: *App, line: []const u8, is_compact: bool) void {
@@ -1184,7 +1208,7 @@ pub fn runInteractive(alloc: std.mem.Allocator, cfg: *cfgmod.Config, cwd: []cons
     // 启动提示
     var gw = std.Io.Writer.Allocating.init(alloc);
     defer gw.deinit();
-    gw.writer.print("piz v{s} — pi 的 Zig 重写 · {s}/{s} · {s}\n/help 查看命令", .{ VERSION, agent.provider.name, agent.model, abs_cwd }) catch {};
+    gw.writer.print("piz v{s} · {s}/{s} · {s}\n/help 命令  ·  @./file 贴文件  ·  !cmd 跑 shell  ·  Ctrl+C 取消  ·  Ctrl+B 后台", .{ VERSION, agent.provider.name, agent.model, abs_cwd }) catch {};
     try tui.appendLine("", "\x1b[36m", gw.written());
     const st = try app.statusLine();
     try tui.setStatus("\x1b[0m", st);
@@ -1596,14 +1620,14 @@ test "expandRefs" {
     try std.Io.Dir.cwd().writeFile(util.io, .{ .sub_path = "ref_test.txt", .data = "FILE-CONTENT" });
     defer std.Io.Dir.cwd().deleteFile(util.io, "ref_test.txt") catch {};
     // @./ref_test.txt 展开
-    const r1 = try expandRefs(a, "read this @./ref_test.txt please");
+    const r1 = try util.expandRefs(a, "read this @./ref_test.txt please", "");
     try t.expect(std.mem.indexOf(u8, r1, "FILE-CONTENT") != null);
     try t.expect(std.mem.indexOf(u8, r1, "```./ref_test.txt") != null);
     // 普通 @ 保留(邮箱/提及)
-    const r2 = try expandRefs(a, "mail me @someone now");
+    const r2 = try util.expandRefs(a, "mail me @someone now", "");
     try t.expectEqualStrings("mail me @someone now", r2);
     // 不存在路径保留原文
-    const r3 = try expandRefs(a, "see @./nope.txt end");
+    const r3 = try util.expandRefs(a, "see @./nope.txt end", "");
     try t.expectEqualStrings("see @./nope.txt end", r3);
 }
 
@@ -1645,4 +1669,12 @@ test "every slash command appears in /help" {
     }
     // 别名不单独列(/q /exit 是 /quit 的简写,列出来只是噪音)
     try t.expect(std.mem.indexOf(u8, SLASH_HELP, "/q ") == null);
+}
+
+test "toolArgsPreview prefers command path pattern" {
+    const t = std.testing;
+    try t.expectEqualStrings("zig test", toolArgsPreview("{\"command\":\"zig test\"}"));
+    try t.expectEqualStrings("src/main.zig", toolArgsPreview("{\"path\":\"src/main.zig\"}"));
+    try t.expectEqualStrings("fn foo", toolArgsPreview("{\"pattern\":\"fn foo\",\"path\":\".\"}"));
+    try t.expectEqualStrings("raw", toolArgsPreview("raw"));
 }

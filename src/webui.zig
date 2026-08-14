@@ -947,6 +947,36 @@ pub const ChatQueue = struct {
         global.shutting_down = true;
         global.mutex.unlock(util.io);
     }
+
+    pub fn pending(session: []const u8) usize {
+        global.mutex.lock(util.io) catch return 0;
+        defer global.mutex.unlock(util.io);
+        var n: usize = 0;
+        for (global.items.items) |it| {
+            if (std.mem.eql(u8, it.session, session)) n += 1;
+        }
+        return n;
+    }
+
+    /// 丢掉本会话还没被 worker 取走的消息,返回清掉的条数。
+    pub fn clear(session: []const u8) usize {
+        const alloc = std.heap.page_allocator;
+        global.mutex.lock(util.io) catch return 0;
+        defer global.mutex.unlock(util.io);
+        var n: usize = 0;
+        var i: usize = 0;
+        while (i < global.items.items.len) {
+            if (std.mem.eql(u8, global.items.items[i].session, session)) {
+                const removed = global.items.orderedRemove(i);
+                alloc.free(removed.session);
+                alloc.free(removed.text);
+                n += 1;
+            } else {
+                i += 1;
+            }
+        }
+        return n;
+    }
 };
 
 test "dequeue returns on per-session stop, not just global shutdown" {
@@ -972,6 +1002,21 @@ test "dequeue returns on per-session stop, not just global shutdown" {
     const item = ChatQueue.dequeue("stopped-session", &go);
     try t.expect(item != null);
     try t.expectEqualStrings("pending", item.?.text);
+}
+
+test "ChatQueue pending and clear only touch one session" {
+    const t = std.testing;
+    try util.testInit();
+    ChatQueue.enqueue("q-a", "one");
+    ChatQueue.enqueue("q-b", "other");
+    ChatQueue.enqueue("q-a", "two");
+    try t.expectEqual(@as(usize, 2), ChatQueue.pending("q-a"));
+    try t.expectEqual(@as(usize, 1), ChatQueue.pending("q-b"));
+    try t.expectEqual(@as(usize, 2), ChatQueue.clear("q-a"));
+    try t.expectEqual(@as(usize, 0), ChatQueue.pending("q-a"));
+    try t.expectEqual(@as(usize, 1), ChatQueue.pending("q-b"));
+    try t.expectEqual(@as(usize, 1), ChatQueue.clear("q-b"));
+    try t.expectEqual(@as(usize, 0), ChatQueue.pending("q-b"));
 }
 
 // ---------- HTTP 层集成测试 ----------

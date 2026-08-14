@@ -47,6 +47,44 @@ pub fn writeFile(path: []const u8, data: []const u8) !void {
     try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = data });
 }
 
+/// 展开行内 @path 引用(仅限 @/、@./、@../ 前缀,防误伤);文件嵌入 ``` 代码块,截断 8KB。
+/// `root` 非空时相对路径相对它解析(Web 多 workspace);空则用进程 cwd。
+pub fn expandRefs(alloc: std.mem.Allocator, line: []const u8, root: []const u8) ![]u8 {
+    var out = std.array_list.Managed(u8).init(alloc);
+    var i: usize = 0;
+    while (i < line.len) {
+        const is_path_ref = line[i] == '@' and i + 1 < line.len and
+            (line[i + 1] == '/' or
+                (line[i + 1] == '.' and i + 2 < line.len and (line[i + 2] == '/' or line[i + 2] == '.')));
+        if (is_path_ref) {
+            var j = i + 1;
+            while (j < line.len and !std.ascii.isWhitespace(line[j])) j += 1;
+            const path = line[i + 1 .. j];
+            const full = if (root.len > 0 and !std.fs.path.isAbsolute(path))
+                (joinPath(alloc, root, path) catch path)
+            else
+                path;
+            const content = std.Io.Dir.cwd().readFileAlloc(io, full, alloc, .limited(8 * 1024)) catch {
+                try out.append('@');
+                i += 1;
+                continue;
+            };
+            defer alloc.free(content);
+            try out.appendSlice("\n```");
+            try out.appendSlice(path);
+            try out.appendSlice("\n");
+            try out.appendSlice(content);
+            if (content.len >= 8 * 1024) try out.appendSlice("\n…(truncated)");
+            try out.appendSlice("```\n");
+            i = j;
+            continue;
+        }
+        try out.append(line[i]);
+        i += 1;
+    }
+    return out.toOwnedSlice();
+}
+
 /// 拼接路径,处理 base 尾斜杠与 rel 前导斜杠。
 pub fn joinPath(alloc: std.mem.Allocator, base: []const u8, rel: []const u8) ![]u8 {
     if (std.fs.path.isAbsolute(rel)) return alloc.dupe(u8, rel);
@@ -655,4 +693,24 @@ test "skills index + memory.md" {
     try tmp.dir.deleteDir(io, "skills/foo");
     try tmp.dir.deleteDir(io, "skills");
     try t.expectEqualStrings("", try loadSkillsIndex(a));
+}
+
+test "expandRefs embeds @./ files and leaves mentions alone" {
+    const t = std.testing;
+    try testInit();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = Arena.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    try tmp.dir.writeFile(io, .{ .sub_path = "ref.txt", .data = "FILE-CONTENT" });
+    const cwd_abs = try std.process.currentPathAlloc(io, a);
+    const root = try std.fmt.allocPrint(a, "{s}/.zig-cache/tmp/{s}", .{ cwd_abs, tmp.sub_path });
+    const r1 = try expandRefs(a, "read this @./ref.txt please", root);
+    try t.expect(std.mem.indexOf(u8, r1, "FILE-CONTENT") != null);
+    try t.expect(std.mem.indexOf(u8, r1, "```./ref.txt") != null);
+    const r2 = try expandRefs(a, "mail me @someone now", root);
+    try t.expectEqualStrings("mail me @someone now", r2);
+    const r3 = try expandRefs(a, "see @./nope.txt end", root);
+    try t.expectEqualStrings("see @./nope.txt end", r3);
 }

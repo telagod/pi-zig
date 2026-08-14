@@ -6,6 +6,7 @@ const agentmod = @import("core").agent;
 const sessionmod = @import("core").session;
 const pluginsmod = @import("core").plugins;
 const compress = @import("core").compress;
+const toolsmod = @import("core").tools;
 const webui_mod = @import("webui.zig");
 
 pub fn runWebCmd(alloc: std.mem.Allocator, args: *std.process.Args.Iterator) void {
@@ -419,6 +420,9 @@ fn poolStateHook(ctx: ?*anyopaque, cwd: []const u8, session: []const u8, alloc: 
         if (ses.agent.cur_stream_fd.load(.acquire) >= 0) "true" else "false",
         snap_history,
     }) catch {};
+    const raw_base = std.fs.path.basename(cwd2);
+    const base = if (raw_base.len > 0) raw_base else cwd2;
+    w.print(",\"ws\":{s}", .{util.jsonString(alloc, base) catch "\"\""}) catch {};
     w.writeAll("}") catch {};
     return stw.toOwnedSlice() catch "{}";
 }
@@ -426,6 +430,10 @@ fn poolStateHook(ctx: ?*anyopaque, cwd: []const u8, session: []const u8, alloc: 
 fn webWorker(ses: *WebSession) void {
     while (true) {
         const item = webui_mod.ChatQueue.dequeue(ses.qkey, &ses.stopping) orelse break;
+        ses.hub.push("{{\"type\":\"user_message\",\"session\":{s},\"text\":{s}}}", .{
+            util.jsonString(ses.agent.alloc, ses.name) catch "\"\"",
+            util.jsonString(ses.agent.alloc, item.text) catch "\"\"",
+        });
         const text = ses.agent.alloc.dupe(u8, item.text) catch null;
         const a = std.heap.page_allocator;
         a.free(item.session);
@@ -855,7 +863,115 @@ fn poolActionHook(ctx: ?*anyopaque, cwd: []const u8, session: []const u8, act: [
         rebuildSnap(ses);
         return std.fmt.allocPrint(alloc, "{{\"ok\":true,\"act\":\"{s}\",\"saved\":{d}}}", .{ act, r.tokens_saved }) catch null;
     }
+    if (std.mem.eql(u8, act, "queue")) {
+        const n = webui_mod.ChatQueue.clear(ses.qkey);
+        return std.fmt.allocPrint(alloc, "{{\"ok\":true,\"act\":\"queue\",\"cleared\":{d}}}", .{n}) catch null;
+    }
+    if (std.mem.eql(u8, act, "fast-compress")) {
+        const msg = compress.formatStatus(alloc, .{
+            .alloc = ses.agent.alloc,
+            .messages = &ses.agent.messages,
+            .window = ses.agent.ctxWindow(),
+            .api = ses.agent.provider.api,
+            .vision = compress.modelHasVision(ses.agent.model),
+        });
+        return jsonOkText(alloc, act, msg);
+    }
+    if (std.mem.eql(u8, act, "copy")) {
+        var i = ses.agent.messages.items.len;
+        while (i > 0) {
+            i -= 1;
+            if (std.mem.eql(u8, ses.agent.messages.items[i].role, "assistant")) {
+                return jsonOkText(alloc, act, ses.agent.messages.items[i].content);
+            }
+        }
+        return "{\"ok\":false,\"act\":\"copy\",\"error\":\"empty\"}";
+    }
+    if (std.mem.eql(u8, act, "tree") or std.mem.eql(u8, act, "export") or std.mem.eql(u8, act, "dump")) {
+        return sessionExport(alloc, ses, act);
+    }
+    if (std.mem.eql(u8, act, "memory") or std.mem.eql(u8, act, "memory-set") or std.mem.eql(u8, act, "memory-clear")) {
+        return memoryAct(alloc, act, name);
+    }
     return null;
+}
+
+fn jsonOkText(alloc: std.mem.Allocator, act: []const u8, text: []const u8) ?[]const u8 {
+    return std.fmt.allocPrint(alloc, "{{\"ok\":true,\"act\":{s},\"text\":{s}}}", .{
+        util.jsonString(alloc, act) catch "\"\"",
+        util.jsonString(alloc, text) catch "\"\"",
+    }) catch null;
+}
+
+fn sessionExport(alloc: std.mem.Allocator, ses: *WebSession, act: []const u8) ?[]const u8 {
+    var ww = std.Io.Writer.Allocating.init(alloc);
+    defer ww.deinit();
+    const w = &ww.writer;
+    const html = std.mem.eql(u8, act, "export");
+    if (html) w.writeAll("<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>piz session</title></head><body>") catch {};
+    if (std.mem.eql(u8, act, "tree")) {
+        w.print("{d} messages:\n", .{ses.agent.messages.items.len}) catch {};
+    }
+    for (ses.agent.messages.items, 0..) |m, i| {
+        if (std.mem.eql(u8, act, "tree")) {
+            const tag: []const u8 = if (m.role.len > 0) switch (m.role[0]) {
+                'u' => "❯",
+                'a' => "←",
+                't' => "⚙",
+                else => "·",
+            } else "·";
+            const head = m.content[0..@min(m.content.len, 50)];
+            w.print("{d}. {s} {s}\n", .{ i + 1, tag, head }) catch {};
+        } else if (html) {
+            w.print("<p><b>{s}</b><br><pre>{s}</pre></p>\n", .{ m.role, htmlEsc(alloc, m.content) }) catch {};
+        } else {
+            w.print("--- {s} ---\n{s}\n", .{ m.role, m.content }) catch {};
+        }
+    }
+    if (html) w.writeAll("</body></html>\n") catch {};
+    if (std.mem.eql(u8, act, "tree")) w.writeAll("use /fork <n> to branch from a message") catch {};
+    return jsonOkText(alloc, act, ww.written());
+}
+
+fn htmlEsc(alloc: std.mem.Allocator, s: []const u8) []const u8 {
+    var out = std.array_list.Managed(u8).init(alloc);
+    for (s) |c| {
+        switch (c) {
+            '&' => out.appendSlice("&amp;") catch {},
+            '<' => out.appendSlice("&lt;") catch {},
+            '>' => out.appendSlice("&gt;") catch {},
+            else => out.append(c) catch {},
+        }
+    }
+    return out.toOwnedSlice() catch s;
+}
+
+fn memoryAct(alloc: std.mem.Allocator, act: []const u8, name: ?[]const u8) ?[]const u8 {
+    const mem_path = util.configDir(alloc) catch return "{\"ok\":false,\"act\":\"memory\",\"error\":\"no config dir\"}";
+    const full = util.joinPath(alloc, mem_path, "memory.md") catch return "{\"ok\":false,\"act\":\"memory\"}";
+    if (std.mem.eql(u8, act, "memory-clear")) {
+        std.Io.Dir.cwd().deleteFile(util.io, full) catch {};
+        return "{\"ok\":true,\"act\":\"memory-clear\"}";
+    }
+    if (std.mem.eql(u8, act, "memory-set")) {
+        const text = std.mem.trim(u8, name orelse "", " ");
+        if (text.len == 0) return "{\"ok\":false,\"act\":\"memory-set\",\"error\":\"empty\"}";
+        const mline = std.fmt.allocPrint(alloc, "{s}\n", .{text}) catch return "{\"ok\":false,\"act\":\"memory-set\"}";
+        var f = std.Io.Dir.cwd().createFile(util.io, full, .{ .exclusive = true, .permissions = @enumFromInt(0o600) }) catch |err| switch (err) {
+            error.PathAlreadyExists => std.Io.Dir.cwd().openFile(util.io, full, .{ .mode = .write_only }) catch return "{\"ok\":false,\"act\":\"memory-set\"}",
+            else => return "{\"ok\":false,\"act\":\"memory-set\"}",
+        };
+        defer f.close(util.io);
+        var wbuf: [1024]u8 = undefined;
+        var w = f.writer(util.io, &wbuf);
+        w.seekTo(f.length(util.io) catch 0) catch {};
+        w.interface.writeAll(mline) catch {};
+        w.flush() catch {};
+        return jsonOkText(alloc, act, text);
+    }
+    const content = std.Io.Dir.cwd().readFileAlloc(util.io, full, alloc, .limited(512 * 1024)) catch
+        return jsonOkText(alloc, "memory", "memory is empty — /memory set <text> to add");
+    return jsonOkText(alloc, "memory", content);
 }
 
 fn poolModeHook(ctx: ?*anyopaque, cwd: []const u8, session: []const u8, auto: ?bool) ?bool {
@@ -881,9 +997,57 @@ fn poolChatHook(ctx: ?*anyopaque, cwd: []const u8, session: []const u8, text: []
     const pool: *SessionPool = @ptrCast(@alignCast(ctx.?));
     const cwd2 = if (cwd.len > 0) cwd else (if (pool.workspaces.items.len > 0) pool.workspaces.items[0] else "");
     const ses = pool.getOrCreate(session, cwd2) orelse return false;
-    ses.hub.push("{{\"type\":\"user_message\",\"session\":{s},\"text\":{s}}}", .{ util.jsonString(pool.alloc, ses.name) catch "\"\"", util.jsonString(pool.alloc, text) catch "\"\"" });
-    webui_mod.ChatQueue.enqueue(ses.qkey, text);
+    const prepared = prepareWebChat(pool.alloc, ses.cwd, text);
+    if (prepared.notice) |note| {
+        ses.hub.push("{{\"type\":\"notice\",\"session\":{s},\"text\":{s}}}", .{
+            util.jsonString(pool.alloc, ses.name) catch "\"\"",
+            util.jsonString(pool.alloc, note) catch "\"\"",
+        });
+    }
+    if (prepared.skip) return true;
+    webui_mod.ChatQueue.enqueue(ses.qkey, prepared.send);
+    if (ses.busy.load(.acquire) != 0) {
+        ses.hub.push("{{\"type\":\"queued\",\"session\":{s},\"text\":{s},\"n\":{d}}}", .{
+            util.jsonString(pool.alloc, ses.name) catch "\"\"",
+            util.jsonString(pool.alloc, prepared.send) catch "\"\"",
+            webui_mod.ChatQueue.pending(ses.qkey),
+        });
+    }
     return true;
+}
+
+const PreparedChat = struct {
+    send: []const u8,
+    notice: ?[]const u8 = null,
+    skip: bool = false,
+};
+
+/// Web 与 TUI 同一套入口:`!cmd` 跑 bash,`!!cmd` 只跑不送模型,`@./path` 嵌文件,`/plan` 写成 PLAN.md。
+fn prepareWebChat(alloc: std.mem.Allocator, cwd: []const u8, text: []const u8) PreparedChat {
+    if (text.len > 1 and text[0] == '!') {
+        const send_to_llm = !(text.len > 1 and text[1] == '!');
+        const cmd = if (send_to_llm) text[1..] else text[2..];
+        toolsmod.setRoot(cwd);
+        defer toolsmod.clearRoot();
+        const json_args = std.fmt.allocPrint(alloc, "{{\"command\":{s},\"timeout\":30}}", .{util.jsonString(alloc, cmd) catch "\"\""}) catch {
+            return .{ .send = text, .notice = "cannot build bash args", .skip = !send_to_llm };
+        };
+        const res: toolsmod.Result = if (toolsmod.find("bash")) |tb|
+            (tb.handler(alloc, json_args) catch .{ .content = "tool crashed", .is_error = true })
+        else
+            .{ .content = "no bash tool", .is_error = true };
+        if (!send_to_llm) return .{ .send = text, .notice = res.content, .skip = true };
+        const msg = std.fmt.allocPrint(alloc, "!{s}\n\nOutput:\n{s}", .{ cmd, res.content }) catch text;
+        return .{ .send = msg, .notice = res.content };
+    }
+    if (std.mem.startsWith(u8, text, "/plan")) {
+        const goal = std.mem.trim(u8, text["/plan".len..], " ");
+        if (goal.len == 0) return .{ .send = text, .notice = "usage: /plan <goal>", .skip = true };
+        const msg = std.fmt.allocPrint(alloc, "Create a detailed step-by-step plan for: {s}. Write the plan to PLAN.md in the project root, then briefly state you are ready to execute it.", .{goal}) catch text;
+        return .{ .send = msg };
+    }
+    const expanded = util.expandRefs(alloc, text, cwd) catch text;
+    return .{ .send = expanded };
 }
 
 test "web undo/compact are rejected while the worker turn is running" {
@@ -931,4 +1095,11 @@ test "web undo/compact are rejected while the worker turn is running" {
     const busy2 = poolActionHook(&pool, "/tmp", "s1", "undo", null, 1) orelse return error.Fail;
     try t.expect(std.mem.indexOf(u8, busy2, "\"error\":\"busy\"") != null);
     ses.busy.store(0, .release);
+
+    const tree = poolActionHook(&pool, "/tmp", "s1", "tree", null, 0) orelse return error.Fail;
+    try t.expect(std.mem.indexOf(u8, tree, "\"ok\":true") != null);
+    const q = poolActionHook(&pool, "/tmp", "s1", "queue", null, 0) orelse return error.Fail;
+    try t.expect(std.mem.indexOf(u8, q, "\"act\":\"queue\"") != null);
+    const copy_empty = poolActionHook(&pool, "/tmp", "s1", "copy", null, 0) orelse return error.Fail;
+    try t.expect(std.mem.indexOf(u8, copy_empty, "\"ok\":false") != null);
 }
