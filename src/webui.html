@@ -1809,19 +1809,6 @@
         overflow: hidden;
         text-overflow: ellipsis;
       }
-      .tb-model {
-        font-size: 12px;
-        color: var(--color-text-muted);
-        border: 1px solid var(--color-line);
-        border-radius: var(--radius-full);
-        padding: 2px 8px;
-        flex: none;
-        max-width: 120px;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-        cursor: pointer;
-      }
       #sheet {
         display: none;
         position: fixed;
@@ -2437,7 +2424,6 @@
             <span class="tb-ws" id="tbWs">…</span><span class="tb-sl">/</span
             ><span class="tb-se" id="tbSe">会话</span>
           </button>
-          <button class="tb-model" id="tbModel">…</button>
           <button class="ib" id="tbKebab" title="会话操作">⋯</button>
         </div>
         <header class="chat-header" id="chatHdr">
@@ -2450,7 +2436,6 @@
           <div class="ch-spacer"></div>
           <span id="plugin-header" data-piz-slot="header"></span
           ><span id="plugin-status" data-piz-slot="status"></span>
-          <button class="ib" id="hModel" title="切换模型">…</button>
           <button class="ib" id="hKebab" title="会话操作">⋯</button>
         </header>
         <div id="panes">
@@ -2491,6 +2476,7 @@
                       style="display: none"
                     ></span
                   ></span>
+                  <span class="mode-pill" id="hModel" title="切换模型">…</span>
                   <span id="turnMeta" class="turn-meta" hidden></span>
                   <button
                     class="compact-chip"
@@ -3392,15 +3378,18 @@
           })
           .catch(() => {});
       }
+      function modelShort(m) {
+        if (!m) return "模型";
+        const n = m.includes("/") ? m.slice(m.lastIndexOf("/") + 1) : m;
+        return n.length > 22 ? n.slice(0, 20) + "…" : n;
+      }
       function renderModel() {
-        $("hModel").textContent = curModel;
-        $("tbModel").textContent = curModel;
+        const el = $("hModel");
+        if (!el) return;
+        el.textContent = modelShort(curModel);
+        el.title = curModel ? "模型 " + curModel : "切换模型";
       }
       $("hModel").onclick = (e) => {
-        e.stopPropagation();
-        loadModels(e.currentTarget);
-      };
-      $("tbModel").onclick = (e) => {
         e.stopPropagation();
         loadModels(e.currentTarget);
       };

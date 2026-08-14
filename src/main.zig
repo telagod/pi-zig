@@ -1208,7 +1208,7 @@ pub fn runInteractive(alloc: std.mem.Allocator, cfg: *cfgmod.Config, cwd: []cons
     // 启动提示
     var gw = std.Io.Writer.Allocating.init(alloc);
     defer gw.deinit();
-    gw.writer.print("piz v{s} · {s}/{s} · {s}\n/help 命令  ·  @./file 贴文件  ·  !cmd 跑 shell  ·  Ctrl+C 取消  ·  Ctrl+B 后台", .{ VERSION, agent.provider.name, agent.model, abs_cwd }) catch {};
+    gw.writer.print("piz v{s} · {s}\n/help 命令  ·  @./file 贴文件  ·  !cmd 跑 shell  ·  Ctrl+C 取消  ·  Ctrl+B 后台", .{ VERSION, abs_cwd }) catch {};
     try tui.appendLine("", "\x1b[36m", gw.written());
     const st = try app.statusLine();
     try tui.setStatus("\x1b[0m", st);
