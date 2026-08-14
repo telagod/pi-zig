@@ -2464,10 +2464,10 @@
               <div class="toolbar">
                 <div class="toolbar-left">
                   <span
-                    class="perm-pill perm-ask"
+                    class="perm-pill perm-allow"
                     id="permPill"
-                    title="审批模式"
-                    >🛡 自动</span
+                    title="授权模式"
+                    >⚡ 全权</span
                   >
                   <span class="mode-pill" id="modePill" title="斜杠命令"
                     >/ 命令<span
@@ -2506,6 +2506,7 @@
     <div class="menu" id="wsmenu"></div>
     <div class="menu" id="modelMenu"></div>
     <div class="menu" id="thinkMenu"></div>
+    <div class="menu" id="permMenu"></div>
     <div id="toast"></div>
     <div id="overlay"></div>
     <div id="sheet">
@@ -3010,6 +3011,8 @@
         if (
           !e.target.closest(".menu") &&
           !e.target.closest(".ib") &&
+          !e.target.closest(".perm-pill") &&
+          !e.target.closest(".mode-pill") &&
           !e.target.closest(".ch-brand") &&
           !e.target.closest(".ws-chip") &&
           !e.target.closest(".ch-ws")
@@ -3133,8 +3136,8 @@
           '</span><button class="kebab" title="操作">⋯</button></div>';
         d.onclick = () => {
           if (s.name === sess) {
-            if (s.auto !== undefined) {
-              autoMode = !!s.auto;
+            if (s.mode || s.auto !== undefined) {
+              approvalMode = s.mode || (s.auto ? "yolo" : "ask");
               setModeBtn();
             }
             closeSheet();
@@ -3441,15 +3444,28 @@
         });
         openAt("thinkMenu", e.currentTarget);
       };
-      // ---- 审批模式 / 模式 ----
-      let autoMode = true;
+      // ---- 授权模式(Codex /permissions: yolo / ask / read-only) ----
+      let approvalMode = "yolo";
+      const APPROVALS = [
+        { id: "yolo", label: "⚡ 全权", hint: "不询问，默认" },
+        { id: "ask", label: "? 询问", hint: "危险工具先问" },
+        { id: "read-only", label: "⊘ 只读", hint: "危险工具直接拒" },
+      ];
       function setModeBtn() {
         const p = $("permPill");
-        p.textContent = autoMode ? "🛡 自动" : "🛡 手动";
-        p.className = "perm-pill " + (autoMode ? "perm-allow" : "perm-ask");
+        const cur = APPROVALS.find((x) => x.id === approvalMode) || APPROVALS[0];
+        p.textContent = cur.label;
+        p.className =
+          "perm-pill " +
+          (approvalMode === "yolo"
+            ? "perm-allow"
+            : approvalMode === "ask"
+              ? "perm-ask"
+              : "perm-deny");
+        p.title = "授权 " + cur.hint;
       }
-      $("permPill").onclick = async () => {
-        autoMode = !autoMode;
+      async function setApproval(mode) {
+        approvalMode = mode;
         setModeBtn();
         try {
           const r = await fetch(
@@ -3457,13 +3473,33 @@
             {
               method: "POST",
               headers: { "content-type": "application/json" },
-              body: JSON.stringify({ auto: autoMode }),
+              body: JSON.stringify({ mode }),
             },
           );
           const j = await r.json();
-          if (j.auto !== undefined) autoMode = !!j.auto;
+          if (j.mode) approvalMode = j.mode;
+          else if (j.auto !== undefined) approvalMode = j.auto ? "yolo" : "ask";
           setModeBtn();
-        } catch {}
+        } catch {
+          showToast("授权切换失败");
+        }
+      }
+      $("permPill").onclick = (e) => {
+        e.stopPropagation();
+        const m = $("permMenu");
+        m.innerHTML = "";
+        APPROVALS.forEach((it) => {
+          const d = document.createElement("div");
+          d.className = "mi" + (it.id === approvalMode ? " check" : "");
+          d.textContent = it.label + "  " + it.hint;
+          d.onclick = (ev) => {
+            ev.stopPropagation();
+            closeMenus();
+            setApproval(it.id);
+          };
+          m.appendChild(d);
+        });
+        openAt("permMenu", e.currentTarget);
       };
       $("modePill").onclick = () => {
         const i = $("inp");
@@ -3943,6 +3979,7 @@
       }
       // 审批
       function addPerm(id, name, args) {
+        hideWelcome();
         const d = document.createElement("div");
         d.className = "pc";
         d.dataset.pid = id;
@@ -3966,33 +4003,42 @@
           '</span><span class="aw">等待审批</span></div>' +
           body +
           '<div class="pb"><button class="ok">允许</button><button class="alw">本会话总是</button><button class="no">拒绝</button></div>';
-        d.querySelector(".ok").onclick = () => appr(id, true, false);
-        d.querySelector(".alw").onclick = () => appr(id, true, true);
-        d.querySelector(".no").onclick = () => appr(id, false, false);
+        d.querySelector(".ok").onclick = (e) => {
+          e.stopPropagation();
+          appr(d, id, true, false);
+        };
+        d.querySelector(".alw").onclick = (e) => {
+          e.stopPropagation();
+          appr(d, id, true, true);
+        };
+        d.querySelector(".no").onclick = (e) => {
+          e.stopPropagation();
+          appr(d, id, false, false);
+        };
         const dk = $("dock");
         dk.appendChild(d);
         scrl();
       }
-      async function appr(id, allow, always) {
+      async function appr(card, id, allow, always) {
+        card.querySelectorAll("button").forEach((b) => (b.disabled = true));
         try {
-          if (always) {
-            autoMode = true;
-            setModeBtn();
-            await fetch(
-              "/api/mode?" + wsp + "session=" + encodeURIComponent(sess),
-              {
-                method: "POST",
-                headers: { "content-type": "application/json" },
-                body: JSON.stringify({ auto: true }),
-              },
-            );
-          }
-          await fetch("/api/approve", {
+          if (always) await setApproval("yolo");
+          const r = await fetch("/api/approve", {
             method: "POST",
             headers: { "content-type": "application/json" },
             body: JSON.stringify({ id, allow }),
           });
-        } catch {}
+          const j = await r.json().catch(() => ({}));
+          if (!r.ok || j.ok === false) {
+            showToast(j.error || "审批失败");
+            card.querySelectorAll("button").forEach((b) => (b.disabled = false));
+            return;
+          }
+          card.remove();
+        } catch {
+          showToast("审批失败");
+          card.querySelectorAll("button").forEach((b) => (b.disabled = false));
+        }
       }
       function addNotice(txt) {
         if (!txt) return;
@@ -4303,6 +4349,7 @@
         { name: "/title", desc: "改会话标题", accepts: true },
         { name: "/model", desc: "切换模型" },
         { name: "/think", desc: "思考等级", accepts: true },
+        { name: "/permissions", desc: "授权 yolo/ask/read-only", accepts: true },
         { name: "/status", desc: "当前状态" },
         { name: "/plan", desc: "写 PLAN.md 再执行", accepts: true },
         { name: "/queue", desc: "清空输入队列" },
@@ -4546,6 +4593,19 @@
           case "/model":
             $("hModel").click();
             break;
+          case "/permissions":
+          case "/approvals": {
+            const lv = (arg || "").trim();
+            if (!lv) {
+              $("permPill").click();
+              break;
+            }
+            await setApproval(lv);
+            addUser("/permissions " + lv);
+            addAsst("授权 " + (APPROVALS.find((x) => x.id === approvalMode) || {}).label);
+            finishAsst();
+            break;
+          }
           case "/think": {
             const lv = (arg || "").trim();
             if (!lv) {
@@ -5047,8 +5107,8 @@
           if (s.title) {
             curTitle = s.title;
           }
-          if (s.auto !== undefined) {
-            autoMode = !!s.auto;
+          if (s.mode || s.auto !== undefined) {
+            approvalMode = s.mode || (s.auto ? "yolo" : "ask");
             setModeBtn();
           }
           renderHdr(s);

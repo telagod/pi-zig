@@ -52,6 +52,47 @@ pub const ThinkLevel = enum {
     }
 };
 
+/// 工具授权。对齐 Codex `/permissions` 能真正做到的三档
+/// (piz 没有 OS sandbox,所以没有 workspace-write 那一档):
+/// yolo = 不询问(Codex Full Access / `--yolo`);
+/// ask = 危险工具先问;
+/// read_only = 危险工具直接拒,读类放行。
+pub const ApprovalMode = enum {
+    yolo,
+    ask,
+    read_only,
+
+    pub fn parse(s: []const u8) ?ApprovalMode {
+        if (std.mem.eql(u8, s, "yolo") or std.mem.eql(u8, s, "full") or
+            std.mem.eql(u8, s, "full-access") or std.mem.eql(u8, s, "never") or
+            std.mem.eql(u8, s, "execute"))
+            return .yolo;
+        if (std.mem.eql(u8, s, "ask") or std.mem.eql(u8, s, "on-request") or
+            std.mem.eql(u8, s, "confirm") or std.mem.eql(u8, s, "manual"))
+            return .ask;
+        if (std.mem.eql(u8, s, "read-only") or std.mem.eql(u8, s, "readonly") or
+            std.mem.eql(u8, s, "ro") or std.mem.eql(u8, s, "read"))
+            return .read_only;
+        return null;
+    }
+
+    pub fn label(self: ApprovalMode) []const u8 {
+        return switch (self) {
+            .yolo => "yolo",
+            .ask => "ask",
+            .read_only => "read-only",
+        };
+    }
+
+    pub fn uiLabel(self: ApprovalMode) []const u8 {
+        return switch (self) {
+            .yolo => "全权",
+            .ask => "询问",
+            .read_only => "只读",
+        };
+    }
+};
+
 /// `thinkingLevelMap` 一档的三态。对齐 pi `packages/coding-agent/docs/models.md`:
 /// omitted = 走缺省(标准档到 high 可见;`xhigh`/`max` 要显式写出才出现);
 /// hidden (`null`) = 不支持,UI 跳过;
@@ -689,6 +730,8 @@ pub const Config = struct {
     default_model: ?[]const u8 = null,
     /// settings.json 的 `defaultThinkingLevel`。字段名抄 pi。
     default_think_level: ?ThinkLevel = null,
+    /// settings.json 的 `approvalMode`。缺省 yolo。
+    default_approval: ApprovalMode = .yolo,
     /// settings.json 的 `thinkingBudgets`。未写用 pi 缺省。
     thinking_budgets: ThinkingBudgets = .{},
     /// settings.json 的 `plugins` 数组:要额外开启的可选插件名。
@@ -879,6 +922,9 @@ pub const Config = struct {
                 self.default_model = getStr(root, "defaultModel");
                 if (getStr(root, "defaultThinkingLevel")) |s| {
                     self.default_think_level = ThinkLevel.parse(s);
+                }
+                if (getStr(root, "approvalMode")) |s| {
+                    if (ApprovalMode.parse(s)) |m| self.default_approval = m;
                 }
                 if (root.object.get("thinkingBudgets")) |raw| {
                     if (raw == .object) self.thinking_budgets = parseThinkingBudgets(raw.object);
@@ -1087,6 +1133,24 @@ pub const Config = struct {
         } else |_| {}
         try root.object.put(alloc, "defaultThinkingLevel", .{ .string = level.label() });
         self.default_think_level = level;
+        try writeJsonFile(alloc, path, root);
+    }
+
+    /// 写 settings.json 的 `approvalMode`。
+    pub fn saveApprovalMode(self: *Config, mode: ApprovalMode) !void {
+        const alloc = self.allocator();
+        const cfg_dir = try util.configDir(alloc);
+        defer alloc.free(cfg_dir);
+        const path = try util.joinPath(alloc, cfg_dir, "settings.json");
+        defer alloc.free(path);
+        var root = std.json.Value{ .object = .{} };
+        if (std.Io.Dir.cwd().readFileAlloc(util.io, path, alloc, .limited(2 * 1024 * 1024))) |content| {
+            defer alloc.free(content);
+            root = self.jsonVal(content) catch return error.ConfigUnparseable;
+            if (root != .object) return error.ConfigUnparseable;
+        } else |_| {}
+        try root.object.put(alloc, "approvalMode", .{ .string = mode.label() });
+        self.default_approval = mode;
         try writeJsonFile(alloc, path, root);
     }
 
@@ -1551,6 +1615,19 @@ test "detectCompat follows pi openai-completions.ts" {
     const z = detectCompat(&zai, "glm-5");
     try t.expectEqual(ThinkFormat.zai, z.think_format.?);
     try t.expectEqual(false, z.supports_reasoning_effort.?);
+}
+
+test "ApprovalMode parse matches Codex aliases" {
+    const t = std.testing;
+    try t.expect(ApprovalMode.parse("yolo").? == .yolo);
+    try t.expect(ApprovalMode.parse("never").? == .yolo);
+    try t.expect(ApprovalMode.parse("ask").? == .ask);
+    try t.expect(ApprovalMode.parse("on-request").? == .ask);
+    try t.expect(ApprovalMode.parse("read-only").? == .read_only);
+    try t.expect(ApprovalMode.parse("ro").? == .read_only);
+    try t.expect(ApprovalMode.parse("nope") == null);
+    try t.expectEqualStrings("yolo", ApprovalMode.yolo.label());
+    try t.expectEqualStrings("全权", ApprovalMode.yolo.uiLabel());
 }
 
 test "settings.json defaultThinkingLevel loads" {

@@ -190,7 +190,7 @@ pub const WebServer = struct {
     interrupt_hook: ?*const fn (ctx: ?*anyopaque, cwd: []const u8, session: []const u8) void = null,
     interrupt_ctx: ?*anyopaque = null,
     /// 审批模式 hook(auto=null 读):返回当前模式或 null(会话不存在)
-    mode_hook: ?*const fn (ctx: ?*anyopaque, cwd: []const u8, session: []const u8, auto: ?bool) ?bool = null,
+    mode_hook: ?*const fn (ctx: ?*anyopaque, cwd: []const u8, session: []const u8, mode: ?[]const u8) ?[]const u8 = null,
     mode_ctx: ?*anyopaque = null,
     /// 模型列表 hook:可用模型 JSON 数组
     models_hook: ?*const fn (ctx: ?*anyopaque, alloc: std.mem.Allocator) []const u8 = null,
@@ -519,7 +519,7 @@ pub const WebServer = struct {
         if (method == .POST and std.mem.startsWith(u8, target, "/api/mode") and !std.mem.startsWith(u8, target, "/api/model")) {
             const session = querySession(self.alloc, target) catch "default";
             defer if (!std.mem.eql(u8, session, "default")) self.alloc.free(session);
-            var auto: ?bool = null;
+            var mode: ?[]const u8 = null;
             var body_buf: [256]u8 = undefined;
             const reader = req.readerExpectNone(&body_buf);
             const body = reader.allocRemaining(self.alloc, .limited(1024)) catch "";
@@ -528,20 +528,25 @@ pub const WebServer = struct {
                 const root = std.json.parseFromSliceLeaky(std.json.Value, self.alloc, body, .{}) catch null;
                 if (root) |r| {
                     if (r == .object) {
-                        if (r.object.get("auto")) |v| {
-                            if (v == .bool) auto = v.bool;
+                        if (r.object.get("mode")) |v| {
+                            if (v == .string) mode = v.string;
+                        } else if (r.object.get("auto")) |v| {
+                            if (v == .bool) mode = if (v.bool) "yolo" else "ask";
                         }
                     }
                 }
             }
             if (self.mode_hook) |f| {
-                const cur = f(self.mode_ctx, ws, session, auto) orelse {
+                const cur = f(self.mode_ctx, ws, session, mode) orelse {
                     try req.respond("{\"ok\":false}", .{ .status = .ok, .extra_headers = &.{.{ .name = "content-type", .value = "application/json" }} });
                     return;
                 };
-                // auto 是 JSON 布尔(无引号),不能走 okJson —— 那会变成字符串
-                // 而破坏前端的 === true 判断。输出只有两种,直接选,不用格式化。
-                const s = if (cur) "{\"ok\":true,\"auto\":true}" else "{\"ok\":true,\"auto\":false}";
+                const s = if (std.mem.eql(u8, cur, "yolo"))
+                    "{\"ok\":true,\"auto\":true,\"mode\":\"yolo\"}"
+                else if (std.mem.eql(u8, cur, "ask"))
+                    "{\"ok\":true,\"auto\":false,\"mode\":\"ask\"}"
+                else
+                    "{\"ok\":true,\"auto\":false,\"mode\":\"read-only\"}";
                 try req.respond(s, .{ .status = .ok, .extra_headers = &.{.{ .name = "content-type", .value = "application/json" }} });
                 return;
             }

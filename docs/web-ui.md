@@ -59,7 +59,7 @@ piz web: http://127.0.0.1:5494/#token=0cbc72149b1492b0e5e8ddd11b95fb33  (Ctrl+C 
 | 流式对话 | SSE 推送文本与推理内容 |
 | 工具卡片 | 可折叠，按工具类型分类渲染（终端输出走 ANSI 着色，`write`/`edit` 走 diff 着色） |
 | Diff 高亮 | 增行绿、删行红、hunk 头强调 |
-| 权限审批 | 工具调用在界面里点允许/拒绝，或切自动模式 |
+| 权限审批 | 默认全权。输入框旁 `⚡ 全权` 打开 Codex 式三档：全权 / 询问 / 只读。询问档下工具卡点允许/拒绝 |
 | 中断 | 生成中随时打断 |
 | 会话管理 | 列表、切换、fork、undo、compact、归档、恢复、删除 |
 | 会话搜索 | `Ctrl/⌘K` Spotlight，按标题与名字过滤 |
@@ -136,7 +136,7 @@ root 设成 `Agent.cwd`，`bash` 则直接以它作为子进程的工作目录�
 | `/api/chat` | 发消息（入队，返回是否接受） |
 | `/api/interrupt` | 中断当前轮 |
 | `/api/approve` | 权限决策 |
-| `/api/mode` | 读写审批模式（自动 / 逐次询问） |
+| `/api/mode` | 读写授权档。body `{mode:"yolo"|"ask"|"read-only"}`，仍认旧的 `{auto:true}` |
 | `/api/model` | 读写当前模型 |
 | `/api/title` | 读写会话标题（写入裁到 256 字节，见 [Sessions](sessions.md)） |
 | `/api/action` | 会话动作：`fork` / `undo` / `compact` / `shake` / `snap` / `archive` / `restore` / `delete` |

@@ -152,7 +152,8 @@ const WebSession = struct {
     tokens_total: usize = 0,
     updated_ns: i128 = 0,
     worker: std.Thread,
-    mode: std.atomic.Value(bool) = std.atomic.Value(bool).init(true),
+    /// 0=yolo 1=ask 2=read_only。默认 yolo。
+    approval: std.atomic.Value(u8) = std.atomic.Value(u8).init(0),
     arena: *util.Arena,
     stopping: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     busy: std.atomic.Value(u8) = std.atomic.Value(u8).init(0),
@@ -162,6 +163,22 @@ const WebSession = struct {
     snap_msgs: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     snap_pct: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
 };
+
+fn sessionApproval(ses: *WebSession) cfgmod.ApprovalMode {
+    return switch (ses.approval.load(.acquire)) {
+        @intFromEnum(cfgmod.ApprovalMode.ask) => .ask,
+        @intFromEnum(cfgmod.ApprovalMode.read_only) => .read_only,
+        else => .yolo,
+    };
+}
+
+fn sessionIsYolo(ses: *const WebSession) bool {
+    return ses.approval.load(.acquire) == @intFromEnum(cfgmod.ApprovalMode.yolo);
+}
+
+fn setSessionApproval(ses: *WebSession, mode: cfgmod.ApprovalMode) void {
+    ses.approval.store(@intFromEnum(mode), .release);
+}
 
 const SessionPool = struct {
     alloc: std.mem.Allocator,
@@ -186,13 +203,13 @@ const SessionPool = struct {
         agent.* = agentmod.Agent.initOpts(a, self.cfg, null, null, abs_cwd, .{ .depth = pluginsmod.processBaseDepth() }) catch return null;
         if (agent.key == null) return null;
         @import("core").plugins.injectMemory(agent);
-        var restored_auto = true;
+        var restored_approval: cfgmod.ApprovalMode = self.cfg.default_approval;
         var restored_updated: i128 = 0;
         if (sessionmod.loadWeb(a, abs_cwd, name) catch null) |web_ses| {
             for (web_ses.msgs) |m| {
                 agent.messages.append(m) catch {};
             }
-            restored_auto = web_ses.auto;
+            restored_approval = if (web_ses.auto) .yolo else .ask;
             restored_updated = web_ses.updated;
             if (web_ses.title) |t| agent.title = t;
             if (web_ses.model) |m| {
@@ -212,7 +229,7 @@ const SessionPool = struct {
             .start_ns = std.Io.Clock.now(.real, util.io).nanoseconds,
             .updated_ns = restored_updated,
             .worker = undefined,
-            .mode = std.atomic.Value(bool).init(restored_auto),
+            .approval = std.atomic.Value(u8).init(@intFromEnum(restored_approval)),
             .arena = ses_arena,
         };
         agent.cbs = .{
@@ -315,7 +332,7 @@ fn poolSessionsHook(ctx: ?*anyopaque, cwd: []const u8, alloc: std.mem.Allocator)
             ses.snap_msgs.load(.acquire),
             ses.snap_pct.load(.acquire),
             util.jsonString(alloc, snap_model) catch "\"\"",
-            if (ses.mode.load(.acquire)) "true" else "false",
+            if (sessionIsYolo(ses)) "true" else "false",
             util.jsonString(alloc, ses.agent.title orelse "") catch "\"\"",
             @divTrunc(ses.updated_ns, std.time.ns_per_ms),
         }) catch {};
@@ -410,9 +427,10 @@ fn poolStateHook(ctx: ?*anyopaque, cwd: []const u8, session: []const u8, alloc: 
     var stw = std.Io.Writer.Allocating.init(alloc);
     defer stw.deinit();
     const w = &stw.writer;
-    w.print("{{\"model\":{s},\"auto\":{s},\"title\":{s},\"think\":{s}", .{
+    w.print("{{\"model\":{s},\"auto\":{s},\"mode\":{s},\"title\":{s},\"think\":{s}", .{
         util.jsonString(alloc, snap_model) catch "\"\"",
-        if (ses.mode.load(.acquire)) "true" else "false",
+        if (sessionIsYolo(ses)) "true" else "false",
+        util.jsonString(alloc, sessionApproval(ses).label()) catch "\"yolo\"",
         util.jsonString(alloc, ses.agent.title orelse "") catch "\"\"",
         util.jsonString(alloc, ses.agent.think_level.label()) catch "\"\"",
     }) catch {};
@@ -453,7 +471,7 @@ fn webWorker(ses: *WebSession) void {
             ses.tokens_total += (u.input orelse 0) + (u.output orelse 0) + (u.cache_read orelse 0);
             ses.agent.last_usage = u;
         }
-        sessionmod.saveWebTs(ses.agent.alloc, ses.cwd, ses.name, ses.agent.model, ses.mode.load(.acquire), ses.agent.title, ses.agent.messages.items, ses.updated_ns) catch |err| {
+        sessionmod.saveWebTs(ses.agent.alloc, ses.cwd, ses.name, ses.agent.model, sessionIsYolo(ses), ses.agent.title, ses.agent.messages.items, ses.updated_ns) catch |err| {
             const msg = std.fmt.allocPrint(ses.agent.alloc, "会话保存失败({s}):本轮内容在重启后会丢失", .{@errorName(err)}) catch "session save failed";
             ses.hub.push("{{\"type\":\"notice\",\"session\":{s},\"text\":{s}}}", .{ util.jsonString(ses.agent.alloc, ses.name) catch "\"\"", util.jsonString(ses.agent.alloc, msg) catch "\"\"" });
         };
@@ -475,11 +493,14 @@ fn webOnToolStart(ctx: ?*anyopaque, name: []const u8, args: []const u8) anyerror
     const short_args = if (args.len > 500) args[0..500] else args;
     s.hub.push("{{\"type\":\"tool_call\",\"session\":{s},\"name\":{s},\"args\":{s}}}", .{ try util.jsonString(s.agent.alloc, s.name), try util.jsonString(s.agent.alloc, name), try util.jsonString(s.agent.alloc, short_args) });
 }
-/// 工具权限:auto 放行;manual → 浏览器确认卡 + 轮询结果(超时拒绝)。
+/// 工具权限:yolo 放行;read-only 拒危险工具;ask → 浏览器确认卡。
 fn webOnPermission(ctx: ?*anyopaque, name: []const u8, args: []const u8) anyerror!bool {
     const s: *WebSession = @ptrCast(@alignCast(ctx.?));
-    if (s.mode.load(.acquire)) return true;
-    if (!toolsmod.needsConfirm(name)) return true;
+    switch (toolsmod.toolGate(sessionApproval(s), name)) {
+        .allow => return true,
+        .deny => return false,
+        .ask => {},
+    }
     const id = webui_mod.PermGate.submit(name, args);
     if (id == 0) return false;
     s.hub.push("{{\"type\":\"permission\",\"session\":{s},\"id\":{d},\"name\":{s},\"args\":{s}}}", .{ try util.jsonString(s.agent.alloc, s.name), id, try util.jsonString(s.agent.alloc, name), try util.jsonString(s.agent.alloc, args) });
@@ -837,7 +858,7 @@ fn poolActionHook(ctx: ?*anyopaque, cwd: []const u8, session: []const u8, act: [
         const ts = @divTrunc(std.Io.Clock.now(.real, util.io).nanoseconds, std.time.ns_per_ms);
         const rand_name = std.fmt.bufPrint(&buf, "{s}-f{d}", .{ session, ts }) catch session;
         const target = if (new_name.len > 0) new_name else rand_name;
-        sessionmod.saveWebTs(alloc, cwd2, target, ses.agent.model, ses.mode.load(.acquire), ses.agent.title, ses.agent.messages.items, std.Io.Clock.now(.real, util.io).nanoseconds) catch return null;
+        sessionmod.saveWebTs(alloc, cwd2, target, ses.agent.model, sessionIsYolo(ses), ses.agent.title, ses.agent.messages.items, std.Io.Clock.now(.real, util.io).nanoseconds) catch return null;
         return std.fmt.allocPrint(alloc, "{{\"ok\":true,\"act\":\"fork\",\"name\":{s}}}", .{util.jsonString(alloc, target) catch "\"\""}) catch null;
     }
     if (std.mem.eql(u8, act, "undo")) {
@@ -859,7 +880,7 @@ fn poolActionHook(ctx: ?*anyopaque, cwd: []const u8, session: []const u8, act: [
         if (msgs.len == 0) return "{\"ok\":false,\"act\":\"undo\"}";
         ses.agent.messages.shrinkRetainingCapacity(msgs.len - cut);
         ses.updated_ns = std.Io.Clock.now(.real, util.io).nanoseconds;
-        sessionmod.saveWebTs(alloc, cwd2, session, ses.agent.model, ses.mode.load(.acquire), ses.agent.title, ses.agent.messages.items, ses.updated_ns) catch {};
+        sessionmod.saveWebTs(alloc, cwd2, session, ses.agent.model, sessionIsYolo(ses), ses.agent.title, ses.agent.messages.items, ses.updated_ns) catch {};
         rebuildSnap(ses);
         return std.fmt.allocPrint(alloc, "{{\"ok\":true,\"act\":\"undo\",\"msgs\":{d}}}", .{msgs.len - cut}) catch null;
     }
@@ -999,23 +1020,24 @@ fn memoryAct(alloc: std.mem.Allocator, act: []const u8, name: ?[]const u8) ?[]co
     return jsonOkText(alloc, "memory", content);
 }
 
-fn poolModeHook(ctx: ?*anyopaque, cwd: []const u8, session: []const u8, auto: ?bool) ?bool {
+fn poolModeHook(ctx: ?*anyopaque, cwd: []const u8, session: []const u8, mode: ?[]const u8) ?[]const u8 {
     const pool: *SessionPool = @ptrCast(@alignCast(ctx.?));
     const cwd2 = if (cwd.len > 0) cwd else (if (pool.workspaces.items.len > 0) pool.workspaces.items[0] else "");
-    var cur: ?bool = null;
+    const parsed = if (mode) |m| cfgmod.ApprovalMode.parse(m) else null;
+    var cur: ?[]const u8 = null;
     pool.mutex.lock(util.io) catch return null;
     for (pool.sessions.items) |ses| {
         if (std.mem.eql(u8, ses.name, session) and std.mem.eql(u8, ses.cwd, cwd2)) {
-            if (auto) |a| ses.mode.store(a, .release);
-            cur = ses.mode.load(.acquire);
+            if (parsed) |p| setSessionApproval(ses, p);
+            cur = sessionApproval(ses).label();
             break;
         }
     }
     pool.mutex.unlock(util.io);
     if (cur) |c| return c;
     const ses = pool.getOrCreate(session, cwd2) orelse return null;
-    if (auto) |a| ses.mode.store(a, .release);
-    return ses.mode.load(.acquire);
+    if (parsed) |p| setSessionApproval(ses, p);
+    return sessionApproval(ses).label();
 }
 
 fn poolChatHook(ctx: ?*anyopaque, cwd: []const u8, session: []const u8, text: []const u8) bool {

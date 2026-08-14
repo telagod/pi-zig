@@ -112,7 +112,7 @@ graph TD
 | `cmd_print.zig` | print/jsonl 输出、`runPrint`、`-a` 异步 |
 | `cmd_pkg.zig` | `piz pkg` 子命令 |
 | `runopts.zig` | 交互/print 共用的运行选项 |
-| `tui.zig` | raw mode、ANSI 渲染、输入解析、历史 |
+| `tui.zig` | raw mode、ANSI 渲染、输入解析、历史、选择器、底栏一行 |
 | `e2e.zig` | 端到端测试（内嵌 mock provider，仅网络边界打桩） |
 
 `webui.html` 是单页前端源码，通过 `@embedFile` 编译期嵌入二进制。

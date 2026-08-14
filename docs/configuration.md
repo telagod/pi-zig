@@ -57,7 +57,8 @@ piz 用自己的配置目录 `~/.piz`。配置**文件格式**与 pi 兼容（`s
 |------|------|
 | `defaultProvider` | 默认 provider |
 | `defaultModel` | 默认模型 |
-| `defaultThinkingLevel` | 默认思考等级（pi 同名字段）。`/think` 与 `Alt+,/.` 会写回这里 |
+| `defaultThinkingLevel` | 默认思考等级（pi 同名字段）。`/think`、选择器与 `Alt+,/.` 会写回这里 |
+| `approvalMode` | 授权档：`yolo`（默认，不询问）/ `ask` / `read-only`。`/permissions` 与选择器会写回这里 |
 | `thinkingBudgets` | 旧 Claude 预算思考每档 token。缺省 `minimal:1024` / `low:2048` / `medium:8192` / `high:16384`（pi `adjustMaxTokensForThinking`）。`xhigh`/`max` 夹到 `high` |
 | `plugins` | 要开启的可选插件名数组，见 [Plugins](plugins.md#开启方式) |
 | `disabled_plugins` | 要从出厂集关掉的插件名数组（撤钩 / 工具 / schema） |
@@ -286,7 +287,7 @@ my-router     → MYROUTER_API_KEY
 1. `settings.json` 的 `defaultProvider` / `defaultModel` / `defaultThinkingLevel`
 2. `PIZ_PROVIDER` / `PIZ_MODEL` 环境变量
 3. `--provider` / `-m` 命令行参数
-4. 交互模式里的 `/model <name>`
+4. 交互模式里的 `/model`（选择器或 `/model <name>`）
 
 给了模型名但没给 provider 时，piz 会遍历所有 provider 的 `models` 列表找匹配。`models` 为空的 provider（如内置的 `openai`）允许用 provider 名当模型名。
 

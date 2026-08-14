@@ -24,18 +24,20 @@ piz ~/code/api   # 指定目录
 piz -n           # 新会话，不续载
 ```
 
-默认续载该目录最近一次会话。对话软换行，输入跟在最后一条消息下面；状态条在输入框正下方（目录、分支、上下文、模型、思考等级、缓存、速率）。状态栏 `◇` 是**当前选的**思考等级（默认 `high`，可从 `settings.json` 的 `defaultThinkingLevel` 读回），按当前模型的 `thinkingLevelMap` 显示，不是按输出字数猜的。`Alt+,` / `Alt+.` 或 `Shift+↓` / `Shift+↑` 在该模型支持的档之间切换，`/think` 直接指定；改过的档会写回 `defaultThinkingLevel`。思考默认展开全文，`Ctrl+T` 只折叠显示。上下文窗口按 pi 的声明解析：DeepSeek 只有 `deepseek-v4-flash` / `deepseek-v4-pro`（`generate-models.ts` 的 `deepseekV4Models`，窗 1000000）；未写窗口的自定义模型缺省 128000（`model-registry.ts`）。不是 131k。
+默认续载该目录最近一次会话。对话软换行，输入跟在最后一条消息下面；底栏在输入框正下方，永远一行。平时是状态（目录、模型、思考、授权、上下文……）；退出确认、Esc 编辑上一条、选择器或授权提示出现时，指令替换状态，不另占一行。窄宽度从右边丢掉次要段（标题、条数、速率），不换行。状态栏 `◇` 是**当前选的**思考等级（默认 `high`，可从 `settings.json` 的 `defaultThinkingLevel` 读回），按当前模型的 `thinkingLevelMap` 显示，不是按输出字数猜的。`Alt+,` / `Alt+.` 或 `Shift+↓` / `Shift+↑` 在该模型支持的档之间切换，`/think` 无参数弹出选择器，有参数直接指定；改过的档会写回 `defaultThinkingLevel`。思考默认展开全文，`Ctrl+T` 只折叠显示。上下文窗口按 pi 的声明解析：DeepSeek 只有 `deepseek-v4-flash` / `deepseek-v4-pro`（`generate-models.ts` 的 `deepseekV4Models`，窗 1000000）；未写窗口的自定义模型缺省 128000（`model-registry.ts`）。不是 131k。
 
-**只拦危险工具。** `read` / `grep` / `find` / `ls` 这类只读操作直接跑。会改文件、跑 shell、出网或委派子 agent 时才弹出授权：
+**默认全权（yolo）。** 对齐 Codex Full Access：命令和写文件不弹窗。状态栏 `⚡ yolo`。要先问再用 `/permissions ask` 或 `--ask`；只读用 `/permissions read-only` 或 `-r`。
+
+询问档下会改文件、跑 shell、出网或委派子 agent 时才弹出授权：
 
 ```
 ? bash  zig test src/parser.zig
   y 允许   n/Esc 拒绝   a 本会话总是   s 跳过
 ```
 
-用 `-x` 关掉询问（连危险工具也自动执行），用 `-r` 走只读模式（一个工具都不发，连 `read` 也没有 —— 见 [Tools](tools.md)）。
+`read` / `grep` / `find` / `ls` 只读工具三档都直接跑。`-x` / `--yolo` 显式全权（已是默认）。
 
-> **注意：** `-x` 意味着模型可以未经确认执行任意 shell 命令。在不熟悉的仓库或处理不可信内容时，不要加 `-x`。
+> **注意：** yolo 意味着模型可以未经确认执行任意 shell 命令。不熟悉的仓库或不可信内容请切 `/permissions ask`。
 
 ### 执行中你会看到什么
 
@@ -72,6 +74,7 @@ piz -n           # 新会话，不续载
 | `!command` | 执行 shell 命令，输出发给模型 |
 | `!!command` | 执行 shell 命令，输出**不**发给模型（自己看） |
 | `/name args` | 未知斜杠命令会尝试当作 prompt 模板展开 |
+| `/permissions` `/model` `/think` | 无参数弹出选择器：↑↓ 或 j/k，Enter 确认，Esc 取消 |
 
 `@` 引用只识别 `@/`、`@./`、`@../` 三种前缀，这是为了避免误伤邮箱地址和普通 `@` 符号。裸文件名（`@foo.txt`）不会展开，写 `@./foo.txt`。
 
@@ -83,9 +86,12 @@ piz -n           # 新会话，不续载
 |------|------|
 | `/help` | 列出全部命令 |
 | `/status` | 刷新状态栏（目录、分支、上下文占用、模型） |
-| `/think` | 查看当前思考等级，并列出**这个模型**能选的档 |
-| `/think off\|minimal\|low\|medium\|high\|xhigh\|max` | 设定思考等级。该模型没有的档会夹到最近的可用档。`浅`/`中`/`深` 仍认，分别是 low / medium / max |
-| `/model <name>` | 会话内切换模型，按模型名自动匹配 provider |
+| `/think` | 弹出思考等级选择器（↑↓ Enter Esc）。只列出**这个模型**能选的档 |
+| `/think off\|minimal\|low\|medium\|high\|xhigh\|max` | 直接设定。该模型没有的档会夹到最近的可用档。`浅`/`中`/`深` 仍认，分别是 low / medium / max |
+| `/permissions` | 弹出授权选择器。对齐 Codex `/permissions` |
+| `/permissions yolo\|ask\|read-only` | 直接设定全权 / 询问 / 只读。写回 `settings.json` 的 `approvalMode`。`/approvals` 是别名 |
+| `/model` | 弹出模型选择器（有密钥的 provider × 模型） |
+| `/model <name>` | 会话内切换模型，`provider/model` 或按模型名匹配 provider |
 | `/new` | 开新会话 |
 | `/clear` | 清空当前会话历史并重开 |
 | `/sessions` | 列出本目录全部会话（带编号与消息数） |
@@ -134,7 +140,7 @@ piz -n           # 新会话，不续载
 piz -p "解释 src/agent.zig 的工具循环"
 echo "总结这个文件" | piz -p              # 从 stdin 读
 piz -p -i prompt.txt                      # 从文件读
-piz -p "跑测试并修掉失败" -x              # 自动执行工具
+piz -p "跑测试并修掉失败"                 # print 本身不询问；交互默认也是 yolo
 ```
 
 输出格式：
@@ -195,8 +201,9 @@ piz web [选项]                 # Web UI
 
 | 选项 | 说明 |
 |------|------|
-| `-r`, `--read-only` | 只读模式，一个工具都不暴露（含 `read`） |
-| `-x`, `--execute` | 危险工具也自动执行，不再询问 |
+| `-r`, `--read-only` | 启动时不暴露工具（含 `read`）。会话内只读用 `/permissions read-only` |
+| `-x`, `--execute`, `--yolo` | 全权（默认已是） |
+| `--ask` | 危险工具先问 |
 | `--plugin <N>` | 开启一个插件（可重复） |
 | `--no-plugin <N>` | 关闭一个插件（可重复，撤钩 / 工具 / schema） |
 | `--plugins` | 列出全部插件与当前启用状态后退出 |

@@ -3,6 +3,7 @@ const std = @import("std");
 const util = @import("util.zig");
 const activity = @import("activity.zig");
 const seams = @import("seams.zig");
+const cfgmod = @import("config.zig");
 
 pub const MAX_TOOL_OUTPUT = 16 * 1024;
 
@@ -1166,6 +1167,18 @@ pub fn needsConfirm(name: []const u8) bool {
     return true;
 }
 
+pub const ToolGate = enum { allow, deny, ask };
+
+/// 按授权档决定工具过不过。读类一律放行。
+pub fn toolGate(mode: cfgmod.ApprovalMode, name: []const u8) ToolGate {
+    if (!needsConfirm(name)) return .allow;
+    return switch (mode) {
+        .yolo => .allow,
+        .ask => .ask,
+        .read_only => .deny,
+    };
+}
+
 test "edit tool" {
     const t = std.testing;
     try util.testInit();
@@ -1671,4 +1684,14 @@ test "needsConfirm allows read-class tools and gates writes" {
     try t.expect(needsConfirm("task"));
     try t.expect(needsConfirm("fetch_url"));
     try t.expect(needsConfirm("unknown_mcp_tool"));
+}
+
+test "toolGate yolo allows writes, read-only denies them" {
+    const t = std.testing;
+    try t.expectEqual(ToolGate.allow, toolGate(.yolo, "bash"));
+    try t.expectEqual(ToolGate.allow, toolGate(.yolo, "read"));
+    try t.expectEqual(ToolGate.ask, toolGate(.ask, "write"));
+    try t.expectEqual(ToolGate.allow, toolGate(.ask, "ls"));
+    try t.expectEqual(ToolGate.deny, toolGate(.read_only, "bash"));
+    try t.expectEqual(ToolGate.allow, toolGate(.read_only, "read"));
 }

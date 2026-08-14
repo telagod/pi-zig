@@ -34,8 +34,9 @@ const HELP =
     \\  -n, --new        新会话(不续载旧会话)
     \\  -c, --continue   续载最近会话(默认行为,显式指明可覆盖 -n 前置)
     \\  -t, --title T    新会话标题
-    \\  -r, --read-only  只读模式:不暴露工具
-    \\  -x, --execute    工具自动执行,不逐次询问(默认交互模式每次询问)
+    \\  -r, --read-only  只读:危险工具直接拒
+    \\  -x, --execute    全权(默认):工具不询问
+    \\      --ask        危险工具先问(Codex on-request)
     \\  -i, --input FILE 从文件读提示词(print 模式)
     \\  -s, --session ID  恢复指定会话(id 见 /sessions 或 -a 输出)
     \\  -a, --async       print 模式后台运行,立即返回会话 id 与日志路径
@@ -66,8 +67,9 @@ const HelpItem = struct { cmd: []const u8, desc: []const u8 };
 const SLASH_ITEMS = [_]HelpItem{
     .{ .cmd = "/help", .desc = "列出命令" },
     .{ .cmd = "/status", .desc = "刷新状态栏" },
-    .{ .cmd = "/think [级]", .desc = "思考等级（按模型）" },
-    .{ .cmd = "/model <m>", .desc = "切换模型" },
+    .{ .cmd = "/think [级]", .desc = "思考等级（无参数弹出选择）" },
+    .{ .cmd = "/permissions [档]", .desc = "授权（无参数弹出选择）" },
+    .{ .cmd = "/model [m]", .desc = "切换模型（无参数弹出选择）" },
     .{ .cmd = "/new", .desc = "新会话" },
     .{ .cmd = "/sessions", .desc = "本目录会话" },
     .{ .cmd = "/resume <n>", .desc = "切到第 n 个" },
@@ -160,6 +162,8 @@ const App = struct {
     model_override: ?[]const u8 = null,
     provider_override: ?[]const u8 = null,
     read_only: bool = false,
+    /// 当前授权档。默认 yolo;Ask 才弹 TUI 确认。
+    approval: cfgmod.ApprovalMode = .yolo,
     /// 权限状态:worker 询问,主循环应答。
     perm: struct {
         pending: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
@@ -226,10 +230,14 @@ const App = struct {
     }
 
     /// 输入框下一行。几何符号分段,底色 dim;只有占用和思考等级出墨。
+    /// 段按重要性从左到右;窄宽度从右边丢掉,不换行。
     fn statusLine(self: *App) ![]u8 {
-        var stw = std.Io.Writer.Allocating.init(self.alloc);
-        defer stw.deinit();
-        const w = &stw.writer;
+        var parts = std.array_list.Managed([]const u8).init(self.alloc);
+        defer {
+            for (parts.items) |p| self.alloc.free(p);
+            parts.deinit();
+        }
+
         var path_seg: []const u8 = self.agent.cwd;
         var slash_count: usize = 0;
         var i = self.agent.cwd.len;
@@ -238,42 +246,49 @@ const App = struct {
             if (self.agent.cwd[i] == '/') slash_count += 1;
         }
         if (slash_count >= 2) path_seg = self.agent.cwd[i + 1 ..];
-        try w.writeAll("\x1b[2m⌂ ");
-        try w.writeAll(path_seg);
-        if (gitBranch(self.alloc)) |br| {
-            defer self.alloc.free(br);
-            try w.print("  ⎇ {s}", .{br});
-        }
-        const cw = self.agent.ctxWindow();
-        const used = self.est_ctx.load(.acquire);
-        const pct = if (cw > 0) used * 100 / cw else 0;
-        var ub: [16]u8 = undefined;
-        var wb: [16]u8 = undefined;
-        try w.writeAll("  ◔ ");
-        if (pct > 85) {
-            try w.print("\x1b[0;31m{d}%\x1b[2m", .{pct});
-        } else if (pct > 50) {
-            try w.print("\x1b[0m{d}%\x1b[2m", .{pct});
-        } else {
-            try w.print("{d}%", .{pct});
-        }
-        try w.print(" {s}/{s}", .{ fmtTok(&ub, @as(u64, used)), fmtTok(&wb, @as(u64, cw)) });
+        try parts.append(try std.fmt.allocPrint(self.alloc, "\x1b[2m⌂ {s}", .{path_seg}));
+
         var model_seg: []const u8 = self.agent.model;
         if (std.mem.indexOfScalar(u8, model_seg, '-')) |dash| model_seg = model_seg[dash + 1 ..];
-        try w.print("  ◆ {s}/{s}", .{ self.agent.provider.name, model_seg });
+        try parts.append(try std.fmt.allocPrint(self.alloc, "◆ {s}/{s}", .{ self.agent.provider.name, model_seg }));
+
         const tl = self.tui.think_level;
-        try w.writeAll("  ");
-        try w.writeAll(tui_mod.thinkColor(tl));
-        try w.print("◇ {s}", .{tui_mod.thinkLabel(tl)});
-        try w.writeAll("\x1b[2m");
+        try parts.append(try std.fmt.allocPrint(self.alloc, "{s}◇ {s}\x1b[2m", .{ tui_mod.thinkColor(tl), tui_mod.thinkLabel(tl) }));
+
+        try parts.append(try std.fmt.allocPrint(self.alloc, "{s}", .{switch (self.approval) {
+            .yolo => "⚡ yolo",
+            .ask => "? ask",
+            .read_only => "⊘ RO",
+        }}));
+
+        {
+            const cw = self.agent.ctxWindow();
+            const used = self.est_ctx.load(.acquire);
+            const pct = if (cw > 0) used * 100 / cw else 0;
+            var ub: [16]u8 = undefined;
+            var wb: [16]u8 = undefined;
+            const ink: []const u8 = if (pct > 85) "\x1b[0;31m" else if (pct > 50) "\x1b[0m" else "";
+            try parts.append(try std.fmt.allocPrint(self.alloc, "◔ {s}{d}%\x1b[2m {s}/{s}", .{
+                ink,
+                pct,
+                fmtTok(&ub, @as(u64, used)),
+                fmtTok(&wb, @as(u64, cw)),
+            }));
+        }
+
+        if (gitBranch(self.alloc)) |br| {
+            defer self.alloc.free(br);
+            try parts.append(try std.fmt.allocPrint(self.alloc, "⎇ {s}", .{br}));
+        }
+
         if (self.last_usage.cache_read) |c| {
             const w_tok = self.last_usage.cache_write orelse 0;
             const total = c + w_tok + (self.last_usage.input orelse 0);
             if (total > 0) {
                 if (c > 0) {
-                    try w.print("  ▣ {d}%", .{c * 100 / total});
+                    try parts.append(try std.fmt.allocPrint(self.alloc, "▣ {d}%", .{c * 100 / total}));
                 } else if (w_tok > 0) {
-                    try w.writeAll("  ▣ warm");
+                    try parts.append(try self.alloc.dupe(u8, "▣ warm"));
                 }
             }
         }
@@ -281,21 +296,27 @@ const App = struct {
             var ib: [16]u8 = undefined;
             var ob: [16]u8 = undefined;
             const out = self.last_usage.output orelse 0;
-            try w.print("  ↕ {s}↑{s}↓", .{ fmtTok(&ib, inp), fmtTok(&ob, out) });
+            try parts.append(try std.fmt.allocPrint(self.alloc, "↕ {s}↑{s}↓", .{ fmtTok(&ib, inp), fmtTok(&ob, out) }));
         }
         if (self.tokens_total > 0) {
             const now_ns = std.Io.Clock.now(.real, util.io).nanoseconds;
             const elapsed_s = @max(1, @divTrunc(now_ns - self.start_ns, std.time.ns_per_s));
-            try w.print("  ▸ {d}t/s", .{self.tokens_total / @as(usize, @intCast(elapsed_s))});
+            try parts.append(try std.fmt.allocPrint(self.alloc, "▸ {d}t/s", .{self.tokens_total / @as(usize, @intCast(elapsed_s))}));
         }
-        if (self.agent.compacts > 0) try w.print("  ↻{d}", .{self.agent.compacts});
+        if (self.agent.compacts > 0)
+            try parts.append(try std.fmt.allocPrint(self.alloc, "↻{d}", .{self.agent.compacts}));
         const qn = self.queue.items.len;
-        if (qn > 0) try w.print("  ≡{d}", .{qn});
-        try w.print("  ¶{d}", .{self.agent.messages.items.len});
-        if (self.read_only) try w.writeAll("  ⊘ RO");
-        if (self.sess.title) |tt| try w.print("  “{s}”", .{tt});
-        try w.writeAll("\x1b[0m");
-        return stw.toOwnedSlice();
+        if (qn > 0) try parts.append(try std.fmt.allocPrint(self.alloc, "≡{d}", .{qn}));
+        try parts.append(try std.fmt.allocPrint(self.alloc, "¶{d}", .{self.agent.messages.items.len}));
+        if (self.sess.title) |tt|
+            try parts.append(try std.fmt.allocPrint(self.alloc, "“{s}”", .{tt}));
+
+        const width = @max(self.tui.width, 20);
+        const joined = try tui_mod.joinFit(self.alloc, parts.items, "  ", width);
+        errdefer self.alloc.free(joined);
+        const out = try std.fmt.allocPrint(self.alloc, "{s}\x1b[0m", .{joined});
+        self.alloc.free(joined);
+        return out;
     }
 
     /// 读 .git/HEAD 取分支名(极简,无子进程)。
@@ -442,6 +463,67 @@ fn persistThink(app: *App) void {
     app.cfg.saveThinkLevel(app.tui.think_level) catch {};
 }
 
+fn applyApproval(app: *App, mode: cfgmod.ApprovalMode) void {
+    app.approval = mode;
+    app.perm.always.store(mode == .yolo, .release);
+    app.cfg.saveApprovalMode(mode) catch {};
+}
+
+fn openApprovalPicker(app: *App) void {
+    const items = [_]tui_mod.PickerItem{
+        .{ .label = "⚡ yolo", .hint = "不询问", .value = "yolo" },
+        .{ .label = "? ask", .hint = "危险工具先问", .value = "ask" },
+        .{ .label = "⊘ read-only", .hint = "拒绝危险工具", .value = "read-only" },
+    };
+    const sel: usize = switch (app.approval) {
+        .yolo => 0,
+        .ask => 1,
+        .read_only => 2,
+    };
+    app.tui.openPicker("permissions", "授权", &items, sel) catch {};
+}
+
+fn openThinkPicker(app: *App) void {
+    var buf: [cfgmod.ThinkLevel.all.len]cfgmod.ThinkLevel = undefined;
+    const avail = cfgmod.fillSupportedThinkLevels(app.agent.modelMeta(), &buf);
+    var items: [cfgmod.ThinkLevel.all.len]tui_mod.PickerItem = undefined;
+    var sel: usize = 0;
+    for (avail, 0..) |lv, i| {
+        items[i] = .{ .label = tui_mod.thinkLabel(lv), .value = lv.label() };
+        if (lv == app.tui.think_level) sel = i;
+    }
+    app.tui.openPicker("think", "思考", items[0..avail.len], sel) catch {};
+}
+
+fn openModelPicker(app: *App) void {
+    var specs = std.array_list.Managed([]u8).init(app.alloc);
+    defer {
+        for (specs.items) |s| app.alloc.free(s);
+        specs.deinit();
+    }
+    var items = std.array_list.Managed(tui_mod.PickerItem).init(app.alloc);
+    defer items.deinit();
+    var sel: usize = 0;
+    for (app.cfg.providers) |p| {
+        if (p.api_key == null) continue;
+        for (p.models) |m| {
+            const spec = std.fmt.allocPrint(app.alloc, "{s}/{s}", .{ p.name, m }) catch continue;
+            specs.append(spec) catch {
+                app.alloc.free(spec);
+                continue;
+            };
+            if (std.mem.eql(u8, p.name, app.agent.provider.name) and std.mem.eql(u8, m, app.agent.model))
+                sel = specs.items.len - 1;
+            items.append(.{ .label = spec, .value = spec }) catch {};
+        }
+    }
+    if (items.items.len == 0) {
+        app.tui.appendLine("", "\x1b[2m", "no models configured") catch {};
+        return;
+    }
+    app.tui.openPicker("model", "模型", items.items, sel) catch {};
+}
+
 fn tuiOnTurnEnd(ctx: ?*anyopaque) anyerror!void {
     const app: *App = @ptrCast(@alignCast(ctx.?));
     const st = app.statusLine() catch return;
@@ -492,8 +574,9 @@ fn tuiOnSubagent(ctx: ?*anyopaque, idx: usize, kind: agentmod.SubagentEvent, tex
 fn tuiOnRequirePermission(ctx: ?*anyopaque, name: []const u8, args: []const u8) anyerror!bool {
     const app: *App = @ptrCast(@alignCast(ctx.?));
     if (app.perm.always.load(.acquire)) return true;
-    if (app.read_only) return false;
-    if (!toolsmod.needsConfirm(name)) return true;
+    const gate = toolsmod.toolGate(app.approval, name);
+    if (gate == .allow) return true;
+    if (gate == .deny or app.read_only) return false;
     app.perm.buf.clearRetainingCapacity();
     try app.perm.buf.appendSlice("? ");
     try app.perm.buf.appendSlice(name);
@@ -515,25 +598,32 @@ fn tuiOnRequirePermission(ctx: ?*anyopaque, name: []const u8, args: []const u8) 
         app.tui.dirty.store(true, .release);
         app.perm.pending.store(false, .release);
     }
-    // 轮询决策(主循环按键应答);Ctrl+C 中止
-    while (app.perm.pending.load(.acquire)) {
+    // 轮询决策(主循环按键应答);Ctrl+C 中止。
+    // 必须看 decision / 由按键把 pending 放下 —— 只写 decision 会永远卡住。
+    while (app.perm.pending.load(.acquire) and app.perm.decision.load(.acquire) == 0) {
         if (app.abort.load(.acquire)) return false;
         _ = std.Io.sleep(util.io, .{ .nanoseconds = 10 * std.time.ns_per_ms }, .awake) catch {};
     }
     return app.perm.decision.load(.acquire) == 1;
 }
 
+fn settlePerm(app: *App, allow: bool) void {
+    app.perm.decision.store(if (allow) 1 else 2, .release);
+    app.perm.pending.store(false, .release);
+}
+
 /// 权限按键路由(主循环):y/n/a/s/Ctrl+C。
 fn tuiOnPermKey(ctx: ?*anyopaque, key: u8) void {
     const app: *App = @ptrCast(@alignCast(ctx orelse return));
     switch (key) {
-        'y' => app.perm.decision.store(1, .release),
-        'n', 0x03, 0x1b => app.perm.decision.store(2, .release),
-        'a' => {
+        'y', 'Y' => settlePerm(app, true),
+        'n', 'N', 0x03, 0x1b => settlePerm(app, false),
+        'a', 'A' => {
+            app.approval = .yolo;
             app.perm.always.store(true, .release);
-            app.perm.decision.store(1, .release);
+            settlePerm(app, true);
         },
-        's' => app.perm.decision.store(2, .release),
+        's', 'S' => settlePerm(app, false),
         else => {},
     }
 }
@@ -788,10 +878,13 @@ fn onSubmit(tui: *tui_mod.Tui, line: []const u8) anyerror!void {
             app.tui.appendLine("", "\x1b[2m", "↶ undone last turn") catch {};
             return;
         }
-        if (std.mem.startsWith(u8, cmd, "model ")) {
-            const spec = std.mem.trim(u8, cmd["model ".len..], " ");
+        if (std.mem.eql(u8, cmd, "model") or std.mem.startsWith(u8, cmd, "model ")) {
+            const spec = if (std.mem.startsWith(u8, cmd, "model "))
+                std.mem.trim(u8, cmd["model ".len..], " ")
+            else
+                "";
             if (spec.len == 0) {
-                app.tui.appendLine("", "\x1b[31m", "usage: /model <model> or <provider>/<model>") catch {};
+                openModelPicker(app);
                 return;
             }
             app.switchModel(spec) catch |err| {
@@ -1076,6 +1169,32 @@ fn onSubmit(tui: *tui_mod.Tui, line: []const u8) anyerror!void {
             app.tui.setStatus("\x1b[0m", st) catch {};
             return;
         }
+        if (std.mem.eql(u8, cmd, "permissions") or std.mem.startsWith(u8, cmd, "permissions ") or
+            std.mem.eql(u8, cmd, "approvals") or std.mem.startsWith(u8, cmd, "approvals "))
+        {
+            const raw = if (std.mem.startsWith(u8, cmd, "permissions "))
+                std.mem.trim(u8, cmd["permissions ".len..], " ")
+            else if (std.mem.startsWith(u8, cmd, "approvals "))
+                std.mem.trim(u8, cmd["approvals ".len..], " ")
+            else
+                "";
+            if (raw.len == 0) {
+                openApprovalPicker(app);
+                return;
+            }
+            const mode = cfgmod.ApprovalMode.parse(raw) orelse {
+                app.tui.appendLine("", "\x1b[31m", "usage: /permissions yolo|ask|read-only") catch {};
+                return;
+            };
+            applyApproval(app, mode);
+            var bw = std.Io.Writer.Allocating.init(app.alloc);
+            defer bw.deinit();
+            bw.writer.print("授权 {s}", .{mode.uiLabel()}) catch {};
+            app.tui.appendLine("", "\x1b[2m", bw.written()) catch {};
+            const st = app.statusLine() catch return;
+            app.tui.setStatus("\x1b[0m", st) catch {};
+            return;
+        }
         if (std.mem.eql(u8, cmd, "think") or std.mem.startsWith(u8, cmd, "think ")) {
             const arg = if (std.mem.startsWith(u8, cmd, "think "))
                 std.mem.trim(u8, cmd["think ".len..], " ")
@@ -1083,12 +1202,7 @@ fn onSubmit(tui: *tui_mod.Tui, line: []const u8) anyerror!void {
                 "";
             const meta = app.agent.modelMeta();
             if (arg.len == 0) {
-                var bw = std.Io.Writer.Allocating.init(app.alloc);
-                defer bw.deinit();
-                bw.writer.print("思考 {s}  ·  /think ", .{tui_mod.thinkLabel(app.tui.think_level)}) catch {};
-                cfgmod.writeSupportedThink(&bw.writer, meta) catch {};
-                bw.writer.writeAll("  ·  Alt+,/. 或 Shift+↓/↑") catch {};
-                app.tui.appendLine("", "\x1b[2m", bw.written()) catch {};
+                openThinkPicker(app);
                 return;
             }
             const level = ai.ThinkLevel.parse(arg) orelse {
@@ -1323,6 +1437,13 @@ pub fn runInteractive(alloc: std.mem.Allocator, cfg: *cfgmod.Config, cwd: []cons
         .cfg = cfg,
         .events = &bus,
         .read_only = opts.read_only,
+        .approval = blk: {
+            var mode = cfg.default_approval;
+            if (opts.execute) mode = .yolo;
+            if (opts.ask) mode = .ask;
+            if (opts.read_only) mode = .read_only;
+            break :blk mode;
+        },
         .perm = .{ .buf = std.array_list.Managed(u8).init(alloc) },
         .queue = std.array_list.Managed([]const u8).init(alloc),
     };
@@ -1342,7 +1463,7 @@ pub fn runInteractive(alloc: std.mem.Allocator, cfg: *cfgmod.Config, cwd: []cons
         .on_require_permission = tuiOnRequirePermission,
         .on_abort = tuiOnAbort,
     };
-    if (opts.execute) app.perm.always.store(true, .release);
+    app.perm.always.store(app.approval == .yolo, .release);
 
     // 启动提示
     var gw = std.Io.Writer.Allocating.init(alloc);
@@ -1433,8 +1554,10 @@ pub fn main(init: std.process.Init) !void {
             opts.new_session = false;
         } else if (std.mem.eql(u8, arg, "-r") or std.mem.eql(u8, arg, "--read-only")) {
             opts.read_only = true;
-        } else if (std.mem.eql(u8, arg, "-x") or std.mem.eql(u8, arg, "--execute")) {
+        } else if (std.mem.eql(u8, arg, "-x") or std.mem.eql(u8, arg, "--execute") or std.mem.eql(u8, arg, "--yolo")) {
             opts.execute = true;
+        } else if (std.mem.eql(u8, arg, "--ask")) {
+            opts.ask = true;
         } else if (std.mem.eql(u8, arg, "-t") or std.mem.eql(u8, arg, "--title")) {
             opts.title = args.next() orelse {
                 std.debug.print("piz: missing value for {s}\n", .{arg});
@@ -1799,10 +1922,10 @@ test "every slash command appears in /help" {
     //
     // 命令名取自 onSubmit 里的 `eql(u8, cmd, "…")` / `startsWith(u8, cmd, "… ")`。
     const dispatched = [_][]const u8{
-        "help",   "status",  "think",  "model",  "new",  "sessions",      "resume",
-        "title",  "tree",    "fork",   "copy", "undo",          "redo",
-        "memory", "compact", "shake",  "snap", "fast-compress", "clear",
-        "plan",   "queue",   "export", "dump", "quit",
+        "help",  "status", "think",         "permissions", "model", "new",   "sessions", "resume",
+        "title", "tree",   "fork",          "copy",        "undo",  "redo",  "memory",   "compact",
+        "shake", "snap",   "fast-compress", "clear",       "plan",  "queue", "export",   "dump",
+        "quit",
     };
     for (dispatched) |cmd| {
         var found = false;

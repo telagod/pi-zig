@@ -5,8 +5,10 @@ pub const RunOptions = struct {
     provider_name: ?[]const u8 = null,
     model_name: ?[]const u8 = null,
     read_only: bool = false,
-    /// -x:工具自动执行,不询问
+    /// -x:全权(默认已是 yolo,显式再写一次)
     execute: bool = false,
+    /// --ask:危险工具先问
+    ask: bool = false,
     new_session: bool = false,
     title: ?[]const u8 = null,
     output_format: OutputFormat = .text,

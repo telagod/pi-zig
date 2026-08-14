@@ -1,6 +1,8 @@
 // tui.zig — 极简交互终端:raw mode、alt screen、流式渲染、行编辑、历史、斜杠命令。
 // 设计取舍:无分页滚动、无鼠标、无补全——保持内核最小。
 // 布局跟 Codex:对话软换行,思考是可折叠块,输入跟在对话后面而不是钉死在屏幕底。
+// /permissions /model /think 无参数时弹出选择器(↑↓ Enter Esc),不走补全。
+// 底栏一行:指令提示(退出/Esc/选择器/授权)替换状态,不另占一行。
 const std = @import("std");
 const util = @import("core").util;
 const activity = @import("core").activity;
@@ -14,6 +16,123 @@ pub const Style = enum { normal, fence, code };
 
 /// 对话块。用来在用户 / 思考 / 正文 / 工具之间留空，而不是把所有字糊成一段。
 pub const Block = enum { none, user, think, text, chrome };
+
+/// 选择器一行。label 是看见的,value 是确认后拼进斜杠命令的参数。
+pub const PickerItem = struct {
+    label: []const u8,
+    hint: []const u8 = "",
+    value: []const u8,
+};
+
+/// `/permissions` `/model` `/think` 的键盘选择器。独占输入,不进 composer。
+pub const Picker = struct {
+    cmd: []u8,
+    title: []u8,
+    items: []Item,
+    sel: usize = 0,
+    scroll: usize = 0,
+
+    pub const Item = struct {
+        label: []u8,
+        hint: []u8,
+        value: []u8,
+    };
+
+    pub fn init(alloc: std.mem.Allocator, cmd: []const u8, title: []const u8, items: []const PickerItem, selected: usize) !Picker {
+        const owned = try alloc.alloc(Item, items.len);
+        errdefer alloc.free(owned);
+        var n: usize = 0;
+        errdefer {
+            var j: usize = 0;
+            while (j < n) : (j += 1) {
+                alloc.free(owned[j].label);
+                alloc.free(owned[j].hint);
+                alloc.free(owned[j].value);
+            }
+        }
+        for (items, 0..) |it, i| {
+            const label = try alloc.dupe(u8, it.label);
+            errdefer alloc.free(label);
+            const hint = try alloc.dupe(u8, it.hint);
+            errdefer alloc.free(hint);
+            const value = try alloc.dupe(u8, it.value);
+            errdefer alloc.free(value);
+            owned[i] = .{ .label = label, .hint = hint, .value = value };
+            n += 1;
+        }
+        const cmd_owned = try alloc.dupe(u8, cmd);
+        errdefer alloc.free(cmd_owned);
+        const title_owned = try alloc.dupe(u8, title);
+        errdefer alloc.free(title_owned);
+        return .{
+            .cmd = cmd_owned,
+            .title = title_owned,
+            .items = owned,
+            .sel = if (items.len == 0) 0 else @min(selected, items.len - 1),
+        };
+    }
+
+    pub fn deinit(self: *Picker, alloc: std.mem.Allocator) void {
+        for (self.items) |it| {
+            alloc.free(it.label);
+            alloc.free(it.hint);
+            alloc.free(it.value);
+        }
+        alloc.free(self.items);
+        alloc.free(self.cmd);
+        alloc.free(self.title);
+        self.* = undefined;
+    }
+
+    pub fn move(self: *Picker, delta: isize) void {
+        if (self.items.len == 0) return;
+        if (delta < 0) {
+            const d: usize = @intCast(-delta);
+            self.sel = if (self.sel >= d) self.sel - d else 0;
+        } else {
+            const d: usize = @intCast(delta);
+            self.sel = @min(self.items.len - 1, self.sel + d);
+        }
+    }
+
+    pub fn confirmLine(self: *const Picker, alloc: std.mem.Allocator) ![]u8 {
+        const value = if (self.items.len == 0) "" else self.items[self.sel].value;
+        return std.fmt.allocPrint(alloc, "/{s} {s}", .{ self.cmd, value });
+    }
+
+    /// 标题 + 可见选项行数。选项最多占屏幕三分之一。
+    pub fn displayRows(self: *const Picker, height: usize) usize {
+        if (self.items.len == 0) return 0;
+        return 1 + @min(self.items.len, itemCap(height));
+    }
+
+    pub fn window(self: *Picker, height: usize) struct { start: usize, count: usize } {
+        const n = self.items.len;
+        const cap = itemCap(height);
+        if (n <= cap) {
+            self.scroll = 0;
+            return .{ .start = 0, .count = n };
+        }
+        var start = self.scroll;
+        if (self.sel < start) start = self.sel;
+        if (self.sel >= start + cap) start = self.sel + 1 - cap;
+        self.scroll = start;
+        return .{ .start = start, .count = cap };
+    }
+
+    fn itemCap(height: usize) usize {
+        return @max(1, height / 3);
+    }
+};
+
+/// 底栏指令优先于状态。perm > picker > quit > esc。
+pub fn footerHint(perm: bool, picker: bool, quit_armed: bool, esc_armed: bool) ?[]const u8 {
+    if (perm) return "y 允许  n 拒绝  a 全权  s 会话";
+    if (picker) return "↑↓ 选择  Enter 确认  Esc 取消";
+    if (quit_armed) return "再按一次退出";
+    if (esc_armed) return "再按 Esc 编辑上一条";
+    return null;
+}
 
 pub const Tui = struct {
     alloc: std.mem.Allocator,
@@ -57,6 +176,8 @@ pub const Tui = struct {
     quit_arm_key: u8 = 0,
     /// Codex:空 composer 上 Esc 武装,再按 Esc 把上一条载回输入框。
     esc_armed: bool = false,
+    /// 斜杠命令弹出的选择器。有值时键盘不进 composer。
+    picker: ?Picker = null,
 
     pub fn init(alloc: std.mem.Allocator) !Tui {
         const in_fd = std.posix.STDIN_FILENO;
@@ -102,12 +223,29 @@ pub const Tui = struct {
 
     pub fn deinit(self: *Tui) void {
         self.restoreTerminal();
+        self.closePicker();
         self.text.deinit();
         self.line_starts.deinit();
         self.input.deinit();
         self.history.deinit();
         self.status.deinit();
         self.think_buf.deinit();
+    }
+
+    pub fn openPicker(self: *Tui, cmd: []const u8, title: []const u8, items: []const PickerItem, selected: usize) !void {
+        self.closePicker();
+        self.picker = try Picker.init(self.alloc, cmd, title, items, selected);
+        self.disarmQuit();
+        self.esc_armed = false;
+        self.dirty.store(true, .release);
+    }
+
+    pub fn closePicker(self: *Tui) void {
+        if (self.picker) |*p| {
+            p.deinit(self.alloc);
+            self.picker = null;
+            self.dirty.store(true, .release);
+        }
     }
 
     // ---------- 终端控制 ----------
@@ -415,9 +553,10 @@ pub const Tui = struct {
                 if (c == '\n') perm_lines += 1;
             }
         }
-        const hint_lines: usize = if (self.quit_arm_ns != 0 or self.esc_armed) 1 else 0;
-        const status_rows = @max(@as(usize, 1), wrapRowCount(self.status.items, w));
-        const reserved = 1 + status_rows + nact + perm_lines + hint_lines;
+        const picker_rows: usize = if (self.picker) |*p| p.displayRows(h) else 0;
+        // 底栏永远一行:指令提示替换状态,不另占一行。
+        const footer_rows: usize = 1;
+        const reserved = 1 + footer_rows + nact + perm_lines + picker_rows;
         const scroll_h = if (h > reserved) h - reserved else 1;
 
         self.mutex.lock(util.io) catch {};
@@ -485,19 +624,52 @@ pub const Tui = struct {
                 try fw.writer.writeAll("\r\n");
             }
         }
-        if (self.quit_arm_ns != 0) {
-            try fw.writer.writeAll(ANSI_DIM ++ "再按一次退出" ++ ANSI_RESET ++ "\r\n");
-        } else if (self.esc_armed) {
-            try fw.writer.writeAll(ANSI_DIM ++ "再按 Esc 编辑上一条" ++ ANSI_RESET ++ "\r\n");
+        if (self.picker) |*p| {
+            const win = p.window(h);
+            try fw.writer.writeAll(ANSI_DIM);
+            try writeTrunc(&fw.writer, p.title, w);
+            try fw.writer.writeAll(ANSI_RESET ++ "\r\n");
+            var pi: usize = win.start;
+            while (pi < win.start + win.count) : (pi += 1) {
+                const it = p.items[pi];
+                const selected = pi == p.sel;
+                if (selected) {
+                    try fw.writer.writeAll("> ");
+                } else {
+                    try fw.writer.writeAll(ANSI_DIM ++ "  ");
+                }
+                var used: usize = 2;
+                const label_room = if (w > used) w - used else 0;
+                try writeTrunc(&fw.writer, it.label, label_room);
+                used += visibleCols(it.label);
+                if (it.hint.len > 0 and used + 3 < w) {
+                    try fw.writer.writeAll(ANSI_DIM ++ "  ");
+                    used += 2;
+                    try writeTrunc(&fw.writer, it.hint, w - used);
+                }
+                try fw.writer.writeAll(ANSI_RESET ++ "\r\n");
+            }
         }
         try fw.writer.writeAll(ANSI_DIM ++ "❯ " ++ ANSI_RESET);
         try fw.writer.writeAll(self.input.items);
         try fw.writer.writeAll("\x1b[K\r\n");
         try fw.writer.writeAll(ANSI_RESET);
-        try fw.writer.writeAll(self.status_style);
-        _ = try emitWrapped(&fw.writer, self.status.items, w, 0, status_rows);
-        try fw.writer.writeAll(ANSI_RESET);
-        const input_row = @max(@as(usize, 1), @min(h -| 1, 1 + emitted + nact + perm_lines + hint_lines));
+        const hint = footerHint(
+            self.perm_prompt.load(.acquire) != null,
+            self.picker != null,
+            self.quit_arm_ns != 0,
+            self.esc_armed,
+        );
+        if (hint) |msg| {
+            try fw.writer.writeAll(ANSI_DIM);
+            try writeTrunc(&fw.writer, msg, w);
+            try fw.writer.writeAll(ANSI_RESET);
+        } else {
+            try fw.writer.writeAll(self.status_style);
+            try writeTrunc(&fw.writer, self.status.items, w);
+            try fw.writer.writeAll(ANSI_RESET);
+        }
+        const input_row = @max(@as(usize, 1), @min(h -| 1, 1 + emitted + nact + perm_lines + picker_rows));
         const typed = activity.displayWidth(self.input.items[0..@min(self.cursor, self.input.items.len)]);
         const col = @max(@as(usize, 1), @min(w, 3 + typed));
         try fw.writer.print("\x1b[{d};{d}H", .{ input_row, col });
@@ -550,7 +722,7 @@ pub const Tui = struct {
                             while (pi < got) : (pi += 1) {
                                 const b = buf[pi];
                                 switch (b) {
-                                    'y', 'n', 'a', 's', 0x03 => f(ctx, b),
+                                    'y', 'Y', 'n', 'N', 'a', 'A', 's', 'S', 0x03 => f(ctx, b),
                                     0x1b => {
                                         if (pi + 1 < got and buf[pi + 1] == '[') continue;
                                         f(ctx, 'n');
@@ -634,6 +806,7 @@ pub const Tui = struct {
     }
 
     fn handleInput(self: *Tui, bytes: []const u8) !Action {
+        if (self.picker != null) return self.handlePickerInput(bytes);
         var i: usize = 0;
         while (i < bytes.len) {
             const b = bytes[i];
@@ -825,6 +998,63 @@ pub const Tui = struct {
         return .none;
     }
 
+    fn handlePickerInput(self: *Tui, bytes: []const u8) !Action {
+        var i: usize = 0;
+        while (i < bytes.len) {
+            const b = bytes[i];
+            if (b == 0x1b) {
+                if (i + 1 < bytes.len and bytes[i + 1] == '[') {
+                    i += 2;
+                    var k = i;
+                    while (k < bytes.len and (bytes[k] < '@' or bytes[k] > '~')) k += 1;
+                    if (k >= bytes.len) break;
+                    const params = bytes[i..k];
+                    const final = bytes[k];
+                    i = k + 1;
+                    if (self.picker) |*p| {
+                        switch (classifyCsi(params, final)) {
+                            .up => p.move(-1),
+                            .down => p.move(1),
+                            else => {},
+                        }
+                    }
+                    self.dirty.store(true, .release);
+                    continue;
+                }
+                self.closePicker();
+                return .none;
+            }
+            if (b == 0x03 or b == 0x04) {
+                self.closePicker();
+                return .none;
+            }
+            switch (b) {
+                '\n', '\r' => return try self.confirmPicker(),
+                'k', 'K', 0x10 => if (self.picker) |*p| p.move(-1),
+                'j', 'J', 0x0e => if (self.picker) |*p| p.move(1),
+                '1'...'9' => {
+                    const n: usize = b - '1';
+                    if (self.picker) |*p| {
+                        if (n < p.items.len) p.sel = n;
+                    }
+                },
+                else => {},
+            }
+            self.dirty.store(true, .release);
+            i += 1;
+        }
+        return .none;
+    }
+
+    fn confirmPicker(self: *Tui) !Action {
+        const line = if (self.picker) |*p|
+            try p.confirmLine(self.alloc)
+        else
+            return .none;
+        self.closePicker();
+        return .{ .submit = line };
+    }
+
     fn cycleThink(self: *Tui, up: bool) void {
         self.think_level = cfgmod.cycleThinkLevel(self.think_meta, self.think_level, up);
         self.dirty.store(true, .release);
@@ -912,6 +1142,73 @@ fn skipAnsi(s: []const u8, i: usize) usize {
 fn charCols(s: []const u8, i: usize) struct { n: usize, cols: usize } {
     const n = std.unicode.utf8ByteSequenceLength(s[i]) catch 1;
     return .{ .n = @min(n, s.len - i), .cols = if (n >= 3) 2 else 1 };
+}
+
+fn visibleCols(s: []const u8) usize {
+    var cols: usize = 0;
+    var i: usize = 0;
+    while (i < s.len) {
+        const next = skipAnsi(s, i);
+        if (next != i) {
+            i = next;
+            continue;
+        }
+        const ch = charCols(s, i);
+        cols += ch.cols;
+        i += ch.n;
+    }
+    return cols;
+}
+
+fn truncateToVisible(s: []const u8, max_cols: usize) []const u8 {
+    var cols: usize = 0;
+    var i: usize = 0;
+    var last: usize = 0;
+    while (i < s.len) {
+        const next = skipAnsi(s, i);
+        if (next != i) {
+            i = next;
+            last = i;
+            continue;
+        }
+        const ch = charCols(s, i);
+        if (cols + ch.cols > max_cols) return s[0..last];
+        cols += ch.cols;
+        i += ch.n;
+        last = i;
+    }
+    return s;
+}
+
+/// 从右往左丢掉段,直到拼起来不超过 width。只剩一段仍超宽就截断。
+pub fn joinFit(alloc: std.mem.Allocator, parts: []const []const u8, sep: []const u8, width: usize) ![]u8 {
+    var n = parts.len;
+    while (n > 0) {
+        const joined = try joinN(alloc, parts[0..n], sep);
+        const cols = visibleCols(joined);
+        if (cols <= width or n == 1) {
+            if (cols > width) {
+                const cut = truncateToVisible(joined, width);
+                const out = try alloc.dupe(u8, cut);
+                alloc.free(joined);
+                return out;
+            }
+            return joined;
+        }
+        alloc.free(joined);
+        n -= 1;
+    }
+    return try alloc.dupe(u8, "");
+}
+
+fn joinN(alloc: std.mem.Allocator, parts: []const []const u8, sep: []const u8) ![]u8 {
+    var w = std.Io.Writer.Allocating.init(alloc);
+    errdefer w.deinit();
+    for (parts, 0..) |p, i| {
+        if (i > 0) try w.writer.writeAll(sep);
+        try w.writer.writeAll(p);
+    }
+    return w.toOwnedSlice();
 }
 
 fn wrapRowCount(line: []const u8, width: usize) usize {
@@ -1253,4 +1550,52 @@ test "CSI shift arrows and delete" {
     try t.expect(classifyCsi("2", 'A') == .shift_up);
     try t.expect(classifyCsi("3", '~') == .delete);
     try t.expect(classifyCsi("", 'H') == .home);
+}
+
+test "footer hint wins over status" {
+    const t = std.testing;
+    try t.expectEqualStrings("y 允许  n 拒绝  a 全权  s 会话", footerHint(true, true, true, true).?);
+    try t.expectEqualStrings("↑↓ 选择  Enter 确认  Esc 取消", footerHint(false, true, true, true).?);
+    try t.expectEqualStrings("再按一次退出", footerHint(false, false, true, true).?);
+    try t.expectEqualStrings("再按 Esc 编辑上一条", footerHint(false, false, false, true).?);
+    try t.expect(footerHint(false, false, false, false) == null);
+}
+
+test "joinFit drops trailing segments then truncates" {
+    const t = std.testing;
+    const parts = [_][]const u8{ "aaa", "bbb", "ccc" };
+    const a = try joinFit(t.allocator, &parts, "  ", 13);
+    defer t.allocator.free(a);
+    try t.expectEqualStrings("aaa  bbb  ccc", a);
+    const b = try joinFit(t.allocator, &parts, "  ", 10);
+    defer t.allocator.free(b);
+    try t.expectEqualStrings("aaa  bbb", b);
+    const c = try joinFit(t.allocator, &parts, "  ", 2);
+    defer t.allocator.free(c);
+    try t.expectEqualStrings("aa", c);
+    try t.expectEqual(@as(usize, 2), visibleCols("\x1b[2mab"));
+}
+
+test "picker moves, confirms, and stays exclusive" {
+    const t = std.testing;
+    const items = [_]PickerItem{
+        .{ .label = "⚡ yolo", .hint = "不询问", .value = "yolo" },
+        .{ .label = "? ask", .hint = "危险工具先问", .value = "ask" },
+        .{ .label = "⊘ read-only", .value = "read-only" },
+    };
+    var p = try Picker.init(t.allocator, "permissions", "授权", &items, 0);
+    defer p.deinit(t.allocator);
+    try t.expectEqual(@as(usize, 0), p.sel);
+    p.move(1);
+    try t.expectEqual(@as(usize, 1), p.sel);
+    p.move(10);
+    try t.expectEqual(@as(usize, 2), p.sel);
+    p.move(-10);
+    try t.expectEqual(@as(usize, 0), p.sel);
+    p.sel = 1;
+    const line = try p.confirmLine(t.allocator);
+    defer t.allocator.free(line);
+    try t.expectEqualStrings("/permissions ask", line);
+    try t.expectEqual(@as(usize, 4), p.displayRows(24));
+    try t.expectEqual(@as(usize, 2), p.displayRows(3));
 }
