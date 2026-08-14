@@ -26,7 +26,7 @@ piz 用自己的配置目录 `~/.piz`。配置**文件格式**与 pi 兼容（`s
 
 ```
 ~/.piz/
-├── settings.json          # 默认 provider 与模型
+├── settings.json          # 默认 provider、模型、思考等级
 ├── auth.json              # API key
 ├── models.json            # 自定义 provider 与模型目录
 ├── AGENTS.md              # 全局上下文文件
@@ -47,6 +47,7 @@ piz 用自己的配置目录 `~/.piz`。配置**文件格式**与 pi 兼容（`s
 {
   "defaultProvider": "anthropic",
   "defaultModel": "claude-sonnet-5",
+  "defaultThinkingLevel": "high",
   "plugins": ["lsp", "todo"]
 }
 ```
@@ -55,6 +56,7 @@ piz 用自己的配置目录 `~/.piz`。配置**文件格式**与 pi 兼容（`s
 |------|------|
 | `defaultProvider` | 默认 provider |
 | `defaultModel` | 默认模型 |
+| `defaultThinkingLevel` | 默认思考等级（pi 同名字段）。`/think` 与 `Alt+,/.` 会写回这里 |
 | `plugins` | 要开启的可选插件名数组，见 [Plugins](plugins.md#开启方式) |
 | `disabled_plugins` | 要从出厂集关掉的插件名数组（撤钩 / 工具 / schema） |
 
@@ -100,10 +102,82 @@ piz 用自己的配置目录 `~/.piz`。配置**文件格式**与 pi 兼容（`s
 | `api` | `openai-completions`、`anthropic-messages` 或 `openai-responses`（OpenAI Responses API） |
 | `baseUrl` | API 基址 |
 | `apiKey` | 可选，也可走 auth.json 或环境变量 |
-| `contextWindow` | provider 默认上下文窗口 token 数，缺省 131072（128K） |
-| `models` | 该 provider 下的模型列表：字符串名，或 `{"id", "contextWindow"}` 对象按模型单独设窗口 |
+| `contextWindow` | provider 默认窗口（piz 扩展；也认 `context_window`）。未写则 128000，与 [pi](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/docs/models.md) 相同 |
+| `models` | 字符串名，或 **pi 同款对象** |
 
-**模型级窗口优先**：同 provider 下 64K/200K/1M 模型并存时，压缩硬线、图片压缩规格、上下文预算都按**当前所选模型**的 `contextWindow` 定；模型未配置窗口时回退 provider 默认。
+模型对象跟 pi 的 `models.json` 对齐（`id` 必填）：
+
+| 字段 | 缺省（同 pi） | 含义 |
+|------|----------------|------|
+| `id` | — | 发给 API 的模型名 |
+| `contextWindow` | `128000` | 上下文窗口。也认 `context_window` / `context_length` |
+| `maxTokens` | `16384` | 最大输出。也认 `max_tokens` / `maxOutput` |
+| `input` | `["text"]` | `["text"]` 或 `["text","image"]`（视觉） |
+| `reasoning` | `false` | 是否支持思考 |
+| `thinkingLevelMap` | 见下 | 该模型有哪些思考档、发给 API 的字符串 |
+| `compat.thinkingFormat` | 按渠道探测 | `openai` / `openrouter` / `deepseek` / `zai` / `together` / `qwen` |
+| `compat.requiresReasoningContentOnAssistantMessages` | DeepSeek 为 true | 回放 `reasoning_content` |
+
+也认 `vision: true` 和 OpenRouter 的 `architecture.modality`。
+
+### 思考等级
+
+词表对齐 OpenAI / pi：`off | minimal | low | medium | high | xhigh | max`。不是每家都认全部七档。可见档和请求里的字符串由模型自己的 `thinkingLevelMap` 定（pi `packages/coding-agent/docs/models.md`）：
+
+| map 值 | 含义 |
+|--------|------|
+| 省略 | 标准档到 `high` 可用；`xhigh` / `max` 必须显式写出才出现 |
+| 字符串 | 支持，请求里发这个值 |
+| `null` | 不支持，切换时跳过 |
+
+内置 DeepSeek 抄 pi `generate-models.ts` 的三张表（只在 `openai-completions` 且 id 含 `deepseek-v4` 时套）：
+
+| 模型 | 可选档 | 发出的 `reasoning_effort` |
+|------|--------|---------------------------|
+| `deepseek-v4-flash`（官方） | off, low, high, max | `low` / `high` / `max` |
+| `deepseek-v4-pro`（官方） | off, high, max | `high` / `max` |
+| OpenRouter 上的 DeepSeek V4 | off, high, xhigh | `high` / `xhigh` |
+
+DeepSeek 官方请求形状（[Thinking Mode](https://api-docs.deepseek.com/guides/thinking_mode)）：`thinking: {type: enabled\|disabled}` + 顶层 `reasoning_effort`。默认思考开、effort `high`。服务端把 `medium`/`xhigh` 收成 `high`；pi 的 Pro 表把 `low` 藏掉，所以 UI 不会选它。
+
+渠道怎么发思考参数，抄 pi 的 `detectCompat`（按 provider 名 / `baseUrl` 认），`models.json` 的 `compat` 可盖掉：
+
+| 探测到 | `thinkingFormat` | 请求字段 |
+|--------|------------------|----------|
+| `deepseek` / `deepseek.com` | `deepseek` | `thinking: {type}` + `reasoning_effort` |
+| `openrouter` / `openrouter.ai` | `openrouter` | `reasoning: {effort}` |
+| `zai` / `api.z.ai` / `open.bigmodel.cn` | `zai` | `thinking: {type}` |
+| `together` | `together` | `reasoning: {enabled}` |
+| `qwen`（须在 compat 里显式写） | `qwen` | `enable_thinking` + `reasoning_effort` |
+| 其他 | `openai` | 顶层 `reasoning_effort` |
+
+DeepSeek（含 id 带 `deepseek-v4` 的网关）会回放 assistant 的 `reasoning_content`：有思考写原文，没有写 `""`。这是官方 tool-call 多轮的硬要求，缺了会 400。
+
+自定义模型可在对象上写 `thinkingLevelMap`，会盖在目录表上面：
+
+```json
+{
+  "id": "deepseek-v4-pro",
+  "reasoning": true,
+  "thinkingLevelMap": {
+    "minimal": null,
+    "low": "low",
+    "medium": null,
+    "high": "high",
+    "max": "max"
+  }
+}
+```
+
+**查找顺序**：模型对象里写了的 > 内置目录 > provider `contextWindow` > **128000**（pi `model-registry.ts` 对未写 `contextWindow` 的缺省）。
+
+内置 DeepSeek 只收 pi `packages/ai/scripts/generate-models.ts` 的 `deepseekV4Models` 两条：`deepseek-v4-flash`、`deepseek-v4-pro`（`contextWindow` 1000000、`maxTokens` 384000、`input` `["text"]`、`reasoning` true）。没有 `deepseek-chat` / `deepseek-reasoner`。
+
+不请求 `GET /models`：pi 也不跑这个；OpenAI 形列表通常只有 `id`。窗口写在发版目录或 `models.json` 对象里。
+
+以前 piz 缺省是 `128*1024=131072`，状态栏就显示成 131k。那不是 API 来的。
+
+**模型级窗口优先**：同 provider 下 64K/200K/1M 模型并存时，压缩硬线、图片规格、上下文预算都按当前模型定。
 
 Claude 兼容（`anthropic-messages`）的第三方端点同理，只是 `api` 换一个值：
 
@@ -184,7 +258,7 @@ my-router     → MYROUTER_API_KEY
 
 优先级从低到高：
 
-1. `settings.json` 的 `defaultProvider` / `defaultModel`
+1. `settings.json` 的 `defaultProvider` / `defaultModel` / `defaultThinkingLevel`
 2. `PIZ_PROVIDER` / `PIZ_MODEL` 环境变量
 3. `--provider` / `-m` 命令行参数
 4. 交互模式里的 `/model <name>`

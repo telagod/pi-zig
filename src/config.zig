@@ -5,31 +5,478 @@ const util = @import("util.zig");
 
 pub const Api = enum { openai_completions, anthropic_messages, openai_responses };
 
+/// 未知模型缺省窗口。跟 pi 一样是十进制 128000,不是 128*1024。
+/// 后者会显示成 131k,就是状态栏上那个错数。
+pub const DEFAULT_CONTEXT_WINDOW: u32 = 128000;
+pub const DEFAULT_MAX_OUTPUT: u32 = 16384;
+
+/// 行业思考等级。词表对齐 OpenAI `reasoning.effort` 与 pi `thinkingLevelMap`:
+/// `off | minimal | low | medium | high | xhigh | max`。
+/// 不是每家都认全部七档;可见档与发给 provider 的字符串由 `thinkingLevelMap` 定。
+pub const ThinkLevel = enum {
+    off,
+    minimal,
+    low,
+    medium,
+    high,
+    xhigh,
+    max,
+
+    pub const all = [_]ThinkLevel{ .off, .minimal, .low, .medium, .high, .xhigh, .max };
+
+    pub fn parse(s: []const u8) ?ThinkLevel {
+        if (std.mem.eql(u8, s, "off") or std.mem.eql(u8, s, "none") or
+            std.mem.eql(u8, s, "-") or std.mem.eql(u8, s, "—") or
+            std.mem.eql(u8, s, "disabled"))
+            return .off;
+        if (std.mem.eql(u8, s, "minimal") or std.mem.eql(u8, s, "min"))
+            return .minimal;
+        if (std.mem.eql(u8, s, "low") or std.mem.eql(u8, s, "light") or
+            std.mem.eql(u8, s, "浅"))
+            return .low;
+        if (std.mem.eql(u8, s, "medium") or std.mem.eql(u8, s, "mid") or
+            std.mem.eql(u8, s, "中"))
+            return .medium;
+        if (std.mem.eql(u8, s, "high"))
+            return .high;
+        if (std.mem.eql(u8, s, "xhigh"))
+            return .xhigh;
+        if (std.mem.eql(u8, s, "max") or std.mem.eql(u8, s, "deep") or
+            std.mem.eql(u8, s, "深"))
+            return .max;
+        return null;
+    }
+
+    pub fn label(self: ThinkLevel) []const u8 {
+        return @tagName(self);
+    }
+};
+
+/// `thinkingLevelMap` 一档的三态。对齐 pi `packages/coding-agent/docs/models.md`:
+/// omitted = 走缺省(标准档到 high 可见;`xhigh`/`max` 要显式写出才出现);
+/// hidden (`null`) = 不支持,UI 跳过;
+/// send = 支持,请求里发这个字符串。
+pub const ThinkSlot = union(enum) {
+    omitted,
+    hidden,
+    send: []const u8,
+};
+
+pub const ThinkingLevelMap = struct {
+    slots: [ThinkLevel.all.len]ThinkSlot = .{.omitted} ** ThinkLevel.all.len,
+
+    pub fn get(self: ThinkingLevelMap, level: ThinkLevel) ThinkSlot {
+        return self.slots[@intFromEnum(level)];
+    }
+
+    pub fn put(self: *ThinkingLevelMap, level: ThinkLevel, slot: ThinkSlot) void {
+        self.slots[@intFromEnum(level)] = slot;
+    }
+};
+
+/// 一条模型的能力。0 / null = 这项没配,继续往下回退(目录 → provider → 缺省)。
+///
+/// 来源只有两处,都不发 `/models` 请求:OpenAI 形的列表通常只有 id,没有窗口。
+///   1. models.json 对象项(camelCase 或 OpenRouter 形 snake_case)
+///   2. catalogMeta 里写死的已知模型
+pub const ModelMeta = struct {
+    context_window: u32 = 0,
+    max_output: u32 = 0,
+    vision: ?bool = null,
+    reasoning: ?bool = null,
+    think_map: ThinkingLevelMap = .{},
+    /// models.json 或目录写过 thinkingLevelMap。
+    think_map_set: bool = false,
+    compat: Compat = .{},
+};
+
+/// 思考请求形状。词表抄 pi `thinkingFormat`,只留渠道实际会碰到的几档
+/// (omp 也是这套,不另发明)。
+pub const ThinkFormat = enum {
+    openai,
+    openrouter,
+    deepseek,
+    zai,
+    together,
+    qwen,
+
+    pub fn parse(s: []const u8) ?ThinkFormat {
+        if (std.mem.eql(u8, s, "openai")) return .openai;
+        if (std.mem.eql(u8, s, "openrouter")) return .openrouter;
+        if (std.mem.eql(u8, s, "deepseek")) return .deepseek;
+        if (std.mem.eql(u8, s, "zai")) return .zai;
+        if (std.mem.eql(u8, s, "together")) return .together;
+        if (std.mem.eql(u8, s, "qwen")) return .qwen;
+        return null;
+    }
+
+    pub fn label(self: ThinkFormat) []const u8 {
+        return @tagName(self);
+    }
+};
+
+/// 渠道兼容。null = 这项没写,走 detectCompat。
+/// 字段名对齐 pi `OpenAICompletionsCompat`,只收发送路径用到的三个。
+pub const Compat = struct {
+    think_format: ?ThinkFormat = null,
+    requires_reasoning_content: ?bool = null,
+    supports_reasoning_effort: ?bool = null,
+};
+
 pub const Provider = struct {
     name: []const u8,
     api: Api,
     base_url: []const u8,
     api_key: ?[]const u8 = null,
     models: []const []const u8 = &.{},
-    /// 模型级上下文窗口(models.json 的 contextWindow),与 models 平行对齐。
-    /// 0 = 该模型未配置,回退 context_window。
-    ///
-    /// 为什么要有:同 provider 下 64K/200K/1M 模型并存(如 GLM/Gemini 系),
-    /// 图片规格与压缩硬线都该按**所选模型**的窗口定,而不是 provider 一刀切。
-    model_windows: []const u32 = &.{},
-    /// provider 默认上下文窗口(token)。模型级未配置时回退到这里(默认 128K)。
-    context_window: u32 = 128 * 1024,
+    /// 与 models 平行。空表或某项全 0 = 该模型没配,走目录 / provider 默认。
+    model_metas: []const ModelMeta = &.{},
+    /// provider 默认上下文窗口。0 = 未写,windowFor 再走目录或 DEFAULT。
+    context_window: u32 = DEFAULT_CONTEXT_WINDOW,
+    compat: Compat = .{},
 };
 
-/// 查所选模型的上下文窗口:模型级优先,否则 provider 默认。
-pub fn windowFor(provider: *const Provider, model: []const u8) usize {
-    // 内置 deepseek 有 models、没有平行的 model_windows。for (a, b) 要求等长,
-    // 否则一进 pruneHook → ctxWindow 就 SIGSEGV,print 模式起不来。
-    const n = @min(provider.models.len, provider.model_windows.len);
-    for (provider.models[0..n], provider.model_windows[0..n]) |m, w| {
-        if (w > 0 and std.mem.eql(u8, m, model)) return w;
+pub fn parsePositiveU32(v: std.json.Value) ?u32 {
+    switch (v) {
+        .integer => |n| {
+            if (n > 0 and n <= std.math.maxInt(u32)) return @intCast(n);
+        },
+        .float => |f| {
+            if (f > 0 and f <= @as(f64, @floatFromInt(std.math.maxInt(u32))))
+                return @intFromFloat(f);
+        },
+        else => {},
     }
-    return provider.context_window;
+    return null;
+}
+
+fn jsonPick(obj: std.json.ObjectMap, names: []const []const u8) ?std.json.Value {
+    for (names) |n| {
+        if (obj.get(n)) |v| return v;
+    }
+    return null;
+}
+
+/// 从模型对象抠能力。认 models.json 的 camelCase,也认 OpenRouter `/models` 形。
+pub fn parseModelMeta(obj: std.json.ObjectMap) ModelMeta {
+    var m = ModelMeta{};
+    if (jsonPick(obj, &.{ "contextWindow", "context_window", "context_length" })) |v| {
+        if (parsePositiveU32(v)) |n| m.context_window = n;
+    }
+    if (jsonPick(obj, &.{ "maxTokens", "max_tokens", "maxOutput", "max_output_tokens", "max_completion_tokens" })) |v| {
+        if (parsePositiveU32(v)) |n| m.max_output = n;
+    }
+    if (jsonPick(obj, &.{ "vision", "hasVision" })) |v| {
+        if (v == .bool) m.vision = v.bool;
+    }
+    // pi 的视觉字段是 input: ["text"] | ["text","image"],不是 bool
+    if (obj.get("input")) |inp| {
+        if (inp == .array) {
+            var saw_image = false;
+            for (inp.array.items) |it| {
+                if (it == .string and (std.mem.eql(u8, it.string, "image") or std.mem.eql(u8, it.string, "image_url")))
+                    saw_image = true;
+            }
+            m.vision = saw_image;
+        }
+    }
+    if (jsonPick(obj, &.{ "reasoning", "thinking" })) |v| {
+        if (v == .bool) m.reasoning = v.bool;
+    }
+    if (obj.get("thinkingLevelMap")) |raw| {
+        if (raw == .object) {
+            m.think_map = parseThinkMap(raw.object);
+            m.think_map_set = true;
+        }
+    }
+    m.compat = parseCompat(obj);
+    if (obj.get("architecture")) |arch| {
+        if (arch == .object) {
+            if (arch.object.get("modality")) |mod| {
+                if (mod == .string and std.mem.indexOf(u8, mod.string, "image") != null) m.vision = true;
+            }
+            if (arch.object.get("input_modalities")) |arr| {
+                if (arr == .array) {
+                    for (arr.array.items) |it| {
+                        if (it == .string and (std.mem.eql(u8, it.string, "image") or std.mem.eql(u8, it.string, "image_url")))
+                            m.vision = true;
+                    }
+                }
+            }
+        }
+    }
+    return m;
+}
+
+fn parseCompat(obj: std.json.ObjectMap) Compat {
+    var c = Compat{};
+    const src = if (obj.get("compat")) |raw| (if (raw == .object) raw.object else obj) else obj;
+    if (src.get("thinkingFormat")) |v| {
+        if (v == .string) c.think_format = ThinkFormat.parse(v.string);
+    }
+    if (src.get("requiresReasoningContentOnAssistantMessages")) |v| {
+        if (v == .bool) c.requires_reasoning_content = v.bool;
+    }
+    if (src.get("supportsReasoningEffort")) |v| {
+        if (v == .bool) c.supports_reasoning_effort = v.bool;
+    }
+    return c;
+}
+
+/// 抄 pi `detectCompat`(openai-completions.ts)。只返回发送路径用到的三项。
+/// `deepseek-v4` 出现在 id 里也要回放 reasoning_content(pi #3668,OpenRouter 同病)。
+pub fn detectCompat(provider: *const Provider, model: []const u8) Compat {
+    const name = provider.name;
+    const url = provider.base_url;
+    const is_zai = std.mem.eql(u8, name, "zai") or std.mem.eql(u8, name, "zai-coding-cn") or
+        std.mem.indexOf(u8, url, "api.z.ai") != null or std.mem.indexOf(u8, url, "open.bigmodel.cn") != null;
+    const is_together = std.mem.eql(u8, name, "together") or
+        std.mem.indexOf(u8, url, "api.together.ai") != null or std.mem.indexOf(u8, url, "api.together.xyz") != null;
+    const is_openrouter = std.mem.eql(u8, name, "openrouter") or std.mem.indexOf(u8, url, "openrouter.ai") != null;
+    const is_deepseek = std.mem.eql(u8, name, "deepseek") or containsIgnoreCase(url, "deepseek.com");
+    const is_moonshot = std.mem.eql(u8, name, "moonshotai") or std.mem.eql(u8, name, "moonshotai-cn") or
+        std.mem.indexOf(u8, url, "api.moonshot.") != null;
+    const is_grok = std.mem.eql(u8, name, "xai") or std.mem.indexOf(u8, url, "api.x.ai") != null;
+    const is_nvidia = std.mem.eql(u8, name, "nvidia") or std.mem.indexOf(u8, url, "integrate.api.nvidia.com") != null;
+    const is_ant = std.mem.eql(u8, name, "ant-ling") or std.mem.indexOf(u8, url, "api.ant-ling.com") != null;
+    const is_cf_gw = std.mem.eql(u8, name, "cloudflare-ai-gateway") or
+        std.mem.indexOf(u8, url, "gateway.ai.cloudflare.com") != null;
+
+    const format: ThinkFormat = if (is_deepseek)
+        .deepseek
+    else if (is_zai)
+        .zai
+    else if (is_together)
+        .together
+    else if (is_openrouter)
+        .openrouter
+    else
+        .openai;
+
+    return .{
+        .think_format = format,
+        .requires_reasoning_content = is_deepseek or std.mem.indexOf(u8, model, "deepseek-v4") != null,
+        .supports_reasoning_effort = !(is_grok or is_zai or is_moonshot or is_together or is_cf_gw or is_nvidia or is_ant),
+    };
+}
+
+fn containsIgnoreCase(hay: []const u8, needle: []const u8) bool {
+    if (needle.len > hay.len) return false;
+    var i: usize = 0;
+    while (i + needle.len <= hay.len) : (i += 1) {
+        if (std.ascii.eqlIgnoreCase(hay[i .. i + needle.len], needle)) return true;
+    }
+    return false;
+}
+
+fn overlayCompat(base: Compat, over: Compat) Compat {
+    return .{
+        .think_format = over.think_format orelse base.think_format,
+        .requires_reasoning_content = over.requires_reasoning_content orelse base.requires_reasoning_content,
+        .supports_reasoning_effort = over.supports_reasoning_effort orelse base.supports_reasoning_effort,
+    };
+}
+
+/// detect → provider.compat → 模型对象 compat。
+pub fn resolveCompat(provider: *const Provider, model: []const u8) Compat {
+    const meta = metaFor(provider, model);
+    return overlayCompat(overlayCompat(detectCompat(provider, model), provider.compat), meta.compat);
+}
+
+fn parseThinkMap(obj: std.json.ObjectMap) ThinkingLevelMap {
+    var map = ThinkingLevelMap{};
+    for (ThinkLevel.all) |level| {
+        const v = obj.get(level.label()) orelse continue;
+        switch (v) {
+            .null => map.put(level, .hidden),
+            .string => |s| map.put(level, .{ .send = s }),
+            else => {},
+        }
+    }
+    return map;
+}
+
+fn modelBareId(model: []const u8) []const u8 {
+    return if (std.mem.lastIndexOfScalar(u8, model, '/')) |i| model[i + 1 ..] else model;
+}
+
+/// 内置目录。数字抄自 pi `packages/ai/scripts/generate-models.ts` 的
+/// `deepseekV4Models`(earendil-works/pi main)。那里只 push 了这两条,
+/// 没有 deepseek-chat / deepseek-reasoner(生成器遇到 status=deprecated 会 skip)。
+///
+/// flash/pro 原文: contextWindow 1000000, maxTokens 384000,
+/// reasoning true, input ["text"]。
+pub fn catalogMeta(model: []const u8) ModelMeta {
+    const name = modelBareId(model);
+    if (std.mem.eql(u8, name, "deepseek-v4-flash") or std.mem.eql(u8, name, "deepseek-v4-pro")) {
+        return .{
+            .context_window = 1_000_000,
+            .max_output = 384_000,
+            .vision = false,
+            .reasoning = true,
+        };
+    }
+    return .{};
+}
+
+/// pi `generate-models.ts` `applyThinkingLevelMetadata`:
+/// `api === "openai-completions" && id.includes("deepseek-v4")` 时套这三张表。
+///
+/// ```
+/// DEEPSEEK_V4_THINKING_LEVEL_MAP = { minimal:null, low:null, medium:null, high:"high", max:"max" }
+/// DEEPSEEK_V4_FLASH_THINKING_LEVEL_MAP = { ...that, low:"low" }
+/// openrouter: { ...Pro, xhigh:"xhigh", max:null }
+/// ```
+pub fn catalogThinkMap(provider: *const Provider, model: []const u8) ?ThinkingLevelMap {
+    if (provider.api != .openai_completions) return null;
+    if (std.mem.indexOf(u8, model, "deepseek-v4") == null) return null;
+
+    var map = ThinkingLevelMap{};
+    map.put(.minimal, .hidden);
+    map.put(.low, .hidden);
+    map.put(.medium, .hidden);
+    map.put(.high, .{ .send = "high" });
+    map.put(.max, .{ .send = "max" });
+
+    if (std.mem.eql(u8, provider.name, "openrouter")) {
+        map.put(.xhigh, .{ .send = "xhigh" });
+        map.put(.max, .hidden);
+        return map;
+    }
+    if (std.mem.eql(u8, provider.name, "deepseek") and std.mem.eql(u8, modelBareId(model), "deepseek-v4-flash")) {
+        map.put(.low, .{ .send = "low" });
+        return map;
+    }
+    return map;
+}
+
+fn overlayThinkMap(base: ThinkingLevelMap, over: ThinkingLevelMap) ThinkingLevelMap {
+    var out = base;
+    for (ThinkLevel.all) |level| {
+        const slot = over.get(level);
+        if (slot != .omitted) out.put(level, slot);
+    }
+    return out;
+}
+
+/// 该模型 UI 里能选的档。算法抄 pi `packages/ai/src/models.ts`
+/// `getSupportedThinkingLevels`: reasoning 关则只有 off;`null` 隐藏;
+/// `xhigh`/`max` 必须 map 里显式有非 null 才出现。
+pub fn fillSupportedThinkLevels(meta: ModelMeta, buf: *[ThinkLevel.all.len]ThinkLevel) []const ThinkLevel {
+    if (meta.reasoning != true) {
+        buf[0] = .off;
+        return buf[0..1];
+    }
+    var n: usize = 0;
+    for (ThinkLevel.all) |level| {
+        const slot = meta.think_map.get(level);
+        if (slot == .hidden) continue;
+        if ((level == .xhigh or level == .max) and slot == .omitted) continue;
+        buf[n] = level;
+        n += 1;
+    }
+    if (n == 0) {
+        buf[0] = .off;
+        return buf[0..1];
+    }
+    return buf[0..n];
+}
+
+/// 抄 pi `clampThinkingLevel`:先往高档找,再往低档找。
+pub fn clampThinkLevel(meta: ModelMeta, level: ThinkLevel) ThinkLevel {
+    var buf: [ThinkLevel.all.len]ThinkLevel = undefined;
+    const avail = fillSupportedThinkLevels(meta, &buf);
+    for (avail) |a| {
+        if (a == level) return level;
+    }
+    const want = @intFromEnum(level);
+    var i: usize = want;
+    while (i < ThinkLevel.all.len) : (i += 1) {
+        const cand: ThinkLevel = @enumFromInt(i);
+        for (avail) |a| {
+            if (a == cand) return cand;
+        }
+    }
+    if (want > 0) {
+        var j: usize = want;
+        while (j > 0) {
+            j -= 1;
+            const cand: ThinkLevel = @enumFromInt(j);
+            for (avail) |a| {
+                if (a == cand) return cand;
+            }
+        }
+    }
+    return avail[0];
+}
+
+pub fn cycleThinkLevel(meta: ModelMeta, current: ThinkLevel, up: bool) ThinkLevel {
+    var buf: [ThinkLevel.all.len]ThinkLevel = undefined;
+    const avail = fillSupportedThinkLevels(meta, &buf);
+    const cur = clampThinkLevel(meta, current);
+    var idx: usize = 0;
+    for (avail, 0..) |a, i| {
+        if (a == cur) {
+            idx = i;
+            break;
+        }
+    }
+    if (up) {
+        if (idx + 1 < avail.len) return avail[idx + 1];
+        return avail[idx];
+    }
+    if (idx > 0) return avail[idx - 1];
+    return avail[idx];
+}
+
+/// 发给 provider 的 effort 字符串。off 或 hidden 返回 null。
+pub fn thinkEffort(meta: ModelMeta, level: ThinkLevel) ?[]const u8 {
+    if (level == .off) return null;
+    return switch (meta.think_map.get(level)) {
+        .send => |s| s,
+        .omitted => level.label(),
+        .hidden => null,
+    };
+}
+
+pub fn writeSupportedThink(w: *std.Io.Writer, meta: ModelMeta) !void {
+    var buf: [ThinkLevel.all.len]ThinkLevel = undefined;
+    const avail = fillSupportedThinkLevels(meta, &buf);
+    for (avail, 0..) |level, i| {
+        if (i > 0) try w.writeByte('|');
+        try w.writeAll(level.label());
+    }
+}
+
+/// 合并后的能力:模型对象 > 内置目录 > provider 默认窗。
+pub fn metaFor(provider: *const Provider, model: []const u8) ModelMeta {
+    var out = catalogMeta(model);
+    if (catalogThinkMap(provider, model)) |m| {
+        out.think_map = m;
+        out.think_map_set = true;
+    }
+    const n = @min(provider.models.len, provider.model_metas.len);
+    for (provider.models[0..n], provider.model_metas[0..n]) |m, meta| {
+        if (!std.mem.eql(u8, m, model)) continue;
+        if (meta.context_window > 0) out.context_window = meta.context_window;
+        if (meta.max_output > 0) out.max_output = meta.max_output;
+        if (meta.vision) |v| out.vision = v;
+        if (meta.reasoning) |v| out.reasoning = v;
+        if (meta.think_map_set) {
+            out.think_map = overlayThinkMap(out.think_map, meta.think_map);
+            out.think_map_set = true;
+        }
+        out.compat = overlayCompat(out.compat, meta.compat);
+        break;
+    }
+    if (out.context_window == 0) out.context_window = provider.context_window;
+    if (out.context_window == 0) out.context_window = DEFAULT_CONTEXT_WINDOW;
+    return out;
+}
+
+/// 查所选模型的上下文窗口。
+pub fn windowFor(provider: *const Provider, model: []const u8) usize {
+    return metaFor(provider, model).context_window;
 }
 
 pub const Resolved = struct {
@@ -43,6 +490,8 @@ pub const Config = struct {
     providers: []Provider = &.{},
     default_provider: ?[]const u8 = null,
     default_model: ?[]const u8 = null,
+    /// settings.json 的 `defaultThinkingLevel`。字段名抄 pi。
+    default_think_level: ?ThinkLevel = null,
     /// settings.json 的 `plugins` 数组:要额外开启的可选插件名。
     enabled_plugins: []const []const u8 = &.{},
     /// settings.json 的 `disabled_plugins` 数组:要从出厂集关掉的插件名。
@@ -93,7 +542,17 @@ pub const Config = struct {
 
         // --- 内置目录 ---
         const builtin = [_]Provider{
-            .{ .name = "deepseek", .api = .openai_completions, .base_url = "https://api.deepseek.com", .models = &.{ "deepseek-v4-flash", "deepseek-v4-pro" } },
+            .{
+                .name = "deepseek",
+                .api = .openai_completions,
+                .base_url = "https://api.deepseek.com",
+                .models = &.{ "deepseek-v4-flash", "deepseek-v4-pro" },
+                .model_metas = &.{
+                    .{ .context_window = 1_000_000, .max_output = 384_000, .vision = false, .reasoning = true },
+                    .{ .context_window = 1_000_000, .max_output = 384_000, .vision = false, .reasoning = true },
+                },
+                .context_window = 1_000_000,
+            },
             .{ .name = "openai", .api = .openai_completions, .base_url = "https://api.openai.com/v1", .models = &.{} },
             .{ .name = "anthropic", .api = .anthropic_messages, .base_url = "https://api.anthropic.com", .models = &.{} },
         };
@@ -123,47 +582,43 @@ pub const Config = struct {
                             else
                                 Api.openai_completions;
                             var models = std.array_list.Managed([]const u8).init(alloc);
-                            var windows = std.array_list.Managed(u32).init(alloc);
-                            var context_window: u32 = 128 * 1024;
+                            var metas = std.array_list.Managed(ModelMeta).init(alloc);
+                            var context_window: u32 = 0;
+                            if (jsonPick(p.object, &.{ "contextWindow", "context_window" })) |cw| {
+                                if (parsePositiveU32(cw)) |n| context_window = n;
+                            }
                             if (p.object.get("models")) |ms| {
                                 if (ms == .array) {
                                     for (ms.array.items) |m| {
-                                        // 字符串模型名或 {id,name,contextWindow,...} 对象(取 id)
+                                        // 字符串模型名或 {id,name,contextWindow,maxTokens,vision,reasoning} 对象
                                         if (m == .string) {
                                             try models.append(m.string);
-                                            try windows.append(0); // 未配置,回退 provider 默认
+                                            try metas.append(.{});
                                         } else if (m == .object) {
                                             if (m.object.get("id")) |id| {
                                                 if (id == .string) {
                                                     try models.append(id.string);
-                                                    // 模型级窗口:0 = 未配置
-                                                    var mw: u32 = 0;
-                                                    if (m.object.get("contextWindow")) |cw| {
-                                                        if (cw == .integer and cw.integer > 0 and cw.integer <= std.math.maxInt(u32)) {
-                                                            mw = @intCast(cw.integer);
-                                                        }
+                                                    const meta = parseModelMeta(m.object);
+                                                    try metas.append(meta);
+                                                    if (meta.context_window > 0) {
+                                                        context_window = @max(context_window, meta.context_window);
                                                     }
-                                                    try windows.append(mw);
-                                                }
-                                            }
-                                            // 上下文窗口:取最大(避免长窗口模型被误压缩)
-                                            if (m.object.get("contextWindow")) |cw| {
-                                                if (cw == .integer and cw.integer > 0 and cw.integer <= std.math.maxInt(u32)) {
-                                                    context_window = @max(context_window, @as(u32, @intCast(cw.integer)));
                                                 }
                                             }
                                         }
                                     }
                                 }
                             }
+                            if (context_window == 0) context_window = DEFAULT_CONTEXT_WINDOW;
                             try file_providers.append(.{
                                 .name = entry.key_ptr.*,
                                 .api = api_enum,
                                 .base_url = base_url,
                                 .api_key = getStr(p, "apiKey"),
                                 .models = try models.toOwnedSlice(),
-                                .model_windows = try windows.toOwnedSlice(),
+                                .model_metas = try metas.toOwnedSlice(),
                                 .context_window = context_window,
+                                .compat = parseCompat(p.object),
                             });
                         }
                     }
@@ -223,6 +678,9 @@ pub const Config = struct {
             if (root == .object) {
                 self.default_provider = getStr(root, "defaultProvider");
                 self.default_model = getStr(root, "defaultModel");
+                if (getStr(root, "defaultThinkingLevel")) |s| {
+                    self.default_think_level = ThinkLevel.parse(s);
+                }
                 // plugins: 要额外开启的可选插件名数组
                 if (root.object.get("plugins")) |arr| {
                     if (arr == .array) {
@@ -249,7 +707,8 @@ pub const Config = struct {
             }
         } else |_| {}
 
-        // --- 合并:builtin + file(统一补 auth.json 密钥——此前内置 provider 漏查) ---
+        // --- 合并:builtin + file。同名文件项盖掉内置(否则 findModel 永远命中
+        // 排在前面的内置 deepseek,models.json 里写的窗口等于没写)。
         var all = std.array_list.Managed(Provider).init(alloc);
         for (builtin) |p| {
             var merged = p;
@@ -263,7 +722,23 @@ pub const Config = struct {
             if (merged.api_key == null) {
                 if (auth_keys.get(p.name)) |k| merged.api_key = k;
             }
-            try all.append(merged);
+            var replaced = false;
+            for (all.items) |*ex| {
+                if (!std.mem.eql(u8, ex.name, p.name)) continue;
+                if (merged.api_key == null) merged.api_key = ex.api_key;
+                if (merged.models.len == 0) {
+                    merged.models = ex.models;
+                    merged.model_metas = ex.model_metas;
+                }
+                if (p.context_window == DEFAULT_CONTEXT_WINDOW and ex.context_window != DEFAULT_CONTEXT_WINDOW) {
+                    merged.context_window = ex.context_window;
+                }
+                merged.compat = overlayCompat(ex.compat, merged.compat);
+                ex.* = merged;
+                replaced = true;
+                break;
+            }
+            if (!replaced) try all.append(merged);
         }
         self.providers = try all.toOwnedSlice();
 
@@ -392,6 +867,24 @@ pub const Config = struct {
         }
         if (provider) |p| try root.object.put(alloc, "defaultProvider", .{ .string = p });
         if (model) |m| try root.object.put(alloc, "defaultModel", .{ .string = m });
+        try writeJsonFile(alloc, path, root);
+    }
+
+    /// 写 settings.json 的 `defaultThinkingLevel`(pi 同名字段)。
+    pub fn saveThinkLevel(self: *Config, level: ThinkLevel) !void {
+        const alloc = self.allocator();
+        const cfg_dir = try util.configDir(alloc);
+        defer alloc.free(cfg_dir);
+        const path = try util.joinPath(alloc, cfg_dir, "settings.json");
+        defer alloc.free(path);
+        var root = std.json.Value{ .object = .{} };
+        if (std.Io.Dir.cwd().readFileAlloc(util.io, path, alloc, .limited(2 * 1024 * 1024))) |content| {
+            defer alloc.free(content);
+            root = self.jsonVal(content) catch return error.ConfigUnparseable;
+            if (root != .object) return error.ConfigUnparseable;
+        } else |_| {}
+        try root.object.put(alloc, "defaultThinkingLevel", .{ .string = level.label() });
+        self.default_think_level = level;
         try writeJsonFile(alloc, path, root);
     }
 
@@ -566,6 +1059,12 @@ test "a syntactically broken config is never overwritten" {
     try t.expect(std.mem.indexOf(u8, ok_after, "\"mine\"") != null);
     try t.expect(std.mem.indexOf(u8, ok_after, "newmodel") != null);
 
+    try cfg.saveThinkLevel(.low);
+    const think_after = try tmp.dir.readFileAlloc(util.io, "settings.json", a, .limited(1 << 16));
+    try t.expect(std.mem.indexOf(u8, think_after, "\"defaultThinkingLevel\"") != null);
+    try t.expect(std.mem.indexOf(u8, think_after, "\"low\"") != null);
+    try t.expectEqual(ThinkLevel.low, cfg.default_think_level.?);
+
     // apiKey 落盘不能让同机其他用户读到
     const st = try tmp.dir.statFile(util.io, "settings.json", .{});
     try t.expectEqual(@as(u32, 0o600), @as(u32, @intFromEnum(st.permissions)) & 0o777);
@@ -612,7 +1111,11 @@ test "windowFor prefers per-model window then provider default" {
         .api = .openai_completions,
         .base_url = "https://x",
         .models = &.{ "m-64k", "m-200k", "m-1m" },
-        .model_windows = &.{ 64 * 1024, 200 * 1024, 1_000_000 },
+        .model_metas = &.{
+            .{ .context_window = 64 * 1024 },
+            .{ .context_window = 200 * 1024 },
+            .{ .context_window = 1_000_000 },
+        },
         .context_window = 128 * 1024,
     };
     try t.expectEqual(@as(usize, 64 * 1024), windowFor(&p, "m-64k"));
@@ -620,14 +1123,25 @@ test "windowFor prefers per-model window then provider default" {
     try t.expectEqual(@as(usize, 1_000_000), windowFor(&p, "m-1m"));
     // 未配置窗口的模型回退 provider 默认
     try t.expectEqual(@as(usize, 128 * 1024), windowFor(&p, "m-unknown"));
-    // 内置 deepseek 形:有模型名、窗口表为空。不能崩。
+    // 内置 deepseek:没写 model_metas 也必须是 1M,不能再掉进 128K 缺省。
     const builtin_ds = Provider{
         .name = "deepseek",
         .api = .openai_completions,
         .base_url = "https://api.deepseek.com",
         .models = &.{ "deepseek-v4-flash", "deepseek-v4-pro" },
+        .context_window = 1_000_000,
     };
-    try t.expectEqual(@as(usize, 128 * 1024), windowFor(&builtin_ds, "deepseek-v4-flash"));
+    try t.expectEqual(@as(usize, 1_000_000), windowFor(&builtin_ds, "deepseek-v4-flash"));
+    try t.expectEqual(@as(usize, 1_000_000), windowFor(&builtin_ds, "deepseek-v4-pro"));
+    // 挂在别的 provider 上的同名 id,目录仍然认
+    const other = Provider{
+        .name = "volcark",
+        .api = .anthropic_messages,
+        .base_url = "https://x",
+        .models = &.{"deepseek-v4-flash"},
+        .context_window = DEFAULT_CONTEXT_WINDOW,
+    };
+    try t.expectEqual(@as(usize, 1_000_000), windowFor(&other, "deepseek-v4-flash"));
     _ = a;
 }
 
@@ -656,13 +1170,200 @@ test "models.json parses per-model contextWindow" {
         if (!std.mem.eql(u8, p.name, "glm")) continue;
         found = true;
         try t.expectEqual(@as(usize, 3), p.models.len);
-        try t.expectEqual(@as(u32, 64 * 1024), p.model_windows[0]);
-        try t.expectEqual(@as(u32, 1_000_000), p.model_windows[1]);
-        try t.expectEqual(@as(u32, 0), p.model_windows[2]); // 字符串模型项
+        try t.expectEqual(@as(u32, 64 * 1024), p.model_metas[0].context_window);
+        try t.expectEqual(@as(u32, 1_000_000), p.model_metas[1].context_window);
+        try t.expectEqual(@as(u32, 0), p.model_metas[2].context_window); // 字符串模型项
         try t.expectEqual(@as(usize, 64 * 1024), windowFor(p, "glm-64k"));
         try t.expectEqual(@as(usize, 1_000_000), windowFor(p, "glm-1m"));
-        // provider 默认 = 所有模型窗口的最大值(旧语义保留)
+        // provider 默认 = 所有模型窗口的最大值(未写 provider 级 contextWindow 时)
         try t.expectEqual(@as(u32, 1_000_000), p.context_window);
     }
     try t.expect(found);
+}
+
+test "models.json parses provider contextWindow and model capabilities" {
+    const t = std.testing;
+    try util.testInit();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = util.Arena.init(t.allocator);
+    const a = arena.allocator();
+    const cwd_abs = try std.process.currentPathAlloc(util.io, a);
+    const tmp_path = try std.fmt.allocPrint(a, "{s}/.zig-cache/tmp/{s}", .{ cwd_abs, tmp.sub_path });
+    try util.environ_map.?.put("PIZ_DIR", tmp_path);
+
+    const json =
+        \\{"providers":{"mine":{"baseUrl":"https://x","contextWindow":200000,
+        \\"models":[{"id":"v","context_length":64000,"maxTokens":8000,"vision":true,"reasoning":false}]}}}
+    ;
+    try tmp.dir.writeFile(util.io, .{ .sub_path = "models.json", .data = json });
+
+    var c = Config{ .arena = &arena };
+    defer c.deinit();
+    try c.load();
+    var found = false;
+    for (c.providers) |*p| {
+        if (!std.mem.eql(u8, p.name, "mine")) continue;
+        found = true;
+        try t.expectEqual(@as(u32, 200000), p.context_window);
+        try t.expectEqual(@as(u32, 64000), p.model_metas[0].context_window);
+        try t.expectEqual(@as(u32, 8000), p.model_metas[0].max_output);
+        try t.expectEqual(true, p.model_metas[0].vision.?);
+        try t.expectEqual(false, p.model_metas[0].reasoning.?);
+        try t.expectEqual(@as(usize, 64000), windowFor(p, "v"));
+    }
+    try t.expect(found);
+}
+
+test "catalogMeta knows DeepSeek V4 and parseModelMeta reads OpenRouter shape" {
+    const t = std.testing;
+    const v4 = catalogMeta("deepseek-v4-flash");
+    try t.expectEqual(@as(u32, 1_000_000), v4.context_window);
+    try t.expectEqual(@as(u32, 384_000), v4.max_output);
+    try t.expectEqual(false, v4.vision.?);
+    try t.expectEqual(true, v4.reasoning.?);
+    try t.expectEqual(@as(u32, 1_000_000), catalogMeta("acme/deepseek-v4-pro").context_window);
+    try t.expectEqual(@as(u32, 0), catalogMeta("gpt-4o").context_window);
+    // pi generate-models.ts 的 deepseekV4Models 没有这两条
+    try t.expectEqual(@as(u32, 0), catalogMeta("deepseek-chat").context_window);
+    try t.expectEqual(@as(u32, 0), catalogMeta("deepseek-reasoner").context_window);
+
+    var arena = util.Arena.init(t.allocator);
+    defer arena.deinit();
+    const raw =
+        \\{"id":"x","context_length":128000,"architecture":{"modality":"text+image"}}
+    ;
+    const val = try std.json.parseFromSliceLeaky(std.json.Value, arena.allocator(), raw, .{});
+    const meta = parseModelMeta(val.object);
+    try t.expectEqual(@as(u32, 128000), meta.context_window);
+    try t.expectEqual(true, meta.vision.?);
+
+    // pi 的 input 数组:有 image 才算视觉;只有 text 则明确没有
+    const pi_raw =
+        \\{"id":"llama","input":["text","image"],"contextWindow":128000,"maxTokens":32000,"reasoning":false}
+    ;
+    const pi_val = try std.json.parseFromSliceLeaky(std.json.Value, arena.allocator(), pi_raw, .{});
+    const pi_meta = parseModelMeta(pi_val.object);
+    try t.expectEqual(true, pi_meta.vision.?);
+    try t.expectEqual(@as(u32, 128000), pi_meta.context_window);
+    try t.expectEqual(@as(u32, 32000), pi_meta.max_output);
+    try t.expectEqual(false, pi_meta.reasoning.?);
+}
+
+fn expectLevels(meta: ModelMeta, want: []const ThinkLevel) !void {
+    var buf: [ThinkLevel.all.len]ThinkLevel = undefined;
+    const got = fillSupportedThinkLevels(meta, &buf);
+    try std.testing.expectEqual(want.len, got.len);
+    for (want, got) |w, g| try std.testing.expectEqual(w, g);
+}
+
+test "DeepSeek V4 thinkingLevelMap matches pi generate-models.ts" {
+    const t = std.testing;
+    const ds = Provider{
+        .name = "deepseek",
+        .api = .openai_completions,
+        .base_url = "https://api.deepseek.com",
+        .models = &.{ "deepseek-v4-flash", "deepseek-v4-pro" },
+    };
+    const flash = metaFor(&ds, "deepseek-v4-flash");
+    const pro = metaFor(&ds, "deepseek-v4-pro");
+    try expectLevels(flash, &.{ .off, .low, .high, .max });
+    try expectLevels(pro, &.{ .off, .high, .max });
+    try t.expectEqualStrings("low", thinkEffort(flash, .low).?);
+    try t.expectEqualStrings("high", thinkEffort(flash, .high).?);
+    try t.expectEqualStrings("max", thinkEffort(pro, .max).?);
+    try t.expect(thinkEffort(pro, .low) == null);
+    try t.expectEqual(ThinkLevel.high, clampThinkLevel(pro, .low));
+    try t.expectEqual(ThinkLevel.high, clampThinkLevel(pro, .medium));
+    try t.expectEqual(ThinkLevel.max, clampThinkLevel(flash, .xhigh));
+    try t.expectEqual(ThinkLevel.low, cycleThinkLevel(flash, .off, true));
+    try t.expectEqual(ThinkLevel.high, cycleThinkLevel(pro, .off, true));
+    try t.expectEqual(ThinkLevel.off, cycleThinkLevel(pro, .off, false));
+    try t.expectEqual(ThinkLevel.max, cycleThinkLevel(pro, .max, true));
+
+    const orouter = Provider{
+        .name = "openrouter",
+        .api = .openai_completions,
+        .base_url = "https://openrouter.ai/api/v1",
+        .models = &.{"deepseek/deepseek-v4-pro"},
+    };
+    try expectLevels(metaFor(&orouter, "deepseek/deepseek-v4-pro"), &.{ .off, .high, .xhigh });
+
+    // 无 reasoning 的模型只有 off
+    try expectLevels(.{ .reasoning = false }, &.{.off});
+    // reasoning 开、没写 map:标准档到 high,没有 xhigh/max
+    try expectLevels(.{ .reasoning = true }, &.{ .off, .minimal, .low, .medium, .high });
+}
+
+test "models.json thinkingLevelMap overlays catalog" {
+    const t = std.testing;
+    try util.testInit();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = util.Arena.init(t.allocator);
+    const a = arena.allocator();
+    const cwd_abs = try std.process.currentPathAlloc(util.io, a);
+    const tmp_path = try std.fmt.allocPrint(a, "{s}/.zig-cache/tmp/{s}", .{ cwd_abs, tmp.sub_path });
+    try util.environ_map.?.put("PIZ_DIR", tmp_path);
+
+    const json =
+        \\{"providers":{"deepseek":{"baseUrl":"https://api.deepseek.com","api":"openai-completions",
+        \\"models":[{"id":"deepseek-v4-pro","reasoning":true,
+        \\"thinkingLevelMap":{"low":"low","medium":null,"high":"high","max":"max"}}]}}}
+    ;
+    try tmp.dir.writeFile(util.io, .{ .sub_path = "models.json", .data = json });
+
+    var c = Config{ .arena = &arena };
+    defer c.deinit();
+    try c.load();
+    var found = false;
+    for (c.providers) |*p| {
+        if (!std.mem.eql(u8, p.name, "deepseek")) continue;
+        found = true;
+        const meta = metaFor(p, "deepseek-v4-pro");
+        try expectLevels(meta, &.{ .off, .low, .high, .max });
+        try t.expectEqualStrings("low", thinkEffort(meta, .low).?);
+    }
+    try t.expect(found);
+}
+
+test "detectCompat follows pi openai-completions.ts" {
+    const t = std.testing;
+    const ds = Provider{ .name = "deepseek", .api = .openai_completions, .base_url = "https://api.deepseek.com" };
+    const d = detectCompat(&ds, "deepseek-v4-pro");
+    try t.expectEqual(ThinkFormat.deepseek, d.think_format.?);
+    try t.expectEqual(true, d.requires_reasoning_content.?);
+    try t.expectEqual(true, d.supports_reasoning_effort.?);
+
+    const oai = Provider{ .name = "openai", .api = .openai_completions, .base_url = "https://api.openai.com/v1" };
+    const o = detectCompat(&oai, "gpt-5.4");
+    try t.expectEqual(ThinkFormat.openai, o.think_format.?);
+    try t.expectEqual(false, o.requires_reasoning_content.?);
+
+    const orouter = Provider{ .name = "openrouter", .api = .openai_completions, .base_url = "https://openrouter.ai/api/v1" };
+    const r = detectCompat(&orouter, "deepseek/deepseek-v4-flash");
+    try t.expectEqual(ThinkFormat.openrouter, r.think_format.?);
+    try t.expectEqual(true, r.requires_reasoning_content.?); // id 含 deepseek-v4
+
+    const zai = Provider{ .name = "zai", .api = .openai_completions, .base_url = "https://api.z.ai/api/paas/v4" };
+    const z = detectCompat(&zai, "glm-5");
+    try t.expectEqual(ThinkFormat.zai, z.think_format.?);
+    try t.expectEqual(false, z.supports_reasoning_effort.?);
+}
+
+test "settings.json defaultThinkingLevel loads" {
+    const t = std.testing;
+    try util.testInit();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = util.Arena.init(t.allocator);
+    const a = arena.allocator();
+    const cwd_abs = try std.process.currentPathAlloc(util.io, a);
+    const tmp_path = try std.fmt.allocPrint(a, "{s}/.zig-cache/tmp/{s}", .{ cwd_abs, tmp.sub_path });
+    try util.environ_map.?.put("PIZ_DIR", tmp_path);
+    try tmp.dir.writeFile(util.io, .{ .sub_path = "settings.json", .data = "{\"defaultThinkingLevel\":\"low\"}" });
+    var c = Config{ .arena = &arena };
+    defer c.deinit();
+    try c.load();
+    try t.expectEqual(ThinkLevel.low, c.default_think_level.?);
 }

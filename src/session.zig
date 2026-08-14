@@ -130,6 +130,10 @@ pub fn saveWebTs(alloc: std.mem.Allocator, cwd: []const u8, name: []const u8, mo
                 }
                 jwtr.writeByte(']') catch return error.WriteFailed;
             }
+            if (m.reasoning) |r| {
+                if (r.len > 0)
+                    jwtr.print(",\"reasoning\":{s}", .{util.jsonString(alloc, r) catch "\"\""}) catch return error.WriteFailed;
+            }
             jwtr.writeAll("}\n") catch return error.WriteFailed;
             const line = jw.toOwnedSlice() catch return error.WriteFailed;
             defer alloc.free(line);
@@ -224,6 +228,9 @@ pub fn loadWeb(alloc: std.mem.Allocator, cwd: []const u8, name: []const u8) !?st
                     m.tool_calls = arr[0..n];
                 }
             }
+        }
+        if (v.object.get("reasoning") orelse v.object.get("reasoning_content")) |r| {
+            if (r == .string and r.string.len > 0) m.reasoning = alloc.dupe(u8, r.string) catch null;
         }
         list.append(m) catch continue;
     }
@@ -569,6 +576,10 @@ pub const Session = struct {
             }
             try ww.writer.writeByte(']');
         }
+        if (msg.reasoning) |r| {
+            if (r.len > 0)
+                try ww.writer.print(",\"reasoning\":{s}", .{try util.jsonString(self.alloc, r)});
+        }
         try ww.writer.writeAll("}\n");
         const line = try ww.toOwnedSlice();
         defer self.alloc.free(line);
@@ -641,6 +652,9 @@ pub const Session = struct {
                     }
                     msg.tool_calls = try calls.toOwnedSlice();
                 }
+            }
+            if (v.object.get("reasoning") orelse v.object.get("reasoning_content")) |r| {
+                if (r == .string and r.string.len > 0) msg.reasoning = try self.alloc.dupe(u8, r.string);
             }
             try out.append(msg);
         }
@@ -761,13 +775,14 @@ test "session roundtrip" {
         } else |_| {}
     }
     try sess.saveMessage(&.{ .role = "user", .content = "hi" });
-    try sess.saveMessage(&.{ .role = "assistant", .content = "hello", .tool_calls = &.{.{ .id = "c1", .name = "bash", .args = "{}" }} });
+    try sess.saveMessage(&.{ .role = "assistant", .content = "hello", .tool_calls = &.{.{ .id = "c1", .name = "bash", .args = "{}" }}, .reasoning = "cot" });
     try sess.saveMessage(&.{ .role = "tool", .content = "out", .tool_call_id = "c1" });
 
     const msgs = try sess.loadMessages();
     try t.expectEqual(@as(usize, 3), msgs.len);
     try t.expectEqualStrings("hi", msgs[0].content);
     try t.expectEqualStrings("bash", msgs[1].tool_calls.?[0].name);
+    try t.expectEqualStrings("cot", msgs[1].reasoning.?);
     try t.expectEqualStrings("c1", msgs[2].tool_call_id.?);
 }
 

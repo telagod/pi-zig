@@ -1151,6 +1151,21 @@ pub fn find(name: []const u8) ?*const Tool {
     return null;
 }
 
+/// 只拦会改状态、出网或委派的工具。读/搜/列目录直接过。
+/// 没登记的名字默认要问 —— 插件和 MCP 不能因为没写进表就放行。
+pub fn needsConfirm(name: []const u8) bool {
+    const safe = [_][]const u8{
+        "read",                 "grep",                 "find",
+        "ls",                   "todo_read",            "todo_write",
+        "get_context_remaining", "git_status",           "skill",
+        "read_image",           "lsp",                  "ask_user",
+    };
+    for (safe) |s| {
+        if (std.mem.eql(u8, name, s)) return false;
+    }
+    return true;
+}
+
 test "edit tool" {
     const t = std.testing;
     try util.testInit();
@@ -1640,4 +1655,20 @@ test "bash runs in the agent root" {
     try t.expect(!w.is_error);
     const back = try tmp.dir.readFileAlloc(util.io, "from-bash.txt", a, .limited(64));
     try t.expectEqualStrings("marker\n", back);
+}
+
+test "needsConfirm allows read-class tools and gates writes" {
+    const t = std.testing;
+    try t.expect(!needsConfirm("read"));
+    try t.expect(!needsConfirm("ls"));
+    try t.expect(!needsConfirm("grep"));
+    try t.expect(!needsConfirm("find"));
+    try t.expect(!needsConfirm("skill"));
+    try t.expect(needsConfirm("bash"));
+    try t.expect(needsConfirm("write"));
+    try t.expect(needsConfirm("edit"));
+    try t.expect(needsConfirm("multi_edit"));
+    try t.expect(needsConfirm("task"));
+    try t.expect(needsConfirm("fetch_url"));
+    try t.expect(needsConfirm("unknown_mcp_tool"));
 }

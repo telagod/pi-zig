@@ -15,7 +15,7 @@ pub fn pruneHook(ctx: ?*anyopaque) void {
         .messages = &self.messages,
         .window = self.ctxWindow(),
         .api = self.provider.api,
-        .vision = compress.modelHasVision(self.model),
+        .vision = self.hasVision(),
     });
     if (compress.formatNotice(self.alloc, r)) |msg| {
         if (self.cbs.on_notice) |f| f(self.cbs.ctx, msg) catch {};

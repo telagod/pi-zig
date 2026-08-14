@@ -706,7 +706,7 @@ test "optional plugins are gated per agent, not process-wide" {
     var defs = std.array_list.Managed(aimod.ToolDef).init(a);
     try appendToolDefsIn(bare, &defs);
     try t.expectEqual(toolsmod.tools.len, defs.items.len);
-    for (toolsmod.tools, defs.items) |*core, d| {
+    for (&toolsmod.tools, defs.items) |*core, d| {
         try t.expectEqualStrings(core.name, d.name);
         try t.expectEqualStrings(core.desc, d.desc);
         try t.expectEqualStrings(core.schema, d.schema);
@@ -715,7 +715,7 @@ test "optional plugins are gated per agent, not process-wide" {
     var factory_defs = std.array_list.Managed(aimod.ToolDef).init(a);
     try appendToolDefsIn(factorySet(), &factory_defs);
     try t.expectEqual(toolsmod.tools.len, factory_defs.items.len);
-    for (toolsmod.tools, factory_defs.items) |*core, d| {
+    for (&toolsmod.tools, factory_defs.items) |*core, d| {
         try t.expectEqualStrings(core.name, d.name);
         try t.expectEqualStrings(core.desc, d.desc);
         try t.expectEqualStrings(core.schema, d.schema);

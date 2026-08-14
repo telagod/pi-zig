@@ -309,9 +309,13 @@ done-42
 
 ### 推理字段的两种叫法
 
-`reasoning_content`（DeepSeek 系）与 `reasoning`（OpenRouter 等网关）都要认，
-但**只能取其一** —— 实测某网关同时发两个且内容逐字节相同（1107 次全同），
-两个都累加会让推理文本翻倍。优先前者，回退后者。
+`reasoning_content`（DeepSeek 系）、`reasoning`（OpenRouter 等网关）、
+`reasoning_text`（部分兼容端点）都要认，但**只能取其一** —— 实测某网关同时发
+两个且内容逐字节相同（1107 次全同），都累加会让推理文本翻倍。优先级抄 pi：
+`reasoning_content` → `reasoning` → `reasoning_text`。
+
+DeepSeek 等渠道要求下一轮把这段思考以 `reasoning_content` 回放；有字写原文，
+没有写 `""`。缺字段会 400。会话 JSONL 存 `reasoning`，读也认 `reasoning_content`。
 
 推理与正文严格分流：TUI 用 dim 斜体，print 模式走 stderr（stdout 留给管道下游），
 jsonl 是独立的 `{"type":"reasoning"}` 事件。用 `2>&1` 观察会看到两者混在一起，

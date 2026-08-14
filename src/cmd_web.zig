@@ -410,10 +410,11 @@ fn poolStateHook(ctx: ?*anyopaque, cwd: []const u8, session: []const u8, alloc: 
     var stw = std.Io.Writer.Allocating.init(alloc);
     defer stw.deinit();
     const w = &stw.writer;
-    w.print("{{\"model\":{s},\"auto\":{s},\"title\":{s}", .{
+    w.print("{{\"model\":{s},\"auto\":{s},\"title\":{s},\"think\":{s}", .{
         util.jsonString(alloc, snap_model) catch "\"\"",
         if (ses.mode.load(.acquire)) "true" else "false",
         util.jsonString(alloc, ses.agent.title orelse "") catch "\"\"",
+        util.jsonString(alloc, ses.agent.think_level.label()) catch "\"\"",
     }) catch {};
     w.print(",\"pct\":{d},\"running\":{s},\"history\":{s}", .{
         ses.snap_pct.load(.acquire),
@@ -478,6 +479,7 @@ fn webOnToolStart(ctx: ?*anyopaque, name: []const u8, args: []const u8) anyerror
 fn webOnPermission(ctx: ?*anyopaque, name: []const u8, args: []const u8) anyerror!bool {
     const s: *WebSession = @ptrCast(@alignCast(ctx.?));
     if (s.mode.load(.acquire)) return true;
+    if (!toolsmod.needsConfirm(name)) return true;
     const id = webui_mod.PermGate.submit(name, args);
     if (id == 0) return false;
     s.hub.push("{{\"type\":\"permission\",\"session\":{s},\"id\":{d},\"name\":{s},\"args\":{s}}}", .{ try util.jsonString(s.agent.alloc, s.name), id, try util.jsonString(s.agent.alloc, name), try util.jsonString(s.agent.alloc, args) });
@@ -502,7 +504,13 @@ fn webOnTurnEnd(ctx: ?*anyopaque) anyerror!void {
     const now_ns = std.Io.Clock.now(.real, util.io).nanoseconds;
     const el = @max(1, @divTrunc(now_ns - s.start_ns, std.time.ns_per_s));
     const tps = s.tokens_total / @as(usize, @intCast(el));
-    s.hub.push("{{\"type\":\"status\",\"pct\":{d},\"model\":{s},\"cache\":{d},\"tps\":{d}}}", .{ pct, try util.jsonString(s.agent.alloc, s.agent.model), cache_pct, tps });
+    s.hub.push("{{\"type\":\"status\",\"pct\":{d},\"model\":{s},\"cache\":{d},\"tps\":{d},\"think\":{s}}}", .{
+        pct,
+        try util.jsonString(s.agent.alloc, s.agent.model),
+        cache_pct,
+        tps,
+        try util.jsonString(s.agent.alloc, s.agent.think_level.label()),
+    });
 }
 
 fn poolInterruptHook(ctx: ?*anyopaque, cwd: []const u8, session: []const u8) void {
@@ -543,6 +551,17 @@ fn poolConfigHook(ctx: ?*anyopaque, alloc: std.mem.Allocator, body: ?[]const u8)
                 cfg.default_provider = cfg.allocator().dupe(u8, v.string) catch return null;
             }
         }
+        if (root.object.get("setDefaultThinkingLevel")) |v| {
+            if (v == .string) {
+                const level = cfgmod.ThinkLevel.parse(v.string) orelse return null;
+                cfg.saveThinkLevel(level) catch return write_err;
+                pool.mutex.lock(util.io) catch {};
+                for (pool.sessions.items) |ses| {
+                    ses.agent.think_level = cfgmod.clampThinkLevel(ses.agent.modelMeta(), level);
+                }
+                pool.mutex.unlock(util.io);
+            }
+        }
         if (root.object.get("upsertProvider")) |v| {
             if (v == .object) {
                 const name = if (v.object.get("name")) |n| (if (n == .string) n.string else "") else "";
@@ -557,22 +576,24 @@ fn poolConfigHook(ctx: ?*anyopaque, alloc: std.mem.Allocator, body: ?[]const u8)
                 else
                     cfgmod.Api.openai_completions;
                 var models = std.array_list.Managed([]const u8).init(alloc);
-                var windows = std.array_list.Managed(u32).init(alloc);
+                var metas = std.array_list.Managed(cfgmod.ModelMeta).init(alloc);
+                var context_window: u32 = 0;
+                if (v.object.get("contextWindow")) |cw| {
+                    if (cfgmod.parsePositiveU32(cw)) |n| context_window = n;
+                }
                 if (v.object.get("models")) |ms| {
                     if (ms == .array) {
                         for (ms.array.items) |m| {
                             if (m == .string) {
                                 models.append(m.string) catch {};
-                                windows.append(0) catch {};
+                                metas.append(.{}) catch {};
                             } else if (m == .object) {
                                 if (m.object.get("id")) |id| {
                                     if (id == .string) {
                                         models.append(id.string) catch {};
-                                        var mw: u32 = 0;
-                                        if (m.object.get("contextWindow")) |cw| {
-                                            if (cw == .integer and cw.integer > 0 and cw.integer <= std.math.maxInt(u32)) mw = @intCast(cw.integer);
-                                        }
-                                        windows.append(mw) catch {};
+                                        const meta = cfgmod.parseModelMeta(m.object);
+                                        metas.append(meta) catch {};
+                                        if (meta.context_window > 0) context_window = @max(context_window, meta.context_window);
                                     }
                                 }
                             }
@@ -581,26 +602,27 @@ fn poolConfigHook(ctx: ?*anyopaque, alloc: std.mem.Allocator, body: ?[]const u8)
                 }
                 var found = false;
                 var existing_models: []const []const u8 = &.{};
-                var existing_windows: []const u32 = &.{};
-                var existing_cw: u32 = 128 * 1024;
+                var existing_metas: []const cfgmod.ModelMeta = &.{};
+                var existing_cw: u32 = cfgmod.DEFAULT_CONTEXT_WINDOW;
                 for (cfg.providers) |*p| {
                     if (std.mem.eql(u8, p.name, name)) {
                         found = true;
                         existing_models = p.models;
-                        existing_windows = p.model_windows;
+                        existing_metas = p.model_metas;
                         existing_cw = p.context_window;
                         break;
                     }
                 }
                 const has_models_field = v.object.get("models") != null;
+                if (context_window == 0) context_window = if (has_models_field) cfgmod.DEFAULT_CONTEXT_WINDOW else existing_cw;
                 const merged = cfgmod.Provider{
                     .name = name,
                     .api = api_enum,
                     .base_url = base_url,
                     .api_key = api_key,
                     .models = if (has_models_field) (models.toOwnedSlice() catch &.{}) else existing_models,
-                    .model_windows = if (has_models_field) (windows.toOwnedSlice() catch &.{}) else existing_windows,
-                    .context_window = if (has_models_field) 128 * 1024 else existing_cw,
+                    .model_metas = if (has_models_field) (metas.toOwnedSlice() catch &.{}) else existing_metas,
+                    .context_window = context_window,
                 };
                 if (found) {
                     for (cfg.providers) |*p| {
@@ -609,7 +631,8 @@ fn poolConfigHook(ctx: ?*anyopaque, alloc: std.mem.Allocator, body: ?[]const u8)
                             p.api = merged.api;
                             p.api_key = merged.api_key;
                             p.models = merged.models;
-                            p.model_windows = merged.model_windows;
+                            p.model_metas = merged.model_metas;
+                            p.context_window = merged.context_window;
                             break;
                         }
                     }
@@ -642,6 +665,8 @@ fn poolConfigHook(ctx: ?*anyopaque, alloc: std.mem.Allocator, body: ?[]const u8)
     w.print("{s}", .{util.jsonString(alloc, cfg.default_provider orelse "") catch "\"\""}) catch {};
     w.writeAll(",\"defaultModel\":") catch {};
     w.print("{s}", .{util.jsonString(alloc, cfg.default_model orelse "") catch "\"\""}) catch {};
+    w.writeAll(",\"defaultThinkingLevel\":") catch {};
+    w.print("{s}", .{util.jsonString(alloc, if (cfg.default_think_level) |lv| lv.label() else "high") catch "\"\""}) catch {};
     w.writeAll(",\"providers\":[") catch {};
     for (cfg.providers, 0..) |p, i| {
         if (i > 0) w.writeAll(",") catch {};
@@ -854,7 +879,7 @@ fn poolActionHook(ctx: ?*anyopaque, cwd: []const u8, session: []const u8, act: [
             .messages = &ses.agent.messages,
             .window = ses.agent.ctxWindow(),
             .api = ses.agent.provider.api,
-            .vision = compress.modelHasVision(ses.agent.model),
+            .vision = ses.agent.hasVision(),
         };
         const r = if (std.mem.eql(u8, act, "snap"))
             compress.snap(in)
@@ -873,7 +898,7 @@ fn poolActionHook(ctx: ?*anyopaque, cwd: []const u8, session: []const u8, act: [
             .messages = &ses.agent.messages,
             .window = ses.agent.ctxWindow(),
             .api = ses.agent.provider.api,
-            .vision = compress.modelHasVision(ses.agent.model),
+            .vision = ses.agent.hasVision(),
         });
         return jsonOkText(alloc, act, msg);
     }

@@ -779,6 +779,12 @@ pub fn formatNotice(alloc: std.mem.Allocator, r: Report) ?[]const u8 {
     return formatReport(alloc, r);
 }
 
+/// 配置里写了 vision 用配置;否则按模型名猜。
+pub fn hasVision(provider: *const cfgmod.Provider, model: []const u8) bool {
+    if (cfgmod.metaFor(provider, model).vision) |v| return v;
+    return modelHasVision(model);
+}
+
 pub fn modelHasVision(model: []const u8) bool {
     var buf: [160]u8 = undefined;
     const n = blk: {
@@ -786,7 +792,7 @@ pub fn modelHasVision(model: []const u8) bool {
         for (model[0..len], 0..) |c, i| buf[i] = std.ascii.toLower(c);
         break :blk buf[0..len];
     };
-    const no = [_][]const u8{ "reasoner", "o1-mini", "o1-preview", "o3-mini", "o4-mini", "embedding", "moderation", "codestral" };
+    const no = [_][]const u8{ "o1-mini", "o1-preview", "o3-mini", "o4-mini", "embedding", "moderation", "codestral" };
     const yes = [_][]const u8{ "vision", "-vl", "gpt-4o", "gpt-4.1", "gpt-5", "claude", "gemini", "grok", "pixtral", "glm-4v", "qwen-vl", "qwen2-vl", "qwen2.5-vl" };
     for (no) |p| {
         if (std.mem.indexOf(u8, n, p) != null) return false;
@@ -1072,9 +1078,30 @@ test "modelHasVision gates known families" {
     try t.expect(modelHasVision("claude-sonnet-4"));
     try t.expect(modelHasVision("gpt-4o-mini"));
     try t.expect(modelHasVision("qwen2.5-vl-72b"));
-    try t.expect(!modelHasVision("deepseek-reasoner"));
-    try t.expect(!modelHasVision("deepseek-chat"));
+    try t.expect(!modelHasVision("deepseek-v4-flash"));
+    try t.expect(!modelHasVision("deepseek-v4-pro"));
     try t.expect(!modelHasVision("o1-mini"));
+    const forced = cfgmod.Provider{
+        .name = "x",
+        .api = .openai_completions,
+        .base_url = "https://x",
+        .models = &.{"plain"},
+        .model_metas = &.{.{ .vision = true }},
+    };
+    try t.expect(hasVision(&forced, "plain"));
+    try t.expect(!hasVision(&forced, "deepseek-v4-flash"));
+}
+
+test "hasVision catalog says DeepSeek V4 cannot see images" {
+    const t = std.testing;
+    const ds = cfgmod.Provider{
+        .name = "deepseek",
+        .api = .openai_completions,
+        .base_url = "https://api.deepseek.com",
+        .models = &.{"deepseek-v4-flash"},
+        .context_window = 1_000_000,
+    };
+    try t.expect(!hasVision(&ds, "deepseek-v4-flash"));
 }
 
 test "formatStatus reports usage next-layer and vision" {

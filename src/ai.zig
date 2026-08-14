@@ -34,6 +34,8 @@ pub const Message = struct {
     image_mime: ?[]const u8 = null,
     image_w: u32 = 0,
     image_h: u32 = 0,
+    /// 上一轮的 chain-of-thought。DeepSeek 等渠道要求回放 `reasoning_content`。
+    reasoning: ?[]const u8 = null,
 };
 
 pub const Usage = struct {
@@ -85,6 +87,9 @@ pub const Callbacks = struct {
     on_connect: ?*const fn (ctx: ?*anyopaque, stream: *httpc.Stream) void = null,
 };
 
+/// 思考等级。词表与 per-model map 在 `config.ThinkLevel` / `thinkingLevelMap`。
+pub const ThinkLevel = cfgmod.ThinkLevel;
+
 pub const Options = struct {
     max_tokens: u32 = 8192,
     /// `prompt_cache_key`(OpenAI Chat Completions / Responses):与前缀 hash
@@ -95,6 +100,13 @@ pub const Options = struct {
     /// `cache_control` 断点。DeepSeek 文档未列此字段但实测静默忽略(HTTP 200),
     /// 所以对 OpenAI 兼容端点无条件发是安全的。
     cache_key: ?[]const u8 = null,
+    /// 思考强度。写在 messages 之后,改等级不打乱 tools 前缀缓存。
+    /// 缺省 high:DeepSeek 官方默认 effort,也是 pi 的默认档。
+    think_level: ThinkLevel = .high,
+    think_map: cfgmod.ThinkingLevelMap = .{},
+    /// false 时不写 thinking / reasoning_effort(模型没有 reasoning)。
+    reasoning: bool = true,
+    compat: cfgmod.Compat = .{},
     callbacks: Callbacks = .{},
     /// HTTP 重试策略(缺省开启;compact 等内部调用亦受益)。
     retry_policy: httpc.RetryPolicy = .{},
@@ -188,14 +200,146 @@ fn writeEscaped(writer: *std.Io.Writer, c: u8) !void {
     }
 }
 
-/// 序列化 OpenAI Responses API 请求体(input items 语义,与 Completions 不同)。
+fn thinkEffortStr(level: ThinkLevel, map: cfgmod.ThinkingLevelMap) ?[]const u8 {
+    if (level == .off) return null;
+    return switch (map.get(level)) {
+        .send => |s| s,
+        .omitted => level.label(),
+        .hidden => null,
+    };
+}
+
+fn writeEffortField(writer: *std.Io.Writer, key: []const u8, effort: []const u8) !void {
+    try writer.writeByte(',');
+    try std.json.Stringify.value(key, .{}, writer);
+    try writer.writeByte(':');
+    try std.json.Stringify.value(effort, .{}, writer);
+}
+
+/// 思考字段。形状抄 pi `openai-completions.ts` 的 `thinkingFormat` 分支。
+/// 写在 messages 之后,改等级不打乱 tools 前缀。
+fn writeThinkCompat(
+    writer: *std.Io.Writer,
+    level: ThinkLevel,
+    map: cfgmod.ThinkingLevelMap,
+    reasoning: bool,
+    compat: cfgmod.Compat,
+) !void {
+    if (!reasoning) return;
+    const format = compat.think_format orelse .openai;
+    const supports_effort = compat.supports_reasoning_effort orelse true;
+    const effort = thinkEffortStr(level, map);
+
+    switch (format) {
+        .deepseek => {
+            if (level == .off) {
+                if (map.get(.off) != .hidden)
+                    try writer.writeAll(",\"thinking\":{\"type\":\"disabled\"}");
+                return;
+            }
+            try writer.writeAll(",\"thinking\":{\"type\":\"enabled\"}");
+            if (supports_effort) {
+                if (effort) |e| try writeEffortField(writer, "reasoning_effort", e);
+            }
+        },
+        .openrouter => {
+            if (level == .off) {
+                if (map.get(.off) != .hidden)
+                    try writer.writeAll(",\"reasoning\":{\"effort\":\"none\"}");
+                return;
+            }
+            if (effort) |e| {
+                try writer.writeAll(",\"reasoning\":{\"effort\":");
+                try std.json.Stringify.value(e, .{}, writer);
+                try writer.writeByte('}');
+            }
+        },
+        .zai => {
+            try writer.writeAll(if (level == .off)
+                ",\"thinking\":{\"type\":\"disabled\"}"
+            else
+                ",\"thinking\":{\"type\":\"enabled\"}");
+        },
+        .together => {
+            try writer.writeAll(if (level == .off)
+                ",\"reasoning\":{\"enabled\":false}"
+            else
+                ",\"reasoning\":{\"enabled\":true}");
+            if (level != .off and supports_effort) {
+                if (effort) |e| try writeEffortField(writer, "reasoning_effort", e);
+            }
+        },
+        .qwen => {
+            try writer.writeAll(if (level == .off)
+                ",\"enable_thinking\":false"
+            else
+                ",\"enable_thinking\":true");
+            if (level != .off and supports_effort) {
+                if (effort) |e| try writeEffortField(writer, "reasoning_effort", e);
+            }
+        },
+        .openai => {
+            if (level == .off) {
+                if (map.get(.off) == .send) {
+                    try writeEffortField(writer, "reasoning_effort", map.get(.off).send);
+                }
+                return;
+            }
+            if (supports_effort) {
+                if (effort) |e| try writeEffortField(writer, "reasoning_effort", e);
+            }
+        },
+    }
+}
+
+/// pi 流式/非流式同一优先级:reasoning_content → reasoning → reasoning_text。
+fn firstReasoningText(obj: std.json.ObjectMap) ?[]const u8 {
+    const fields = [_][]const u8{ "reasoning_content", "reasoning", "reasoning_text" };
+    for (fields) |f| {
+        if (obj.get(f)) |v| {
+            if (v == .string and v.string.len > 0) return v.string;
+        }
+    }
+    return null;
+}
+
+/// pi `requiresReasoningContentOnAssistantMessages`:有字写字,没有写空串。
+fn writeReasoningContent(writer: *std.Io.Writer, m: Message, require: bool) !void {
+    const text = m.reasoning orelse "";
+    if (!require and text.len == 0) return;
+    try writer.writeAll(",\"reasoning_content\":");
+    try writeJsonText(writer, text);
+}
+
+/// OpenAI / DeepSeek Responses:`reasoning.effort`。
+/// DeepSeek 文档:`none/low/high/max`;OpenAI:`none/minimal/low/medium/high/xhigh/max`。
+/// 发 map 后的字符串,没有 map 就发等级名。
+fn writeThinkResponses(writer: *std.Io.Writer, level: ThinkLevel, map: cfgmod.ThinkingLevelMap, reasoning: bool) !void {
+    if (!reasoning) return;
+    const effort: []const u8 = if (level == .off)
+        "none"
+    else switch (map.get(level)) {
+        .send => |s| s,
+        .omitted => level.label(),
+        .hidden => return,
+    };
+    try writer.writeAll(",\"reasoning\":{\"effort\":");
+    try std.json.Stringify.value(effort, .{}, writer);
+    try writer.writeAll("}");
+}
+
 fn serializeResponses(
     alloc: std.mem.Allocator,
     model: []const u8,
     messages: []const Message,
     tools: []const ToolDef,
     max_tokens: u32,
+    think_level: ThinkLevel,
+    think_map: cfgmod.ThinkingLevelMap,
+    reasoning: bool,
+    compat: cfgmod.Compat,
 ) ![]u8 {
+    _ = compat;
     var aw = std.Io.Writer.Allocating.init(alloc);
     defer aw.deinit();
     const writer = &aw.writer;
@@ -273,11 +417,13 @@ fn serializeResponses(
         try writer.writeAll(",\"instructions\":");
         try std.json.Stringify.value(ins.written(), .{}, writer);
     }
+    try writeThinkResponses(writer, think_level, think_map, reasoning);
+    _ = compat;
     try writer.writeAll("}");
     return aw.toOwnedSlice();
 }
 
-/// 序列化 OpenAI 兼容请求体。
+/// 序列化 OpenAI 兼容请求体。测试走默认 high;真正发请求用 serializeOpenAIThink。
 fn serializeOpenAI(
     alloc: std.mem.Allocator,
     model: []const u8,
@@ -286,6 +432,21 @@ fn serializeOpenAI(
     max_tokens: u32,
     cache_key: ?[]const u8,
 ) ![]u8 {
+    return serializeOpenAIThink(alloc, model, messages, tools, max_tokens, cache_key, .high, .{}, true, .{});
+}
+
+fn serializeOpenAIThink(
+    alloc: std.mem.Allocator,
+    model: []const u8,
+    messages: []const Message,
+    tools: []const ToolDef,
+    max_tokens: u32,
+    cache_key: ?[]const u8,
+    think_level: ThinkLevel,
+    think_map: cfgmod.ThinkingLevelMap,
+    reasoning: bool,
+    compat: cfgmod.Compat,
+) ![]u8 {
     var aw = std.Io.Writer.Allocating.init(alloc);
     defer aw.deinit();
     const writer = &aw.writer;
@@ -293,21 +454,14 @@ fn serializeOpenAI(
     try std.json.Stringify.value(model, .{}, writer);
     try writer.writeAll(",\"stream\":true,\"stream_options\":{\"include_usage\":true},\"max_tokens\":");
     try writer.print("{d}", .{max_tokens});
-    // prompt_cache_key:与前缀 hash 组合决定请求路由到哪台机器。同一工作目录
-    // 的请求共享同一个长前缀,给相同的 key 能让它们落到同一台,命中率更高。
+    // prompt_cache_key:与前缀 hash 组合决定请求路由到哪台机器。
     if (cache_key) |k| {
         if (k.len > 0) {
             try writer.writeAll(",\"prompt_cache_key\":");
             try std.json.Stringify.value(k, .{}, writer);
         }
     }
-    // tools 写在 messages 之前:静态部分在前、每轮变化的 messages 尾部在后。
-    //
-    // 注意 JSON 顶层字段顺序本身**不影响**缓存命中 —— OpenAI / DeepSeek 都是
-    // 服务端反序列化后按自己的模板重组 prompt 再做前缀匹配,JSON object 无序。
-    // 这里只是让字面顺序反映语义顺序,便于阅读。真正影响命中率的是:
-    // (a) tools 数组**内部**顺序每轮必须一致(打乱就是另一个前缀);
-    // (b) messages 只在尾部追加,不在中间插改。
+    // tools 在 messages 之前,保持每轮静态前缀稳定。thinking 写在 messages 之后。
     if (tools.len > 0) {
         try writer.writeAll(",\"tools\":[");
         for (tools, 0..) |td, i| {
@@ -322,6 +476,7 @@ fn serializeOpenAI(
         }
         try writer.writeAll("]");
     }
+    const replay_rc = (compat.requires_reasoning_content orelse false) and reasoning;
     try writer.writeAll(",\"messages\":[");
     for (messages, 0..) |m, i| {
         if (i > 0) try writer.writeByte(',');
@@ -339,9 +494,10 @@ fn serializeOpenAI(
                 try std.json.Stringify.value(tc.args, .{}, writer);
                 try writer.writeAll("}}");
             }
-            try writer.writeAll("]}");
+            try writer.writeAll("]");
+            try writeReasoningContent(writer, m, replay_rc);
+            try writer.writeByte('}');
         } else if (m.image) |img| {
-            // 带图消息:content 数组 [text, image_url](openai 协议)
             try writer.writeAll(",\"content\":[{\"type\":\"text\",\"text\":");
             try writeJsonText(writer, m.content);
             try writer.writeAll("},{\"type\":\"image_url\",\"image_url\":{\"url\":\"data:");
@@ -354,6 +510,8 @@ fn serializeOpenAI(
                 try writer.writeAll(",\"tool_call_id\":");
                 try std.json.Stringify.value(id, .{}, writer);
             }
+            if (std.mem.eql(u8, m.role, "assistant"))
+                try writeReasoningContent(writer, m, replay_rc);
             try writer.writeAll("}");
         } else {
             try writer.writeAll(",\"content\":");
@@ -363,10 +521,13 @@ fn serializeOpenAI(
                 try writer.writeAll(",\"tool_call_id\":");
                 try std.json.Stringify.value(id, .{}, writer);
             }
+            if (std.mem.eql(u8, m.role, "assistant"))
+                try writeReasoningContent(writer, m, replay_rc);
             try writer.writeAll("}");
         }
     }
     try writer.writeAll("]");
+    try writeThinkCompat(writer, think_level, think_map, reasoning, compat);
     try writer.writeAll("}");
     return aw.toOwnedSlice();
 }
@@ -617,15 +778,11 @@ fn parseOpenAIChunk(alloc: std.mem.Allocator, arena: std.mem.Allocator, chunk: [
             try emitText(cbs, out_text.items, c.string);
         }
     }
-    // 推理字段有两种叫法:DeepSeek 系用 reasoning_content,OpenRouter 等网关用 reasoning。
-    // 实测某网关**同时发两个**且内容完全一致(1107 次全同),所以只能取其一 ——
-    // 都累加会让推理文本翻倍。优先 reasoning_content,回退 reasoning。
-    const reasoning_delta = delta.object.get("reasoning_content") orelse delta.object.get("reasoning");
-    if (reasoning_delta) |rc| {
-        if (rc == .string and rc.string.len > 0) {
-            try out_reasoning.appendSlice(rc.string);
-            try emitCallback(cbs, cbs.on_reasoning, rc.string);
-        }
+    // pi openai-completions.ts:reasoning_content → reasoning → reasoning_text,
+    // 只取第一个非空,避免双字段翻倍。
+    if (firstReasoningText(delta.object)) |rc| {
+        try out_reasoning.appendSlice(rc);
+        try emitCallback(cbs, cbs.on_reasoning, rc);
     }
     if (delta.object.get("tool_calls")) |tcs| {
         if (tcs != .array) return;
@@ -901,7 +1058,6 @@ fn runOpenAIStream(alloc: std.mem.Allocator, arena: std.mem.Allocator, stream: *
 
 /// 非流式 OpenAI 响应(个别网关不支持流)。
 fn parseOpenAIJson(alloc: std.mem.Allocator, body: []const u8, cbs: Callbacks, result: *RunResult, out_text: *std.array_list.Managed(u8), out_reasoning: *std.array_list.Managed(u8), usage: *Usage) !void {
-    _ = out_reasoning;
     const root = std.json.parseFromSliceLeaky(std.json.Value, alloc, body, .{}) catch {
         result.error_msg = "provider returned invalid JSON";
         return;
@@ -946,6 +1102,10 @@ fn parseOpenAIJson(alloc: std.mem.Allocator, body: []const u8, cbs: Callbacks, r
                                     try out_text.appendSlice(c.string);
                                     try emitText(cbs, out_text.items, c.string);
                                 }
+                            }
+                            if (firstReasoningText(msg.object)) |rc| {
+                                try out_reasoning.appendSlice(rc);
+                                try emitCallback(cbs, cbs.on_reasoning, rc);
                             }
                             if (msg.object.get("tool_calls")) |tcs| {
                                 if (tcs == .array) {
@@ -1141,9 +1301,9 @@ pub fn run(
     const body = if (provider.api == .anthropic_messages)
         try serializeAnthropic(alloc, model, msgs, tools, options.max_tokens)
     else if (provider.api == .openai_responses)
-        try serializeResponses(alloc, model, msgs, tools, options.max_tokens)
+        try serializeResponses(alloc, model, msgs, tools, options.max_tokens, options.think_level, options.think_map, options.reasoning, options.compat)
     else
-        try serializeOpenAI(alloc, model, msgs, tools, options.max_tokens, options.cache_key);
+        try serializeOpenAIThink(alloc, model, msgs, tools, options.max_tokens, options.cache_key, options.think_level, options.think_map, options.reasoning, options.compat);
     defer alloc.free(body);
 
     var headers = std.array_list.Managed(httpc.Header).init(alloc);
@@ -1378,6 +1538,161 @@ test "serializeOpenAI basic" {
     try t.expect(std.mem.indexOf(u8, body, "\"model\":\"m\"") != null);
     try t.expect(std.mem.indexOf(u8, body, "\"tool_call_id\":\"c1\"") != null);
     try t.expect(std.mem.indexOf(u8, body, "\"arguments\":\"{\\\"command\\\":\\\"ls\\\"}\"") != null);
+    try t.expect(std.mem.indexOf(u8, body, "\"reasoning_effort\":\"high\"") != null);
+}
+
+test "ThinkLevel parse uses industry names" {
+    const t = std.testing;
+    try t.expect(ThinkLevel.parse("浅").? == .low);
+    try t.expect(ThinkLevel.parse("off").? == .off);
+    try t.expect(ThinkLevel.parse("medium").? == .medium);
+    try t.expect(ThinkLevel.parse("xhigh").? == .xhigh);
+    try t.expect(ThinkLevel.parse("max").? == .max);
+    try t.expect(ThinkLevel.parse("nope") == null);
+    try t.expectEqualStrings("high", ThinkLevel.high.label());
+}
+
+test "serializeOpenAI think level maps to DeepSeek fields after messages" {
+    const t = std.testing;
+    var arena = util.Arena.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const msgs = [_]Message{.{ .role = "user", .content = "hi" }};
+
+    const ds_c = cfgmod.Compat{ .think_format = .deepseek, .requires_reasoning_content = true, .supports_reasoning_effort = true };
+    const off = try serializeOpenAIThink(a, "m", &msgs, &.{}, 100, null, .off, .{}, true, ds_c);
+    try t.expect(std.mem.indexOf(u8, off, "\"thinking\":{\"type\":\"disabled\"}") != null);
+    try t.expect(std.mem.indexOf(u8, off, "reasoning_effort") == null);
+    try t.expect(std.mem.indexOf(u8, off, "\"thinking\"").? > std.mem.indexOf(u8, off, "\"messages\":[").?);
+
+    const low = try serializeOpenAIThink(a, "m", &msgs, &.{}, 100, null, .low, .{}, true, ds_c);
+    try t.expect(std.mem.indexOf(u8, low, "\"reasoning_effort\":\"low\"") != null);
+
+    const deep = try serializeOpenAIThink(a, "m", &msgs, &.{}, 100, null, .max, .{}, true, ds_c);
+    try t.expect(std.mem.indexOf(u8, deep, "\"reasoning_effort\":\"max\"") != null);
+
+    const resp = try serializeResponses(a, "m", &msgs, &.{}, 100, .max, .{}, true, .{});
+    try t.expect(std.mem.indexOf(u8, resp, "\"reasoning\":{\"effort\":\"max\"}") != null);
+
+    const silent = try serializeOpenAIThink(a, "m", &msgs, &.{}, 100, null, .high, .{}, false, ds_c);
+    try t.expect(std.mem.indexOf(u8, silent, "thinking") == null);
+    try t.expect(std.mem.indexOf(u8, silent, "reasoning_effort") == null);
+
+    const ds = cfgmod.Provider{
+        .name = "deepseek",
+        .api = .openai_completions,
+        .base_url = "https://api.deepseek.com",
+    };
+    const flash = cfgmod.metaFor(&ds, "deepseek-v4-flash");
+    const pro = cfgmod.metaFor(&ds, "deepseek-v4-pro");
+    const flash_low = try serializeOpenAIThink(a, "deepseek-v4-flash", &msgs, &.{}, 100, null, .low, flash.think_map, true, ds_c);
+    try t.expect(std.mem.indexOf(u8, flash_low, "\"reasoning_effort\":\"low\"") != null);
+    const pro_high = try serializeOpenAIThink(a, "deepseek-v4-pro", &msgs, &.{}, 100, null, .high, pro.think_map, true, ds_c);
+    try t.expect(std.mem.indexOf(u8, pro_high, "\"reasoning_effort\":\"high\"") != null);
+    const pro_low = try serializeOpenAIThink(a, "deepseek-v4-pro", &msgs, &.{}, 100, null, .low, pro.think_map, true, ds_c);
+    try t.expect(std.mem.indexOf(u8, pro_low, "reasoning_effort") == null);
+
+    const oai_c = cfgmod.Compat{ .think_format = .openai, .supports_reasoning_effort = true };
+    const oai = try serializeOpenAIThink(a, "gpt", &msgs, &.{}, 100, null, .high, .{}, true, oai_c);
+    try t.expect(std.mem.indexOf(u8, oai, "\"reasoning_effort\":\"high\"") != null);
+    try t.expect(std.mem.indexOf(u8, oai, "\"thinking\"") == null);
+
+    const or_c = cfgmod.Compat{ .think_format = .openrouter };
+    const orb = try serializeOpenAIThink(a, "x", &msgs, &.{}, 100, null, .high, .{}, true, or_c);
+    try t.expect(std.mem.indexOf(u8, orb, "\"reasoning\":{\"effort\":\"high\"}") != null);
+
+    const replay_msgs = [_]Message{.{
+        .role = "assistant",
+        .content = "",
+        .tool_calls = &.{.{ .id = "c1", .name = "bash", .args = "{}" }},
+        .reasoning = "step",
+    }};
+    const replay = try serializeOpenAIThink(a, "m", &replay_msgs, &.{}, 100, null, .high, .{}, true, ds_c);
+    try t.expect(std.mem.indexOf(u8, replay, "\"reasoning_content\":\"step\"") != null);
+    const empty_rc = [_]Message{.{
+        .role = "assistant",
+        .content = "",
+        .tool_calls = &.{.{ .id = "c1", .name = "bash", .args = "{}" }},
+    }};
+    const empty = try serializeOpenAIThink(a, "m", &empty_rc, &.{}, 100, null, .high, .{}, true, ds_c);
+    try t.expect(std.mem.indexOf(u8, empty, "\"reasoning_content\":\"\"") != null);
+}
+
+test "live resolveCompat path: official DeepSeek flash/pro request shape" {
+    const t = std.testing;
+    var arena = util.Arena.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const p = cfgmod.Provider{
+        .name = "deepseek",
+        .api = .openai_completions,
+        .base_url = "https://api.deepseek.com",
+        .models = &.{ "deepseek-v4-flash", "deepseek-v4-pro" },
+        .model_metas = &.{
+            .{ .context_window = 1_000_000, .max_output = 384_000, .vision = false, .reasoning = true },
+            .{ .context_window = 1_000_000, .max_output = 384_000, .vision = false, .reasoning = true },
+        },
+    };
+    const hist = [_]Message{
+        .{ .role = "user", .content = "hi" },
+        .{
+            .role = "assistant",
+            .content = "",
+            .tool_calls = &.{.{ .id = "c1", .name = "bash", .args = "{}" }},
+            .reasoning = "think-1",
+        },
+        .{ .role = "tool", .content = "ok", .tool_call_id = "c1" },
+    };
+
+    const flash_meta = cfgmod.metaFor(&p, "deepseek-v4-flash");
+    const flash_c = cfgmod.resolveCompat(&p, "deepseek-v4-flash");
+    try t.expectEqual(cfgmod.ThinkFormat.deepseek, flash_c.think_format.?);
+    try t.expectEqual(true, flash_c.requires_reasoning_content.?);
+    const flash_lv = cfgmod.clampThinkLevel(flash_meta, .high);
+    try t.expectEqual(cfgmod.ThinkLevel.high, flash_lv);
+    const flash = try serializeOpenAIThink(a, "deepseek-v4-flash", &hist, &.{}, 100, "/tmp", flash_lv, flash_meta.think_map, flash_meta.reasoning.?, flash_c);
+    try t.expect(std.mem.indexOf(u8, flash, "\"thinking\":{\"type\":\"enabled\"}") != null);
+    try t.expect(std.mem.indexOf(u8, flash, "\"reasoning_effort\":\"high\"") != null);
+    try t.expect(std.mem.indexOf(u8, flash, "\"reasoning_content\":\"think-1\"") != null);
+
+    const pro_meta = cfgmod.metaFor(&p, "deepseek-v4-pro");
+    const pro_c = cfgmod.resolveCompat(&p, "deepseek-v4-pro");
+    try t.expectEqual(cfgmod.ThinkLevel.high, cfgmod.clampThinkLevel(pro_meta, .low));
+    const pro = try serializeOpenAIThink(a, "deepseek-v4-pro", &hist, &.{}, 100, "/tmp", .high, pro_meta.think_map, pro_meta.reasoning.?, pro_c);
+    try t.expect(std.mem.indexOf(u8, pro, "\"reasoning_effort\":\"high\"") != null);
+    try t.expect(std.mem.indexOf(u8, pro, "\"reasoning_content\":\"think-1\"") != null);
+
+    const orouter = cfgmod.Provider{
+        .name = "openrouter",
+        .api = .openai_completions,
+        .base_url = "https://openrouter.ai/api/v1",
+        .models = &.{"deepseek/deepseek-v4-pro"},
+        .model_metas = &.{.{ .reasoning = true }},
+    };
+    const or_c = cfgmod.resolveCompat(&orouter, "deepseek/deepseek-v4-pro");
+    try t.expectEqual(cfgmod.ThinkFormat.openrouter, or_c.think_format.?);
+    try t.expectEqual(true, or_c.requires_reasoning_content.?);
+    const or_body = try serializeOpenAIThink(a, "deepseek/deepseek-v4-pro", &hist, &.{}, 100, null, .high, cfgmod.metaFor(&orouter, "deepseek/deepseek-v4-pro").think_map, true, or_c);
+    try t.expect(std.mem.indexOf(u8, or_body, "\"reasoning\":{\"effort\":\"high\"}") != null);
+    try t.expect(std.mem.indexOf(u8, or_body, "\"thinking\"") == null);
+    try t.expect(std.mem.indexOf(u8, or_body, "\"reasoning_content\":\"think-1\"") != null);
+}
+
+test "non-stream JSON keeps reasoning_content for replay" {
+    const t = std.testing;
+    var arena = util.Arena.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var out_text = std.array_list.Managed(u8).init(a);
+    var out_reasoning = std.array_list.Managed(u8).init(a);
+    var usage = Usage{};
+    var result = RunResult{};
+    const body =
+        \\{"choices":[{"message":{"role":"assistant","content":"hi","reasoning_content":"cot"}}]}
+    ;
+    try parseOpenAIJson(a, body, .{}, &result, &out_text, &out_reasoning, &usage);
+    try t.expectEqualStrings("hi", out_text.items);
+    try t.expectEqualStrings("cot", out_reasoning.items);
 }
 
 test "invalid utf8 in tool output still serializes as a JSON string" {
@@ -1920,6 +2235,7 @@ test "reasoning arrives under either field name, never doubled" {
         .{ .json = "{\"choices\":[{\"delta\":{\"reasoning\":\"bb\"}}]}", .want = "bb" },
         // 实测某网关两个都发且内容相同:只能算一次,否则推理文本翻倍
         .{ .json = "{\"choices\":[{\"delta\":{\"reasoning_content\":\"cc\",\"reasoning\":\"cc\"}}]}", .want = "cc" },
+        .{ .json = "{\"choices\":[{\"delta\":{\"reasoning_text\":\"dd\"}}]}", .want = "dd" },
     };
 
     for (cases) |c| {
@@ -1947,6 +2263,17 @@ test "image messages serialize to content arrays on both protocols" {
     const body = try serializeOpenAI(a, "m", &msgs, &.{}, 100, null);
     try t.expect(std.mem.indexOf(u8, body, "\"content\":[{\"type\":\"text\"") != null);
     try t.expect(std.mem.indexOf(u8, body, "\"type\":\"image_url\",\"image_url\":{\"url\":\"data:image/png;base64,AAAA\"}") != null);
+
+    const asst_img = [_]Message{.{
+        .role = "assistant",
+        .content = "see",
+        .image = "BBBB",
+        .image_mime = "image/png",
+        .reasoning = "cot",
+    }};
+    const ds_c = cfgmod.Compat{ .think_format = .deepseek, .requires_reasoning_content = true };
+    const replay_img = try serializeOpenAIThink(a, "m", &asst_img, &.{}, 100, null, .high, .{}, true, ds_c);
+    try t.expect(std.mem.indexOf(u8, replay_img, "\"reasoning_content\":\"cot\"") != null);
 
     const body2 = try serializeAnthropic(a, "m", &msgs, &.{}, 100);
     try t.expect(std.mem.indexOf(u8, body2, "\"type\":\"image\",\"source\":{\"type\":\"base64\",\"media_type\":\"image/png\",\"data\":\"AAAA\"}") != null);

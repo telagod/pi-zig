@@ -386,6 +386,8 @@ pub const Agent = struct {
     /// 新进程可继承环境,深度必须是 Agent 自己的字段。
     depth: usize = 0,
     cbs: AgentCallbacks = .{},
+    /// 思考强度。TUI /think 与 Alt+,/. 改它,下一轮请求带上。
+    think_level: ai.ThinkLevel = .high,
     /// 流被取消(如 Ctrl+C)
     aborted: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     /// 当前活跃 provider 流的 socket fd(-1 = 无)。
@@ -417,6 +419,10 @@ pub const Agent = struct {
         _ = pluginsmod.defaultSet();
         const resolved = try cfg.resolve(provider_name, model_name);
         const url = try cfg.endpointUrl(resolved.provider);
+        const think0 = cfgmod.clampThinkLevel(
+            cfgmod.metaFor(resolved.provider, resolved.model),
+            cfg.default_think_level orelse .high,
+        );
         // 启用集:调用方给了就用它,否则拷进程默认集。之后只改这个副本 ——
         // 从前 initOpts 里的 enable("skills") 改的是全局,会污染别的 Agent。
         var enabled = opts.plugins orelse pluginsmod.defaultSet();
@@ -529,6 +535,7 @@ pub const Agent = struct {
                 .plugins = enabled,
                 .tool_allow = opts.tool_allow,
                 .depth = opts.depth,
+                .think_level = think0,
             };
         }
         // SYSTEM.md(项目 .pi/SYSTEM.md 优先,其次全局)替换默认提示
@@ -556,6 +563,7 @@ pub const Agent = struct {
                     .plugins = enabled,
                     .tool_allow = opts.tool_allow,
                     .depth = opts.depth,
+                    .think_level = think0,
                 };
             } else |_| {}
         }
@@ -579,6 +587,7 @@ pub const Agent = struct {
             .plugins = enabled,
             .tool_allow = opts.tool_allow,
             .depth = opts.depth,
+            .think_level = think0,
         };
     }
 
@@ -605,6 +614,7 @@ pub const Agent = struct {
         // 并发分配同一个 arena 会损坏它。旧 url 留在 arena 不 free,
         // 每次切换泄漏约百字节,可忽略。
         self.url = try std.heap.page_allocator.dupe(u8, try self.cfg.endpointUrl(resolved.provider));
+        self.think_level = cfgmod.clampThinkLevel(self.modelMeta(), self.think_level);
     }
 
     /// 设置会话标题(null 清除)。
@@ -647,6 +657,24 @@ pub const Agent = struct {
     /// 预算查询都按它 —— 不再 provider 一刀切。
     pub fn ctxWindow(self: *const Agent) usize {
         return cfgmod.windowFor(self.provider, self.model);
+    }
+
+    pub fn modelMeta(self: *const Agent) cfgmod.ModelMeta {
+        return cfgmod.metaFor(self.provider, self.model);
+    }
+
+    fn llmOpts(self: *const Agent, extra: ai.Options) ai.Options {
+        var o = extra;
+        const meta = self.modelMeta();
+        o.think_level = cfgmod.clampThinkLevel(meta, self.think_level);
+        o.think_map = meta.think_map;
+        o.reasoning = meta.reasoning orelse false;
+        o.compat = cfgmod.resolveCompat(self.provider, self.model);
+        return o;
+    }
+
+    pub fn hasVision(self: *const Agent) bool {
+        return @import("compress.zig").hasVision(self.provider, self.model);
     }
 
     pub fn estTokens(self: *const Agent) usize {
@@ -753,12 +781,16 @@ pub const Agent = struct {
                 self.model,
                 all.items,
                 tool_defs.items,
-                .{ .callbacks = cbs, .cache_key = self.cwd },
+                self.llmOpts(.{ .callbacks = cbs, .cache_key = self.cwd }),
             );
             if (result.aborted) {
                 // 中断:保留已生成 partial 文本,结束本轮(不再执行工具)
                 if (result.text.len > 0) {
-                    try self.messages.append(.{ .role = "assistant", .content = result.text });
+                    try self.messages.append(.{
+                        .role = "assistant",
+                        .content = result.text,
+                        .reasoning = if (result.reasoning.len > 0) result.reasoning else null,
+                    });
                 }
                 self.cur_stream_fd.store(-1, .release);
                 if (self.cbs.on_turn_end) |f| try f(self.cbs.ctx);
@@ -776,6 +808,7 @@ pub const Agent = struct {
                 .role = "assistant",
                 .content = result.text,
                 .tool_calls = if (result.tool_calls.len > 0) result.tool_calls else null,
+                .reasoning = if (result.reasoning.len > 0) result.reasoning else null,
             });
 
             // 流中途断了(网络抖动,非用户中止)。partial 已经存进历史,
@@ -1122,11 +1155,11 @@ pub const Agent = struct {
             if (all.items.len <= 3) break; // 删无可删
             _ = all.orderedRemove(1); // 删最旧历史(保 system 与总结指令)
         }
-        result = try self.llm_run(self.alloc, self.alloc, self.provider, self.key, self.url, self.model, all.items, &.{}, .{ .cache_key = self.cwd });
+        result = try self.llm_run(self.alloc, self.alloc, self.provider, self.key, self.url, self.model, all.items, &.{}, self.llmOpts(.{ .cache_key = self.cwd }));
         if (result.error_msg != null) {
             // compact 韧性:插件提供备用模型时重试一次
             if (pluginsmod.compactFallbackModel(@ptrCast(self))) |fb| {
-                result = try self.llm_run(self.alloc, self.alloc, self.provider, self.key, self.url, fb, all.items, &.{}, .{ .cache_key = self.cwd });
+                result = try self.llm_run(self.alloc, self.alloc, self.provider, self.key, self.url, fb, all.items, &.{}, self.llmOpts(.{ .cache_key = self.cwd }));
             }
         }
         if (result.error_msg != null) return result.error_msg.?;

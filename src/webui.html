@@ -2477,6 +2477,7 @@
                     ></span
                   ></span>
                   <span class="mode-pill" id="hModel" title="切换模型">…</span>
+                  <span class="mode-pill" id="hThink" title="思考等级">◇ high</span>
                   <span id="turnMeta" class="turn-meta" hidden></span>
                   <button
                     class="compact-chip"
@@ -2504,6 +2505,7 @@
     <div class="menu" id="kmenu"></div>
     <div class="menu" id="wsmenu"></div>
     <div class="menu" id="modelMenu"></div>
+    <div class="menu" id="thinkMenu"></div>
     <div id="toast"></div>
     <div id="overlay"></div>
     <div id="sheet">
@@ -3393,6 +3395,52 @@
         e.stopPropagation();
         loadModels(e.currentTarget);
       };
+      const THINK_LEVELS = [
+        "off",
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+      ];
+      function renderThink() {
+        const el = $("hThink");
+        if (!el) return;
+        el.textContent = "◇ " + (curThink || "high");
+        el.title = "思考 " + (curThink || "high");
+      }
+      function setThink(level) {
+        fetch("/api/config", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ setDefaultThinkingLevel: level }),
+        })
+          .then((r) => r.json())
+          .then((j) => {
+            if (j && j.defaultThinkingLevel) {
+              curThink = j.defaultThinkingLevel;
+              renderThink();
+            }
+          })
+          .catch(() => {});
+      }
+      $("hThink").onclick = (e) => {
+        e.stopPropagation();
+        const m = $("thinkMenu");
+        m.innerHTML = "";
+        THINK_LEVELS.forEach((lv) => {
+          const d = document.createElement("div");
+          d.className = "mi" + (lv === curThink ? " check" : "");
+          d.textContent = lv;
+          d.onclick = () => {
+            m.hidden = true;
+            setThink(lv);
+          };
+          m.appendChild(d);
+        });
+        openAt("thinkMenu", e.currentTarget);
+      };
       // ---- 审批模式 / 模式 ----
       let autoMode = true;
       function setModeBtn() {
@@ -4223,6 +4271,10 @@
             }
             setTurnMeta(evt);
             if (evt.model) renderModel();
+            if (evt.think) {
+              curThink = evt.think;
+              renderThink();
+            }
             break;
         }
       };
@@ -4250,6 +4302,7 @@
         { name: "/fork", desc: "派生会话" },
         { name: "/title", desc: "改会话标题", accepts: true },
         { name: "/model", desc: "切换模型" },
+        { name: "/think", desc: "思考等级", accepts: true },
         { name: "/status", desc: "当前状态" },
         { name: "/plan", desc: "写 PLAN.md 再执行", accepts: true },
         { name: "/queue", desc: "清空输入队列" },
@@ -4493,11 +4546,25 @@
           case "/model":
             $("hModel").click();
             break;
+          case "/think": {
+            const lv = (arg || "").trim();
+            if (!lv) {
+              $("hThink").click();
+              break;
+            }
+            setThink(lv);
+            addUser("/think " + lv);
+            addAsst("思考 " + lv);
+            finishAsst();
+            break;
+          }
           case "/status":
             addUser("/status");
             addAsst(
               "模型 " +
                 (curModel || "?") +
+                " · 思考 " +
+                (curThink || "high") +
                 " · 会话 " +
                 sess +
                 " · 项目 " +
@@ -4932,6 +4999,7 @@
       });
       // ---- 初始化 ----
       let curModel = "",
+        curThink = "high",
         curTitle = "";
       // ---- 启动门(kimi GlobalLoading + auth gate):splash → 探活 → 登录页或主界面 ----
       let booted = false;
@@ -4971,6 +5039,10 @@
           if (s.model) {
             curModel = s.model;
             renderModel();
+          }
+          if (s.think) {
+            curThink = s.think;
+            renderThink();
           }
           if (s.title) {
             curTitle = s.title;

@@ -59,41 +59,91 @@ const HELP =
     \\
 ;
 
-/// `/help` 输出。每个真实存在的命令都必须在这里出现 —— 漏掉的等于没实现。
-/// 下面有测试盯着这份清单与实际分发的一致性。
-const SLASH_HELP =
-    \\斜杠命令
-    \\  /help              列出命令
-    \\  /status            刷新状态栏
-    \\  /model <m>         切换模型
-    \\  /new               新会话
-    \\  /sessions          列出本目录会话
-    \\  /resume <n>        切到第 n 个会话
-    \\  /title <t>         改会话标题
-    \\  /tree              消息列表，供 /fork
-    \\  /fork <n>          从第 n 条分叉
-    \\  /copy              复制最后一条回复
-    \\  /undo              撤销上一轮
-    \\  /redo              重发上一次输入
-    \\  /memory            跨会话记忆
-    \\  /compact           压缩上下文
-    \\  /shake [images]    裁旧工具输出
-    \\  /snap              大段输出打成密图
-    \\  /fast-compress     快压状态
-    \\  /clear             清空并重开
-    \\  /plan <goal>       写 PLAN.md 再执行
-    \\  /queue             清空输入队列
-    \\  /export            导出 HTML
-    \\  /dump              整段会话到剪贴板
-    \\  /quit              退出
-    \\
-    \\编辑
-    \\  @./path            把文件贴进消息
-    \\  !cmd               跑 shell，输出给模型
-    \\  !!cmd              跑 shell，只给你看
-    \\  Ctrl+C             取消当前轮
-    \\  Ctrl+B             活动转后台
-;
+const HelpItem = struct { cmd: []const u8, desc: []const u8 };
+
+/// `/help` 清单。每个真实存在的命令都必须在这里出现 —— 漏掉的等于没实现。
+/// 下面有测试盯着这份表与实际分发的一致性。
+const SLASH_ITEMS = [_]HelpItem{
+    .{ .cmd = "/help", .desc = "列出命令" },
+    .{ .cmd = "/status", .desc = "刷新状态栏" },
+    .{ .cmd = "/think [级]", .desc = "思考等级（按模型）" },
+    .{ .cmd = "/model <m>", .desc = "切换模型" },
+    .{ .cmd = "/new", .desc = "新会话" },
+    .{ .cmd = "/sessions", .desc = "本目录会话" },
+    .{ .cmd = "/resume <n>", .desc = "切到第 n 个" },
+    .{ .cmd = "/title <t>", .desc = "改标题" },
+    .{ .cmd = "/tree", .desc = "消息列表" },
+    .{ .cmd = "/fork <n>", .desc = "从第 n 条分叉" },
+    .{ .cmd = "/copy", .desc = "复制末条回复" },
+    .{ .cmd = "/undo", .desc = "撤销上一轮" },
+    .{ .cmd = "/redo", .desc = "重发上次输入" },
+    .{ .cmd = "/memory", .desc = "跨会话记忆" },
+    .{ .cmd = "/compact", .desc = "压缩上下文" },
+    .{ .cmd = "/shake [images]", .desc = "裁旧工具输出" },
+    .{ .cmd = "/snap", .desc = "大段打成密图" },
+    .{ .cmd = "/fast-compress", .desc = "快压状态" },
+    .{ .cmd = "/clear", .desc = "清空并重开" },
+    .{ .cmd = "/plan <goal>", .desc = "写 PLAN.md 再执行" },
+    .{ .cmd = "/queue", .desc = "清空输入队列" },
+    .{ .cmd = "/export", .desc = "导出 HTML" },
+    .{ .cmd = "/dump", .desc = "整段到剪贴板" },
+    .{ .cmd = "/quit", .desc = "退出" },
+};
+
+const EDIT_ITEMS = [_]HelpItem{
+    .{ .cmd = "@./path", .desc = "把文件贴进消息" },
+    .{ .cmd = "!cmd", .desc = "跑 shell，给模型" },
+    .{ .cmd = "!!cmd", .desc = "跑 shell，只给你看" },
+    .{ .cmd = "Esc", .desc = "中止本轮；空行再按编辑上一条" },
+    .{ .cmd = "Ctrl+C", .desc = "清空；空行再按退出" },
+    .{ .cmd = "Ctrl+D", .desc = "空行再按退出" },
+    .{ .cmd = "Tab", .desc = "忙碌时把输入入队" },
+    .{ .cmd = "Ctrl+B", .desc = "忙碌时转后台" },
+    .{ .cmd = "Ctrl+T", .desc = "折叠思考" },
+    .{ .cmd = "Alt+,/.", .desc = "思考更浅 / 更深" },
+    .{ .cmd = "Shift+↑/↓", .desc = "思考更浅 / 更深" },
+};
+
+fn writeHelpCell(w: *std.Io.Writer, it: HelpItem, cmd_cols: usize, cell_cols: usize, pad_cell: bool) !void {
+    try w.writeAll("  ");
+    try w.writeAll(it.cmd);
+    var used: usize = 2 + activity.displayWidth(it.cmd);
+    while (used < 2 + cmd_cols) : (used += 1) try w.writeByte(' ');
+    try w.writeAll("\x1b[2m");
+    const room = if (cell_cols > used) cell_cols - used else 0;
+    const cut = activity.truncateToCols(it.desc, room);
+    try w.writeAll(it.desc[0..cut]);
+    try w.writeAll("\x1b[0m");
+    if (pad_cell) {
+        used += activity.displayWidth(it.desc[0..cut]);
+        while (used < cell_cols) : (used += 1) try w.writeByte(' ');
+    }
+}
+
+fn writeHelpSection(w: *std.Io.Writer, title: []const u8, items: []const HelpItem, width: usize) !void {
+    try w.print("\x1b[2m{s}\x1b[0m\n", .{title});
+    const two = width >= 72;
+    const cell: usize = if (two) width / 2 else width;
+    const cmd_cols: usize = @min(18, if (cell > 12) cell / 2 else 8);
+    var i: usize = 0;
+    while (i < items.len) {
+        try writeHelpCell(w, items[i], cmd_cols, cell, two and i + 1 < items.len);
+        if (two and i + 1 < items.len) {
+            try writeHelpCell(w, items[i + 1], cmd_cols, cell, false);
+        }
+        try w.writeByte('\n');
+        i += if (two) 2 else 1;
+    }
+}
+
+fn formatHelp(alloc: std.mem.Allocator, width: usize) ![]u8 {
+    var stw = std.Io.Writer.Allocating.init(alloc);
+    defer stw.deinit();
+    try writeHelpSection(&stw.writer, "斜杠", &SLASH_ITEMS, width);
+    try stw.writer.writeByte('\n');
+    try writeHelpSection(&stw.writer, "编辑", &EDIT_ITEMS, width);
+    return stw.toOwnedSlice();
+}
 
 // ---------- 交互模式 ----------
 
@@ -164,13 +214,22 @@ const App = struct {
         self.queue.clearRetainingCapacity();
     }
 
-    /// 极简状态栏(omp minimal preset 分段 × codex 配色纪律):
-    /// path(dim) │ git 分支(cyan) ctx%(分级色) model(cyan) · 缓存%(dim) · 标题(dim)
+    fn fmtTok(buf: *[16]u8, n: u64) []const u8 {
+        if (n >= 1_000_000) {
+            const m = n / 1_000_000;
+            const frac = (n % 1_000_000) / 100_000;
+            if (frac == 0) return std.fmt.bufPrint(buf, "{d}M", .{m}) catch "?";
+            return std.fmt.bufPrint(buf, "{d}.{d}M", .{ m, frac }) catch "?";
+        }
+        if (n >= 1000) return std.fmt.bufPrint(buf, "{d}k", .{n / 1000}) catch "?";
+        return std.fmt.bufPrint(buf, "{d}", .{n}) catch "?";
+    }
+
+    /// 输入框下一行。几何符号分段,底色 dim;只有占用和思考等级出墨。
     fn statusLine(self: *App) ![]u8 {
         var stw = std.Io.Writer.Allocating.init(self.alloc);
         defer stw.deinit();
         const w = &stw.writer;
-        // path:最后两段缩写
         var path_seg: []const u8 = self.agent.cwd;
         var slash_count: usize = 0;
         var i = self.agent.cwd.len;
@@ -179,48 +238,63 @@ const App = struct {
             if (self.agent.cwd[i] == '/') slash_count += 1;
         }
         if (slash_count >= 2) path_seg = self.agent.cwd[i + 1 ..];
-        try w.print("\x1b[2m{s}\x1b[0m", .{path_seg});
-        // git 分支(本地读 .git/HEAD,无子进程)
+        try w.writeAll("\x1b[2m⌂ ");
+        try w.writeAll(path_seg);
         if (gitBranch(self.alloc)) |br| {
             defer self.alloc.free(br);
-            try w.print(" \x1b[36m{s}\x1b[0m", .{br});
+            try w.print("  ⎇ {s}", .{br});
         }
-        // ctx%:分级色(绿 <50 / cyan 50-85 / red >85——codex 禁黄)
         const cw = self.agent.ctxWindow();
-        // 读 worker 发布的估算值,不现场遍历 messages(见 est_ctx 注释)
         const used = self.est_ctx.load(.acquire);
         const pct = if (cw > 0) used * 100 / cw else 0;
-        const pct_col: []const u8 = if (pct > 85) "31" else if (pct > 50) "36" else "32";
-        try w.print(" \x1b[{s}m{d}%\x1b[0m", .{ pct_col, pct });
-        // model 缩写(去 provider 前缀)
+        var ub: [16]u8 = undefined;
+        var wb: [16]u8 = undefined;
+        try w.writeAll("  ◔ ");
+        if (pct > 85) {
+            try w.print("\x1b[0;31m{d}%\x1b[2m", .{pct});
+        } else if (pct > 50) {
+            try w.print("\x1b[0m{d}%\x1b[2m", .{pct});
+        } else {
+            try w.print("{d}%", .{pct});
+        }
+        try w.print(" {s}/{s}", .{ fmtTok(&ub, @as(u64, used)), fmtTok(&wb, @as(u64, cw)) });
         var model_seg: []const u8 = self.agent.model;
         if (std.mem.indexOfScalar(u8, model_seg, '-')) |dash| model_seg = model_seg[dash + 1 ..];
-        try w.print(" \x1b[36m{s}/{s}\x1b[0m", .{ self.agent.provider.name, model_seg });
-        // 缓存命中率(dim)。Anthropic 的 input_tokens 不含缓存部分,
-        // 故总输入 = input + cache_read + cache_write。
+        try w.print("  ◆ {s}/{s}", .{ self.agent.provider.name, model_seg });
+        const tl = self.tui.think_level;
+        try w.writeAll("  ");
+        try w.writeAll(tui_mod.thinkColor(tl));
+        try w.print("◇ {s}", .{tui_mod.thinkLabel(tl)});
+        try w.writeAll("\x1b[2m");
         if (self.last_usage.cache_read) |c| {
             const w_tok = self.last_usage.cache_write orelse 0;
             const total = c + w_tok + (self.last_usage.input orelse 0);
             if (total > 0) {
                 if (c > 0) {
-                    try w.print(" \x1b[2m· cache {d}%\x1b[0m", .{c * 100 / total});
+                    try w.print("  ▣ {d}%", .{c * 100 / total});
                 } else if (w_tok > 0) {
-                    // 刚写入缓存:下一轮才开始省。与「压根没缓存」区分开,
-                    // 否则用户看到 cache 0% 会以为配置没生效。
-                    try w.print(" \x1b[2m· cache warm\x1b[0m", .{});
+                    try w.writeAll("  ▣ warm");
                 }
             }
         }
-        // token 速率 t/s(dim)——omp token_rate 段
+        if (self.last_usage.input) |inp| {
+            var ib: [16]u8 = undefined;
+            var ob: [16]u8 = undefined;
+            const out = self.last_usage.output orelse 0;
+            try w.print("  ↕ {s}↑{s}↓", .{ fmtTok(&ib, inp), fmtTok(&ob, out) });
+        }
         if (self.tokens_total > 0) {
             const now_ns = std.Io.Clock.now(.real, util.io).nanoseconds;
             const elapsed_s = @max(1, @divTrunc(now_ns - self.start_ns, std.time.ns_per_s));
-            try w.print(" \x1b[2m· {d} t/s\x1b[0m", .{self.tokens_total / @as(usize, @intCast(elapsed_s))});
+            try w.print("  ▸ {d}t/s", .{self.tokens_total / @as(usize, @intCast(elapsed_s))});
         }
-        // 压缩次数(cyan,>0 时)——omp context_mgr 段
-        if (self.agent.compacts > 0) try w.print(" \x1b[36m⊞{d}\x1b[0m", .{self.agent.compacts});
-        if (self.read_only) try w.writeAll(" \x1b[2m· RO\x1b[0m");
-        if (self.sess.title) |tt| try w.print(" \x1b[2m· {s}\x1b[0m", .{tt});
+        if (self.agent.compacts > 0) try w.print("  ↻{d}", .{self.agent.compacts});
+        const qn = self.queue.items.len;
+        if (qn > 0) try w.print("  ≡{d}", .{qn});
+        try w.print("  ¶{d}", .{self.agent.messages.items.len});
+        if (self.read_only) try w.writeAll("  ⊘ RO");
+        if (self.sess.title) |tt| try w.print("  “{s}”", .{tt});
+        try w.writeAll("\x1b[0m");
         return stw.toOwnedSlice();
     }
 
@@ -251,6 +325,14 @@ const App = struct {
             self.agent.* = agent;
             self.model_override = spec;
         }
+        syncThink(self);
+    }
+
+    fn syncThink(self: *App) void {
+        const meta = self.agent.modelMeta();
+        self.tui.think_meta = meta;
+        self.tui.think_level = cfgmod.clampThinkLevel(meta, self.tui.think_level);
+        self.agent.think_level = self.tui.think_level;
     }
 
     /// 切换会话:载入消息并替换 app.sess。
@@ -272,13 +354,7 @@ fn tuiOnText(ctx: ?*anyopaque, text: []const u8) anyerror!void {
 
 fn tuiOnReasoning(ctx: ?*anyopaque, text: []const u8) anyerror!void {
     const app: *App = @ptrCast(@alignCast(ctx.?));
-    // 思考块:dim 斜体包裹
-    var buf = std.array_list.Managed(u8).init(app.alloc);
-    defer buf.deinit();
-    buf.appendSlice("\x1b[3m") catch {};
-    buf.appendSlice(text) catch {};
-    buf.appendSlice("\x1b[0m") catch {};
-    app.tui.appendText(buf.items) catch {};
+    app.tui.appendThink(text) catch {};
     if (app.abort.load(.acquire)) return error.Aborted;
 }
 
@@ -306,7 +382,7 @@ fn tuiOnToolStart(ctx: ?*anyopaque, name: []const u8, args: []const u8) anyerror
     const app: *App = @ptrCast(@alignCast(ctx.?));
     var buf = std.array_list.Managed(u8).init(app.alloc);
     defer buf.deinit();
-    buf.appendSlice("\x1b[2m⚙\x1b[0m ") catch {};
+    buf.appendSlice("  ") catch {};
     buf.appendSlice(name) catch {};
     const preview = toolArgsPreview(args);
     if (preview.len > 0) {
@@ -331,7 +407,7 @@ fn tuiOnToolEnd(ctx: ?*anyopaque, name: []const u8, is_error: bool, summary: []c
     const app: *App = @ptrCast(@alignCast(ctx.?));
     var buf = std.array_list.Managed(u8).init(app.alloc);
     defer buf.deinit();
-    buf.appendSlice(if (is_error) "✗ " else "✓ ") catch {};
+    buf.appendSlice(if (is_error) "  ✗ " else "  ✓ ") catch {};
     buf.appendSlice(name) catch {};
     // 输出规模:工具产出整体进了模型上下文而用户看不到内容,
     // 至少让他知道这一步吃掉了多少 —— 12KB 和 40B 是完全不同的信号。
@@ -339,7 +415,7 @@ fn tuiOnToolEnd(ctx: ?*anyopaque, name: []const u8, is_error: bool, summary: []c
     buf.appendSlice(" \x1b[2m") catch {};
     buf.appendSlice(activity.formatBytes(&bb, summary.len)) catch {};
     buf.appendSlice("\x1b[0m") catch {};
-    app.tui.appendLine("", if (is_error) "\x1b[31m" else "\x1b[32m", buf.items) catch {};
+    app.tui.appendLine("", if (is_error) "\x1b[31m" else "\x1b[2m", buf.items) catch {};
     var ea = util.Arena.init(app.alloc);
     defer ea.deinit();
     const ealloc = ea.allocator();
@@ -347,6 +423,23 @@ fn tuiOnToolEnd(ctx: ?*anyopaque, name: []const u8, is_error: bool, summary: []c
         try util.jsonString(ealloc, name),
         if (is_error) "true" else "false",
     }) catch return);
+}
+
+fn tuiOnPaint(ctx: ?*anyopaque) void {
+    const app: *App = @ptrCast(@alignCast(ctx orelse return));
+    const st = app.statusLine() catch return;
+    defer app.alloc.free(st);
+    app.tui.setStatus("\x1b[0m", st) catch {};
+}
+
+fn tuiOnThink(ctx: ?*anyopaque) void {
+    const app: *App = @ptrCast(@alignCast(ctx orelse return));
+    app.agent.think_level = app.tui.think_level;
+    persistThink(app);
+}
+
+fn persistThink(app: *App) void {
+    app.cfg.saveThinkLevel(app.tui.think_level) catch {};
 }
 
 fn tuiOnTurnEnd(ctx: ?*anyopaque) anyerror!void {
@@ -364,7 +457,7 @@ fn tuiOnNotice(ctx: ?*anyopaque, text: []const u8) anyerror!void {
     defer buf.deinit();
     buf.appendSlice("· ") catch {};
     buf.appendSlice(text) catch {};
-    app.tui.appendLine("", "\x1b[33m", buf.items) catch {};
+    app.tui.appendLine("", "\x1b[2m", buf.items) catch {};
 }
 
 /// subagent 中间事件 → TUI 一行。
@@ -400,15 +493,18 @@ fn tuiOnRequirePermission(ctx: ?*anyopaque, name: []const u8, args: []const u8) 
     const app: *App = @ptrCast(@alignCast(ctx.?));
     if (app.perm.always.load(.acquire)) return true;
     if (app.read_only) return false;
-    // 构建提示(截断 args)
+    if (!toolsmod.needsConfirm(name)) return true;
     app.perm.buf.clearRetainingCapacity();
     try app.perm.buf.appendSlice("? ");
     try app.perm.buf.appendSlice(name);
-    try app.perm.buf.appendSlice("  ");
-    const head = args[0..@min(args.len, 160)];
-    try app.perm.buf.appendSlice(head);
-    if (args.len > 160) try app.perm.buf.appendSlice("…");
-    try app.perm.buf.appendSlice("\n  \x1b[32m[y]\x1b[0m 允许  \x1b[31m[n]\x1b[0m 拒绝  \x1b[36m[a]\x1b[0m 本会话总是  \x1b[2m[s]\x1b[0m 跳过");
+    const preview = toolArgsPreview(args);
+    if (preview.len > 0) {
+        try app.perm.buf.appendSlice("  ");
+        const head = preview[0..@min(preview.len, 120)];
+        try app.perm.buf.appendSlice(head);
+        if (preview.len > 120) try app.perm.buf.appendSlice("…");
+    }
+    try app.perm.buf.appendSlice("\n  \x1b[2my 允许   n/Esc 拒绝   a 本会话总是   s 跳过\x1b[0m");
     app.perm.decision.store(0, .release);
     app.perm.pending.store(true, .release);
     app.perm.slice = app.perm.buf.items;
@@ -432,7 +528,7 @@ fn tuiOnPermKey(ctx: ?*anyopaque, key: u8) void {
     const app: *App = @ptrCast(@alignCast(ctx orelse return));
     switch (key) {
         'y' => app.perm.decision.store(1, .release),
-        'n', 0x03 => app.perm.decision.store(2, .release),
+        'n', 0x03, 0x1b => app.perm.decision.store(2, .release),
         'a' => {
             app.perm.always.store(true, .release);
             app.perm.decision.store(1, .release);
@@ -482,7 +578,7 @@ fn workerMain(wctx: *WorkerCtx) void {
                 break :blk "";
             };
             if (err_msg == null) {
-                app.tui.appendLine("", "\x1b[2m", "📦 conversation compacted") catch {};
+                app.tui.appendLine("", "\x1b[2m", "conversation compacted") catch {};
                 _ = summary;
             }
         } else {
@@ -591,9 +687,9 @@ fn onSubmit(tui: *tui_mod.Tui, line: []const u8) anyerror!void {
             app.tui.clearScroll();
             app.sess.deinit();
             app.sess.* = sessionmod.Session.fresh(app.alloc, app.agent.cwd) catch return;
-            app.tui.appendLine("", "\x1b[2m", "📄 new session started") catch {};
+            app.tui.appendLine("", "\x1b[2m", "new session started") catch {};
             const st = app.statusLine() catch return;
-            app.tui.setStatus("\x1b[32m", st) catch {};
+            app.tui.setStatus("\x1b[0m", st) catch {};
             return;
         }
         if (std.mem.startsWith(u8, cmd, "title ")) {
@@ -605,9 +701,9 @@ fn onSubmit(tui: *tui_mod.Tui, line: []const u8) anyerror!void {
                 app.tui.appendLine("", "\x1b[31m", bw.written()) catch {};
                 return;
             };
-            app.tui.appendLine("", "\x1b[2m", if (title.len > 0) "✎ title set" else "✎ title cleared") catch {};
+            app.tui.appendLine("", "\x1b[2m", if (title.len > 0) "title set" else "title cleared") catch {};
             const st = app.statusLine() catch return;
-            app.tui.setStatus("\x1b[32m", st) catch {};
+            app.tui.setStatus("\x1b[0m", st) catch {};
             return;
         }
         if (std.mem.eql(u8, cmd, "sessions")) {
@@ -634,7 +730,7 @@ fn onSubmit(tui: *tui_mod.Tui, line: []const u8) anyerror!void {
                 bw.writer.print("\n", .{}) catch {};
             }
             bw.writer.writeAll("use /resume <n> to switch") catch {};
-            app.tui.appendLine("", "\x1b[36m", bw.written()) catch {};
+            app.tui.appendLine("", "\x1b[2m", bw.written()) catch {};
             return;
         }
         if (std.mem.startsWith(u8, cmd, "resume ")) {
@@ -676,7 +772,7 @@ fn onSubmit(tui: *tui_mod.Tui, line: []const u8) anyerror!void {
             bw.writer.print("resumed {s}: {d} messages", .{ std.fs.path.basename(app.sess.path), app.agent.messages.items.len }) catch {};
             app.tui.appendLine("", "\x1b[2m", bw.written()) catch {};
             const st = app.statusLine() catch return;
-            app.tui.setStatus("\x1b[32m", st) catch {};
+            app.tui.setStatus("\x1b[0m", st) catch {};
             return;
         }
         if (std.mem.eql(u8, cmd, "undo")) {
@@ -706,7 +802,7 @@ fn onSubmit(tui: *tui_mod.Tui, line: []const u8) anyerror!void {
                 return;
             };
             const st = app.statusLine() catch return;
-            app.tui.setStatus("\x1b[32m", st) catch {};
+            app.tui.setStatus("\x1b[0m", st) catch {};
             return;
         }
         if (std.mem.eql(u8, cmd, "compact")) {
@@ -725,7 +821,7 @@ fn onSubmit(tui: *tui_mod.Tui, line: []const u8) anyerror!void {
                 .messages = &app.agent.messages,
                 .window = app.agent.ctxWindow(),
                 .api = app.agent.provider.api,
-                .vision = compress.modelHasVision(app.agent.model),
+                .vision = app.agent.hasVision(),
             }, .{ .protect_tokens = 0, .min_savings = 0, .drop_images = std.mem.eql(u8, args, "images") });
             const msg = compress.formatNotice(app.alloc, r) orelse "shake: nothing to elide";
             app.tui.appendLine("", "\x1b[2m", msg) catch {};
@@ -736,7 +832,7 @@ fn onSubmit(tui: *tui_mod.Tui, line: []const u8) anyerror!void {
                 app.tui.appendLine("", "\x1b[31m", "cannot snap while a turn is running") catch {};
                 return;
             }
-            const vision = compress.modelHasVision(app.agent.model);
+            const vision = app.agent.hasVision();
             const r = compress.snap(.{
                 .alloc = app.alloc,
                 .messages = &app.agent.messages,
@@ -757,7 +853,7 @@ fn onSubmit(tui: *tui_mod.Tui, line: []const u8) anyerror!void {
                 .messages = &app.agent.messages,
                 .window = app.agent.ctxWindow(),
                 .api = app.agent.provider.api,
-                .vision = compress.modelHasVision(app.agent.model),
+                .vision = app.agent.hasVision(),
             });
             app.tui.appendLine("", "\x1b[2m", msg) catch {};
             return;
@@ -791,7 +887,7 @@ fn onSubmit(tui: *tui_mod.Tui, line: []const u8) anyerror!void {
             bw.writer.writeAll(content[0..@min(content.len, 4000)]) catch {};
             if (content.len > 4000) bw.writer.writeAll("\n…(truncated)") catch {};
             bw.writer.print("\nusage: /memory set <text> | /memory clear", .{}) catch {};
-            app.tui.appendLine("", "\x1b[36m", bw.written()) catch {};
+            app.tui.appendLine("", "\x1b[2m", bw.written()) catch {};
             return;
         }
         if (std.mem.startsWith(u8, cmd, "memory set ")) {
@@ -845,7 +941,7 @@ fn onSubmit(tui: *tui_mod.Tui, line: []const u8) anyerror!void {
                 return;
             };
             std.Io.Dir.cwd().deleteFile(util.io, full) catch {};
-            app.tui.appendLine("", "\x1b[2m", "🧹 memory cleared") catch {};
+            app.tui.appendLine("", "\x1b[2m", "memory cleared") catch {};
             return;
         }
         if (std.mem.startsWith(u8, cmd, "fork ")) {
@@ -871,7 +967,7 @@ fn onSubmit(tui: *tui_mod.Tui, line: []const u8) anyerror!void {
             bw.writer.print("🌿 forked {d} messages → session {s}", .{ n, std.fs.path.basename(app.sess.path) }) catch {};
             app.tui.appendLine("", "\x1b[2m", bw.written()) catch {};
             const st = app.statusLine() catch return;
-            app.tui.setStatus("\x1b[32m", st) catch {};
+            app.tui.setStatus("\x1b[0m", st) catch {};
             return;
         }
         if (std.mem.eql(u8, cmd, "tree")) {
@@ -889,7 +985,7 @@ fn onSubmit(tui: *tui_mod.Tui, line: []const u8) anyerror!void {
                 bw.writer.print("{d}. {s} {s}\n", .{ i + 1, tag, head }) catch {};
             }
             bw.writer.writeAll("use /fork <n> to branch from a message") catch {};
-            app.tui.appendLine("", "\x1b[36m", bw.written()) catch {};
+            app.tui.appendLine("", "\x1b[2m", bw.written()) catch {};
             return;
         }
         if (std.mem.startsWith(u8, cmd, "plan")) {
@@ -930,10 +1026,10 @@ fn onSubmit(tui: *tui_mod.Tui, line: []const u8) anyerror!void {
                     app.tui.appendLine("", "\x1b[31m", "export failed") catch {};
                     return;
                 };
-                app.tui.appendLine("", "\x1b[32m", "exported to piz-export.html") catch {};
+                app.tui.appendLine("", "\x1b[2m", "exported to piz-export.html") catch {};
             } else {
                 if (copyToClipboard(app.alloc, ww.written())) {
-                    app.tui.appendLine("", "\x1b[32m", "session copied to clipboard") catch {};
+                    app.tui.appendLine("", "\x1b[2m", "session copied to clipboard") catch {};
                 } else {
                     app.tui.appendLine("", "\x1b[31m", "no clipboard tool (wl-copy/xclip); /tmp fallback") catch {};
                     std.Io.Dir.cwd().writeFile(util.io, .{ .sub_path = "/tmp/piz-dump.txt", .data = ww.written() }) catch {};
@@ -957,11 +1053,11 @@ fn onSubmit(tui: *tui_mod.Tui, line: []const u8) anyerror!void {
                 return;
             };
             if (copyToClipboard(app.alloc, text)) {
-                app.tui.appendLine("", "\x1b[2m", "📋 copied to clipboard") catch {};
+                app.tui.appendLine("", "\x1b[2m", "copied to clipboard") catch {};
             } else {
                 // 回退:写临时文件并提示
                 if (util.writeFile("/tmp/piz-copy.txt", text)) |_| {
-                    app.tui.appendLine("", "\x1b[2m", "📋 no clipboard tool — saved to /tmp/piz-copy.txt") catch {};
+                    app.tui.appendLine("", "\x1b[2m", "no clipboard tool — saved to /tmp/piz-copy.txt") catch {};
                 } else |_| {}
             }
             return;
@@ -972,16 +1068,56 @@ fn onSubmit(tui: *tui_mod.Tui, line: []const u8) anyerror!void {
                 return;
             }
             app.clearQueue();
-            app.tui.appendLine("", "\x1b[2m", "🗑 queued messages cleared") catch {};
+            app.tui.appendLine("", "\x1b[2m", "queued messages cleared") catch {};
             return;
         }
         if (std.mem.eql(u8, cmd, "status")) {
             const st = app.statusLine() catch return;
-            app.tui.setStatus("\x1b[32m", st) catch {};
+            app.tui.setStatus("\x1b[0m", st) catch {};
+            return;
+        }
+        if (std.mem.eql(u8, cmd, "think") or std.mem.startsWith(u8, cmd, "think ")) {
+            const arg = if (std.mem.startsWith(u8, cmd, "think "))
+                std.mem.trim(u8, cmd["think ".len..], " ")
+            else
+                "";
+            const meta = app.agent.modelMeta();
+            if (arg.len == 0) {
+                var bw = std.Io.Writer.Allocating.init(app.alloc);
+                defer bw.deinit();
+                bw.writer.print("思考 {s}  ·  /think ", .{tui_mod.thinkLabel(app.tui.think_level)}) catch {};
+                cfgmod.writeSupportedThink(&bw.writer, meta) catch {};
+                bw.writer.writeAll("  ·  Alt+,/. 或 Shift+↓/↑") catch {};
+                app.tui.appendLine("", "\x1b[2m", bw.written()) catch {};
+                return;
+            }
+            const level = ai.ThinkLevel.parse(arg) orelse {
+                var bw = std.Io.Writer.Allocating.init(app.alloc);
+                defer bw.deinit();
+                bw.writer.writeAll("usage: /think ") catch {};
+                cfgmod.writeSupportedThink(&bw.writer, meta) catch {};
+                app.tui.appendLine("", "\x1b[31m", bw.written()) catch {};
+                return;
+            };
+            const clamped = cfgmod.clampThinkLevel(meta, level);
+            app.tui.think_level = clamped;
+            app.agent.think_level = clamped;
+            persistThink(app);
+            const st = app.statusLine() catch return;
+            app.tui.setStatus("\x1b[0m", st) catch {};
+            var bw = std.Io.Writer.Allocating.init(app.alloc);
+            defer bw.deinit();
+            if (clamped != level)
+                bw.writer.print("思考 {s}（此模型没有 {s}）", .{ tui_mod.thinkLabel(clamped), level.label() }) catch {}
+            else
+                bw.writer.print("思考 {s}", .{tui_mod.thinkLabel(clamped)}) catch {};
+            app.tui.appendLine("", "\x1b[2m", bw.written()) catch {};
             return;
         }
         if (std.mem.eql(u8, cmd, "help")) {
-            app.tui.appendLine("", "\x1b[0m", SLASH_HELP) catch {};
+            const text = formatHelp(app.alloc, app.tui.width) catch return;
+            defer app.alloc.free(text);
+            app.tui.appendLine("", "", text) catch {};
             return;
         }
         // 未知斜杠命令:尝试 prompt 模板(/name [args])
@@ -1064,6 +1200,7 @@ fn onSubmit(tui: *tui_mod.Tui, line: []const u8) anyerror!void {
 }
 
 fn spawnWorker(app: *App, line: []const u8, is_compact: bool) void {
+    app.agent.think_level = app.tui.think_level;
     const wctx = app.alloc.create(WorkerCtx) catch return;
     wctx.* = .{ .app = app, .line = line, .is_compact = is_compact };
     const thread = std.Thread.spawn(.{}, workerMain, .{wctx}) catch {
@@ -1091,7 +1228,7 @@ fn onAbort(ctx: ?*anyopaque) void {
         std.fmt.bufPrint(&buf, "interrupted — cancelling {d} running activity(s)", .{n}) catch "interrupted"
     else
         "interrupted";
-    app.tui.appendLine("", "\x1b[33m", msg) catch {};
+    app.tui.appendLine("", "\x1b[2m", msg) catch {};
 }
 
 /// Ctrl+B:把在跑的活动转后台。
@@ -1190,6 +1327,8 @@ pub fn runInteractive(alloc: std.mem.Allocator, cfg: *cfgmod.Config, cwd: []cons
         .queue = std.array_list.Managed([]const u8).init(alloc),
     };
     tui.ctx = &app;
+    if (cfg.default_think_level) |lv| app.tui.think_level = lv;
+    app.syncThink();
     // 接线回调:流式输出 + 工具行 + 权限询问(此前缺失,交互模式流式显示依赖于此)
     agent.cbs = .{
         .ctx = &app,
@@ -1208,8 +1347,8 @@ pub fn runInteractive(alloc: std.mem.Allocator, cfg: *cfgmod.Config, cwd: []cons
     // 启动提示
     var gw = std.Io.Writer.Allocating.init(alloc);
     defer gw.deinit();
-    gw.writer.print("piz v{s} · {s}\n/help 命令  ·  @./file 贴文件  ·  !cmd 跑 shell  ·  Ctrl+C 取消  ·  Ctrl+B 后台", .{ VERSION, abs_cwd }) catch {};
-    try tui.appendLine("", "\x1b[36m", gw.written());
+    gw.writer.print("piz v{s}  ·  {s}\n/help   @./file   !cmd   Esc 中止   ^C 退出   ^T 折叠   Alt+,/. 思考", .{ VERSION, abs_cwd }) catch {};
+    try tui.appendLine("", "\x1b[2m", gw.written());
     const st = try app.statusLine();
     try tui.setStatus("\x1b[0m", st);
 
@@ -1227,6 +1366,8 @@ pub fn runInteractive(alloc: std.mem.Allocator, cfg: *cfgmod.Config, cwd: []cons
         .on_abort = onAbort,
         .on_detach = onDetach,
         .on_perm = tuiOnPermKey,
+        .on_paint = tuiOnPaint,
+        .on_think = tuiOnThink,
         .ctx = &app,
     });
 
@@ -1482,7 +1623,7 @@ fn explainAndExit(e: anyerror, cfg: *cfgmod.Config, opts: RunOptions) noreturn {
             std.debug.print("piz: unknown provider '{s}'.\n", .{want});
             if (cfg.providers.len == 0) {
                 std.debug.print("  No providers are configured. Create ~/.piz/models.json, for example:\n" ++
-                    "    {{\"providers\":[{{\"name\":\"deepseek\",\"baseUrl\":\"https://api.deepseek.com\",\"models\":[\"deepseek-chat\"]}}]}}\n" ++
+                    "    {{\"providers\":[{{\"name\":\"deepseek\",\"baseUrl\":\"https://api.deepseek.com\",\"models\":[\"deepseek-v4-flash\"]}}]}}\n" ++
                     "  then put the key in ~/.piz/auth.json or DEEPSEEK_API_KEY.\n", .{});
             } else {
                 std.debug.print("  Configured providers:", .{});
@@ -1631,6 +1772,10 @@ test "expandRefs" {
     try t.expectEqualStrings("see @./nope.txt end", r3);
 }
 
+test {
+    _ = @import("tui");
+}
+
 test "copyToClipboard does not double-close the child stdin" {
     try util.testInit();
     var arena = util.Arena.init(std.testing.allocator);
@@ -1650,25 +1795,44 @@ test "every slash command appears in /help" {
 
     // /dump /export /plan /queue 四条一直能用却没在帮助里列出 ——
     // 对用户等于不存在。这里把清单和实际分发绑在一起:
-    // 新加命令忘了写进 SLASH_HELP,测试就失败。
+    // 新加命令忘了写进 SLASH_ITEMS,测试就失败。
     //
     // 命令名取自 onSubmit 里的 `eql(u8, cmd, "…")` / `startsWith(u8, cmd, "… ")`。
     const dispatched = [_][]const u8{
-        "help",   "status",  "model",  "new",  "sessions",      "resume",
+        "help",   "status",  "think",  "model",  "new",  "sessions",      "resume",
         "title",  "tree",    "fork",   "copy", "undo",          "redo",
         "memory", "compact", "shake",  "snap", "fast-compress", "clear",
         "plan",   "queue",   "export", "dump", "quit",
     };
     for (dispatched) |cmd| {
-        var buf: [32]u8 = undefined;
-        const needle = try std.fmt.bufPrint(&buf, "/{s}", .{cmd});
-        if (std.mem.indexOf(u8, SLASH_HELP, needle) == null) {
-            std.debug.print("命令 /{s} 能用但没在 SLASH_HELP 里\n", .{cmd});
+        var found = false;
+        for (SLASH_ITEMS) |it| {
+            if (it.cmd.len < 2 or it.cmd[0] != '/') continue;
+            const rest = it.cmd[1..];
+            if (std.mem.eql(u8, rest, cmd) or
+                (std.mem.startsWith(u8, rest, cmd) and rest.len > cmd.len and rest[cmd.len] == ' '))
+            {
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            std.debug.print("命令 /{s} 能用但没在 SLASH_ITEMS 里\n", .{cmd});
             return error.CommandMissingFromHelp;
         }
     }
     // 别名不单独列(/q /exit 是 /quit 的简写,列出来只是噪音)
-    try t.expect(std.mem.indexOf(u8, SLASH_HELP, "/q ") == null);
+    for (SLASH_ITEMS) |it| {
+        try t.expect(!std.mem.eql(u8, it.cmd, "/q"));
+    }
+
+    const text = try formatHelp(t.allocator, 80);
+    defer t.allocator.free(text);
+    for (SLASH_ITEMS) |it| {
+        try t.expect(std.mem.indexOf(u8, text, it.cmd) != null);
+    }
+    try t.expect(std.mem.indexOf(u8, text, "斜杠") != null);
+    try t.expect(std.mem.indexOf(u8, text, "编辑") != null);
 }
 
 test "toolArgsPreview prefers command path pattern" {
@@ -1677,4 +1841,12 @@ test "toolArgsPreview prefers command path pattern" {
     try t.expectEqualStrings("src/main.zig", toolArgsPreview("{\"path\":\"src/main.zig\"}"));
     try t.expectEqualStrings("fn foo", toolArgsPreview("{\"pattern\":\"fn foo\",\"path\":\".\"}"));
     try t.expectEqualStrings("raw", toolArgsPreview("raw"));
+}
+
+test "needsConfirm skips read-class tools" {
+    const t = std.testing;
+    try t.expect(!toolsmod.needsConfirm("ls"));
+    try t.expect(!toolsmod.needsConfirm("read"));
+    try t.expect(toolsmod.needsConfirm("bash"));
+    try t.expect(toolsmod.needsConfirm("write"));
 }
