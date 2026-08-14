@@ -1,5 +1,7 @@
 # piz
 
+<p align="center"><img src="src/logo.svg" width="72" alt="piz"></p>
+
 极简终端编码 agent。用 Zig 重写自 [pi](https://pi.dev)，核心保持小巧，能力通过内置插件扩展。
 
 - **单个静态二进制**，无运行时依赖，无 `node_modules`
@@ -67,7 +69,7 @@ piz 额外做了 pi 明确声明不做的事：交互式权限门、`/plan` 计�
 ## 开发
 
 ```bash
-zig build test                   # 177 个测试
+zig build test                   # 184 个测试
 zig fmt src build.zig            # 格式化
 ```
 

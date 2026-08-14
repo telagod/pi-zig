@@ -15,6 +15,7 @@ pub const events = @import("events.zig");
 pub const webplugins = @import("webplugins.zig");
 pub const plugins = @import("plugins.zig");
 pub const compress = @import("compress.zig");
+pub const seams = @import("seams.zig");
 
 comptime {
     // stb C 对象引用的 piz_* 导出:zig 惰性编译下 export fn 若不被 zig 侧
@@ -49,4 +50,5 @@ test {
     _ = @import("webplugins.zig");
     _ = @import("plugins.zig");
     _ = @import("compress.zig");
+    _ = @import("seams.zig");
 }

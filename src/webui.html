@@ -8,6 +8,10 @@
     />
     <meta name="color-scheme" content="light dark" />
     <meta name="theme-color" content="#0d1117" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 18'%3E%3Cpath fill='%234d6bfe' d='M2.4 1.8h17.2a1.7 1.7 0 0 1 0 3.4H10l10 8.2A1.8 1.8 0 0 1 18.65 16.45H3.2a1.7 1.7 0 0 1 0-3.4h9.4L2.7 4.9A1.8 1.8 0 0 1 4.1 1.8z'/%3E%3C/svg%3E"
+    />
     <title>piz</title>
     <style>
       * {
@@ -21,20 +25,20 @@
         --faint: #b5b5b5;
         --line: #e9edf3;
         --line2: #f1f4f8;
-        --canvas: #f4f6fa;
+        --canvas: #f7f8fa;
         --sh:
           0 1px 3px rgba(28, 40, 66, 0.05), 0 6px 18px rgba(28, 40, 66, 0.06);
         --shc: 0 1px 2px rgba(28, 40, 66, 0.05);
         --panel: #fafbfc;
         --panel2: #f3f5f8;
         --bg: #ffffff;
-        --blue: #1783ff;
-        --blue2: #0f6fe0;
-        --soft: #e8f3ff;
-        --bd: #cfe6ff;
-        --logo: #1783ff;
-        --bluebg: #e8f3ff;
-        --blueln: #cfe6ff;
+        --blue: #4d6bfe;
+        --blue2: #3b5cf0;
+        --soft: #eef2ff;
+        --bd: #d9e0ff;
+        --logo: #171717;
+        --bluebg: #eef2ff;
+        --blueln: #d9e0ff;
         --ok: #0e7a38;
         --warn: #a9610a;
         --star: #eab308;
@@ -46,7 +50,7 @@
           "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, "SF Mono",
           Menlo, Consolas, monospace;
         --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
-        --accent-primary: #1783ff;
+        --accent-primary: #4d6bfe;
         --accent-secondary: #6b7280;
         --color-bg: #ffffff;
         --color-surface: #fafbfc;
@@ -59,9 +63,9 @@
         --color-line: #e7eaee;
         --color-line-strong: #d4d9e0;
         --color-accent: var(--accent-primary);
-        --color-accent-hover: #0f6fe0;
-        --color-accent-soft: #e8f3ff;
-        --color-accent-bd: #cfe6ff;
+        --color-accent-hover: #3b5cf0;
+        --color-accent-soft: #eef2ff;
+        --color-accent-bd: #d9e0ff;
         --color-success: #0e7a38;
         --color-success-soft: #e7f6ee;
         --color-success-bd: #bfe3cc;
@@ -124,11 +128,11 @@
         --panel: #1c2128;
         --panel2: #161b22;
         --bg: #0d1117;
-        --blue: #58a6ff;
-        --blue2: #79b8ff;
+        --blue: #678efe;
+        --blue2: #8aa4ff;
         --soft: #1f2937;
-        --bd: #1f6feb;
-        --logo: #58a6ff;
+        --bd: #4d6bfe;
+        --logo: #e8eaed;
         --bluebg: #1c2a3a;
         --blueln: #1f4f7a;
         --ok: #3fb950;
@@ -139,7 +143,7 @@
         --canvas: #161b22;
         --sh: 0 1px 3px rgba(0, 0, 0, 0.35), 0 6px 18px rgba(0, 0, 0, 0.4);
         --shc: 0 1px 2px rgba(0, 0, 0, 0.35);
-        --accent-primary: #58a6ff;
+        --accent-primary: #678efe;
         --color-bg: #0d1117;
         --color-surface: #1c2128;
         --color-surface-raised: #22272e;
@@ -150,10 +154,10 @@
         --color-text-on-accent: #fff;
         --color-line: #2d333b;
         --color-line-strong: #3d454e;
-        --color-accent: #58a6ff;
-        --color-accent-hover: #79b8ff;
+        --color-accent: #678efe;
+        --color-accent-hover: #8aa4ff;
         --color-accent-soft: #1f2937;
-        --color-accent-bd: #1f6feb;
+        --color-accent-bd: #4d6bfe;
         --color-success: #3fb950;
         --color-success-soft: #1c2a3a;
         --color-success-bd: #1f4f7a;
@@ -183,11 +187,11 @@
           --panel: #1c2128;
           --panel2: #161b22;
           --bg: #0d1117;
-          --blue: #58a6ff;
-          --blue2: #79b8ff;
+          --blue: #678efe;
+          --blue2: #8aa4ff;
           --soft: #1f2937;
-          --bd: #1f6feb;
-          --logo: #58a6ff;
+          --bd: #4d6bfe;
+          --logo: #e8eaed;
           --bluebg: #1c2a3a;
           --blueln: #1f4f7a;
           --ok: #3fb950;
@@ -198,7 +202,7 @@
           --canvas: #161b22;
           --sh: 0 1px 3px rgba(0, 0, 0, 0.35), 0 6px 18px rgba(0, 0, 0, 0.4);
           --shc: 0 1px 2px rgba(0, 0, 0, 0.35);
-          --accent-primary: #58a6ff;
+          --accent-primary: #678efe;
           --color-bg: #0d1117;
           --color-surface: #1c2128;
           --color-surface-raised: #22272e;
@@ -209,7 +213,7 @@
           --color-text-on-accent: #fff;
           --color-line: #2d333b;
           --color-line-strong: #3d454e;
-          --color-accent: #58a6ff;
+          --color-accent: #678efe;
           --color-accent-hover: #79b8ff;
           --color-accent-soft: #1f2937;
           --color-accent-bd: #1f6feb;
@@ -315,11 +319,24 @@
         align-items: center;
         gap: 14px;
       }
+      .gload-brand {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
       .gload-logo {
-        width: 96px;
-        height: 66px;
+        width: 34px;
+        height: 25px;
         color: var(--logo);
         animation: fadein 0.4s ease-out;
+      }
+      .gload-word,
+      .auth-word {
+        font-size: 26px;
+        line-height: 32px;
+        font-weight: 500;
+        letter-spacing: -0.04em;
+        color: var(--color-text);
       }
       .gload-text {
         font-size: 13px;
@@ -349,8 +366,8 @@
         padding: 24px;
       }
       .auth-page-logo {
-        width: 48px;
-        height: 33px;
+        width: 34px;
+        height: 25px;
         color: var(--logo);
       }
       .auth-page h1 {
@@ -456,19 +473,42 @@
         align-items: center;
         gap: 8px;
         min-width: 0;
+        flex: 1;
+        color: var(--logo);
+        cursor: pointer;
       }
       .ch-logo {
         width: 24px;
-        height: 17px;
+        height: 18px;
         flex: none;
-        cursor: pointer;
+        color: inherit;
+        transform-origin: 50% 60%;
       }
       .ch-name {
-        font-size: 15px;
-        font-weight: var(--weight-semibold);
+        font-size: 16px;
+        font-weight: 600;
+        letter-spacing: -0.04em;
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
+      }
+      @keyframes logo-swim {
+        0%,
+        100% {
+          transform: translate(0, 0) rotate(0);
+        }
+        35% {
+          transform: translate(-1px, -1px) rotate(-5deg);
+        }
+        70% {
+          transform: translate(1px, 0) rotate(3deg);
+        }
+      }
+      @media (hover: hover) and (prefers-reduced-motion: no-preference) {
+        .ch-brand:hover .ch-logo,
+        .empty-headline:hover .empty-logo {
+          animation: logo-swim 0.45s ease;
+        }
       }
       .ch-ib {
         width: 26px;
@@ -831,13 +871,28 @@
         display: flex;
         flex-direction: column;
         align-items: center;
-        gap: 6px;
+        justify-content: center;
+        gap: 10px;
         padding: 40px 0;
         text-align: center;
+        min-height: 42vh;
+      }
+      .empty-headline {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        color: var(--color-text);
+      }
+      .empty-logo {
+        width: 34px;
+        height: 25px;
+        color: inherit;
       }
       .empty-hint-title {
-        font-size: 17px;
-        font-weight: var(--weight-semibold);
+        font-size: 26px;
+        line-height: 32px;
+        font-weight: 500;
+        letter-spacing: -0.04em;
       }
       .empty-hint-text {
         font-size: 13px;
@@ -1285,6 +1340,26 @@
         padding: 8px 20px max(12px, env(safe-area-inset-bottom));
         position: relative;
       }
+      #cmp::before {
+        content: "";
+        position: absolute;
+        left: 50%;
+        bottom: 8px;
+        width: min(720px, 92%);
+        height: 160px;
+        transform: translateX(-50%);
+        background: radial-gradient(
+          ellipse at center,
+          rgba(77, 107, 254, 0.1),
+          transparent 70%
+        );
+        pointer-events: none;
+        z-index: 0;
+      }
+      #cmp > * {
+        position: relative;
+        z-index: 1;
+      }
       .cmp-row {
         max-width: var(--p-content-max);
         margin: 0 auto;
@@ -1296,7 +1371,7 @@
         flex: 1;
         position: relative;
         border: 1px solid var(--color-line);
-        border-radius: var(--radius-xl);
+        border-radius: 22px;
         background: var(--bg);
         box-shadow: var(--shadow-md);
         transition:
@@ -1395,8 +1470,8 @@
         width: 32px;
         height: 32px;
         border-radius: 50%;
-        background: var(--color-accent);
-        color: var(--color-text-on-accent);
+        background: var(--color-text);
+        color: var(--color-bg);
         border: none;
         box-shadow: var(--shadow-xs);
         padding: 0;
@@ -1408,7 +1483,7 @@
         font-size: 13px;
       }
       #send:hover {
-        background: var(--color-accent-hover);
+        filter: brightness(1.12);
       }
       #send:active {
         transform: scale(0.92);
@@ -1732,24 +1807,366 @@
           font-size: 15px;
         }
       }
+      html[data-accent="mono"] {
+        --accent-primary: #171717;
+        --color-accent: #171717;
+        --color-accent-hover: #383838;
+        --color-accent-soft: #f1f1f2;
+        --color-accent-bd: #d4d4d8;
+        --blue: #171717;
+        --blue2: #383838;
+        --soft: #f1f1f2;
+        --bd: #d4d4d8;
+        --logo: #171717;
+      }
+      html[data-color-scheme="dark"][data-accent="mono"] {
+        --accent-primary: #e8eaed;
+        --color-accent: #e8eaed;
+        --color-accent-hover: #c9cdd4;
+        --color-accent-soft: #21262d;
+        --color-accent-bd: #444c56;
+        --blue: #e8eaed;
+        --blue2: #c9cdd4;
+        --soft: #21262d;
+        --bd: #444c56;
+        --logo: #e8eaed;
+      }
+      @media (prefers-color-scheme: dark) {
+        html[data-color-scheme="system"][data-accent="mono"] {
+          --accent-primary: #e8eaed;
+          --color-accent: #e8eaed;
+          --color-accent-hover: #c9cdd4;
+          --color-accent-soft: #21262d;
+          --color-accent-bd: #444c56;
+          --blue: #e8eaed;
+          --blue2: #c9cdd4;
+          --soft: #21262d;
+          --bd: #444c56;
+          --logo: #e8eaed;
+        }
+      }
+      #overlay {
+        display: none;
+        position: fixed;
+        inset: 0;
+        z-index: var(--z-modal);
+        background: rgba(0, 0, 0, 0.35);
+        align-items: flex-start;
+        justify-content: center;
+        padding: 10vh 16px 24px;
+      }
+      #overlay.open {
+        display: flex;
+      }
+      .dlg {
+        width: min(520px, 100%);
+        max-height: min(80vh, 720px);
+        display: flex;
+        flex-direction: column;
+        background: var(--color-surface-raised);
+        border: 1px solid var(--color-line);
+        border-radius: var(--radius-xl);
+        box-shadow: var(--shadow-lg);
+        overflow: hidden;
+      }
+      .dlg.set {
+        width: min(560px, 100%);
+      }
+      .dlg-hd {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 12px 14px;
+        border-bottom: 1px solid var(--color-line);
+        font-weight: 600;
+        font-size: 14px;
+      }
+      .dlg-x {
+        border: 0;
+        background: transparent;
+        color: var(--color-text-muted);
+        width: 28px;
+        height: 28px;
+        border-radius: var(--radius-sm);
+        cursor: pointer;
+        font-size: 14px;
+      }
+      .dlg-x:hover {
+        background: var(--hover);
+        color: var(--color-text);
+      }
+      .dlg-bd {
+        padding: 12px 14px;
+        overflow: auto;
+        flex: 1;
+      }
+      .dlg-ft {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+        padding: 10px 14px 12px;
+        border-top: 1px solid var(--color-line);
+      }
+      .dlg-in {
+        width: 100%;
+        border: 1px solid var(--color-line);
+        background: var(--color-surface-sunken);
+        color: var(--color-text);
+        border-radius: var(--radius-md);
+        padding: 8px 10px;
+        font: inherit;
+        font-size: 13px;
+        outline: none;
+      }
+      .dlg-in:focus {
+        border-color: var(--color-accent);
+        box-shadow: 0 0 0 3px var(--color-accent-soft);
+      }
+      .dlg-msg {
+        font-size: 13px;
+        color: var(--color-text-muted);
+        line-height: 1.5;
+      }
+      .btn {
+        border: 1px solid var(--color-line);
+        background: var(--color-surface);
+        color: var(--color-text);
+        border-radius: var(--radius-md);
+        padding: 6px 12px;
+        font: inherit;
+        font-size: 13px;
+        cursor: pointer;
+      }
+      .btn:hover {
+        background: var(--hover);
+      }
+      .btn-p {
+        background: var(--color-accent);
+        border-color: var(--color-accent);
+        color: var(--color-text-on-accent);
+      }
+      .btn-p:hover {
+        background: var(--color-accent-hover);
+      }
+      .btn-d {
+        background: var(--color-danger);
+        border-color: var(--color-danger);
+        color: #fff;
+      }
+      .set-tabs {
+        display: flex;
+        gap: 4px;
+        margin-bottom: 12px;
+      }
+      .set-tabs button {
+        border: 0;
+        background: transparent;
+        color: var(--color-text-muted);
+        padding: 6px 10px;
+        border-radius: var(--radius-sm);
+        cursor: pointer;
+        font: inherit;
+        font-size: 13px;
+      }
+      .set-tabs button.on {
+        background: var(--color-surface-sunken);
+        color: var(--color-text);
+        font-weight: 600;
+      }
+      .set-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 10px 0;
+        border-bottom: 1px solid var(--color-line);
+        font-size: 13px;
+      }
+      .set-row:last-child {
+        border-bottom: 0;
+      }
+      .set-lab {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        min-width: 0;
+      }
+      .set-hint {
+        color: var(--color-text-faint);
+        font-size: 12px;
+      }
+      .seg {
+        display: inline-flex;
+        border: 1px solid var(--color-line);
+        border-radius: var(--radius-md);
+        overflow: hidden;
+        flex: none;
+      }
+      .seg button {
+        border: 0;
+        background: transparent;
+        color: var(--color-text-muted);
+        padding: 5px 10px;
+        font: inherit;
+        font-size: 12px;
+        cursor: pointer;
+      }
+      .seg button.on {
+        background: var(--color-accent);
+        color: var(--color-text-on-accent);
+      }
+      .num-in {
+        width: 64px;
+        border: 1px solid var(--color-line);
+        background: var(--color-surface-sunken);
+        color: var(--color-text);
+        border-radius: var(--radius-sm);
+        padding: 4px 6px;
+        font: inherit;
+        font-size: 13px;
+      }
+      .sw {
+        width: 36px;
+        height: 20px;
+        border: 0;
+        border-radius: 99px;
+        background: var(--color-line-strong);
+        position: relative;
+        cursor: pointer;
+        flex: none;
+      }
+      .sw.on {
+        background: var(--color-accent);
+      }
+      .sw::after {
+        content: "";
+        position: absolute;
+        top: 2px;
+        left: 2px;
+        width: 16px;
+        height: 16px;
+        border-radius: 50%;
+        background: #fff;
+        transition: transform 0.15s;
+      }
+      .sw.on::after {
+        transform: translateX(16px);
+      }
+      .hit {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        padding: 8px 10px;
+        border-radius: var(--radius-sm);
+        cursor: pointer;
+      }
+      .hit:hover,
+      .hit.on {
+        background: var(--color-surface-sunken);
+      }
+      .hit-t {
+        font-size: 13px;
+        font-weight: 600;
+      }
+      .hit-s {
+        font-size: 12px;
+        color: var(--color-text-muted);
+      }
+      .slash-menu {
+        position: absolute;
+        bottom: calc(100% + 6px);
+        left: 0;
+        right: 0;
+        padding: 4px;
+        background: var(--color-surface-raised);
+        border: 1px solid var(--color-line);
+        border-radius: var(--radius-lg);
+        box-shadow: var(--shadow-sm);
+        z-index: var(--z-dropdown);
+        max-height: 240px;
+        overflow-y: auto;
+      }
+      .slash-item {
+        display: grid;
+        grid-template-columns: minmax(90px, 32%) minmax(0, 1fr);
+        gap: 10px;
+        padding: 6px 10px;
+        border-radius: var(--radius-sm);
+        cursor: pointer;
+        font-size: 13px;
+      }
+      .slash-item:hover,
+      .slash-item.active {
+        background: var(--color-surface-sunken);
+      }
+      .slash-name {
+        font-family: var(--mono);
+        font-size: 12px;
+        color: var(--color-accent);
+      }
+      .slash-desc {
+        color: var(--color-text-muted);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .ctx-wrap {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        color: var(--color-text-muted);
+        font-size: 11px;
+        font-variant-numeric: tabular-nums;
+        margin-right: 4px;
+      }
+      .ctx-ring {
+        width: 16px;
+        height: 16px;
+        flex: none;
+        transform: rotate(-90deg);
+      }
+      .ctx-ring-track {
+        stroke: var(--color-line);
+      }
+      .ctx-ring-fill {
+        stroke: var(--color-accent);
+        transition: stroke-dashoffset 0.3s ease;
+      }
+      .empty-keys {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: center;
+        gap: 10px 16px;
+        margin-top: 14px;
+        font-size: 12px;
+        color: var(--color-text-muted);
+      }
+      kbd {
+        display: inline-block;
+        min-width: 1.4em;
+        padding: 0 5px;
+        border: 1px solid var(--color-line);
+        border-bottom-width: 2px;
+        border-radius: 4px;
+        background: var(--color-surface-sunken);
+        font: inherit;
+        font-size: 11px;
+        font-family: var(--mono);
+        line-height: 1.6;
+      }
     </style>
   </head>
   <body>
     <!-- 连接 splash(kimi GlobalLoading) -->
     <div class="gload" id="splash">
       <div class="gload-box">
-        <svg class="gload-logo" viewBox="0 0 32 22" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="piz">
-          <defs>
-            <mask id="splashEyes" maskUnits="userSpaceOnUse">
-              <rect x="0" y="0" width="32" height="22" fill="#fff" />
-              <g fill="#000">
-                <rect class="ch-eye" x="11.8" y="7" width="2.8" height="8" rx="1.4" />
-                <rect class="ch-eye" x="17.4" y="7" width="2.8" height="8" rx="1.4" />
-              </g>
-            </mask>
-          </defs>
-          <rect x="1" y="1" width="30" height="20" rx="6" fill="var(--logo)" mask="url(#splashEyes)" />
-        </svg>
+        <div class="gload-brand">
+          <svg class="gload-logo" viewBox="0 0 24 18" fill="currentColor" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="piz">
+            <path d="M2.4 1.8h17.2a1.7 1.7 0 0 1 0 3.4H10l10 8.2A1.8 1.8 0 0 1 18.65 16.45H3.2a1.7 1.7 0 0 1 0-3.4h9.4L2.7 4.9A1.8 1.8 0 0 1 4.1 1.8z" />
+          </svg>
+          <span class="gload-word">piz</span>
+        </div>
         <span class="spin"></span>
         <div class="gload-text">正在连接本地服务器…</div>
       </div>
@@ -1757,19 +2174,13 @@
     <!-- 登录页(kimi auth-page) -->
     <section class="auth-page" id="authPage">
       <div class="auth-page-inner">
-        <svg class="auth-page-logo" viewBox="0 0 32 22" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="piz">
-          <defs>
-            <mask id="authEyes" maskUnits="userSpaceOnUse">
-              <rect x="0" y="0" width="32" height="22" fill="#fff" />
-              <g fill="#000">
-                <rect class="ch-eye" x="11.8" y="7" width="2.8" height="8" rx="1.4" />
-                <rect class="ch-eye" x="17.4" y="7" width="2.8" height="8" rx="1.4" />
-              </g>
-            </mask>
-          </defs>
-          <rect x="1" y="1" width="30" height="20" rx="6" fill="var(--logo)" mask="url(#authEyes)" />
-        </svg>
-        <h1>piz 需要凭证</h1>
+        <div class="gload-brand">
+          <svg class="auth-page-logo" viewBox="0 0 24 18" fill="currentColor" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="piz">
+            <path d="M2.4 1.8h17.2a1.7 1.7 0 0 1 0 3.4H10l10 8.2A1.8 1.8 0 0 1 18.65 16.45H3.2a1.7 1.7 0 0 1 0-3.4h9.4L2.7 4.9A1.8 1.8 0 0 1 4.1 1.8z" />
+          </svg>
+          <span class="auth-word">piz</span>
+        </div>
+        <h1>需要凭证</h1>
         <p>此服务器受保护。输入启动时打印的 token(或 <code>--token</code> 设置的值)。</p>
         <input type="password" id="authTok" placeholder="Token" autocomplete="current-password" />
         <div class="auth-err" id="authErr"></div>
@@ -1782,45 +2193,17 @@
           <div class="ch-brand">
             <svg
               class="ch-logo"
-              viewBox="0 0 32 22"
-              fill="none"
+              viewBox="0 0 24 18"
+              fill="currentColor"
               xmlns="http://www.w3.org/2000/svg"
               role="img"
               aria-label="piz"
             >
-              <defs>
-                <mask id="kimiEyes" maskUnits="userSpaceOnUse">
-                  <rect x="0" y="0" width="32" height="22" fill="#fff" />
-                  <g fill="#000">
-                    <rect
-                      class="ch-eye"
-                      x="11.8"
-                      y="7"
-                      width="2.8"
-                      height="8"
-                      rx="1.4"
-                    />
-                    <rect
-                      class="ch-eye"
-                      x="17.4"
-                      y="7"
-                      width="2.8"
-                      height="8"
-                      rx="1.4"
-                    />
-                  </g>
-                </mask>
-              </defs>
-              <rect
-                x="1"
-                y="1"
-                width="30"
-                height="20"
-                rx="6"
-                fill="var(--logo)"
-                mask="url(#kimiEyes)"
-              /></svg
-            ><span class="ch-name" id="wsName">piz</span>
+              <path
+                d="M2.4 1.8h17.2a1.7 1.7 0 0 1 0 3.4H10l10 8.2A1.8 1.8 0 0 1 18.65 16.45H3.2a1.7 1.7 0 0 1 0-3.4h9.4L2.7 4.9A1.8 1.8 0 0 1 4.1 1.8z"
+              />
+            </svg>
+            <span class="ch-name" id="wsName">piz</span>
           </div>
           <div style="display: flex; gap: 2px">
             <button class="ch-ib" id="colBtn" title="折叠侧栏">◂</button
@@ -1869,11 +2252,12 @@
         <div id="cmp">
           <div class="cmp-row">
             <div class="composer-card">
+              <div id="slashMenu" class="slash-menu" hidden></div>
               <div class="cin-wrap">
                 <textarea
                   id="inp"
                   rows="1"
-                  placeholder="输入消息… Enter 发送 · Shift+Enter 换行"
+                  placeholder="输入消息… / 命令 · Enter 发送"
                 ></textarea>
               </div>
               <div class="toolbar">
@@ -1884,8 +2268,8 @@
                     title="审批模式"
                     >🛡 自动</span
                   >
-                  <span class="mode-pill" id="modePill" title="模式"
-                    >模式<span
+                  <span class="mode-pill" id="modePill" title="斜杠命令"
+                    >/ 命令<span
                       class="mode-tag"
                       id="modeTag"
                       style="display: none"
@@ -1900,7 +2284,12 @@
                   </button>
                 </div>
                 <div class="toolbar-right">
-                  <span id="plugin-composer" data-piz-slot="composer"></span
+                  <span id="ctxWrap" class="ctx-wrap" title="上下文占用" hidden
+                    ><svg class="ctx-ring" viewBox="0 0 20 20" aria-hidden="true">
+                      <circle class="ctx-ring-track" cx="10" cy="10" r="7" fill="none" stroke-width="2.5"></circle>
+                      <circle id="ctxFill" class="ctx-ring-fill" cx="10" cy="10" r="7" fill="none" stroke-width="2.5" stroke-linecap="round" stroke-dasharray="43.98" stroke-dashoffset="43.98"></circle></svg
+                    ><span id="ctxLbl"></span></span
+                  ><span id="plugin-composer" data-piz-slot="composer"></span
                   ><button id="send" title="发送">➤</button>
                 </div>
               </div>
@@ -1913,6 +2302,7 @@
     <div class="menu" id="wsmenu"></div>
     <div class="menu" id="modelMenu"></div>
     <div id="toast"></div>
+    <div id="overlay"></div>
     <div id="sheet">
       <div id="scrim"></div>
       <div id="spnl">
@@ -1936,15 +2326,54 @@
       const ws = decodeURIComponent(qp.get("ws") || "");
       const wsp = ws ? "ws=" + encodeURIComponent(ws) + "&" : "";
       const isMobile = () => window.innerWidth < 840;
-      // 主题
-      function applyScheme() {
-        let v = "dark";
+      const PREF_KEY = "piz.prefs";
+      const prefs = {
+        scheme: "dark",
+        accent: "blue",
+        uiFont: 14,
+        notify: false,
+        sound: false,
+      };
+      try {
+        Object.assign(prefs, JSON.parse(localStorage.getItem(PREF_KEY) || "{}"));
+      } catch {}
+      try {
+        const old = localStorage.getItem("piz.scheme");
+        if (old && !localStorage.getItem(PREF_KEY)) prefs.scheme = old;
+      } catch {}
+      function savePrefs() {
         try {
-          v = localStorage.getItem("piz.scheme") || "dark";
+          localStorage.setItem(PREF_KEY, JSON.stringify(prefs));
         } catch {}
-        document.documentElement.dataset.colorScheme = v;
+      }
+      function applyScheme() {
+        const root = document.documentElement;
+        root.dataset.colorScheme = prefs.scheme || "dark";
+        root.dataset.accent = prefs.accent || "blue";
+        const fs = (prefs.uiFont || 14) + "px";
+        root.style.setProperty("--ui-font-size", fs);
+        root.style.setProperty("--text-base", fs);
+        const dark =
+          prefs.scheme === "dark" ||
+          (prefs.scheme === "system" &&
+            window.matchMedia &&
+            window.matchMedia("(prefers-color-scheme: dark)").matches);
+        const tm = document.querySelector('meta[name="theme-color"]');
+        if (tm) tm.setAttribute("content", dark ? "#0d1117" : "#ffffff");
       }
       applyScheme();
+      if (window.matchMedia) {
+        try {
+          matchMedia("(prefers-color-scheme: dark)").addEventListener(
+            "change",
+            applyScheme,
+          );
+        } catch {}
+      }
+      try {
+        if (localStorage.getItem("piz.sidebar") === "1")
+          document.body.classList.add("collapsed");
+      } catch {}
       // ---- 服务器凭证(kimi serverAuth.ts:#token= fragment + sessionStorage) ----
       const AUTH_KEY = "piz-web.credential";
       let credential = undefined;
@@ -2049,6 +2478,308 @@
         clearTimeout(toastT);
         toastT = setTimeout(() => toastEl.classList.remove("show"), 2200);
       }
+      let dlgOnok = null,
+        dlgOncancel = null;
+      function closeDlg() {
+        const ov = $("overlay");
+        ov.classList.remove("open");
+        ov.innerHTML = "";
+        dlgOnok = dlgOncancel = null;
+      }
+      function openDlg(opts) {
+        const ov = $("overlay");
+        ov.classList.add("open");
+        ov.innerHTML =
+          '<div class="dlg ' +
+          (opts.cls || "") +
+          '" role="dialog"><div class="dlg-hd"><span>' +
+          esc(opts.title || "") +
+          '</span><button class="dlg-x" id="dlgX" type="button">✕</button></div><div class="dlg-bd">' +
+          (opts.body || "") +
+          "</div>" +
+          (opts.ok
+            ? '<div class="dlg-ft">' +
+              (opts.cancel
+                ? '<button class="btn" id="dlgCancel" type="button">' +
+                  esc(opts.cancel) +
+                  "</button>"
+                : "") +
+              '<button class="btn ' +
+              (opts.danger ? "btn-d" : "btn-p") +
+              '" id="dlgOk" type="button">' +
+              esc(opts.ok) +
+              "</button></div>"
+            : "") +
+          "</div>";
+        dlgOnok = opts.onok || null;
+        dlgOncancel = opts.oncancel || null;
+        $("dlgX").onclick = () => {
+          if (dlgOncancel) dlgOncancel();
+          closeDlg();
+        };
+        const cxl = $("dlgCancel");
+        if (cxl)
+          cxl.onclick = () => {
+            if (dlgOncancel) dlgOncancel();
+            closeDlg();
+          };
+        const ok = $("dlgOk");
+        if (ok)
+          ok.onclick = () => {
+            const r = dlgOnok && dlgOnok();
+            if (r !== false) closeDlg();
+          };
+        ov.onclick = (e) => {
+          if (e.target === ov) {
+            if (dlgOncancel) dlgOncancel();
+            closeDlg();
+          }
+        };
+        if (opts.focus && $(opts.focus)) {
+          const el = $(opts.focus);
+          el.focus();
+          if (el.select) el.select();
+        }
+      }
+      function askText(title, value, placeholder) {
+        return new Promise((resolve) => {
+          openDlg({
+            title,
+            body:
+              '<input id="dlgIn" class="dlg-in" value="' +
+              esc(value || "") +
+              '" placeholder="' +
+              esc(placeholder || "") +
+              '">',
+            ok: "确定",
+            cancel: "取消",
+            focus: "dlgIn",
+            onok: () => {
+              resolve($("dlgIn").value);
+            },
+            oncancel: () => resolve(null),
+          });
+          $("dlgIn").addEventListener("keydown", (e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              resolve($("dlgIn").value);
+              closeDlg();
+            }
+          });
+        });
+      }
+      function askYes(title, msg) {
+        return new Promise((resolve) => {
+          openDlg({
+            title,
+            body: '<p class="dlg-msg">' + esc(msg) + "</p>",
+            ok: "确定",
+            danger: true,
+            cancel: "取消",
+            onok: () => resolve(true),
+            oncancel: () => resolve(false),
+          });
+        });
+      }
+      function segHtml(name, opts, cur) {
+        return (
+          '<div class="seg" data-seg="' +
+          name +
+          '">' +
+          opts
+            .map(
+              (o) =>
+                '<button type="button" data-v="' +
+                esc(o.v) +
+                '" class="' +
+                (o.v === cur ? "on" : "") +
+                '">' +
+                esc(o.l) +
+                "</button>",
+            )
+            .join("") +
+          "</div>"
+        );
+      }
+      function bindSeg(name, fn) {
+        const box = document.querySelector('[data-seg="' + name + '"]');
+        if (!box) return;
+        box.onclick = (e) => {
+          const b = e.target.closest("button");
+          if (!b) return;
+          for (const x of box.querySelectorAll("button")) x.classList.remove("on");
+          b.classList.add("on");
+          fn(b.getAttribute("data-v"));
+        };
+      }
+      function openSettings() {
+        openDlg({
+          cls: "set",
+          title: "设置",
+          body:
+            '<div class="set-tabs" id="setTabs"><button type="button" data-tab="look" class="on">外观</button><button type="button" data-tab="note">通知</button><button type="button" data-tab="about">关于</button></div>' +
+            '<div id="setLook">' +
+            '<div class="set-row"><div class="set-lab">配色</div>' +
+            segHtml("scheme", [{ v: "light", l: "浅色" }, { v: "dark", l: "深色" }, { v: "system", l: "系统" }], prefs.scheme) +
+            "</div>" +
+            '<div class="set-row"><div class="set-lab">强调色</div>' +
+            segHtml("accent", [{ v: "blue", l: "蓝" }, { v: "mono", l: "黑白" }], prefs.accent) +
+            "</div>" +
+            '<div class="set-row"><div class="set-lab">界面字号</div><input id="setFont" class="num-in" type="number" min="12" max="20" value="' +
+            (prefs.uiFont || 14) +
+            '"></div></div>' +
+            '<div id="setNote" hidden>' +
+            '<div class="set-row"><div class="set-lab">完成时通知<span class="set-hint">浏览器系统通知</span></div><button type="button" class="sw' +
+            (prefs.notify ? " on" : "") +
+            '" id="swNotify"></button></div>' +
+            '<div class="set-row"><div class="set-lab">完成时提示音</div><button type="button" class="sw' +
+            (prefs.sound ? " on" : "") +
+            '" id="swSound"></button></div></div>' +
+            '<div id="setAbout" hidden>' +
+            '<div class="set-row"><div class="set-lab">piz web<span class="set-hint">配置见 ~/.piz/</span></div></div>' +
+            '<div class="set-row"><div class="set-lab">快捷键<span class="set-hint"><kbd>Ctrl</kbd><kbd>K</kbd> 搜会话 · <kbd>Ctrl</kbd><kbd>,</kbd> 设置 · <kbd>/</kbd> 命令</span></div></div></div>',
+        });
+        const tabs = $("setTabs");
+        const panels = { look: $("setLook"), note: $("setNote"), about: $("setAbout") };
+        tabs.onclick = (e) => {
+          const b = e.target.closest("button");
+          if (!b) return;
+          for (const x of tabs.querySelectorAll("button")) x.classList.toggle("on", x === b);
+          for (const k of Object.keys(panels)) panels[k].hidden = k !== b.dataset.tab;
+        };
+        bindSeg("scheme", (v) => {
+          prefs.scheme = v;
+          savePrefs();
+          applyScheme();
+        });
+        bindSeg("accent", (v) => {
+          prefs.accent = v;
+          savePrefs();
+          applyScheme();
+        });
+        $("setFont").onchange = () => {
+          prefs.uiFont = Math.min(20, Math.max(12, +$("setFont").value || 14));
+          savePrefs();
+          applyScheme();
+        };
+        $("swNotify").onclick = async () => {
+          if (!prefs.notify && window.Notification && Notification.permission === "default") {
+            try {
+              await Notification.requestPermission();
+            } catch {}
+          }
+          prefs.notify = !prefs.notify;
+          $("swNotify").classList.toggle("on", prefs.notify);
+          savePrefs();
+        };
+        $("swSound").onclick = () => {
+          prefs.sound = !prefs.sound;
+          $("swSound").classList.toggle("on", prefs.sound);
+          savePrefs();
+        };
+      }
+      function openSearch() {
+        const hits = sessList.slice();
+        let sel = 0;
+        openDlg({
+          title: "搜索会话",
+          body:
+            '<input id="dlgIn" class="dlg-in" placeholder="按标题或名字过滤…">' +
+            '<div id="hitList" style="margin-top:8px;max-height:50vh;overflow:auto"></div>',
+          focus: "dlgIn",
+        });
+        const box = $("hitList");
+        const inp = $("dlgIn");
+        function paint() {
+          const q = (inp.value || "").toLowerCase().trim();
+          const shown = [];
+          for (const s of hits) {
+            const title = s.title || s.name || "";
+            const name = s.name || "";
+            if (q && !title.toLowerCase().includes(q) && !name.toLowerCase().includes(q))
+              continue;
+            shown.push(s);
+            if (shown.length >= 80) break;
+          }
+          if (sel >= shown.length) sel = Math.max(0, shown.length - 1);
+          box.innerHTML = shown.length
+            ? shown
+                .map(
+                  (s, i) =>
+                    '<div class="hit' +
+                    (i === sel ? " on" : "") +
+                    '" data-name="' +
+                    esc(s.name) +
+                    '"><div class="hit-t">' +
+                    esc(s.title || s.name) +
+                    '</div><div class="hit-s">' +
+                    esc(s.name) +
+                    (s.msgs ? " · " + s.msgs + " 条" : "") +
+                    "</div></div>",
+                )
+                .join("")
+            : '<div class="dlg-msg">无匹配会话</div>';
+          const on = box.querySelector(".hit.on");
+          if (on) on.scrollIntoView({ block: "nearest" });
+          return shown;
+        }
+        function go(name) {
+          if (!name) return;
+          closeDlg();
+          location.href =
+            "/?session=" +
+            encodeURIComponent(name) +
+            (ws ? "&ws=" + encodeURIComponent(ws) : "");
+        }
+        inp.addEventListener("input", () => {
+          sel = 0;
+          paint();
+        });
+        inp.addEventListener("keydown", (e) => {
+          const shown = paint();
+          if (e.key === "ArrowDown") {
+            e.preventDefault();
+            sel = Math.min(shown.length - 1, sel + 1);
+            paint();
+          } else if (e.key === "ArrowUp") {
+            e.preventDefault();
+            sel = Math.max(0, sel - 1);
+            paint();
+          } else if (e.key === "Enter") {
+            e.preventDefault();
+            if (shown[sel]) go(shown[sel].name);
+          }
+        });
+        box.onclick = (e) => {
+          const h = e.target.closest(".hit");
+          if (h) go(h.getAttribute("data-name"));
+        };
+        paint();
+      }
+      document.addEventListener("keydown", (e) => {
+        if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+          e.preventDefault();
+          openSearch();
+          return;
+        }
+        if ((e.metaKey || e.ctrlKey) && e.key === ",") {
+          e.preventDefault();
+          openSettings();
+          return;
+        }
+        if (e.key === "Escape") {
+          if ($("overlay").classList.contains("open")) {
+            e.preventDefault();
+            if (dlgOncancel) dlgOncancel();
+            closeDlg();
+            return;
+          }
+          const sm = $("slashMenu");
+          if (sm && !sm.hidden) {
+            sm.hidden = true;
+          }
+        }
+      });
       // ---- 菜单助手 ----
       let openMenu = null;
       function closeMenus() {
@@ -2108,8 +2839,8 @@
         const add = document.createElement("div");
         add.className = "mi";
         add.textContent = "＋ 添加项目…";
-        add.onclick = () => {
-          const root = prompt("项目目录(绝对路径):");
+        add.onclick = async () => {
+          const root = await askText("添加项目", "", "绝对路径，如 /home/me/proj");
           if (!root) return;
           fetch("/api/workspaces", {
             method: "POST",
@@ -2195,9 +2926,9 @@
           const ren = document.createElement("div");
           ren.className = "mi";
           ren.textContent = "✎ 重命名";
-          ren.onclick = () => {
+          ren.onclick = async () => {
             closeMenus();
-            const t = prompt("会话标题:", s.title || s.name);
+            const t = await askText("重命名会话", s.title || s.name, "会话标题");
             if (t === null) return;
             act({ act: "rename", name: t }, (j) => {
               loadSessions();
@@ -2208,9 +2939,10 @@
           const fork = document.createElement("div");
           fork.className = "mi";
           fork.textContent = "✱ 派生会话";
-          fork.onclick = () => {
+          fork.onclick = async () => {
             closeMenus();
-            const n = prompt("新会话名(留空自动):", "");
+            const n = await askText("派生会话", "", "新会话名，留空自动");
+            if (n === null) return;
             act({ act: "fork", name: n || "" }, (j) => {
               if (j && j.name) {
                 showToast("已派生 " + j.name);
@@ -2245,9 +2977,9 @@
         const del = document.createElement("div");
         del.className = "mi danger";
         del.textContent = arch ? "永久删除" : "删除";
-        del.onclick = () => {
+        del.onclick = async () => {
           closeMenus();
-          if (!confirm("永久删除 " + s.name + "?")) return;
+          if (!(await askYes("删除会话", "永久删除 " + s.name + "？"))) return;
           act({ act: "delete" }, () => {
             loadSessions();
           });
@@ -2352,28 +3084,9 @@
           })
           .catch(() => {});
       }
-      // 搜索(spotlight 式:点击展开输入过滤)
       const searchQ = document.createElement("input");
       searchQ.id = "searchQ";
-      searchQ.placeholder = "搜索会话…";
-      searchQ.style.cssText =
-        "flex:1;min-width:0;border:none;outline:none;background:transparent;font-size:13px;color:var(--color-text)";
-      $("searchBtn").onclick = () => {
-        const t = $("searchBtn").querySelector(".search-t");
-        if (t) t.remove();
-        $("searchBtn").prepend(searchQ);
-        searchQ.focus();
-      };
-      searchQ.addEventListener("input", () => loadSessions());
-      searchQ.addEventListener("blur", () => {
-        if (!searchQ.value) {
-          searchQ.remove();
-          const t = document.createElement("span");
-          t.className = "search-t";
-          t.textContent = "搜索会话…";
-          $("searchBtn").prepend(t);
-        }
-      });
+      $("searchBtn").onclick = () => openSearch();
       // ---- 会话操作 ----
       function act(body, then) {
         fetch("/api/action?" + wsp + "session=" + encodeURIComponent(sess), {
@@ -2459,10 +3172,26 @@
         } catch {}
       };
       $("modePill").onclick = () => {
-        showToast("piz 模式:自动执行工具/手动审批切换在左侧 🛡");
+        const i = $("inp");
+        if (!i.value.startsWith("/")) i.value = "/";
+        i.focus();
+        i.dispatchEvent(new Event("input"));
       };
       // ---- 压缩提示 ----
       function setCtx(pct) {
+        const wrap = $("ctxWrap"),
+          fill = $("ctxFill"),
+          lbl = $("ctxLbl");
+        if (wrap && fill && lbl) {
+          const n = Math.max(0, Math.min(100, +pct || 0));
+          const C = 2 * Math.PI * 7;
+          fill.style.strokeDashoffset = String(C * (1 - n / 100));
+          lbl.textContent = n + "%";
+          wrap.hidden = false;
+          wrap.title = "上下文 " + n + "%";
+          fill.style.stroke =
+            n > 85 ? "var(--color-danger)" : "var(--color-accent)";
+        }
         if (pct > 85) {
           const c = $("compactChip");
           c.style.display = "";
@@ -2515,8 +3244,8 @@
           git.appendChild(pill);
         }
       }
-      $("hSes").onclick = () => {
-        const t = prompt("会话标题:", curTitle || "");
+      $("hSes").onclick = async () => {
+        const t = await askText("会话标题", curTitle || "", "");
         if (t === null) return;
         fetch("/api/title?" + wsp + "session=" + encodeURIComponent(sess), {
           method: "POST",
@@ -2554,8 +3283,8 @@
             .then(() => showToast("已复制"))
             .catch(() => showToast("复制失败"));
         });
-        mi("✎ 重命名", () => {
-          const t = prompt("会话标题:", curTitle || "");
+        mi("✎ 重命名", async () => {
+          const t = await askText("会话标题", curTitle || "", "");
           if (t === null) return;
           fetch("/api/title?" + wsp + "session=" + encodeURIComponent(sess), {
             method: "POST",
@@ -2571,8 +3300,9 @@
             })
             .catch(() => {});
         });
-        mi("✱ 派生会话", () => {
-          const n = prompt("新会话名(留空自动):", "");
+        mi("✱ 派生会话", async () => {
+          const n = await askText("派生会话", "", "新会话名，留空自动");
+          if (n === null) return;
           act({ act: "fork", name: n || "" }, (j) => {
             if (j && j.name) {
               showToast("已派生 " + j.name);
@@ -3006,6 +3736,29 @@
             finishAsst();
             finishRsn();
             setRun(false);
+            if (
+              prefs.notify &&
+              window.Notification &&
+              Notification.permission === "granted"
+            ) {
+              try {
+                new Notification("piz", { body: "本轮已完成" });
+              } catch {}
+            }
+            if (prefs.sound) {
+              try {
+                const AC = window.AudioContext || window.webkitAudioContext;
+                const ac = new AC();
+                const o = ac.createOscillator();
+                const g = ac.createGain();
+                o.frequency.value = 880;
+                g.gain.value = 0.04;
+                o.connect(g);
+                g.connect(ac.destination);
+                o.start();
+                o.stop(ac.currentTime + 0.08);
+              } catch {}
+            }
             break;
           case "status":
             if (evt.pct !== undefined) {
@@ -3027,22 +3780,337 @@
           );
         } else send();
       };
+      const SLASH = [
+        { name: "/help", desc: "列出命令" },
+        { name: "/new", desc: "新会话" },
+        { name: "/clear", desc: "新会话" },
+        { name: "/undo", desc: "撤销上一轮" },
+        { name: "/compact", desc: "压缩上下文" },
+        { name: "/shake", desc: "裁剪旧工具输出" },
+        { name: "/snap", desc: "大段输出打成密图" },
+        { name: "/fork", desc: "派生会话" },
+        { name: "/title", desc: "改会话标题", accepts: true },
+        { name: "/model", desc: "切换模型" },
+        { name: "/status", desc: "当前状态" },
+      ];
+      let slashItems = [],
+        slashIdx = 0;
+      function hideSlash() {
+        const m = $("slashMenu");
+        if (m) m.hidden = true;
+        slashItems = [];
+      }
+      function slashOpen() {
+        const m = $("slashMenu");
+        return m && !m.hidden && slashItems.length > 0;
+      }
+      function renderSlash() {
+        const m = $("slashMenu");
+        if (!m) return;
+        if (!slashItems.length) {
+          m.hidden = true;
+          return;
+        }
+        m.hidden = false;
+        m.innerHTML = slashItems
+          .map(
+            (it, i) =>
+              '<div class="slash-item' +
+              (i === slashIdx ? " active" : "") +
+              '" data-i="' +
+              i +
+              '" role="option"><span class="slash-name">' +
+              esc(it.name) +
+              '</span><span class="slash-desc">' +
+              esc(it.desc) +
+              "</span></div>",
+          )
+          .join("");
+        const on = m.querySelector(".slash-item.active");
+        if (on) on.scrollIntoView({ block: "nearest" });
+      }
+      function updateSlash() {
+        const v = $("inp").value;
+        if (!v.startsWith("/") || v.includes("\n")) {
+          hideSlash();
+          return;
+        }
+        const q = v.slice(1).split(" ")[0].toLowerCase();
+        slashItems = SLASH.filter((it) => {
+          const n = it.name.slice(1);
+          return !q || n.startsWith(q) || n.includes(q);
+        });
+        slashItems.sort((a, b) => {
+          const qa = a.name.slice(1),
+            qb = b.name.slice(1);
+          const sa = qa === q ? 3 : qa.startsWith(q) ? 2 : 1;
+          const sb = qb === q ? 3 : qb.startsWith(q) ? 2 : 1;
+          return sb - sa;
+        });
+        if (slashIdx >= slashItems.length) slashIdx = 0;
+        renderSlash();
+      }
+      function slashMove(d) {
+        if (!slashItems.length) return;
+        slashIdx = (slashIdx + d + slashItems.length) % slashItems.length;
+        renderSlash();
+      }
+      function slashPick() {
+        const it = slashItems[slashIdx];
+        if (!it) return;
+        if (it.accepts) {
+          $("inp").value = it.name + " ";
+          hideSlash();
+          autosizeInp();
+          return;
+        }
+        $("inp").value = it.name;
+        hideSlash();
+        send();
+      }
+      $("slashMenu").onmousedown = (e) => {
+        const it = e.target.closest(".slash-item");
+        if (!it) return;
+        e.preventDefault();
+        slashIdx = +it.getAttribute("data-i") || 0;
+        slashPick();
+      };
+      function autosizeInp() {
+        const i = $("inp");
+        i.style.height = "auto";
+        i.style.height = Math.min(i.scrollHeight, 180) + "px";
+      }
+      function draftKey() {
+        return "piz.draft." + sess;
+      }
+      function saveDraft() {
+        try {
+          const v = $("inp").value;
+          if (v) localStorage.setItem(draftKey(), v);
+          else localStorage.removeItem(draftKey());
+        } catch {}
+      }
+      function restoreDraft() {
+        try {
+          const v = localStorage.getItem(draftKey());
+          if (v) {
+            $("inp").value = v;
+            autosizeInp();
+          }
+        } catch {}
+      }
+      function clearDraft() {
+        try {
+          localStorage.removeItem(draftKey());
+        } catch {}
+      }
+      function histKey() {
+        return "piz.hist." + sess;
+      }
+      function loadHist() {
+        try {
+          return JSON.parse(localStorage.getItem(histKey()) || "[]");
+        } catch {
+          return [];
+        }
+      }
+      let histIdx = -1,
+        histDraft = "";
+      function pushHist(t) {
+        const a = loadHist().filter((x) => x !== t);
+        a.push(t);
+        while (a.length > 50) a.shift();
+        try {
+          localStorage.setItem(histKey(), JSON.stringify(a));
+        } catch {}
+        histIdx = -1;
+        histDraft = "";
+      }
+      function histPrev() {
+        const a = loadHist();
+        if (!a.length) return;
+        if (histIdx < 0) {
+          histDraft = $("inp").value;
+          histIdx = a.length;
+        }
+        if (histIdx > 0) histIdx--;
+        $("inp").value = a[histIdx] || "";
+        autosizeInp();
+      }
+      function histNext() {
+        const a = loadHist();
+        if (histIdx < 0) return;
+        histIdx++;
+        if (histIdx >= a.length) {
+          histIdx = -1;
+          $("inp").value = histDraft;
+        } else $("inp").value = a[histIdx] || "";
+        autosizeInp();
+      }
+      function sessUrl(name) {
+        return (
+          "/?session=" +
+          encodeURIComponent(name) +
+          (ws ? "&ws=" + encodeURIComponent(ws) : "")
+        );
+      }
+      async function runSlash(item, arg) {
+        switch (item.name) {
+          case "/help":
+            addUser("/help");
+            addAsst(
+              SLASH.map((s) => s.name + "  " + s.desc).join("\n") +
+                "\n\nCtrl+K 搜会话 · Ctrl+, 设置",
+            );
+            finishAsst();
+            break;
+          case "/new":
+          case "/clear":
+            location.href = sessUrl(Math.random().toString(36).slice(2, 8));
+            break;
+          case "/undo":
+            act({ act: "undo" }, (j) =>
+              showToast(j && j.ok ? "已撤销" : "撤销失败"),
+            );
+            break;
+          case "/compact":
+            act({ act: "compact" }, (j) =>
+              showToast(j && j.ok ? "压缩完成" : "压缩失败"),
+            );
+            break;
+          case "/shake":
+            act({ act: "shake" }, (j) =>
+              showToast(j && j.ok ? "shake 完成" : "shake 失败"),
+            );
+            break;
+          case "/snap":
+            act({ act: "snap" }, (j) =>
+              showToast(j && j.ok ? "snap 完成" : "snap 失败"),
+            );
+            break;
+          case "/fork": {
+            const n =
+              arg || (await askText("派生会话", "", "新会话名，留空自动"));
+            if (n === null) return;
+            act({ act: "fork", name: n || "" }, (j) => {
+              if (j && j.ok && j.name) location.href = sessUrl(j.name);
+              else showToast("派生失败");
+            });
+            break;
+          }
+          case "/title": {
+            const t = arg || (await askText("会话标题", curTitle || "", ""));
+            if (t === null || !t) return;
+            fetch("/api/title?" + wsp + "session=" + encodeURIComponent(sess), {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ title: t }),
+            })
+              .then((r) => r.json())
+              .then((j) => {
+                if (j && j.title) {
+                  curTitle = j.title;
+                  $("hSes").textContent = j.title;
+                  loadSessions();
+                }
+              });
+            break;
+          }
+          case "/model":
+            $("hModel").click();
+            break;
+          case "/status":
+            addUser("/status");
+            addAsst(
+              "模型 " +
+                (curModel || "?") +
+                " · 会话 " +
+                sess +
+                " · 项目 " +
+                (ws || "."),
+            );
+            finishAsst();
+            break;
+          default:
+            showToast("未知命令");
+        }
+      }
       $("inp").addEventListener("keydown", (e) => {
+        if (slashOpen()) {
+          if (e.key === "ArrowDown") {
+            e.preventDefault();
+            slashMove(1);
+            return;
+          }
+          if (e.key === "ArrowUp") {
+            e.preventDefault();
+            slashMove(-1);
+            return;
+          }
+          if (e.key === "Enter" || e.key === "Tab") {
+            e.preventDefault();
+            slashPick();
+            return;
+          }
+          if (e.key === "Escape") {
+            e.preventDefault();
+            hideSlash();
+            return;
+          }
+        }
+        if (
+          e.key === "ArrowUp" &&
+          !e.shiftKey &&
+          $("inp").selectionStart === 0 &&
+          $("inp").value.indexOf("\n") < 0
+        ) {
+          e.preventDefault();
+          histPrev();
+          return;
+        }
+        if (
+          e.key === "ArrowDown" &&
+          !e.shiftKey &&
+          $("inp").selectionStart === $("inp").value.length &&
+          $("inp").value.indexOf("\n") < 0
+        ) {
+          e.preventDefault();
+          histNext();
+          return;
+        }
         if (e.key === "Enter" && !e.shiftKey) {
           e.preventDefault();
           send();
         }
       });
       $("inp").addEventListener("input", () => {
-        const i = $("inp");
-        i.style.height = "auto";
-        i.style.height = Math.min(i.scrollHeight, 180) + "px";
+        autosizeInp();
+        saveDraft();
+        updateSlash();
       });
       async function send() {
         const t = $("inp").value.trim();
         if (!t) return;
+        if (t.startsWith("/")) {
+          const space = t.indexOf(" ");
+          const cmd = space < 0 ? t : t.slice(0, space);
+          const arg = space < 0 ? "" : t.slice(space + 1);
+          const item = SLASH.find((s) => s.name === cmd);
+          if (item) {
+            $("inp").value = "";
+            $("inp").style.height = "auto";
+            clearDraft();
+            hideSlash();
+            pushHist(t);
+            await runSlash(item, arg);
+            return;
+          }
+        }
         $("inp").value = "";
         $("inp").style.height = "auto";
+        clearDraft();
+        pushHist(t);
+        hideSlash();
         setRun(true);
         try {
           await fetch(
@@ -3070,18 +4138,21 @@
       $("scls").onclick = closeSheet;
       $("tbMid").onclick = openSheet;
       $("newBtn").onclick = () => {
-        location.href = "/?session=" + Math.random().toString(36).slice(2, 8);
+        location.href = sessUrl(Math.random().toString(36).slice(2, 8));
       };
       $("colBtn").onclick = () => {
         document.body.classList.add("collapsed");
+        try {
+          localStorage.setItem("piz.sidebar", "1");
+        } catch {}
       };
       $("expBtn").onclick = () => {
         document.body.classList.remove("collapsed");
+        try {
+          localStorage.setItem("piz.sidebar", "0");
+        } catch {}
       };
-      // 设置
-      $("setBtn").onclick = () => {
-        showToast("设置:配置见 ~/.piz/ 下文件");
-      };
+      $("setBtn").onclick = () => openSettings();
       // 空状态
       function hideWelcome() {
         const x = $("welcome");
@@ -3328,7 +4399,11 @@
       welcome.id = "welcome";
       welcome.className = "empty-hint";
       welcome.innerHTML =
-        '<div class="empty-spacer"></div><div class="empty-hint-title">piz</div><div class="empty-hint-text">与终端 AI 协作者对话。Enter 发送 · Shift+Enter 换行 · 工具卡点击展开</div>';
+        '<div class="empty-headline">' +
+        '<svg class="empty-logo" viewBox="0 0 24 18" fill="currentColor" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M2.4 1.8h17.2a1.7 1.7 0 0 1 0 3.4H10l10 8.2A1.8 1.8 0 0 1 18.65 16.45H3.2a1.7 1.7 0 0 1 0-3.4h9.4L2.7 4.9A1.8 1.8 0 0 1 4.1 1.8z"/></svg>' +
+        '<span class="empty-hint-title">piz</span></div>' +
+        '<div class="empty-hint-text">与终端 AI 协作者对话</div>' +
+        '<div class="empty-keys"><span><kbd>/</kbd> 命令</span><span><kbd>Ctrl</kbd> <kbd>K</kbd> 搜会话</span><span><kbd>Enter</kbd> 发送</span></div>';
       const wrap = $("wrap");
       if (!th.children.length) {
         wrap.prepend(welcome);
@@ -3339,6 +4414,7 @@
       renderWsName();
       loadSessions();
       loadPlugins();
+      restoreDraft();
       }
       initServerAuth();
       const probe = rawFetch("/api/state?" + wsp + "session=" + encodeURIComponent(sess), {

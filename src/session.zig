@@ -647,6 +647,27 @@ pub const Session = struct {
         return out.toOwnedSlice();
     }
 
+    /// 能进模型请求的会话角色。新的模型可见输入必须能落成其中之一,
+    /// 或在 architecture.md 的「模型可见清单」里登记为每轮重装的瞬时件。
+    pub const MODEL_VISIBLE_ROLES = [_][]const u8{ "user", "assistant", "tool" };
+
+    pub fn isModelVisibleRole(role: []const u8) bool {
+        for (MODEL_VISIBLE_ROLES) |r| {
+            if (std.mem.eql(u8, r, role)) return true;
+        }
+        return false;
+    }
+
+    /// 从日志重建模型历史:丢掉 system / 未知角色,保留 user/assistant/tool。
+    pub fn reconstructModelVisible(self: *Session) ![]ai.Message {
+        const all = try self.loadMessages();
+        var out = std.array_list.Managed(ai.Message).init(self.alloc);
+        for (all) |m| {
+            if (isModelVisibleRole(m.role)) try out.append(m);
+        }
+        return out.toOwnedSlice();
+    }
+
     /// 分支:新建会话文件,拷贝前 cut 条消息(含元信息)。后续 saveMessage 自动接续 parent。
     pub fn fork(self: *Session, cut: usize) !Session {
         const content = std.Io.Dir.cwd().readFileAlloc(util.io, self.path, self.alloc, .limited(16 * 1024 * 1024)) catch return error.InvalidSession;
@@ -748,6 +769,42 @@ test "session roundtrip" {
     try t.expectEqualStrings("hi", msgs[0].content);
     try t.expectEqualStrings("bash", msgs[1].tool_calls.?[0].name);
     try t.expectEqualStrings("c1", msgs[2].tool_call_id.?);
+}
+
+test "model-visible reconstruct drops system and keeps user/assistant/tool" {
+    const t = std.testing;
+    try util.testInit();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = util.Arena.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cwd_abs = try std.process.currentPathAlloc(util.io, a);
+    const tmp_path = try std.fmt.allocPrint(a, "{s}/.zig-cache/tmp/{s}", .{ cwd_abs, tmp.sub_path });
+    try util.environ_map.?.put("PIZ_DIR", tmp_path);
+
+    var sess = try Session.fresh(a, "/tmp");
+    defer {
+        std.Io.Dir.cwd().deleteFile(util.io, sess.path) catch {};
+        if (std.fmt.allocPrint(a, "{s}/sessions/--tmp--", .{tmp_path})) |sd1| {
+            std.Io.Dir.cwd().deleteDir(util.io, sd1) catch {};
+        } else |_| {}
+        if (std.fmt.allocPrint(a, "{s}/sessions", .{tmp_path})) |sd2| {
+            std.Io.Dir.cwd().deleteDir(util.io, sd2) catch {};
+        } else |_| {}
+    }
+    try sess.saveMessage(&.{ .role = "system", .content = "you are piz" });
+    try sess.saveMessage(&.{ .role = "user", .content = "hi" });
+    try sess.saveMessage(&.{ .role = "assistant", .content = "ok" });
+    try sess.saveMessage(&.{ .role = "tool", .content = "out", .tool_call_id = "c1" });
+
+    const vis = try sess.reconstructModelVisible();
+    try t.expectEqual(@as(usize, 3), vis.len);
+    try t.expectEqualStrings("user", vis[0].role);
+    try t.expectEqualStrings("assistant", vis[1].role);
+    try t.expectEqualStrings("tool", vis[2].role);
+    try t.expect(Session.isModelVisibleRole("user"));
+    try t.expect(!Session.isModelVisibleRole("system"));
 }
 
 test "session title + list + setTitle" {

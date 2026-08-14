@@ -1,0 +1,322 @@
+// 默认启用的挂钩:快压、记忆、压缩兜底、概念图、命令规范化、大输出外置。
+const std = @import("std");
+const agentmod = @import("../agent.zig");
+const compress = @import("../compress.zig");
+const api = @import("api.zig");
+const BeforeChain = api.BeforeChain;
+const AfterChain = api.AfterChain;
+
+/// 快压入口(before_turn):prune → shake → snap → 硬线救援。
+/// 纯机械,不调模型。实现见 compress.zig。
+pub fn pruneHook(ctx: ?*anyopaque) void {
+    const self: *agentmod.Agent = @ptrCast(@alignCast(ctx.?));
+    const r = compress.runAuto(.{
+        .alloc = self.alloc,
+        .messages = &self.messages,
+        .window = self.ctxWindow(),
+        .api = self.provider.api,
+        .vision = compress.modelHasVision(self.model),
+    });
+    if (compress.formatNotice(self.alloc, r)) |msg| {
+        if (self.cbs.on_notice) |f| f(self.cbs.ctx, msg) catch {};
+    }
+}
+
+// =====================================================================
+const MEMORY_HEADER = "## Cross-session memory";
+const MEMORY_MAX_CHARS = 8 * 1024; // 注入上限 ≈ 2K token
+
+fn memoryFilePath(alloc: std.mem.Allocator, self: *agentmod.Agent) ![]const u8 {
+    const dir = try agentmod.util.configDir(alloc);
+    const slug = try agentmod.util.cwdSlug(alloc, self.cwd);
+    const dir_path = try std.fs.path.join(alloc, &.{ dir, "memories" });
+    std.Io.Dir.cwd().createDirPath(agentmod.util.io, dir_path) catch {};
+    defer alloc.free(dir_path);
+    return std.fs.path.join(alloc, &.{ dir, "memories", try std.fmt.allocPrint(alloc, "{s}.md", .{slug}) });
+}
+
+pub fn memoryAppend(ctx: ?*anyopaque, summary: []const u8) void {
+    const self: *agentmod.Agent = @ptrCast(@alignCast(ctx.?));
+    const path = memoryFilePath(self.alloc, self) catch return;
+    defer self.alloc.free(path);
+    var content = std.array_list.Managed(u8).init(self.alloc);
+    defer content.deinit();
+    const ts = @divTrunc(std.Io.Clock.now(.real, agentmod.util.io).nanoseconds, std.time.ns_per_ms);
+    content.appendSlice(std.fmt.allocPrint(self.alloc, "## [{d}] {s}\n{s}\n\n", .{ ts, self.cwd, summary }) catch return) catch return;
+    std.Io.Dir.cwd().writeFile(agentmod.util.io, .{ .sub_path = path, .data = content.items }) catch {};
+}
+
+/// 启动注入:读本项目记忆,追加到 system_prompt(幂等)。
+pub fn injectMemory(self: *agentmod.Agent) void {
+    if (std.mem.indexOf(u8, self.system_prompt, MEMORY_HEADER) != null) return; // 已注入
+    const path = memoryFilePath(self.alloc, self) catch return;
+    defer self.alloc.free(path);
+    const content = std.Io.Dir.cwd().readFileAlloc(agentmod.util.io, path, self.alloc, .limited(64 * 1024)) catch return;
+    defer self.alloc.free(content);
+    if (content.len == 0) return;
+    // 最近记忆优先:取尾部 ≤ MEMORY_MAX_CHARS
+    const tail = if (content.len > MEMORY_MAX_CHARS) content[content.len - MEMORY_MAX_CHARS ..] else content;
+    const new_prompt = std.fmt.allocPrint(self.alloc, "{s}\n\n{s}\n{s}", .{ self.system_prompt, MEMORY_HEADER, tail }) catch return;
+    self.alloc.free(self.system_prompt);
+    self.system_prompt = new_prompt;
+}
+
+// =====================================================================
+// 命令规范化插件:危险模式拦截(防误操作)。
+// =====================================================================
+const DANGEROUS_PATTERNS = [_][]const u8{
+    "sudo rm -rf /", "rm -rf / ", "rm -rf /*", "mkfs.", ":(){ :|:& };:", "> /dev/sd", "dd if=/dev/zero of=/dev/sd",
+};
+
+fn canonicalDecide(ctx: ?*anyopaque, name: []const u8, args: []const u8) ?[]const u8 {
+    if (!std.mem.eql(u8, name, "bash")) return null;
+    const self: *agentmod.Agent = @ptrCast(@alignCast(ctx.?));
+    for (DANGEROUS_PATTERNS) |pat| {
+        if (std.mem.indexOf(u8, args, pat) != null) {
+            return std.fmt.allocPrint(self.alloc, "error: blocked by command-canonicalization: pattern '{s}' detected. Rewrite the command safely or explain why it is necessary.", .{pat}) catch null;
+        }
+    }
+    return null;
+}
+
+pub fn canonicalBlock(chain: *BeforeChain) ?[]const u8 {
+    if (canonicalDecide(chain.ctx, chain.name, chain.args)) |msg| return msg;
+    return chain.next();
+}
+
+// =====================================================================
+// 工件外置插件:大工具输出写文件,上下文只留引用(根治上下文暴增)。
+// =====================================================================
+const ARTIFACT_THRESHOLD_CHARS = 4 * 1024;
+
+fn artifactStore(ctx: ?*anyopaque, name: []const u8, content: []const u8) ?[]const u8 {
+    if (content.len <= ARTIFACT_THRESHOLD_CHARS) return null;
+    const self: *agentmod.Agent = @ptrCast(@alignCast(ctx.?));
+    const dir = agentmod.util.configDir(self.alloc) catch return null;
+    defer self.alloc.free(dir);
+    const artifacts_dir = std.fs.path.join(self.alloc, &.{ dir, "artifacts" }) catch return null;
+    defer self.alloc.free(artifacts_dir);
+    std.Io.Dir.cwd().createDirPath(agentmod.util.io, artifacts_dir) catch {};
+    const ts = @divTrunc(std.Io.Clock.now(.real, agentmod.util.io).nanoseconds, std.time.ns_per_ms);
+    const fname = std.fmt.allocPrint(self.alloc, "{d}-{s}.txt", .{ ts, name }) catch return null;
+    defer self.alloc.free(fname);
+    const fpath = std.fs.path.join(self.alloc, &.{ artifacts_dir, fname }) catch return null;
+    defer self.alloc.free(fpath);
+    std.Io.Dir.cwd().writeFile(agentmod.util.io, .{ .sub_path = fpath, .data = content }) catch return null;
+    // 引用替换:预览 + 文件路径(模型可 bash cat 取全量)
+    //
+    // clampUtf8 而非裸切片:切在多字节序列中间会产出非法 UTF-8,而
+    // std.json.Stringify 对非法 UTF-8 的 []const u8 不报错 —— 它退化成
+    // **整数数组**。provider 收到 `"content":[91,65,...]` 直接 400
+    // (deepseek: "invalid type: integer `91`, expected ContentBlock")。
+    // 中文注释开头的源码文件必然踩中:400 字节边界落在汉字中间。
+    const preview = agentmod.util.clampUtf8(content, 400);
+    return std.fmt.allocPrint(self.alloc, "[Artifact stored: {s} ({d} bytes)]\n{s}\n...(truncated; read the artifact file for full content)", .{ fpath, content.len, preview }) catch null;
+}
+
+pub fn artifactStoreHook(chain: *AfterChain) ?[]const u8 {
+    const inner = chain.next() orelse chain.content;
+    if (artifactStore(chain.ctx, chain.name, inner)) |rewritten| return rewritten;
+    if (inner.ptr == chain.content.ptr and inner.len == chain.content.len) return null;
+    return inner;
+}
+
+// =====================================================================
+// concept-graph 插件(最小版):压缩摘要中提取事实(decision/constraint/goal 等行)
+// 追加到 <configDir>/concepts/<cwd-slug>.md,跨会话项目知识沉淀。
+// =====================================================================
+const FACT_MARKERS = [_][]const u8{ "decision:", "decided", "constraint:", "goal:", "convention:", "architecture:" };
+
+pub fn conceptExtract(ctx: ?*anyopaque, summary: []const u8) void {
+    const self: *agentmod.Agent = @ptrCast(@alignCast(ctx.?));
+    var facts = std.array_list.Managed(u8).init(self.alloc);
+    defer facts.deinit();
+    var lines = std.mem.splitScalar(u8, summary, '\n');
+    while (lines.next()) |line| {
+        const l = std.mem.trim(u8, line, " \t");
+        if (l.len == 0) continue;
+        for (FACT_MARKERS) |mk| {
+            if (std.ascii.startsWithIgnoreCase(l, mk)) {
+                facts.appendSlice(l) catch {};
+                facts.appendSlice("\n") catch {};
+                break;
+            }
+        }
+    }
+    if (facts.items.len == 0) return;
+    const dir = agentmod.util.configDir(self.alloc) catch return;
+    defer self.alloc.free(dir);
+    const slug = agentmod.util.cwdSlug(self.alloc, self.cwd) catch return;
+    defer self.alloc.free(slug);
+    const concepts_dir = std.fs.path.join(self.alloc, &.{ dir, "concepts" }) catch return;
+    defer self.alloc.free(concepts_dir);
+    std.Io.Dir.cwd().createDirPath(agentmod.util.io, concepts_dir) catch {};
+    const fname = std.fmt.allocPrint(self.alloc, "{s}.md", .{slug}) catch return;
+    defer self.alloc.free(fname);
+    const fpath = std.fs.path.join(self.alloc, &.{ concepts_dir, fname }) catch return;
+    defer self.alloc.free(fpath);
+    // 追加(读旧+写新)
+    var content = std.array_list.Managed(u8).init(self.alloc);
+    defer content.deinit();
+    if (std.Io.Dir.cwd().readFileAlloc(agentmod.util.io, fpath, self.alloc, .limited(256 * 1024))) |old| {
+        defer self.alloc.free(old);
+        content.appendSlice(old) catch {};
+    } else |_| {}
+    content.appendSlice(facts.items) catch {};
+    std.Io.Dir.cwd().writeFile(agentmod.util.io, .{ .sub_path = fpath, .data = content.items }) catch {};
+}
+
+pub fn compactFallback(ctx: ?*anyopaque) ?[]const u8 {
+    const self: *agentmod.Agent = @ptrCast(@alignCast(ctx.?));
+    if (self.provider.models.len > 1) return self.provider.models[1];
+    return null;
+}
+
+test "command canonicalization blocks dangerous patterns" {
+    const t = std.testing;
+    try agentmod.util.testInit();
+    var arena = agentmod.util.Arena.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var cfg = agentmod.cfgmod.Config{ .arena = &arena };
+    var provs = [_]agentmod.cfgmod.Provider{.{ .name = "mock", .api = .openai_completions, .base_url = "http://127.0.0.1:1", .api_key = "k" }};
+    cfg.providers = &provs;
+    var agent = try agentmod.Agent.init(a, &cfg, "mock", "m", "/tmp");
+    const blocked = canonicalDecide(&agent, "bash", "sudo rm -rf / --no-preserve-root");
+    try t.expect(blocked != null);
+    try t.expect(std.mem.indexOf(u8, blocked.?, "blocked") != null);
+    const ok = canonicalDecide(&agent, "bash", "ls -la");
+    try t.expect(ok == null);
+}
+
+test "artifact store externalizes large outputs" {
+    const t = std.testing;
+    try agentmod.util.testInit();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = agentmod.util.Arena.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cwd_abs = try std.process.currentPathAlloc(agentmod.util.io, a);
+    const tmp_path = try std.fmt.allocPrint(a, "{s}/.zig-cache/tmp/{s}", .{ cwd_abs, tmp.sub_path });
+    defer std.Io.Dir.cwd().deleteTree(agentmod.util.io, tmp_path) catch {};
+    try agentmod.util.environ_map.?.put("PIZ_DIR", tmp_path);
+    var cfg = agentmod.cfgmod.Config{ .arena = &arena };
+    var provs = [_]agentmod.cfgmod.Provider{.{ .name = "mock", .api = .openai_completions, .base_url = "http://127.0.0.1:1", .api_key = "k" }};
+    cfg.providers = &provs;
+    var agent = try agentmod.Agent.init(a, &cfg, "mock", "m", "/tmp");
+
+    // 小输出不处理
+    try t.expect(artifactStore(&agent, "bash", "small") == null);
+    // 大输出外置:引用含路径与预览
+    const big = "x" ** (8 * 1024);
+    const ref = artifactStore(&agent, "bash", big).?;
+    try t.expect(std.mem.indexOf(u8, ref, "[Artifact stored:") != null);
+    try t.expect(std.mem.indexOf(u8, ref, "artifacts") != null);
+    // 文件真实存在(路径在 "stored: " 与 " (" 之间)
+    const path_start = std.mem.indexOf(u8, ref, "stored: ").? + 8;
+    const path_end = std.mem.indexOfScalar(u8, ref[path_start..], ' ').? + path_start;
+    const fpath = ref[path_start..path_end];
+    const stored = try std.Io.Dir.cwd().readFileAlloc(agentmod.util.io, fpath, a, .limited(64 * 1024));
+    try t.expectEqual(big.len, stored.len);
+
+    // 多字节内容:预览必须切在字符边界上。
+    //
+    // 这是实际踩过的坑:裸切片让预览尾部带上半个汉字,而
+    // std.json.Stringify 对非法 UTF-8 的 []const u8 会静默退化成**整数数组**,
+    // provider 直接 400(deepseek: "invalid type: integer `91`")。
+    // 报错跟真实原因毫无关系,查了很久才定位。
+    // 源码文件的中文注释必然踩中 —— 400 字节边界落在汉字中间。
+    // 前缀 "x" 是刻意的:不加它,400 字节边界正好落在字符边界上,
+    // 裸切片也能通过 —— 测试会因为运气而不是因为正确性变绿。
+    const zh = "x" ++ "// agents.zig — 会话级 subagent 注册表:长驻 agent + 邮箱。\n" ** 80;
+    try t.expect(zh.len > ARTIFACT_THRESHOLD_CHARS);
+    try t.expect(!std.unicode.utf8ValidateSlice(zh[0..400])); // 400 处确实切在字符中间
+    const zh_ref = artifactStore(&agent, "read", zh).?;
+    // 整条引用必须是合法 UTF-8 —— 预览尾部带半个汉字就会在这里失败
+    try t.expect(std.unicode.utf8ValidateSlice(zh_ref));
+}
+
+test "cross-session memory persists and injects idempotently" {
+    const t = std.testing;
+    try agentmod.util.testInit();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = agentmod.util.Arena.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // 隔离 configDir
+    const cwd_abs = try std.process.currentPathAlloc(agentmod.util.io, a);
+    const tmp_path = try std.fmt.allocPrint(a, "{s}/.zig-cache/tmp/{s}", .{ cwd_abs, tmp.sub_path });
+    defer std.Io.Dir.cwd().deleteTree(agentmod.util.io, tmp_path) catch {};
+    try agentmod.util.environ_map.?.put("PIZ_DIR", tmp_path);
+
+    var cfg = agentmod.cfgmod.Config{ .arena = &arena };
+    var provs = [_]agentmod.cfgmod.Provider{.{ .name = "mock", .api = .openai_completions, .base_url = "http://127.0.0.1:1", .api_key = "k" }};
+    cfg.providers = &provs;
+    var agent = try agentmod.Agent.init(a, &cfg, "mock", "m", "/tmp");
+    const sys_before = agent.system_prompt.len;
+
+    // 压缩钩子 → 记忆文件
+    memoryAppend(&agent, "summary one");
+    memoryAppend(&agent, "summary two");
+
+    // 注入:system_prompt 含记忆;幂等(二次注入不重复)
+    injectMemory(&agent);
+    try t.expect(std.mem.indexOf(u8, agent.system_prompt, "summary two") != null);
+    try t.expect(std.mem.indexOf(u8, agent.system_prompt, "## Cross-session memory") != null);
+    const once = agent.system_prompt.len;
+    injectMemory(&agent);
+    try t.expectEqual(once, agent.system_prompt.len);
+    try t.expect(agent.system_prompt.len > sys_before);
+}
+
+test "prune plugin trims old tool outputs only" {
+    const t = std.testing;
+    try agentmod.util.testInit();
+    var arena = agentmod.util.Arena.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var cfg = agentmod.cfgmod.Config{ .arena = &arena };
+    var provs = [_]agentmod.cfgmod.Provider{.{ .name = "mock", .api = .openai_completions, .base_url = "http://127.0.0.1:1", .api_key = "k" }};
+    cfg.providers = &provs;
+    var agent = try agentmod.Agent.init(a, &cfg, "mock", "m", "/tmp");
+
+    // 旧 bash 轮 ×8(240KB)+ read 轮(30KB,不裁)+ 新 bash 轮(30KB,尾部保护)
+    const big = "z" ** (30 * 1024);
+    for (0..8) |i| {
+        const id = try std.fmt.allocPrint(a, "c_bash{d}", .{i});
+        const tcs = try a.alloc(agentmod.ai.ToolCall, 1);
+        tcs[0] = .{ .id = id, .name = "bash", .args = "{}" };
+        try agent.messages.append(.{ .role = "user", .content = "old q" });
+        try agent.messages.append(.{ .role = "assistant", .content = "a", .tool_calls = tcs });
+        try agent.messages.append(.{ .role = "tool", .content = big, .tool_call_id = id });
+    }
+    const read_tcs = try a.alloc(agentmod.ai.ToolCall, 1);
+    read_tcs[0] = .{ .id = "c_read1", .name = "read", .args = "{\"path\":\"keep.zig\"}" };
+    try agent.messages.append(.{ .role = "user", .content = "old read q" });
+    try agent.messages.append(.{ .role = "assistant", .content = "a", .tool_calls = read_tcs });
+    try agent.messages.append(.{ .role = "tool", .content = big, .tool_call_id = "c_read1" });
+    const recent_tcs = try a.alloc(agentmod.ai.ToolCall, 1);
+    recent_tcs[0] = .{ .id = "c_bash9", .name = "bash", .args = "{}" };
+    try agent.messages.append(.{ .role = "user", .content = "new q" });
+    try agent.messages.append(.{ .role = "assistant", .content = "a", .tool_calls = recent_tcs });
+    try agent.messages.append(.{ .role = "tool", .content = big, .tool_call_id = "c_bash9" });
+
+    pruneHook(@ptrCast(&agent));
+    var found_trunc = false;
+    var read_intact = false;
+    var recent_intact = false;
+    for (agent.messages.items) |m| {
+        if (std.mem.eql(u8, m.role, "tool")) {
+            if (std.mem.startsWith(u8, m.content, "[Output truncated")) found_trunc = true;
+            if (std.mem.eql(u8, m.content, big)) {
+                if (std.mem.eql(u8, m.tool_call_id orelse "", "c_read1")) read_intact = true;
+                if (std.mem.eql(u8, m.tool_call_id orelse "", "c_bash9")) recent_intact = true;
+            }
+        }
+    }
+    try t.expect(found_trunc); // 部分旧 bash 输出被裁
+    try t.expect(read_intact); // read 输出不裁
+    try t.expect(recent_intact); // 尾部受保护
+}

@@ -40,7 +40,7 @@ zig fmt src build.zig  # 格式化
 
 ```mermaid
 graph TD
-    app["app — src/main.zig<br/>CLI 入口 / 交互编排 / Web 命令"]
+    app["app — src/main.zig<br/>CLI 入口 / 交互编排"]
     tui["tui — src/tui.zig<br/>raw mode / ANSI 渲染"]
     core["core — src/core.zig<br/>聚合入口"]
 
@@ -86,7 +86,9 @@ graph TD
 | `compress.zig` | 快压三件套：prune / shake / snap，无 LLM |
 | `ai.zig` | 两种 provider 协议的序列化与 SSE 流式解析 |
 | `tools.zig` | 核心工具实现、glob 匹配、最小正则引擎、目录遍历 |
-| `plugins.zig` | 内置插件表与钩子分发、插件工具 |
+| `plugins.zig` | 内置插件合同、出厂表、启用集、钩子分发 |
+| `plugins/` | 挂钩/web/todo/小件/agents/task/lsp 实现；`limits.zig` 为委托上限 |
+| `seams.zig` | 编译期能力缝：fs / llm 默认 Provider，无加载器 |
 | `session.zig` | 会话文件读写、fork、截断、Web 会话管理 |
 | `config.zig` | 配置文件加载、provider 合并、key 解析 |
 | `httpc.zig` | `std.http.Client` 封装、SSE 解析、重试退避 |
@@ -96,7 +98,10 @@ graph TD
 | `events.zig` | 扫描包扩展声明、事件触发时 spawn 命令 |
 | `webui.zig` | HTTP 服务、路由、SSE、鉴权 |
 | `webplugins.zig` | 前端插件清单与资源服务 |
-| `main.zig` | argv 解析、交互态编排、Web 会话池、print 模式 |
+| `main.zig` | argv 解析、交互态编排 |
+| `cmd_web.zig` | Web 会话池、`piz web` 命令 |
+| `cmd_print.zig` | print/jsonl 输出与 `runPrint` |
+| `runopts.zig` | 交互/print 共用的运行选项 |
 | `tui.zig` | raw mode、ANSI 渲染、输入解析、历史 |
 | `e2e.zig` | 端到端测试（内嵌 mock provider，仅网络边界打桩） |
 
@@ -138,6 +143,21 @@ sequenceDiagram
 ```
 
 循环上限 `MAX_TOOL_ITER = 24`。
+
+## 模型可见清单
+
+进模型请求的内容必须能从会话日志重建，或在此登记为每轮重装的瞬时件。改 loop 加新输入时同步改本表。
+
+| 输入 | 落账 |
+|------|------|
+| user / assistant / tool 消息 | JSONL，`Session.reconstructModelVisible` |
+| assistant.tool_calls | 同上 |
+| 系统提示（角色、工具 schema、技能目录） | 每轮重装，不入 JSONL |
+| skill 全文（`skill` 工具结果） | 入 tool 消息 |
+| 跨会话记忆注入 | `before_turn` 写进 messages，随后 `saveMessage` |
+| 快压占位 | 改写已有 tool 内容后落盘 |
+
+`system` 角色可写入 JSONL，但重建请求历史时丢弃（`isModelVisibleRole`）。
 
 ## 上下文管理
 
@@ -431,7 +451,7 @@ piz 保留「置前」，理由是两者的压缩语义不同：codex 保留 use
 ## 测试
 
 ```bash
-zig build test          # 177 个测试
+zig build test          # 184 个测试
 ```
 
 两个测试目标：`core.zig` 为根（收集全部 core 模块的 test 块）、`main.zig` 为根（含 `e2e.zig`）。Zig 的 `zig test` 只收集根模块的测试，所以要分两个目标。
@@ -446,8 +466,9 @@ zig build test          # 177 个测试
 - **新模块必须显式加进 test 块才会被收集。** Zig 只跑 `_ = @import(…)` 列出的测试；
   引用一个模块（`const m = @import("x.zig")`）不会自动收集它的测试。`webui.zig` 的
   `parseChatText` 测试因此从写下起就没跑过。core 里的模块加到 `core.zig` 的 test 块，
-  只被 main 引用的（`webui.zig`）在 `main.zig` 的 test 块里 `_ = webui_mod;` ——
-  不能再 `@import` 一次，同一文件同时属于 root 与 core 两个模块会编译失败。
+  只被 main 引用的（`webui.zig` / `cmd_web.zig` / `cmd_print.zig`）在 `main.zig`
+  的 test 块里列出 —— 不能再 `@import` 一次，同一文件同时属于 root 与 core
+  两个模块会编译失败。
 
 ### e2e 测试
 

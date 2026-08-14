@@ -62,6 +62,11 @@ piz web: http://127.0.0.1:5494/#token=0cbc72149b1492b0e5e8ddd11b95fb33  (Ctrl+C 
 | 权限审批 | 工具调用在界面里点允许/拒绝，或切自动模式 |
 | 中断 | 生成中随时打断 |
 | 会话管理 | 列表、切换、fork、undo、compact、归档、恢复、删除 |
+| 会话搜索 | `Ctrl/⌘K` Spotlight，按标题与名字过滤 |
+| 斜杠命令 | 输入 `/` 弹出菜单：help/new/undo/compact/shake/snap/fork/title/model/status |
+| 设置 | 配色（浅/深/系统）、强调色、字号、完成通知与提示音 |
+| 上下文环 | 工具栏显示占用百分比，超过 85% 提示压缩 |
+| 草稿与历史 | 未发送草稿按会话落 localStorage；↑/↓ 翻输入历史 |
 | 模型切换 | 界面内切，per-session 生效 |
 | 多项目 | 注册多个工作区，各自独立会话池 |
 | 前端插件 | 注入自定义 JS/CSS，见 [Web plugins](web-plugins.md) |

@@ -5,6 +5,7 @@ pub const ai = @import("ai.zig");
 pub const cfgmod = @import("config.zig");
 const toolsmod = @import("tools.zig");
 const pluginsmod = @import("plugins.zig");
+const seams = @import("seams.zig");
 const httpcmod = @import("httpc.zig");
 const imgxmod = @import("imgx.zig");
 
@@ -178,6 +179,7 @@ fn runToolSlot(slot: *ToolSlot) void {
     // web 模式多 workspace 下这是实际的数据损坏:会话声明在 projB,
     // `write out.txt` 落进 projA(实测复现过)。
     toolsmod.setRoot(self.cwd);
+    seams.setFs(self.fs);
     defer toolsmod.clearRoot();
     if (t.ctx_handler) |h| {
         slot.result = h(@ptrCast(self), self.alloc, slot.call.args) catch .{ .content = "tool crashed", .is_error = true };
@@ -372,6 +374,10 @@ pub const Agent = struct {
     /// 一个 Agent 开了 skills 会让所有 Agent 都看到 skill 工具,而只读的
     /// 调研 subagent 更不该因为兄弟 agent 的设置拿到写工具。
     plugins: pluginsmod.EnabledSet = 0,
+    /// 能力缝:默认本地 fs / ai.run / findToolIn。测试或沙箱可替换。
+    fs: *const seams.Fs = &seams.local_fs,
+    llm_run: seams.LlmRun = seams.defaultLlmRun,
+    find_tool: *const fn (pluginsmod.EnabledSet, []const u8) ?*const toolsmod.Tool = pluginsmod.findToolIn,
     /// 委派深度。顶层 agent = 0,它派出的 subagent = 1。
     ///
     /// 从前只能靠 PIZ_TASK_DEPTH 环境变量跨进程传 —— 进程内 subagent 没有
@@ -721,7 +727,7 @@ pub const Agent = struct {
                 .on_connect = self.cbs.on_connect,
             };
             // 可变:断流重连额度用尽时要就地填 error_msg 说明「上面这段不完整」
-            var result = try ai.run(
+            var result = try self.llm_run(
                 self.alloc,
                 self.alloc,
                 self.provider,
@@ -886,7 +892,7 @@ pub const Agent = struct {
                         continue;
                     }
                 }
-                const tool = if (self.read_only) null else pluginsmod.findToolIn(self.plugins, tc.name);
+                const tool = if (self.read_only) null else self.find_tool(self.plugins, tc.name);
                 if (tool == null) {
                     slots[i].done = true;
                     slots[i].result = if (self.read_only) .{
@@ -1099,11 +1105,11 @@ pub const Agent = struct {
             if (all.items.len <= 3) break; // 删无可删
             _ = all.orderedRemove(1); // 删最旧历史(保 system 与总结指令)
         }
-        result = try ai.run(self.alloc, self.alloc, self.provider, self.key, self.url, self.model, all.items, &.{}, .{ .cache_key = self.cwd });
+        result = try self.llm_run(self.alloc, self.alloc, self.provider, self.key, self.url, self.model, all.items, &.{}, .{ .cache_key = self.cwd });
         if (result.error_msg != null) {
             // compact 韧性:插件提供备用模型时重试一次
             if (pluginsmod.compactFallbackModel(@ptrCast(self))) |fb| {
-                result = try ai.run(self.alloc, self.alloc, self.provider, self.key, self.url, fb, all.items, &.{}, .{ .cache_key = self.cwd });
+                result = try self.llm_run(self.alloc, self.alloc, self.provider, self.key, self.url, fb, all.items, &.{}, .{ .cache_key = self.cwd });
             }
         }
         if (result.error_msg != null) return result.error_msg.?;
@@ -1352,7 +1358,7 @@ test "parallel tool slots preserve call order" {
     };
     const slots = try a.alloc(ToolSlot, calls.len);
     for (calls, 0..) |c, i| {
-        slots[i] = .{ .call = c, .agent = &agent, .tool = pluginsmod.findToolIn(agent.plugins, c.name) };
+        slots[i] = .{ .call = c, .agent = &agent, .tool = agent.find_tool(agent.plugins, c.name) };
     }
     var threads: [5]std.Thread = undefined;
     for (slots, 0..) |*s, i| {
@@ -1396,7 +1402,7 @@ test "per-file lock prevents lost writes under concurrency" {
     };
     const slots = try a.alloc(ToolSlot, calls.len);
     for (calls, 0..) |c, i| {
-        slots[i] = .{ .call = c, .agent = &agent, .tool = pluginsmod.findToolIn(agent.plugins, c.name) };
+        slots[i] = .{ .call = c, .agent = &agent, .tool = agent.find_tool(agent.plugins, c.name) };
     }
     var threads: [2]std.Thread = undefined;
     for (slots, 0..) |*s, i| {

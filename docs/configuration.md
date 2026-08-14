@@ -56,6 +56,7 @@ piz 用自己的配置目录 `~/.piz`。配置**文件格式**与 pi 兼容（`s
 | `defaultProvider` | 默认 provider |
 | `defaultModel` | 默认模型 |
 | `plugins` | 要开启的可选插件名数组，见 [Plugins](plugins.md#开启方式) |
+| `disabled_plugins` | 要从出厂集关掉的插件名数组（撤钩 / 工具 / schema） |
 
 `plugins` 里的未知名字只警告不报错（配置可能是为更新版本写的）；`--plugin` 传的未知名字直接失败。
 

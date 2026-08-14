@@ -42,6 +42,8 @@ pub const Config = struct {
     default_model: ?[]const u8 = null,
     /// settings.json 的 `plugins` 数组:要额外开启的可选插件名。
     enabled_plugins: []const []const u8 = &.{},
+    /// settings.json 的 `disabled_plugins` 数组:要从出厂集关掉的插件名。
+    disabled_plugins: []const []const u8 = &.{},
     /// 加载时解析失败的配置文件名(不含路径)。
     ///
     /// 语法错误的配置会被静默当成不存在,于是用户看到的是「unknown provider」
@@ -218,6 +220,17 @@ pub const Config = struct {
                             }
                         }
                         self.enabled_plugins = try names.toOwnedSlice();
+                    }
+                }
+                if (root.object.get("disabled_plugins")) |arr| {
+                    if (arr == .array) {
+                        var names = std.array_list.Managed([]const u8).init(alloc);
+                        for (arr.array.items) |it| {
+                            if (it == .string and it.string.len > 0) {
+                                try names.append(try alloc.dupe(u8, it.string));
+                            }
+                        }
+                        self.disabled_plugins = try names.toOwnedSlice();
                     }
                 }
             }

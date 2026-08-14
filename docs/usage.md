@@ -195,7 +195,8 @@ piz web [选项]                 # Web UI
 |------|------|
 | `-r`, `--read-only` | 只读模式，一个工具都不暴露（含 `read`） |
 | `-x`, `--execute` | 工具自动执行，不逐次询问 |
-| `--plugin <N>` | 开启一个可选插件（可重复） |
+| `--plugin <N>` | 开启一个插件（可重复） |
+| `--no-plugin <N>` | 关闭一个插件（可重复，撤钩 / 工具 / schema） |
 | `--plugins` | 列出全部插件与当前启用状态后退出 |
 | `-i`, `--input <FILE>` | 从文件读提示词（print 模式） |
 | `--system <TEXT>` | 替换默认系统提示 |
@@ -205,6 +206,7 @@ piz 默认只暴露 8 个核心工具，其余能力按需开启：
 ```bash
 piz --plugins                     # 看有哪些
 piz --plugin lsp --plugin todo    # 本次开启
+piz --no-plugin tool-output-pruner  # 本次关掉出厂插件
 ```
 
 持久生效写进 `~/.piz/settings.json` 的 `plugins` 数组。详见 [Tools](tools.md) 与 [Plugins](plugins.md)。

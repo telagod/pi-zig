@@ -1,4 +1,4 @@
-> 想加插件？让 piz 读这篇，然后描述你要挂的钩子。它会照着 `src/plugins.zig` 的现有条目写。
+> 想加插件？让 piz 读这篇，然后描述你要挂的钩子。它会照着 `src/plugins.zig` 的现有条目写。对齐外部 harness 哲学时先读 [dsh 对照札](dsh-mapping.md)。
 
 # 内置插件
 
@@ -49,19 +49,20 @@ piz 的插件是**编译期注册的 Zig 函数表**，不是运行时加载的�
 ### 开启方式
 
 ```bash
-piz --plugins                     # 列出全部插件与当前启用状态
-piz --plugin lsp --plugin todo    # 本次开启（可重复）
+piz --plugins                          # 列出全部插件与当前启用状态
+piz --plugin lsp --plugin todo         # 本次开启（可重复）
+piz --no-plugin tool-output-pruner     # 本次关闭（撤钩、撤工具、撤 schema）
 ```
 
 持久生效写进 `~/.piz/settings.json`：
 
 ```json
-{ "plugins": ["lsp", "todo"] }
+{ "plugins": ["lsp", "todo"], "disabled_plugins": ["tool-output-pruner"] }
 ```
 
-`--plugins` 显示的是**本次实际生效**的状态（已应用 settings.json、`--plugin` 与技能自动检测），不是编译期默认。
+`--plugins` 显示的是**本次实际生效**的状态（出厂集 + settings.json + `--plugin` / `--no-plugin` + 技能自动检测），不是编译期默认。关在开之后应用，所以 `--no-plugin` 能盖掉 settings 里的开启。
 
-> 禁用插件的工具**查不到**，不只是不出现在 tools 定义里。这一致性是必要的 —— 否则模型可能调到一个没声明的工具。
+> 关掉的插件**钩子不跑、工具查不到、schema 不进请求**。不只是不出现在 tools 定义里。
 
 ## 钩子契约
 
@@ -72,15 +73,15 @@ piz --plugin lsp --plugin todo    # 本次开启（可重复）
 | `before_turn` | `fn (ctx) void` | 每轮请求前。可改 `messages`（裁剪、注入）。**串行调用**，不在并行区。 |
 | `on_compact` | `fn (ctx, summary) void` | 压缩成功后。复用已有摘要，不额外调模型。 |
 | `on_compact_failed` | `fn (ctx) ?[]const u8` | 压缩失败。返回非 null 则用该模型名重试一次。 |
-| `on_tool_before` | `fn (ctx, name, args) ?[]const u8` | 工具执行前。返回非 null 则**跳过执行**，该字符串作为错误结果回模型。 |
-| `on_tool_result` | `fn (ctx, name, content) ?[]const u8` | 工具成功后。返回非 null 则**替换**结果内容。 |
+| `on_tool_before` | `fn (chain: *BeforeChain) ?[]const u8` | 工具执行前 waterfall。须 `chain.next()` 才放行后续；不调即短路。返回非 null 则**跳过执行**，该字符串作为错误结果回模型。 |
+| `on_tool_result` | `fn (chain: *AfterChain) ?[]const u8` | 工具成功后 waterfall。须 `chain.next()` 才放行后续。返回非 null 则**替换**结果内容。 |
 | `on_user_message` | `fn (ctx, text) void` | 用户消息提交时。 |
 | `slash_commands` | `[]const SlashCommand` | 注册 `/name` 交互命令。 |
 | `tools` | `[]const Tool` | 注册工具，与核心工具一起暴露给模型。 |
 
 `ctx` 是 `*Agent` 的不透明指针，用 `@ptrCast(@alignCast(ctx.?))` 取回。
 
-多个插件挂同一钩子时按 `builtin_plugins` 的声明顺序执行。对返回 `?T` 的钩子，**第一个返回非 null 的插件胜出**，后续不再调用。
+多个插件挂同一钩子时按 `builtin_plugins` 的声明顺序执行。`on_tool_before` / `on_tool_result` 是 waterfall：先注册的在外层，须调 `next()` 才进入内层；不调即短路。其余返回 `?T` 的钩子仍是第一个非 null 胜出。
 
 ## 各插件行为
 

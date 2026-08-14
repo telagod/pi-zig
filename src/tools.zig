@@ -2,6 +2,7 @@
 const std = @import("std");
 const util = @import("util.zig");
 const activity = @import("activity.zig");
+const seams = @import("seams.zig");
 
 pub const MAX_TOOL_OUTPUT = 16 * 1024;
 
@@ -22,6 +23,21 @@ pub fn setRoot(root: []const u8) void {
 
 pub fn clearRoot() void {
     tool_root = "";
+}
+
+fn diskRead(arena: std.mem.Allocator, path: []const u8, limit: usize) ![]u8 {
+    const f = seams.fs();
+    return f.readFile(f.ctx, arena, path, limit);
+}
+
+fn diskWrite(path: []const u8, data: []const u8) !void {
+    const f = seams.fs();
+    return f.writeFile(f.ctx, path, data);
+}
+
+fn diskMkdir(path: []const u8) void {
+    const f = seams.fs();
+    f.createDirPath(f.ctx, path) catch {};
 }
 
 /// 把工具参数里的路径解析成可直接用于 `Dir.cwd()` 的路径。
@@ -97,7 +113,7 @@ fn parseArgs(arena: std.mem.Allocator, args: []const u8) !std.json.Value {
 fn toolRead(arena: std.mem.Allocator, args: []const u8) !Result {
     const v = try parseArgs(arena, args);
     const path = resolvePath(arena, jstr(v, "path") orelse return .{ .content = "error: missing 'path' argument", .is_error = true });
-    const content = std.Io.Dir.cwd().readFileAlloc(util.io, path, arena, .limited(16 * 1024 * 1024)) catch |err| {
+    const content = diskRead(arena, path, 16 * 1024 * 1024) catch |err| {
         return .{ .content = try std.fmt.allocPrint(arena, "error reading {s}: {s}", .{ path, @errorName(err) }), .is_error = true };
     };
     const offset = jint(v, "offset");
@@ -149,9 +165,9 @@ fn toolWrite(arena: std.mem.Allocator, args: []const u8) !Result {
     const path = resolvePath(arena, jstr(v, "path") orelse return .{ .content = "error: missing 'path' argument", .is_error = true });
     const content = jstr(v, "content") orelse "";
     if (std.fs.path.dirname(path)) |d| {
-        if (d.len > 0) std.Io.Dir.cwd().createDirPath(util.io, d) catch {};
+        if (d.len > 0) diskMkdir(d);
     }
-    std.Io.Dir.cwd().writeFile(util.io, .{ .sub_path = path, .data = content }) catch |err| {
+    diskWrite(path, content) catch |err| {
         return .{ .content = try std.fmt.allocPrint(arena, "error writing {s}: {s}", .{ path, @errorName(err) }), .is_error = true };
     };
     // 输出带 diff 块(+ 行,限 40 行;web diff 卡渲染用)
@@ -180,7 +196,7 @@ fn toolEdit(arena: std.mem.Allocator, args: []const u8) !Result {
     if (edits != .array or edits.array.items.len == 0) {
         return .{ .content = "error: 'edits' must be a non-empty array", .is_error = true };
     }
-    const orig = std.Io.Dir.cwd().readFileAlloc(util.io, path, arena, .limited(64 * 1024 * 1024)) catch |err| {
+    const orig = diskRead(arena, path, 64 * 1024 * 1024) catch |err| {
         return .{ .content = try std.fmt.allocPrint(arena, "error reading {s}: {s}", .{ path, @errorName(err) }), .is_error = true };
     };
     var buf = std.array_list.Managed(u8).init(arena);
@@ -216,7 +232,7 @@ fn toolEdit(arena: std.mem.Allocator, args: []const u8) !Result {
             @memcpy(buf.items[pos .. pos + new_text.len], new_text);
         }
     }
-    std.Io.Dir.cwd().writeFile(util.io, .{ .sub_path = path, .data = buf.items }) catch |err| {
+    diskWrite(path, buf.items) catch |err| {
         return .{ .content = try std.fmt.allocPrint(arena, "error writing {s}: {s}", .{ path, @errorName(err) }), .is_error = true };
     };
     // 输出带 diff 块(-old/+new 行,限 40 行;web diff 卡渲染用)
@@ -495,14 +511,14 @@ pub fn toolSkill(arena: std.mem.Allocator, args: []const u8) !Result {
     }
     const cfg_dir = util.configDir(arena) catch return .{ .content = "error: no config dir", .is_error = true };
     const first = try std.fmt.allocPrint(arena, "{s}/skills/{s}/SKILL.md", .{ cfg_dir, name });
-    if (std.Io.Dir.cwd().readFileAlloc(util.io, first, arena, .limited(256 * 1024))) |content| {
+    if (diskRead(arena, first, 256 * 1024)) |content| {
         return .{ .content = try std.fmt.allocPrint(arena, "# Skill {s}\n\n{s}", .{ name, content }) };
     } else |_| {}
     // 资源包(用户级 + 项目级)
     if (util.pkgDirsForRuntime(arena)) |pkgs| {
         for (pkgs) |pkg| {
             const p = try std.fmt.allocPrint(arena, "{s}/skills/{s}/SKILL.md", .{ pkg, name });
-            if (std.Io.Dir.cwd().readFileAlloc(util.io, p, arena, .limited(256 * 1024))) |content| {
+            if (diskRead(arena, p, 256 * 1024)) |content| {
                 return .{ .content = try std.fmt.allocPrint(arena, "# Skill {s}\n\n{s}", .{ name, content }) };
             } else |_| {}
         }
@@ -825,7 +841,7 @@ fn toolGrep(arena: std.mem.Allocator, args: []const u8) !Result {
             if (!globMatch(g, rel) and !globMatch(g, std.fs.path.basename(rel))) continue;
         }
         const full = if (single) rel else try util.joinPath(arena, root, rel);
-        const data = std.Io.Dir.cwd().readFileAlloc(util.io, full, arena, .limited(8 * 1024 * 1024)) catch continue;
+        const data = diskRead(arena, full, 8 * 1024 * 1024) catch continue;
         if (looksBinary(data)) continue;
         scanned += 1;
 
@@ -999,7 +1015,7 @@ fn toolMultiEdit(arena: std.mem.Allocator, args: []const u8) !Result {
             .content = try std.fmt.allocPrint(arena, "error: {s}: 'edits' must be a non-empty array", .{path}),
             .is_error = true,
         };
-        const orig = std.Io.Dir.cwd().readFileAlloc(util.io, disk_path, arena, .limited(64 * 1024 * 1024)) catch |err| {
+        const orig = diskRead(arena, disk_path, 64 * 1024 * 1024) catch |err| {
             return .{
                 .content = try std.fmt.allocPrint(arena, "error reading {s}: {s} — nothing was written", .{ path, @errorName(err) }),
                 .is_error = true,
@@ -1044,7 +1060,7 @@ fn toolMultiEdit(arena: std.mem.Allocator, args: []const u8) !Result {
 
     // 阶段二:全部校验通过,逐个落盘
     for (pending.items) |p| {
-        std.Io.Dir.cwd().writeFile(util.io, .{ .sub_path = p.disk_path, .data = p.content }) catch |err| {
+        diskWrite(p.disk_path, p.content) catch |err| {
             return .{
                 .content = try std.fmt.allocPrint(arena, "error writing {s}: {s} — earlier files in this batch were already written", .{ p.path, @errorName(err) }),
                 .is_error = true,

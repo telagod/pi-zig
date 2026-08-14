@@ -1331,7 +1331,7 @@ test "nested in-process delegation is stopped by the depth gate" {
     // 进程内路径没有进程边界兜底,那就是栈溢出或挂死。这个测试跑得完
     // 本身就是闸门生效的证据。
     var parent = try agentmod.Agent.initOpts(a, &cfg, "mock", "m", "/tmp", .{
-        .plugins = pluginsmod.withEnabled(0, "task-delegation"),
+        .plugins = pluginsmod.withEnabled(pluginsmod.factorySet(), "task-delegation"),
     });
     const result = try parent.send("NEST-ME once");
     try t.expect(result.error_msg == null);
