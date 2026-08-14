@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 520" role="img" aria-label="piz ¤’!">
+  <defs>
+    <clipPath id="win"><rect x="0" y="0" width="920" height="520" rx="12"/></clipPath>
+    <linearGradient id="bar" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#161b22"/><stop offset="1" stop-color="#0d1117"/>
+    </linearGradient>
+  </defs>
+  <g clip-path="url(#win)">
+    <rect width="920" height="520" fill="#0d1117"/>
+    <rect width="920" height="36" fill="url(#bar)"/>
+    <circle cx="18" cy="18" r="5" fill="#f85149"/>
+    <circle cx="36" cy="18" r="5" fill="#d29922"/>
+    <circle cx="54" cy="18" r="5" fill="#3fb950"/>
+    <path transform="translate(78,10) scale(0.72)" fill="#4d6bfe" d="M2.4 1.8h17.2a1.7 1.7 0 0 1 0 3.4H10l10 8.2A1.8 1.8 0 0 1 18.65 16.45H3.2a1.7 1.7 0 0 1 0-3.4h9.4L2.7 4.9A1.8 1.8 0 0 1 4.1 1.8z"/>
+    <text x="102" y="23" fill="#8b949e" font-family="ui-monospace,SF Mono,Menlo,monospace" font-size="12">piz  pi-zig</text>
+
+    <text font-family="ui-monospace,SF Mono,Menlo,monospace" font-size="13">
+      <tspan x="24" y="68" fill="#8b949e">pi-zig</tspan>
+      <tspan dx="10" fill="#39d0d6">main</tspan>
+      <tspan dx="10" fill="#3fb950">12%</tspan>
+      <tspan dx="10" fill="#39d0d6">deepseek/v4-flash</tspan>
+      <tspan dx="10" fill="#6e7681">· cache 97%</tspan>
+      <tspan dx="8" fill="#6e7681">· 42 t/s</tspan>
+    </text>
+
+    <text x="24" y="108" fill="#c9d1d9" font-family="ui-monospace,SF Mono,Menlo,monospace" font-size="14">Š recursive descent 9 PrattHxãh</text>
+
+    <text x="24" y="144" fill="#d29922" font-family="ui-monospace,SF Mono,Menlo,monospace" font-size="13">· >ú 2 ï</text>
+
+    <text font-family="ui-monospace,SF Mono,Menlo,monospace" font-size="13">
+      <tspan x="24" y="180" fill="#58a6ff">9 bash</tspan>
+      <tspan dx="8" fill="#8b949e">12s/30s</tspan>
+      <tspan dx="8" fill="#8b949e">4.1KB</tspan>
+      <tspan dx="8" fill="#c9d1d9">zig build test -- src/parser.zig</tspan>
+    </text>
+    <text font-family="ui-monospace,SF Mono,Menlo,monospace" font-size="13">
+      <tspan x="24" y="204" fill="#58a6ff">9 agent</tspan>
+      <tspan dx="8" fill="#8b949e">3m05s/10m</tspan>
+      <tspan dx="8" fill="#8b949e">2.0KB</tspan>
+      <tspan dx="8" fill="#c9d1d9">Í„ãhŠRM9 Pratt</tspan>
+    </text>
+    <text x="24" y="236" fill="#6e7681" font-family="ui-monospace,SF Mono,Menlo,monospace" font-size="13">[sub 1] ™ grep</text>
+    <text x="24" y="256" fill="#6e7681" font-family="ui-monospace,SF Mono,Menlo,monospace" font-size="13">[sub 2]  read</text>
+
+    <rect x="20" y="284" width="880" height="88" rx="6" fill="#161b22" stroke="#30363d"/>
+    <text x="36" y="314" fill="#c9d1d9" font-family="ui-monospace,SF Mono,Menlo,monospace" font-size="14">? bash: cargo test --lib</text>
+    <text font-family="ui-monospace,SF Mono,Menlo,monospace" font-size="13">
+      <tspan x="36" y="346" fill="#3fb950">[y]</tspan>
+      <tspan dx="6" fill="#8b949e">A¸</tspan>
+      <tspan dx="16" fill="#f85149">[n]</tspan>
+      <tspan dx="6" fill="#8b949e">Òİ</tspan>
+      <tspan dx="16" fill="#58a6ff">[a]</tspan>
+      <tspan dx="6" fill="#8b949e">,İ;/A¸</tspan>
+      <tspan dx="16" fill="#8b949e">[s] óÇ,!</tspan>
+    </text>
+
+    <text x="24" y="412" fill="#c9d1d9" font-family="ui-monospace,SF Mono,Menlo,monospace" font-size="14">h¾H§ÎÑš›hû`RBp</text>
+    <text x="24" y="436" fill="#8b949e" font-family="ui-monospace,SF Mono,Menlo,monospace" font-size="13">9† src/parser.zig · KÇ</text>
+
+    <rect x="0" y="476" width="920" height="44" fill="#161b22"/>
+    <text x="24" y="504" fill="#4d6bfe" font-family="ui-monospace,SF Mono,Menlo,monospace" font-size="16">o</text>
+    <text x="48" y="504" fill="#6e7681" font-family="ui-monospace,SF Mono,Menlo,monospace" font-size="14">¥@9 codegenØ/HeKÕ</text>
+  </g>
+</svg>
