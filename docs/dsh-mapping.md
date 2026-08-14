@@ -72,5 +72,6 @@ dsh 选事件域是改动的第一个决定。本仓对应如下。
 2. **挂钩形态** — 已摘。`BeforeChain` / `AfterChain`。
 3. **seam 切口** — 已摘并接入。`seams.Fs` / `seams.LlmRun` / `Agent.find_tool`；`runToolSlot` 绑定 fs，loop 走 `llm_run` / `find_tool`，核心工具与 `read_image` 走 `seams.fs()`。默认仍是本地实现。
 4. **可逆** — 已摘。`enable`/`disable` 成对；关位后钩子、工具、schema 一并消失。`--no-plugin` 与 `disabled_plugins`。
+5. **孩子工具掩码** — 已摘纪律。子 agent 默认去掉 `task-delegation`；`tools` / `plugins` 只能收紧。不是 isolate realm。
 
 对照到此为止。要动代码，另下差遣，并点明上表第几条。

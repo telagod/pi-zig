@@ -16,6 +16,7 @@ const std = @import("std");
 const agentmod = @import("agent.zig");
 const util = @import("util.zig");
 const activity = @import("activity.zig");
+const poolmod = @import("pool.zig");
 
 /// 会话内同时打开的 subagent 上限。
 ///
@@ -91,7 +92,11 @@ pub const Entry = struct {
     /// close 时整个回收,不必逐个 free。
     arena: *std.heap.ArenaAllocator,
     agent: *agentmod.Agent,
-    worker: std.Thread,
+    /// 已入 worker 池。关停时等它落下再回收 arena。
+    queued: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    in_flight: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    /// 池线程回调:跑一轮。由 plugins/agents 接线,registry 不引用 agent loop。
+    run_turn: ?*const fn (*Entry) void = null,
 
     // ---- 以下字段跨线程访问,全部原子或持 registry 锁 ----
     status: std.atomic.Value(Status),
@@ -132,24 +137,42 @@ pub const Registry = struct {
     }
 
     /// 关掉全部 agent 并回收。进程退出前调用。
+    ///
+    /// 先置停,再停 worker 池(join 池线程),最后回收 arena —— 池线程可能
+    /// 正跑某一轮,先 deinit 就是悬垂指针。
     pub fn deinit(self: *Registry) void {
-        // 先全部置停,再逐个 join —— 反过来的话第一个 join 要等它自己超时
+        self.signalStopAll();
+        poolmod.shutdownGlobal();
+        self.destroyEntries();
+    }
+
+    pub fn signalStopAll(self: *Registry) void {
         self.mutex.lockUncancelable(util.io);
+        defer self.mutex.unlock(util.io);
         for (self.entries.items) |e| {
             e.stopping.store(true, .release);
             e.agent.aborted.store(true, .release);
         }
+    }
+
+    pub fn destroyEntries(self: *Registry) void {
+        self.mutex.lockUncancelable(util.io);
         const snapshot = self.entries.toOwnedSlice() catch &.{};
         self.mutex.unlock(util.io);
-
         for (snapshot) |e| {
-            e.worker.join();
+            self.freeInbox(e);
             const ar = e.arena;
             ar.deinit();
             self.alloc.destroy(ar);
         }
         if (snapshot.len > 0) self.alloc.free(snapshot);
         self.entries.deinit();
+    }
+
+    fn freeInbox(self: *Registry, e: *Entry) void {
+        _ = self;
+        for (e.inbox.items) |item| std.heap.page_allocator.free(item);
+        e.inbox.clearRetainingCapacity();
     }
 
     /// 当前打开的 agent 数(含 idle/done —— 跑完不等于释放)。
@@ -205,22 +228,38 @@ pub const Registry = struct {
     /// 追加输入。`interrupt` 为真时打断当前轮并插到队首。
     pub fn send(self: *Registry, id: usize, text: []const u8, interrupt: bool) !void {
         self.mutex.lockUncancelable(util.io);
-        defer self.mutex.unlock(util.io);
-        const e = self.findLocked(id) orelse return error.NoSuchAgent;
-        if (e.status.load(.acquire) == .done) return error.AgentClosed;
+        const e = self.findLocked(id) orelse {
+            self.mutex.unlock(util.io);
+            return error.NoSuchAgent;
+        };
+        if (e.status.load(.acquire) == .done) {
+            self.mutex.unlock(util.io);
+            return error.AgentClosed;
+        }
         // dupe 到 page_allocator 而非 entry arena:send 从父线程调用,而 entry
         // arena 是 worker 线程的常驻分配器(消息、邮件、agent 自身都在上面)。
         // 两个线程并发分配同一个 arena = 数据损坏。worker 消费后负责 free。
-        const owned = try std.heap.page_allocator.dupe(u8, text);
-        errdefer std.heap.page_allocator.free(owned);
+        const owned = std.heap.page_allocator.dupe(u8, text) catch {
+            self.mutex.unlock(util.io);
+            return error.OutOfMemory;
+        };
         if (interrupt) {
-            try e.inbox.insert(0, owned);
-            // 打断当前轮:ai.run 的流式检查点读这个标志。worker 跑完这一轮
-            // 会看到队首是新输入,直接接着做。
+            e.inbox.insert(0, owned) catch {
+                std.heap.page_allocator.free(owned);
+                self.mutex.unlock(util.io);
+                return error.OutOfMemory;
+            };
             e.agent.aborted.store(true, .release);
         } else {
-            try e.inbox.append(owned);
+            e.inbox.append(owned) catch {
+                std.heap.page_allocator.free(owned);
+                self.mutex.unlock(util.io);
+                return error.OutOfMemory;
+            };
         }
+        const wired = e.run_turn != null;
+        self.mutex.unlock(util.io);
+        if (wired) self.schedule(e);
     }
 
     /// 取出未读邮件(父 agent 调用)。返回的切片在 entry 的 arena 上,
@@ -285,6 +324,7 @@ pub const Registry = struct {
         defer self.mutex.unlock(util.io);
         for (self.entries.items) |e| {
             if (e.status.load(.acquire) == .running) return false;
+            if (e.in_flight.load(.acquire) or e.queued.load(.acquire)) return false;
             if (e.inbox.items.len > 0) return false;
         }
         return true;
@@ -348,14 +388,64 @@ pub const Registry = struct {
         _ = self.entries.orderedRemove(idx);
         e.stopping.store(true, .release);
         e.agent.aborted.store(true, .release);
-        // 锁外 join:worker 可能正跑一轮(几十秒),持锁等会把整个注册表冻住
+        // 锁外等池线程放下这一条:可能正跑一轮,持锁等会把整个注册表冻住
         self.mutex.unlock(util.io);
 
-        e.worker.join();
+        self.waitIdle(e);
+        self.freeInbox(e);
         const ar = e.arena;
         ar.deinit();
         self.alloc.destroy(ar);
         return prev;
+    }
+
+    fn waitIdle(self: *Registry, e: *Entry) void {
+        _ = self;
+        while (e.in_flight.load(.acquire) or e.queued.load(.acquire)) {
+            std.Io.sleep(util.io, .{ .nanoseconds = 5 * std.time.ns_per_ms }, .awake) catch break;
+        }
+    }
+
+    /// 有待办则入池。已在队里或正在关则不再入。
+    pub fn schedule(self: *Registry, e: *Entry) void {
+        self.mutex.lockUncancelable(util.io);
+        const stop = e.stopping.load(.acquire);
+        const already = e.queued.load(.acquire);
+        const has_work = e.inbox.items.len > 0;
+        if (stop or already or !has_work) {
+            self.mutex.unlock(util.io);
+            return;
+        }
+        e.queued.store(true, .release);
+        self.mutex.unlock(util.io);
+        poolmod.global().enqueue(.{ .run = runQueued, .ctx = @ptrCast(e) }) catch {
+            e.queued.store(false, .release);
+        };
+    }
+
+    fn runQueued(ctx: *anyopaque) void {
+        const e: *Entry = @ptrCast(@alignCast(ctx));
+        if (e.run_turn) |f| {
+            f(e);
+            return;
+        }
+        e.queued.store(false, .release);
+    }
+
+    /// 一轮结束后:还有输入就再入队,否则标 idle。必须持锁看 inbox,否则
+    /// 会跟 send 丢一次唤醒。
+    pub fn rescheduleOrIdle(self: *Registry, e: *Entry) void {
+        self.mutex.lockUncancelable(util.io);
+        if (e.stopping.load(.acquire) or e.inbox.items.len == 0) {
+            e.queued.store(false, .release);
+            e.status.store(.idle, .release);
+            self.mutex.unlock(util.io);
+            return;
+        }
+        self.mutex.unlock(util.io);
+        poolmod.global().enqueue(.{ .run = runQueued, .ctx = @ptrCast(e) }) catch {
+            e.queued.store(false, .release);
+        };
     }
 
     /// 取下一条输入(worker 调用)。没有就返回 null。
@@ -385,7 +475,6 @@ fn testEntry(a: std.mem.Allocator, cfg: *agentmod.cfgmod.Config, name: []const u
         .task = "survey the parser",
         .arena = ar,
         .agent = ag,
-        .worker = undefined,
         .status = std.atomic.Value(Status).init(.idle),
         .inbox = std.array_list.Managed([]const u8).init(a),
         .mailbox = std.array_list.Managed(Mail).init(a),
@@ -516,6 +605,23 @@ test "wait is woken by results, not by progress" {
     // failed 也是结果 —— 出错了父 agent 必须醒过来
     reg.post(e, .failed, "provider refused");
     try t.expect(reg.hasResult());
+}
+
+test "close without a dedicated thread returns" {
+    const t = std.testing;
+    try util.testInit();
+    var arena = util.Arena.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    var reg = Registry.init(a);
+    var provs: [1]agentmod.cfgmod.Provider = undefined;
+    var cfg = testCfg(&arena, &provs);
+    const e = try testEntry(a, &cfg, "scout");
+    const id = try reg.register(e);
+    const prev = try reg.close(id);
+    try t.expectEqual(Status.idle, prev);
+    try t.expectEqual(@as(usize, 0), reg.openCount());
 }
 
 test "waitMail returns immediately when nothing can produce more" {

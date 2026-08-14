@@ -1236,6 +1236,7 @@ test "in-process subagents report progress and inherit the right identity" {
     });
     parent.cbs = .{ .ctx = &spy, .on_subagent = SubSpy.onEvent };
 
+    defer pluginsmod.shutdownAgents();
     const result = try parent.send("SPLIT-ME into two");
     try t.expect(result.error_msg == null);
 
@@ -1323,16 +1324,13 @@ test "nested in-process delegation is stopped by the depth gate" {
     }};
     cfg.providers = &provs;
 
-    // mock 让每一层都要求再委派。深度正确递增时:顶层(0)派出 subagent(1),
-    // 它再派就撞上 MAX_TASK_DEPTH=2 被拒。父 agent 拿到拒绝后会在工具循环里
-    // 重试(上限 MAX_TOOL_ITER),所以请求数不是常数,但**有界**。
-    //
-    // 深度不递增的话每层都是 depth 1,闸门永远不触发,一层层递归下去 ——
-    // 进程内路径没有进程边界兜底,那就是栈溢出或挂死。这个测试跑得完
-    // 本身就是闸门生效的证据。
+    // 孩子默认不继承 task-delegation,所以再派会被「没有这个工具」拦住。
+    // 深度闸门仍在:显式 plugins:["task-delegation"] 时靠 depth 字段封顶。
+    // 本测试跑得完本身就是不再无限递归的证据。
     var parent = try agentmod.Agent.initOpts(a, &cfg, "mock", "m", "/tmp", .{
         .plugins = pluginsmod.withEnabled(pluginsmod.factorySet(), "task-delegation"),
     });
+    defer pluginsmod.shutdownAgents();
     const result = try parent.send("NEST-ME once");
     try t.expect(result.error_msg == null);
 

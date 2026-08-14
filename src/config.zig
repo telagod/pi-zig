@@ -23,7 +23,10 @@ pub const Provider = struct {
 
 /// 查所选模型的上下文窗口:模型级优先,否则 provider 默认。
 pub fn windowFor(provider: *const Provider, model: []const u8) usize {
-    for (provider.models, provider.model_windows) |m, w| {
+    // 内置 deepseek 有 models、没有平行的 model_windows。for (a, b) 要求等长,
+    // 否则一进 pruneHook → ctxWindow 就 SIGSEGV,print 模式起不来。
+    const n = @min(provider.models.len, provider.model_windows.len);
+    for (provider.models[0..n], provider.model_windows[0..n]) |m, w| {
         if (w > 0 and std.mem.eql(u8, m, model)) return w;
     }
     return provider.context_window;
@@ -617,6 +620,14 @@ test "windowFor prefers per-model window then provider default" {
     try t.expectEqual(@as(usize, 1_000_000), windowFor(&p, "m-1m"));
     // 未配置窗口的模型回退 provider 默认
     try t.expectEqual(@as(usize, 128 * 1024), windowFor(&p, "m-unknown"));
+    // 内置 deepseek 形:有模型名、窗口表为空。不能崩。
+    const builtin_ds = Provider{
+        .name = "deepseek",
+        .api = .openai_completions,
+        .base_url = "https://api.deepseek.com",
+        .models = &.{ "deepseek-v4-flash", "deepseek-v4-pro" },
+    };
+    try t.expectEqual(@as(usize, 128 * 1024), windowFor(&builtin_ds, "deepseek-v4-flash"));
     _ = a;
 }
 

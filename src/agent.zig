@@ -374,6 +374,8 @@ pub const Agent = struct {
     /// 一个 Agent 开了 skills 会让所有 Agent 都看到 skill 工具,而只读的
     /// 调研 subagent 更不该因为兄弟 agent 的设置拿到写工具。
     plugins: pluginsmod.EnabledSet = 0,
+    /// 非空则只暴露这些工具名。空 = 启用集里的全部。只能收紧。
+    tool_allow: []const []const u8 = &.{},
     /// 能力缝:默认本地 fs / ai.run / findToolIn。测试或沙箱可替换。
     fs: *const seams.Fs = &seams.local_fs,
     llm_run: seams.LlmRun = seams.defaultLlmRun,
@@ -407,9 +409,12 @@ pub const Agent = struct {
         plugins: ?pluginsmod.EnabledSet = null,
         /// 委派深度。顶层 = 0;subagent 传父深度 + 1。
         depth: usize = 0,
+        /// 子 agent 的工具白名单。空 = 不额外收紧。
+        tool_allow: []const []const u8 = &.{},
     };
 
     pub fn initOpts(alloc: std.mem.Allocator, cfg: *cfgmod.Config, provider_name: ?[]const u8, model_name: ?[]const u8, cwd: []const u8, opts: InitOptions) !Agent {
+        _ = pluginsmod.defaultSet();
         const resolved = try cfg.resolve(provider_name, model_name);
         const url = try cfg.endpointUrl(resolved.provider);
         // 启用集:调用方给了就用它,否则拷进程默认集。之后只改这个副本 ——
@@ -452,7 +457,7 @@ pub const Agent = struct {
             \\
         );
         // 联网准则:仅在工具真的可用时才说,否则是在教模型用不存在的东西
-        if (pluginsmod.isToolEnabledIn(enabled, "web_search") or pluginsmod.isToolEnabledIn(enabled, "fetch_url")) {
+        if (pluginsmod.exposesTool(enabled, opts.tool_allow, "web_search") or pluginsmod.exposesTool(enabled, opts.tool_allow, "fetch_url")) {
             try spw.writer.writeAll(
                 \\# When local information runs out
                 \\Your knowledge has a cutoff and this machine may not have the answer.
@@ -464,7 +469,7 @@ pub const Agent = struct {
             );
         }
         // 委派准则:同上,只在 task 工具可用时说
-        if (pluginsmod.isToolEnabledIn(enabled, "task")) {
+        if (pluginsmod.exposesTool(enabled, opts.tool_allow, "task")) {
             try spw.writer.writeAll(
                 \\# Delegating
                 \\Use task to farm out independent, self-contained pieces of work and run them
@@ -492,7 +497,9 @@ pub const Agent = struct {
             // 没装技能时暴露它是纯浪费:模型多一个永远无结果的工具。
             // 只开本 Agent 的:从前调 pluginsmod.enable 改的是进程全局,
             // 一个装了 skills 的 Agent 会让所有 Agent 都看到 skill 工具。
-            enabled = pluginsmod.withEnabled(enabled, "skills");
+            if (opts.tool_allow.len == 0 or pluginsmod.exposesTool(pluginsmod.withEnabled(enabled, "skills"), opts.tool_allow, "skill")) {
+                enabled = pluginsmod.withEnabled(enabled, "skills");
+            }
             try spw.writer.writeAll("# Available skills (use the skill tool to load one)\n");
             try spw.writer.writeAll(skills_idx);
             try spw.writer.writeByte('\n');
@@ -520,6 +527,7 @@ pub const Agent = struct {
                 .system_prompt = try spw2.toOwnedSlice(),
                 .read_only = opts.read_only,
                 .plugins = enabled,
+                .tool_allow = opts.tool_allow,
                 .depth = opts.depth,
             };
         }
@@ -546,6 +554,7 @@ pub const Agent = struct {
                     .system_prompt = try spw2.toOwnedSlice(),
                     .read_only = opts.read_only,
                     .plugins = enabled,
+                    .tool_allow = opts.tool_allow,
                     .depth = opts.depth,
                 };
             } else |_| {}
@@ -568,12 +577,20 @@ pub const Agent = struct {
             .system_prompt = try spw.toOwnedSlice(),
             .read_only = opts.read_only,
             .plugins = enabled,
+            .tool_allow = opts.tool_allow,
             .depth = opts.depth,
         };
     }
 
     pub fn deinit(self: *Agent) void {
         self.messages.deinit();
+    }
+
+    /// 本 Agent 当前能调的工具。只读或白名单未列则没有。
+    pub fn lookupTool(self: *const Agent, name: []const u8) ?*const toolsmod.Tool {
+        if (self.read_only) return null;
+        if (!pluginsmod.exposesTool(self.plugins, self.tool_allow, name)) return null;
+        return self.find_tool(self.plugins, name);
     }
 
     /// 切换模型(per-session;kimi /model 式):按模型名找 provider,更新 provider/model/key/url。
@@ -642,7 +659,7 @@ pub const Agent = struct {
         }
         // 工具定义每轮都全量重发,是上下文的一部分 —— 实测默认工具集 1024 token。
         // 漏掉它压缩就会晚触发,预算查询也会虚报余量。只读模式不发工具。
-        if (!self.read_only) n += pluginsmod.toolDefsTokensIn(self.plugins);
+        if (!self.read_only) n += pluginsmod.toolDefsTokensFiltered(self.plugins, self.tool_allow);
         return n;
     }
 
@@ -715,7 +732,7 @@ pub const Agent = struct {
             // 工具定义(核心 + 插件;带真 JSON Schema)
             var tool_defs = std.array_list.Managed(ai.ToolDef).init(self.alloc);
             defer tool_defs.deinit();
-            if (!self.read_only) try pluginsmod.appendToolDefsIn(self.plugins, &tool_defs);
+            if (!self.read_only) try pluginsmod.appendToolDefsFiltered(self.plugins, self.tool_allow, &tool_defs);
 
             const cbs = ai.Callbacks{
                 .ctx = self.cbs.ctx,
@@ -892,7 +909,7 @@ pub const Agent = struct {
                         continue;
                     }
                 }
-                const tool = if (self.read_only) null else self.find_tool(self.plugins, tc.name);
+                const tool = self.lookupTool(tc.name);
                 if (tool == null) {
                     slots[i].done = true;
                     slots[i].result = if (self.read_only) .{
@@ -1358,7 +1375,7 @@ test "parallel tool slots preserve call order" {
     };
     const slots = try a.alloc(ToolSlot, calls.len);
     for (calls, 0..) |c, i| {
-        slots[i] = .{ .call = c, .agent = &agent, .tool = agent.find_tool(agent.plugins, c.name) };
+        slots[i] = .{ .call = c, .agent = &agent, .tool = agent.lookupTool(c.name) };
     }
     var threads: [5]std.Thread = undefined;
     for (slots, 0..) |*s, i| {
@@ -1402,7 +1419,7 @@ test "per-file lock prevents lost writes under concurrency" {
     };
     const slots = try a.alloc(ToolSlot, calls.len);
     for (calls, 0..) |c, i| {
-        slots[i] = .{ .call = c, .agent = &agent, .tool = agent.find_tool(agent.plugins, c.name) };
+        slots[i] = .{ .call = c, .agent = &agent, .tool = agent.lookupTool(c.name) };
     }
     var threads: [2]std.Thread = undefined;
     for (slots, 0..) |*s, i| {

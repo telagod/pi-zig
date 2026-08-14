@@ -44,7 +44,7 @@ piz 的插件是**编译期注册的 Zig 函数表**，不是运行时加载的�
 | `context-budget` | `get_context_remaining` |
 | `elicitation` | `ask_user` |
 
-`task` 阻塞等结果，其余 6 个是长驻 sub-agent 的生命周期管理（派出去、按需收、中途改向）。详见 [Tools](tools.md)。
+`task` 阻塞等结果，其余 6 个是长驻 sub-agent 的生命周期管理（派出去、按需收、中途改向）。孩子默认不继承这组工具；要嵌套委派或收紧核心工具，用 `plugins` / `tools` 参数，见 [Tools](tools.md)。
 
 ### 开启方式
 

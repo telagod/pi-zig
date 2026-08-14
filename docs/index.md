@@ -9,7 +9,7 @@ piz 是一个极简的终端编码 agent，用 Zig 重写自 [pi](https://pi.dev
 与 pi 的关键差异：
 
 - **单一静态二进制**，无 Node.js 运行时，无 `node_modules`
-- **零第三方依赖**，只用 Zig 标准库（含自实现的正则与 glob 引擎）
+- **Zig 标准库 + vendored stb**（读图）；正则和 glob 是自己的
 - **内置 Web UI**（`piz web`），pi 没有
 - **LSP 代码智能**（`lsp` 工具），接真实语言服务器查定义/引用/重命名影响面
 - **交互式权限门**、`/plan`、结构化 todo 工具，这些是 pi 明确声明不做的

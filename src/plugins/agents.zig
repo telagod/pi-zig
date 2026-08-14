@@ -6,6 +6,8 @@ const agentsmod = @import("../agents.zig");
 const toolsmod = @import("../tools.zig");
 const jsonx = @import("jsonx.zig");
 const limits = @import("limits.zig");
+const poolmod = @import("../pool.zig");
+const childbind = @import("childbind.zig");
 
 const MAX_TASK_DEPTH = limits.MAX_TASK_DEPTH;
 const TASK_TIMEOUT_MS = limits.TASK_TIMEOUT_MS;
@@ -38,8 +40,13 @@ pub fn agentOpenCountForTest() usize {
 
 /// 进程退出前回收全部 subagent(main 调用)。
 pub fn shutdownAgents() void {
-    if (g_registry) |*r| r.deinit();
+    if (g_registry) |*r| {
+        r.signalStopAll();
+        poolmod.shutdownGlobal();
+        r.destroyEntries();
+    }
     g_registry = null;
+    poolmod.shutdownGlobal();
 }
 
 /// 长驻 worker 的事件转发。
@@ -76,8 +83,16 @@ const MailCtx = struct {
     }
 };
 
-fn agentWorker(entry: *agentsmod.Entry) void {
+fn runTurn(entry: *agentsmod.Entry) void {
     const reg = registry();
+    entry.in_flight.store(true, .release);
+    defer entry.in_flight.store(false, .release);
+
+    if (entry.stopping.load(.acquire)) {
+        reg.rescheduleOrIdle(entry);
+        return;
+    }
+
     var mail = MailCtx{ .reg = reg, .entry = entry, .parent_cbs = entry.parent_cbs };
     entry.agent.cbs = .{
         .ctx = &mail,
@@ -87,42 +102,43 @@ fn agentWorker(entry: *agentsmod.Entry) void {
         .on_abort = MailCtx.onAbort,
     };
 
-    while (!entry.stopping.load(.acquire)) {
-        const input = reg.takeInput(entry) orelse {
-            reg.setStatus(entry, .idle);
-            std.Io.sleep(agentmod.util.io, .{ .nanoseconds = 100 * std.time.ns_per_ms }, .awake) catch break;
-            continue;
-        };
-        const text = entry.agent.alloc.dupe(u8, input) catch {
-            std.heap.page_allocator.free(input);
-            reg.post(entry, .failed, "out of memory copying task input");
-            entry.turns += 1;
-            continue;
-        };
-        defer std.heap.page_allocator.free(input);
-        reg.setStatus(entry, .running);
-        entry.agent.aborted.store(false, .release);
-
-        const act = activity.begin(.subagent, "agent", text, TASK_TIMEOUT_MS);
-        const result = entry.agent.send(text) catch |e| {
-            act.release();
-            if (entry.stopping.load(.acquire)) break;
-            if (reg.hasQueuedInput(entry)) continue;
-            reg.post(entry, .failed, @errorName(e));
-            entry.turns += 1;
-            continue;
-        };
-        act.release();
+    const input = reg.takeInput(entry) orelse {
+        reg.rescheduleOrIdle(entry);
+        return;
+    };
+    const text = entry.agent.alloc.dupe(u8, input) catch {
+        std.heap.page_allocator.free(input);
+        reg.post(entry, .failed, "out of memory copying task input");
         entry.turns += 1;
+        reg.rescheduleOrIdle(entry);
+        return;
+    };
+    defer std.heap.page_allocator.free(input);
+    reg.setStatus(entry, .running);
+    entry.agent.aborted.store(false, .release);
 
-        if (result.error_msg) |msg| {
-            reg.post(entry, .failed, msg);
-        } else {
-            const reply = if (result.text.len > 0) result.text else "(no text produced)";
-            reg.post(entry, .turn_done, reply);
+    const act = activity.begin(.subagent, "agent", text, TASK_TIMEOUT_MS);
+    const result = entry.agent.send(text) catch |e| {
+        act.release();
+        if (!entry.stopping.load(.acquire)) {
+            if (!reg.hasQueuedInput(entry)) {
+                reg.post(entry, .failed, @errorName(e));
+                entry.turns += 1;
+            }
         }
+        reg.rescheduleOrIdle(entry);
+        return;
+    };
+    act.release();
+    entry.turns += 1;
+
+    if (result.error_msg) |msg| {
+        reg.post(entry, .failed, msg);
+    } else {
+        const reply = if (result.text.len > 0) result.text else "(no text produced)";
+        reg.post(entry, .turn_done, reply);
     }
-    reg.setStatus(entry, .done);
+    reg.rescheduleOrIdle(entry);
 }
 
 pub fn toolSpawnAgent(ctx: ?*anyopaque, arena: std.mem.Allocator, args: []const u8) anyerror!toolsmod.Result {
@@ -154,6 +170,37 @@ pub fn toolSpawnAgent(ctx: ?*anyopaque, arena: std.mem.Allocator, args: []const 
         break :blk false;
     } else false;
 
+    const want_plugins = jsonx.jsonStrs(arena, v, "plugins") catch |e| return .{
+        .content = switch (e) {
+            error.EmptyList => "error: plugins must be a non-empty array of plugin names",
+            else => "error: plugins must be an array of strings",
+        },
+        .is_error = true,
+    };
+    const want_tools = jsonx.jsonStrs(arena, v, "tools") catch |e| return .{
+        .content = switch (e) {
+            error.EmptyList => "error: tools must be a non-empty array of tool names",
+            else => "error: tools must be an array of strings",
+        },
+        .is_error = true,
+    };
+    const child_plugins = childbind.resolveSet(self.plugins, want_plugins) catch |e| return .{
+        .content = switch (e) {
+            error.UnknownPlugin => "error: unknown plugin name in plugins[]",
+            error.PluginNotHeld => "error: plugins[] can only keep plugins you already have",
+            else => "error: cannot resolve child plugins",
+        },
+        .is_error = true,
+    };
+    const child_tools = if (want_tools) |names| childbind.resolveTools(arena, self.plugins, names) catch |e| return .{
+        .content = switch (e) {
+            error.UnknownTool => "error: unknown tool name in tools[]",
+            error.ToolNotHeld => "error: tools[] can only keep tools you already have",
+            else => "error: cannot resolve child tools",
+        },
+        .is_error = true,
+    } else &.{};
+
     const reg = registry();
     const gpa = std.heap.page_allocator;
 
@@ -164,6 +211,19 @@ pub fn toolSpawnAgent(ctx: ?*anyopaque, arena: std.mem.Allocator, args: []const 
     ar.* = std.heap.ArenaAllocator.init(gpa);
     const a = ar.allocator();
 
+    const owned_tools = a.alloc([]const u8, child_tools.len) catch {
+        ar.deinit();
+        gpa.destroy(ar);
+        return .{ .content = "error: out of memory starting sub-agent", .is_error = true };
+    };
+    for (child_tools, owned_tools) |n, *d| {
+        d.* = a.dupe(u8, n) catch {
+            ar.deinit();
+            gpa.destroy(ar);
+            return .{ .content = "error: out of memory starting sub-agent", .is_error = true };
+        };
+    }
+
     const sub = a.create(agentmod.Agent) catch {
         ar.deinit();
         gpa.destroy(ar);
@@ -171,7 +231,8 @@ pub fn toolSpawnAgent(ctx: ?*anyopaque, arena: std.mem.Allocator, args: []const 
     };
     sub.* = agentmod.Agent.initOpts(a, self.cfg, self.provider.name, self.model, self.cwd, .{
         .read_only = self.read_only or read_only,
-        .plugins = self.plugins,
+        .plugins = child_plugins,
+        .tool_allow = owned_tools,
         .depth = self.depth + 1,
     }) catch |e| {
         ar.deinit();
@@ -197,16 +258,27 @@ pub fn toolSpawnAgent(ctx: ?*anyopaque, arena: std.mem.Allocator, args: []const 
         .task = a.dupe(u8, task) catch task,
         .arena = ar,
         .agent = sub,
-        .worker = undefined,
+        .run_turn = runTurn,
         .status = std.atomic.Value(agentsmod.Status).init(.running),
         .inbox = std.array_list.Managed([]const u8).init(a),
         .mailbox = std.array_list.Managed(agentsmod.Mail).init(a),
         .stopping = std.atomic.Value(bool).init(false),
         .parent_cbs = self.cbs,
     };
-    entry.inbox.append(entry.task) catch {};
+    const first = std.heap.page_allocator.dupe(u8, entry.task) catch {
+        ar.deinit();
+        gpa.destroy(ar);
+        return .{ .content = "error: out of memory starting sub-agent", .is_error = true };
+    };
+    entry.inbox.append(first) catch {
+        std.heap.page_allocator.free(first);
+        ar.deinit();
+        gpa.destroy(ar);
+        return .{ .content = "error: out of memory starting sub-agent", .is_error = true };
+    };
 
     const id = reg.register(entry) catch |e| {
+        for (entry.inbox.items) |item| std.heap.page_allocator.free(item);
         ar.deinit();
         gpa.destroy(ar);
         return .{
@@ -218,10 +290,7 @@ pub fn toolSpawnAgent(ctx: ?*anyopaque, arena: std.mem.Allocator, args: []const 
         };
     };
 
-    entry.worker = std.Thread.spawn(.{}, agentWorker, .{entry}) catch {
-        _ = reg.close(id) catch {};
-        return .{ .content = "error: cannot start sub-agent worker thread", .is_error = true };
-    };
+    reg.schedule(entry);
 
     return .{ .content = try std.fmt.allocPrint(arena, "sub-agent #{d} ({s}) started. It runs in the background — use wait_agent to be told when it has something, read_agent to collect it, send_agent to give it more work, close_agent when done.", .{ id, entry.name }) };
 }

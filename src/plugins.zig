@@ -13,6 +13,7 @@ const todo = @import("plugins/todo.zig");
 const agentsplug = @import("plugins/agents.zig");
 const taskmod = @import("plugins/task.zig");
 const lspmod = @import("plugins/lsp.zig");
+const childbind = @import("plugins/childbind.zig");
 
 pub const BeforeChain = api.BeforeChain;
 pub const AfterChain = api.AfterChain;
@@ -179,18 +180,18 @@ pub const builtin_plugins = [_]Plugin{
     .{ .name = "task-delegation", .enabled_by_default = false, .tools = &.{
         .{
             .name = "task",
-            .desc = "Delegate self-contained work to sub-agents and wait for all of them to finish. Sub-agents inherit this session's directory, model and tools but start with no conversation history, so each description must be complete on its own. Pass 'tasks' to run up to 32 in parallel. Use this when you just want the answers; use spawn_agent instead when you want to keep working while they run, or may need to redirect them.",
+            .desc = "Delegate self-contained work to sub-agents and wait for all of them to finish. Sub-agents inherit this session's directory and model but start with no conversation history, so each description must be complete on its own. They do not inherit task/spawn_agent unless you pass plugins:[\"task-delegation\"]. Pass tools:[\"read\",\"grep\"] to give a child only those tools. Pass 'tasks' to queue up to 32 (8 run at once). Use this when you just want the answers; use spawn_agent instead when you want to keep working while they run, or may need to redirect them.",
             .schema =
-            \\{"type":"object","properties":{"description":{"type":"string","description":"A single self-contained task, including all context the sub-agent needs."},"read_only":{"type":"boolean","description":"Give the sub-agent NO tools at all — it can only reason from the task text you provide. It cannot read files, run commands or search. Leave this off for investigation: a sub-agent that cannot read cannot investigate."},"tasks":{"type":"array","description":"Independent tasks to run in parallel (max 32 at top level, 4 inside a sub-agent).","items":{"type":"object","properties":{"description":{"type":"string","description":"A single self-contained task."},"read_only":{"type":"boolean","description":"Give this sub-agent no tools at all; it can only reason from its task text."}},"required":["description"]}}}}
+            \\{"type":"object","properties":{"description":{"type":"string","description":"A single self-contained task, including all context the sub-agent needs."},"read_only":{"type":"boolean","description":"Give the sub-agent NO tools at all — it can only reason from the task text you provide. It cannot read files, run commands or search. Leave this off for investigation: a sub-agent that cannot read cannot investigate."},"plugins":{"type":"array","items":{"type":"string"},"description":"Plugin names the child may keep, intersected with yours. Omit to inherit yours minus task-delegation."},"tools":{"type":"array","items":{"type":"string"},"description":"Exact tool names the child may use (read, grep, …). Omit for all tools in its plugin set. Cannot grant a tool you do not have."},"tasks":{"type":"array","description":"Independent tasks to run in parallel (max 32 queued at top level, 4 inside a sub-agent; 8 run at once).","items":{"type":"object","properties":{"description":{"type":"string","description":"A single self-contained task."},"read_only":{"type":"boolean","description":"Give this sub-agent no tools at all; it can only reason from its task text."},"plugins":{"type":"array","items":{"type":"string"},"description":"Plugin names this child may keep."},"tools":{"type":"array","items":{"type":"string"},"description":"Exact tool names this child may use."}},"required":["description"]}}}}
             ,
             .handler = toolCtxStub,
             .ctx_handler = taskmod.toolTask,
         },
         .{
             .name = "spawn_agent",
-            .desc = "Start a background sub-agent and return immediately with its id. Unlike task, this does not block: you keep working while it runs, can send it more instructions mid-flight, and collect its output when you are ready. Follow up with wait_agent, read_agent, send_agent and close_agent. Prefer this for long investigations, or when its findings may change what you ask it next.",
+            .desc = "Start a background sub-agent and return immediately with its id. Unlike task, this does not block: you keep working while it runs, can send it more instructions mid-flight, and collect its output when you are ready. Follow up with wait_agent, read_agent, send_agent and close_agent. Prefer this for long investigations, or when its findings may change what you ask it next. It does not inherit task/spawn_agent unless you pass plugins:[\"task-delegation\"]. Pass tools to narrow what it can call.",
             .schema =
-            \\{"type":"object","properties":{"task":{"type":"string","description":"Self-contained description of what the sub-agent should do. It starts with no memory of this conversation unless fork_context is set."},"name":{"type":"string","description":"Short label for this sub-agent, shown in list_agents."},"read_only":{"type":"boolean","description":"Give it NO tools at all — it can only reason from the task text. It cannot read files or run commands, so leave this off whenever it needs to look at anything."},"fork_context":{"type":"boolean","description":"Copy this conversation's history into the sub-agent. Use it when the task only makes sense given what was already discussed; leave it off otherwise to save tokens."}},"required":["task"]}
+            \\{"type":"object","properties":{"task":{"type":"string","description":"Self-contained description of what the sub-agent should do. It starts with no memory of this conversation unless fork_context is set."},"name":{"type":"string","description":"Short label for this sub-agent, shown in list_agents."},"read_only":{"type":"boolean","description":"Give it NO tools at all — it can only reason from the task text. It cannot read files or run commands, so leave this off whenever it needs to look at anything."},"fork_context":{"type":"boolean","description":"Copy this conversation's history into the sub-agent. Use it when the task only makes sense given what was already discussed; leave it off otherwise to save tokens."},"plugins":{"type":"array","items":{"type":"string"},"description":"Plugin names it may keep, intersected with yours. Omit to inherit yours minus task-delegation."},"tools":{"type":"array","items":{"type":"string"},"description":"Exact tool names it may use. Omit for all tools in its plugin set."}},"required":["task"]}
             ,
             .handler = toolCtxStub,
             .ctx_handler = agentsplug.toolSpawnAgent,
@@ -302,6 +303,14 @@ fn ensureDefault() void {
     if (default_inited) return;
     default_enabled = factorySet();
     default_inited = true;
+    childbind.child_set = childSet;
+    childbind.tool_allow = childToolAllow;
+}
+
+comptime {
+    if (!std.mem.eql(u8, builtin_plugins[12].name, "task-delegation")) {
+        @compileError("task-delegation 必须停在 builtin_plugins[12],childbind 的未绑定回退靠这一位");
+    }
 }
 
 /// 按名开启一个插件(改进程默认集)。未知名字返回 false(调用方给提示)。
@@ -352,6 +361,76 @@ pub fn withoutEnabled(set: EnabledSet, name: []const u8) EnabledSet {
         if (std.mem.eql(u8, p.name, name)) return set & ~maskOf(i);
     }
     return set;
+}
+
+/// 子 agent 的启用集:继承父集,默认摘掉 `task-delegation`。
+///
+/// 孩子不该默认再付 7 个委派工具的 schema,也不该默认能再派。
+/// `want` 为 null = 这个默认;非 null = 与父集求交(只能收紧)。
+/// 无工具的钩子插件始终从父集保留 —— `plugins: ["lsp"]` 是加工具,不是关快压。
+pub fn childSet(parent: EnabledSet, want: ?[]const []const u8) !EnabledSet {
+    var hooks: EnabledSet = 0;
+    for (&builtin_plugins, 0..) |p, i| {
+        if (p.tools.len != 0) continue;
+        if (isEnabledIn(parent, i)) hooks |= maskOf(i);
+    }
+    if (want) |names| {
+        var set = hooks;
+        for (names) |n| {
+            const bit = bitOf(n) orelse return error.UnknownPlugin;
+            if (parent & bit == 0) return error.PluginNotHeld;
+            set |= bit;
+        }
+        return set;
+    }
+    return withoutEnabled(parent, "task-delegation");
+}
+
+fn bitOf(name: []const u8) ?EnabledSet {
+    for (&builtin_plugins, 0..) |p, i| {
+        if (std.mem.eql(u8, p.name, name)) return maskOf(i);
+    }
+    return null;
+}
+
+fn nameIn(names: []const []const u8, name: []const u8) bool {
+    for (names) |n| {
+        if (std.mem.eql(u8, n, name)) return true;
+    }
+    return false;
+}
+
+/// 已知工具名(核心表或任一插件)。
+pub fn knownToolName(name: []const u8) bool {
+    if (toolsmod.find(name) != null) return true;
+    for (&builtin_plugins) |p| {
+        for (p.tools) |*t| {
+            if (std.mem.eql(u8, t.name, name)) return true;
+        }
+    }
+    return false;
+}
+
+/// 父 agent 当前能用的工具,孩子才能要。
+pub fn parentHoldsTool(parent: EnabledSet, name: []const u8) bool {
+    return findToolIn(parent, name) != null;
+}
+
+/// 启用集 + 可选工具白名单是否暴露该工具。
+pub fn exposesTool(set: EnabledSet, allow: []const []const u8, name: []const u8) bool {
+    if (allow.len > 0 and !nameIn(allow, name)) return false;
+    return findToolIn(set, name) != null;
+}
+
+/// 校验 `tools` 白名单:每项已知,且父集能用。返回 arena 上的拷贝。
+pub fn childToolAllow(arena: std.mem.Allocator, parent: EnabledSet, names: []const []const u8) ![]const []const u8 {
+    for (names) |n| {
+        if (!knownToolName(n)) return error.UnknownTool;
+        if (!parentHoldsTool(parent, n)) return error.ToolNotHeld;
+    }
+    const out = try arena.alloc([]const u8, names.len);
+    for (names, out) |n, *d| d.* = try arena.dupe(u8, n);
+    return out;
 }
 
 /// 该插件在给定启用集下是否可用。
@@ -542,12 +621,19 @@ pub fn findToolIn(set: EnabledSet, name: []const u8) ?*const toolsmod.Tool {
 /// 汇总工具定义(核心表 + 已启用插件)到 out,供 ai.run 的 tools 参数。
 /// 单一真相源:新增插件工具自动带上其 JSON Schema,无需改此函数。
 pub fn appendToolDefsIn(set: EnabledSet, out: *std.array_list.Managed(aimod.ToolDef)) !void {
+    try appendToolDefsFiltered(set, &.{}, out);
+}
+
+/// 按启用集与可选白名单汇总工具定义。`allow` 空 = 不额外收紧。
+pub fn appendToolDefsFiltered(set: EnabledSet, allow: []const []const u8, out: *std.array_list.Managed(aimod.ToolDef)) !void {
     for (&toolsmod.tools) |*t| {
+        if (allow.len > 0 and !nameIn(allow, t.name)) continue;
         try out.append(.{ .name = t.name, .desc = t.desc, .schema = t.schema });
     }
     for (&builtin_plugins, 0..) |p, i| {
         if (!isEnabledIn(set, i)) continue;
         for (p.tools) |*t| {
+            if (allow.len > 0 and !nameIn(allow, t.name)) continue;
             try out.append(.{ .name = t.name, .desc = t.desc, .schema = t.schema });
         }
     }
@@ -560,11 +646,22 @@ pub fn appendToolDefsIn(set: EnabledSet, out: *std.array_list.Managed(aimod.Tool
 /// 单独一个函数而非复用 `appendToolDefs`:预算估算在热路径上被反复调用,
 /// 不该为了数几个字符去分配一个 list。
 pub fn toolDefsTokensIn(set: EnabledSet) usize {
+    return toolDefsTokensFiltered(set, &.{});
+}
+
+/// 与 `appendToolDefsFiltered` 同一口径的 token 估算,不分配。
+pub fn toolDefsTokensFiltered(set: EnabledSet, allow: []const []const u8) usize {
     var n: usize = 0;
-    for (&toolsmod.tools) |*t| n += defTokens(t.name, t.desc, t.schema);
+    for (&toolsmod.tools) |*t| {
+        if (allow.len > 0 and !nameIn(allow, t.name)) continue;
+        n += defTokens(t.name, t.desc, t.schema);
+    }
     for (&builtin_plugins, 0..) |p, i| {
         if (!isEnabledIn(set, i)) continue;
-        for (p.tools) |*t| n += defTokens(t.name, t.desc, t.schema);
+        for (p.tools) |*t| {
+            if (allow.len > 0 and !nameIn(allow, t.name)) continue;
+            n += defTokens(t.name, t.desc, t.schema);
+        }
     }
     return n;
 }
@@ -609,8 +706,19 @@ test "optional plugins are gated per agent, not process-wide" {
     var defs = std.array_list.Managed(aimod.ToolDef).init(a);
     try appendToolDefsIn(bare, &defs);
     try t.expectEqual(toolsmod.tools.len, defs.items.len);
-    for (defs.items) |d| {
-        try t.expect(toolsmod.find(d.name) != null);
+    for (toolsmod.tools, defs.items) |*core, d| {
+        try t.expectEqualStrings(core.name, d.name);
+        try t.expectEqualStrings(core.desc, d.desc);
+        try t.expectEqualStrings(core.schema, d.schema);
+    }
+    // 出厂启用集也不许往默认前缀里塞插件工具 —— 那是 prompt cache 的稳定区
+    var factory_defs = std.array_list.Managed(aimod.ToolDef).init(a);
+    try appendToolDefsIn(factorySet(), &factory_defs);
+    try t.expectEqual(toolsmod.tools.len, factory_defs.items.len);
+    for (toolsmod.tools, factory_defs.items) |*core, d| {
+        try t.expectEqualStrings(core.name, d.name);
+        try t.expectEqualStrings(core.desc, d.desc);
+        try t.expectEqualStrings(core.schema, d.schema);
     }
     // 关键:禁用插件的工具查不到 —— 否则模型能调到没在 tools 里声明的工具
     try t.expect(findToolIn(bare, "lsp") == null);
@@ -643,6 +751,32 @@ test "optional plugins are gated per agent, not process-wide" {
 
     // token 估算也跟着集合走 —— 上下文预算必须按本 Agent 的工具集算
     try t.expect(toolDefsTokensIn(with_todo) > toolDefsTokensIn(bare));
+
+    // 子 agent 默认摘掉委派插件:否则每路孩子都付 7 个工具的 schema
+    const parent_full = withEnabled(factorySet(), "task-delegation");
+    const child_default = try childSet(parent_full, null);
+    try t.expect(findToolIn(parent_full, "task") != null);
+    try t.expect(findToolIn(child_default, "task") == null);
+    try t.expect(findToolIn(child_default, "read") != null);
+    // 钩子插件仍在(零 token)
+    try t.expect((child_default & factorySet()) == factorySet());
+    // 显式要回委派:只能从父集收,不能凭空开
+    const child_nested = try childSet(parent_full, &.{"task-delegation"});
+    try t.expect(findToolIn(child_nested, "task") != null);
+    try t.expectError(error.UnknownPlugin, childSet(parent_full, &.{"no-such"}));
+    try t.expectError(error.PluginNotHeld, childSet(factorySet(), &.{"task-delegation"}));
+    // 工具白名单只能收紧
+    const allow = try childToolAllow(a, parent_full, &.{ "read", "grep" });
+    try t.expectEqual(@as(usize, 2), allow.len);
+    try t.expect(exposesTool(child_default, allow, "read"));
+    try t.expect(!exposesTool(child_default, allow, "write"));
+    try t.expectError(error.UnknownTool, childToolAllow(a, parent_full, &.{"nope"}));
+    try t.expectError(error.ToolNotHeld, childToolAllow(a, bare, &.{"lsp"}));
+
+    var defs_allow = std.array_list.Managed(aimod.ToolDef).init(a);
+    try appendToolDefsFiltered(child_default, allow, &defs_allow);
+    try t.expectEqual(@as(usize, 2), defs_allow.items.len);
+    try t.expect(toolDefsTokensFiltered(child_default, allow) < toolDefsTokensIn(child_default));
 
     // 进程默认集只影响新建 Agent 的初值
     try t.expectEqual(factorySet(), defaultSet());
@@ -719,6 +853,7 @@ test "disable withdraws tools hooks and schema" {
 // lsp 测已迁 plugins/lsp.zig
 
 test {
+    _ = @import("plugins/childbind.zig");
     _ = @import("plugins/api.zig");
     _ = @import("plugins/jsonx.zig");
     _ = @import("plugins/hooks.zig");

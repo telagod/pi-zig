@@ -45,6 +45,7 @@ test {
     _ = @import("session.zig");
     _ = @import("agent.zig");
     _ = @import("agents.zig");
+    _ = @import("pool.zig");
     _ = @import("pkgs.zig");
     _ = @import("events.zig");
     _ = @import("webplugins.zig");

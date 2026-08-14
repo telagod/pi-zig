@@ -328,7 +328,7 @@ pi 明确声明不做 to-dos，这是 piz 的增强。
 {"tasks": [{"description": "任务 A"}, {"description": "任务 B", "read_only": true}]}
 ```
 
-在**本进程内**建一个独立 Agent 跑委托任务，**阻塞等结果**，把子 agent 的最终答复回传给模型。`tasks` 数组并行（顶层上限 32、子 agent 里 4，超了直接报错而不是静默截断）。
+在**本进程内**建一个独立 Agent 跑委托任务，**阻塞等结果**，把子 agent 的最终答复回传给模型。`tasks` 数组入队（顶层上限 32、子 agent 里 4，超了直接报错而不是静默截断），真正同时跑的不超过 worker 池 8 条。
 
 `read_only` 让子 agent **一个工具都没有**（不是「只有读工具」）—— 它只能凭 `description` 里的
 文字推理。调研任务别开：读不了文件的子 agent 调研不了任何东西。
@@ -365,12 +365,17 @@ spawn 的进程一起收掉（子进程同样起成独立进程组）。
 | 工作目录 | 不继承就在错误的目录动手（web 模式各会话 cwd 不同） |
 | provider / model | 不继承会悄悄回退到配置里的默认模型 |
 | 只读模式 | 否则只读 agent 能借委托绕出写权限 |
+| 钩子类插件（快压、记忆等） | 零 token，关掉会退化 |
+
+**默认不继承** `task-delegation`。孩子不必每轮付 7 个委派工具的 schema，也不能默认再派。要嵌套委派时显式传 `plugins: ["task-delegation"]`（仍受深度闸门约束）。
+
+`tools: ["read", "grep"]` 再收紧核心工具；只能列出你自己有的名字。省略则孩子看得到其插件集里的全部工具。
 
 **不继承**对话历史。子 agent 从零开始，所以每条 `description` 必须自带全部上下文 —— 只写「继续上面那个」子 agent 看不懂。
 
 ### 进程内执行
 
-子 agent 跑在本进程的线程里，不再 spawn 独立 piz 进程。两个收益：
+子 agent 跑在本进程的 **8 线程 worker 池**里，不再每人一条 OS 线程，也不再默认 spawn 独立 piz 进程。两个收益：
 
 **中间过程可见。** 子 agent 的每次工具调用、每条引擎告知都通过 `on_subagent` 回调实时转发给父 agent，TUI 与 `-o text` 显示成 `[sub 3] ⚙ bash`，`-o jsonl` 输出 `{"type":"subagent","task":"3","kind":"tool_start","text":"bash"}`。子进程路径下委派是纯黑盒：父 agent `join()` 干等，只能在结束时拿到一坨文本。实测 3 路委派进程内给出 9 条事件，子进程 0 条。
 
@@ -384,7 +389,7 @@ spawn 的进程一起收掉（子进程同样起成独立进程组）。
 
 真实场景里 provider 延迟主导（一轮 TTFB 就几百毫秒），所以这个提升在墙钟上不明显 —— 32 路并行两条路径都是 1.66 秒，都完全并行。
 
-子 agent 继承父 agent 的 provider / model / cwd / 插件启用集，`read_only` 只能加不能减，深度 +1。每个子 agent 有自己的 arena 与启用集：**并发跑的 32 个子 agent 互不影响**，这是把插件启用状态从进程级单例改成 `Agent.plugins` 位掩码换来的。
+子 agent 继承父 agent 的 provider / model / cwd，插件集默认去掉 `task-delegation`，`read_only` 与 `tools` 只能加不能减，深度 +1。每个子 agent 有自己的 arena 与启用集：**入队的 32 个子 agent 互不影响**，同时在跑的不超过 8 个。
 
 `PIZ_TASK_SPAWN=1` 切回 spawn 子进程。逃生通道：进程内共享地址空间，子 agent 里的 panic 会拖垮整个 piz，真出问题不必回滚版本。
 
@@ -394,7 +399,7 @@ spawn 的进程一起收掉（子进程同样起成独立进程组）。
 
 实测（mock provider，13 代 i7）：每个 subagent 常驻 9MB / 3 线程，父进程侧每个约 +0.5MB、+1 线程、+2 fd。顶层跑满 32 个：整树 299MB、33 个进程、墙钟 1.60s，而单个 subagent 自己就要 1.54s —— 扇出代价几乎为零。再往上受制于 provider 的并发配额而不是本机资源。
 
-**委托深度上限 2 层**（顶层 agent 算第 0 层）。子 agent 读的是同一份 `settings.json`，所以它也带 `task` 工具、也能继续 spawn —— 不拦就是 fork bomb。深度靠 `PIZ_TASK_DEPTH` 环境变量跨进程传递（进程间唯一可靠的通道），超限时报 `delegation depth limit reached` 让模型自己动手。
+**委托深度上限 2 层**（顶层 agent 算第 0 层）。孩子默认没有 `task` / `spawn_agent`；显式 `plugins: ["task-delegation"]` 才带上，再靠深度闸门封顶。子进程路径仍用 `PIZ_TASK_DEPTH` 跨进程传深度。超限时报 `delegation depth limit reached` 让模型自己动手。
 
 > 这条限制是读 codex 源码时发现的 —— 它有 `exceeds_thread_spawn_depth_limit`（`core/src/agent/registry.rs:76`）而 piz 当时只限并发数。
 
@@ -420,6 +425,8 @@ spawn 的进程一起收掉（子进程同样起成独立进程组）。
 **长驻**的意思是跑完一轮不销毁，停在 `idle` 等下一条输入 —— 它保留自己的对话历史，所以 `send_agent` 是「接着刚才那件事」，不是重新开始。实测同一个 agent 跑两轮：第一轮报 parser，`interrupt` 转向后第二轮报 lexer，`turns` 从 1 变 2。
 
 `spawn_agent` 的 `fork_context` 让子 agent 继承父 agent 的完整对话历史。默认关：多数委派任务不需要全部上下文，继承过去只是白烧 token。需要「接着刚才讨论的事」时才开。
+
+`plugins` / `tools` 与 `task` 相同：默认去掉委派工具，可用白名单再收紧。长驻 agent 空闲时不占线程，32 个打开的槽位共享 8 个 worker。
 
 **两个读者，两条通道。** `read_agent` 只返回终态（`turn_done` / `failed` / `notice`），逐条工具调用被过滤掉 —— 那对父 agent 的决策没有价值，进上下文只是烧 token。进度仍然收着，走 `on_subagent` 回调显示给**人**看（TUI 与 `-o text` 的 `[sub 1] ⚙ bash`）。codex 也是这样分的：它的细粒度事件只进 UI 与 rollout，进父 agent 模型上下文的唯一东西是子 agent 终止时的一条摘要（`session_prefix.rs`，上限 1000 token）。
 

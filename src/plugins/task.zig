@@ -4,6 +4,9 @@ const agentmod = @import("../agent.zig");
 const activity = @import("../activity.zig");
 const toolsmod = @import("../tools.zig");
 const limits = @import("limits.zig");
+const jsonx = @import("jsonx.zig");
+const childbind = @import("childbind.zig");
+const poolmod = @import("../pool.zig");
 
 const MAX_PARALLEL_TASKS = limits.MAX_PARALLEL_TASKS;
 const MAX_PARALLEL_TASKS_NESTED = limits.MAX_PARALLEL_TASKS_NESTED;
@@ -63,6 +66,8 @@ const TaskSlot = struct {
     /// 本槽的序号(1 起),事件转发时告诉父 agent 是哪个子任务
     idx: usize = 0,
     read_only: bool = false,
+    child_plugins: u16 = 0,
+    tool_allow: []const []const u8 = &.{},
 
     // ---- 进程内路径 ----
     /// 父 agent:借它的 cfg / provider / model / 启用集 / 回调
@@ -169,7 +174,8 @@ fn runTaskInProcess(slot: *TaskSlot, parent: *agentmod.Agent, act: activity.Hand
     // 否则委派就是一条提权通道。
     var sub = agentmod.Agent.initOpts(a, parent.cfg, parent.provider.name, parent.model, parent.cwd, .{
         .read_only = parent.read_only or slot.read_only,
-        .plugins = parent.plugins,
+        .plugins = slot.child_plugins,
+        .tool_allow = slot.tool_allow,
         .depth = parent.depth + 1,
     }) catch |e| {
         slot.failed = true;
@@ -340,9 +346,13 @@ pub fn toolTask(ctx: ?*anyopaque, arena: std.mem.Allocator, args: []const u8) an
     // 支持 {description} 或 {tasks: [{description}, ...]}(并行)。
     // 每个任务带自己的 read_only —— 调研类子 agent 不该有写权限,
     // 而同一次调用里「查一个、改一个」是常见组合。
-    const TaskSpec = struct { desc: []const u8, read_only: bool };
+    const TaskSpec = struct {
+        desc: []const u8,
+        read_only: bool,
+        plugins: ?[]const []const u8 = null,
+        tools: ?[]const []const u8 = null,
+    };
     var specs = std.array_list.Managed(TaskSpec).init(arena);
-    // 顶层 read_only 作为 tasks[] 各项的默认值
     const top_ro = blk: {
         if (v == .object) {
             if (v.object.get("read_only")) |r| {
@@ -351,18 +361,30 @@ pub fn toolTask(ctx: ?*anyopaque, arena: std.mem.Allocator, args: []const u8) an
         }
         break :blk false;
     };
+    const top_plugins = jsonx.jsonStrs(arena, v, "plugins") catch {
+        return .{ .content = "error: plugins must be a non-empty array of plugin names", .is_error = true };
+    };
+    const top_tools = jsonx.jsonStrs(arena, v, "tools") catch {
+        return .{ .content = "error: tools must be a non-empty array of tool names", .is_error = true };
+    };
     if (v == .object) {
         if (v.object.get("description")) |d| {
-            if (d == .string and d.string.len > 0) try specs.append(.{ .desc = d.string, .read_only = top_ro });
+            if (d == .string and d.string.len > 0) try specs.append(.{ .desc = d.string, .read_only = top_ro, .plugins = top_plugins, .tools = top_tools });
         }
         if (v.object.get("tasks")) |ts| {
             if (ts == .array) {
-                for (ts.array.items) |t| {
-                    if (t != .object) continue;
-                    const dd = t.object.get("description") orelse continue;
+                for (ts.array.items) |item| {
+                    if (item != .object) continue;
+                    const dd = item.object.get("description") orelse continue;
                     if (dd != .string or dd.string.len == 0) continue;
-                    const ro = if (t.object.get("read_only")) |r| (if (r == .bool) r.bool else top_ro) else top_ro;
-                    try specs.append(.{ .desc = dd.string, .read_only = ro });
+                    const ro = if (item.object.get("read_only")) |r| (if (r == .bool) r.bool else top_ro) else top_ro;
+                    const p = jsonx.jsonStrs(arena, item, "plugins") catch {
+                        return .{ .content = "error: tasks[].plugins must be a non-empty array of plugin names", .is_error = true };
+                    };
+                    const tls = jsonx.jsonStrs(arena, item, "tools") catch {
+                        return .{ .content = "error: tasks[].tools must be a non-empty array of tool names", .is_error = true };
+                    };
+                    try specs.append(.{ .desc = dd.string, .read_only = ro, .plugins = p orelse top_plugins, .tools = tls orelse top_tools });
                 }
             }
         }
@@ -396,6 +418,22 @@ pub fn toolTask(ctx: ?*anyopaque, arena: std.mem.Allocator, args: []const u8) an
 
     if (!spawn_mode) {
         for (slots, slot_arenas, specs.items, 1..) |*slot, *sa, spec, i| {
+            const child_plugins = childbind.resolveSet(self.plugins, spec.plugins) catch |e| return .{
+                .content = switch (e) {
+                    error.UnknownPlugin => "error: unknown plugin name in plugins[]",
+                    error.PluginNotHeld => "error: plugins[] can only keep plugins you already have",
+                    else => "error: cannot resolve child plugins",
+                },
+                .is_error = true,
+            };
+            const raw_tools = if (spec.tools) |names| childbind.resolveTools(sa.allocator(), self.plugins, names) catch |e| return .{
+                .content = switch (e) {
+                    error.UnknownTool => "error: unknown tool name in tools[]",
+                    error.ToolNotHeld => "error: tools[] can only keep tools you already have",
+                    else => "error: cannot resolve child tools",
+                },
+                .is_error = true,
+            } else &.{};
             slot.* = .{
                 .desc = spec.desc,
                 .arena = sa,
@@ -403,6 +441,8 @@ pub fn toolTask(ctx: ?*anyopaque, arena: std.mem.Allocator, args: []const u8) an
                 .cwd = self.cwd,
                 .idx = i,
                 .read_only = spec.read_only,
+                .child_plugins = child_plugins,
+                .tool_allow = raw_tools,
                 .parent = self,
             };
         }
@@ -440,18 +480,30 @@ pub fn toolTask(ctx: ?*anyopaque, arena: std.mem.Allocator, args: []const u8) an
         }
     }
 
-    // 并行跑。单个任务不开线程,省一次 spawn/join。
+    // 并行入池。单个任务不开线程,省一次入队。
     if (slots.len == 1) {
         runTaskSlot(&slots[0]);
     } else {
-        const threads = try arena.alloc(?std.Thread, slots.len);
-        for (slots, threads) |*slot, *th| {
-            th.* = std.Thread.spawn(.{}, runTaskSlot, .{slot}) catch blk: {
-                runTaskSlot(slot); // 开不出线程就当场跑,不能静默丢任务
-                break :blk null;
+        const TaskJob = struct {
+            slot: *TaskSlot,
+            left: *std.atomic.Value(usize),
+            fn run(ptr: *anyopaque) void {
+                const job: *@This() = @ptrCast(@alignCast(ptr));
+                runTaskSlot(job.slot);
+                _ = job.left.fetchSub(1, .acq_rel);
+            }
+        };
+        var left = std.atomic.Value(usize).init(slots.len);
+        const jobs = try arena.alloc(TaskJob, slots.len);
+        for (slots, jobs) |*slot, *job| {
+            job.* = .{ .slot = slot, .left = &left };
+            poolmod.global().enqueue(.{ .run = TaskJob.run, .ctx = @ptrCast(job) }) catch {
+                TaskJob.run(@ptrCast(job));
             };
         }
-        for (threads) |th| if (th) |t| t.join();
+        while (left.load(.acquire) > 0) {
+            std.Io.sleep(agentmod.util.io, .{ .nanoseconds = 5 * std.time.ns_per_ms }, .awake) catch break;
+        }
     }
 
     return formatTaskResults(arena, slots);
@@ -513,6 +565,20 @@ test "task tool delegates to a real sub-process and returns its output" {
     // 缺参数 → 明确错误(不 spawn)
     try t.expect((try toolTask(&agent, a, "{}")).is_error);
     try t.expect((try toolTask(&agent, a, "{\"description\":\"\"}")).is_error);
+
+    // 孩子掩码只能收紧:未知名、空数组、父集没有的插件/工具都得响
+    const bad_plug = try toolTask(&agent, a, "{\"description\":\"x\",\"plugins\":[\"no-such\"]}");
+    try t.expect(bad_plug.is_error);
+    try t.expect(std.mem.indexOf(u8, bad_plug.content, "unknown plugin") != null);
+    const empty_tools = try toolTask(&agent, a, "{\"description\":\"x\",\"tools\":[]}");
+    try t.expect(empty_tools.is_error);
+    try t.expect(std.mem.indexOf(u8, empty_tools.content, "non-empty") != null);
+    const unknown_tool = try toolTask(&agent, a, "{\"description\":\"x\",\"tools\":[\"nope\"]}");
+    try t.expect(unknown_tool.is_error);
+    try t.expect(std.mem.indexOf(u8, unknown_tool.content, "unknown tool") != null);
+    const not_held = try toolTask(&agent, a, "{\"description\":\"x\",\"plugins\":[\"task-delegation\"]}");
+    try t.expect(not_held.is_error);
+    try t.expect(std.mem.indexOf(u8, not_held.content, "already have") != null);
 
     // 超过并行上限 → 拒绝,不是静默丢弃。任务数从常量派生 ——
     // 硬编码的话每次调整上限都要跟着改测试,而忘了改就变成「测试通过但

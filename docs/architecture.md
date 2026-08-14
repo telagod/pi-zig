@@ -2,7 +2,7 @@
 
 # 架构
 
-piz 是单个静态二进制，零第三方依赖，只用 Zig 标准库。约 1.9 万行 Zig。
+piz 是单个静态二进制。Zig 标准库 + vendored stb（读图）。约 1.9 万行 Zig。
 
 ## 目录
 
@@ -60,8 +60,9 @@ graph TD
     core --> compress["compress.zig — prune/shake/snap"]
     core --> ai["ai.zig — provider 协议 / SSE"]
     core --> tools["tools.zig — 8 个核心工具"]
-    core --> plugins["plugins.zig — 14 个内置插件"]
+    core --> plugins["plugins.zig — 15 个内置插件"]
     core --> agents["agents.zig — 长驻 sub-agent 注册表 + 邮箱"]
+    core --> pool["pool.zig — 8 线程 worker 池"]
     core --> session["session.zig — JSONL 持久化"]
     core --> config["config.zig — 配置 / provider 解析"]
     core --> httpc["httpc.zig — HTTP 流式 / 重试"]
@@ -188,8 +189,8 @@ sequenceDiagram
 | 工具执行 | `std.Thread` + 信号量限流，同时在跑上限 8，流水线调度 |
 | Web 会话 | 每会话独立 Agent + arena + worker 线程，池上限 4 |
 | Web 连接 | 每连接一个 detach 线程，上限 64；无读超时（见 [Web UI](web-ui.md#资源上限)） |
-| subagent 委派 | 每个一个 OS 线程 + 进程内独立 Agent，顶层并行 32、嵌套层 4（`PIZ_TASK_SPAWN=1` 回退到子进程）|
-| 长驻 sub-agent | 每个一个 OS 线程 + 独立 Agent + 独立 arena，会话级上限 32 |
+| subagent 委派 | 入固定 8 线程 worker 池 + 进程内独立 Agent，顶层排队 32、嵌套层 4（`PIZ_TASK_SPAWN=1` 回退到子进程）|
+| 长驻 sub-agent | 同一 worker 池 + 独立 Agent + 独立 arena，打开上限 32；空闲不占线程 |
 | 工具工作目录 | thread-local root，分发前由 `runToolSlot` 设为 `Agent.cwd` |
 | 事件命令 | spawn 后 detach，不等待 |
 | TUI 渲染 | 主线程轮询 stdin，worker 线程跑 agent |
@@ -215,12 +216,12 @@ worker 会在队列上 100ms 轮询到进程结束：实测 24 个会话建删�
 
 插件若需跨调用状态，按 Agent 指针地址隔离并自己加锁（参考 `todo` 插件）。
 
-**长驻 sub-agent 的四条约束**（改 `agents.zig` 前必读）：
+**长驻 sub-agent 的四条约束**（改 `agents.zig` / `pool.zig` 前必读）：
 
 1. **邮箱分两类读者。** `read_agent` 只给模型终态（`turn_done`/`failed`/`notice`），`progress` 被过滤 —— 逐条工具调用进上下文只是烧 token。进度走 `on_subagent` 回调给人看。`wait_agent` 同样只被终态唤醒，否则父 agent 会为「子 agent 在跑 bash」白烧一整轮。
 2. **`waitMail` 必须在无人可产出时提前返回。** 全部 agent 都 `idle` 且没有排队输入 → 再等也不会有新结果，盲等满超时是纯浪费。
 3. **邮箱有容量上限，满了丢最旧。** 一个话多的 agent 否则能吃光内存。丢头时 `read_cursor` 要跟着减，不然会把已读的又读一遍或越界。
-4. **`close` 的 join 必须在锁外。** worker 可能正跑一轮（几十秒），持注册表锁等它会把所有 agent 操作冻住。
+4. **`close` 等池线程放下这一条必须在锁外。** 该 agent 可能正跑一轮（几十秒），持注册表锁等会把所有 agent 操作冻住。闲着的 agent 不占线程，所以没有 per-agent `join`。
 
 **进程内 subagent 的三条隔离要求**（改 `runTaskInProcess` 前必读）：
 
@@ -460,7 +461,7 @@ piz 保留「置前」，理由是两者的压缩语义不同：codex 保留 use
 ## 测试
 
 ```bash
-zig build test          # 185 个测试
+zig build test
 ```
 
 两个测试目标：`core.zig` 为根（收集全部 core 模块的 test 块）、`main.zig` 为根（含 `e2e.zig`）。Zig 的 `zig test` 只收集根模块的测试，所以要分两个目标。
