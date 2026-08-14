@@ -112,7 +112,7 @@ graph TD
 | `cmd_print.zig` | print/jsonl 输出、`runPrint`、`-a` 异步 |
 | `cmd_pkg.zig` | `piz pkg` 子命令 |
 | `runopts.zig` | 交互/print 共用的运行选项 |
-| `tui.zig` | raw mode、ANSI 渲染、输入解析、历史、选择器、底栏一行 |
+| `tui.zig` | raw mode、ANSI 渲染、输入钉底、历史滚动、选择器 |
 | `e2e.zig` | 端到端测试（内嵌 mock provider，仅网络边界打桩） |
 
 `webui.html` 是单页前端源码，通过 `@embedFile` 编译期嵌入二进制。
@@ -152,7 +152,7 @@ sequenceDiagram
     end
 ```
 
-循环上限 `MAX_TOOL_ITER = 24`。
+工具循环没有步数上限（与 pi 相同）。空转由相同调用 / 相同输出两条判据收；用户 Esc 中止。
 
 ## 模型可见清单
 
@@ -291,7 +291,7 @@ print 模式走 stderr，jsonl 是 `{"type":"notice"}`）。静默自愈和不�
 
 ### 切断时不让用户空手而归
 
-三条止损路径（空转两条 + 迭代上限）都可能在模型**一个字正文都没产出**时返回。
+空转两条止损路径都可能在模型**一个字正文都没产出**时返回。
 抓原始 SSE 确认过：那种场景下 `delta.content` 全程只有 4 个 token，剩下 1107 次
 全是推理增量。直接返回等于让 print 模式的 stdout 是零字节，`piz -p … | jq`
 拿到空输入。
@@ -532,7 +532,7 @@ zig build test
 | `activity.zig` | 并发登记不会发布写了一半的槽位（否则耗时显示成系统启动时长） |
 | `activity.zig` | 取消世代只影响当时在跑的活动，之后新起的不受影响 |
 | `e2e.zig` | 流中途断连保住已收文本并自动续跑 |
-| `e2e.zig` | 连续相同的工具调用远早于迭代上限被切断 |
+| `e2e.zig` | 连续相同的工具调用被空转判据切断 |
 | `e2e.zig` | 参数不同但输出相同的重复调用同样被切断 |
 | `e2e.zig` | 切断时模型无正文则交出最后一份工具输出 |
 | `e2e.zig` | 填补永不覆盖模型自己产出的正文 |

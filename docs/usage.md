@@ -13,6 +13,7 @@ piz 有三种运行形态：交互模式（默认）、print 模式（`-p`，一
 - [print 模式](#print-模式)
 - [CLI 参考](#cli-参考)
 - [键位](#键位)
+- [限额](#限额)
 
 ## 交互模式
 
@@ -24,9 +25,23 @@ piz ~/code/api   # 指定目录
 piz -n           # 新会话，不续载
 ```
 
-默认续载该目录最近一次会话。对话软换行，输入跟在最后一条消息下面；底栏在输入框正下方，永远一行。平时是状态（目录、模型、思考、授权、上下文……）；退出确认、Esc 编辑上一条、选择器或授权提示出现时，指令替换状态，不另占一行。窄宽度从右边丢掉次要段（标题、条数、速率），不换行。状态栏 `◇` 是**当前选的**思考等级（默认 `high`，可从 `settings.json` 的 `defaultThinkingLevel` 读回），按当前模型的 `thinkingLevelMap` 显示，不是按输出字数猜的。`Alt+,` / `Alt+.` 或 `Shift+↓` / `Shift+↑` 在该模型支持的档之间切换，`/think` 无参数弹出选择器，有参数直接指定；改过的档会写回 `defaultThinkingLevel`。思考默认展开全文，`Ctrl+T` 只折叠显示。上下文窗口按 pi 的声明解析：DeepSeek 只有 `deepseek-v4-flash` / `deepseek-v4-pro`（`generate-models.ts` 的 `deepseekV4Models`，窗 1000000）；未写窗口的自定义模型缺省 128000（`model-registry.ts`）。不是 131k。
+默认续载该目录最近一次会话。输入和状态钉在屏幕底，对话在上面软换行。`PageUp` / `PageDown` 翻历史。不用表情符号。
 
-**默认全权（yolo）。** 对齐 Codex Full Access：命令和写文件不弹窗。状态栏 `⚡ yolo`。要先问再用 `/permissions ask` 或 `--ask`；只读用 `/permissions read-only` 或 `-r`。
+```
+> 你的话
+  v 思考                         Ctrl+T 折叠
+模型正文
+  bash  zig test src/foo.zig
+  bash  4.2KB
+> _
+pi-zig  deepseek/flash  high  yolo  12% 1k/128k
+```
+
+底栏一直是状态（目录、模型、思考档、授权、上下文）。有提示时写在状态前面，不把状态换掉。思考档是当前选的（默认 `high`），`/think` 或 `Alt+,/.` 改。
+
+上下文窗口按 pi 的声明解析：DeepSeek 只有 `deepseek-v4-flash` / `deepseek-v4-pro`（窗 1000000）；未写窗口的自定义模型缺省 128000。不是 131k。
+
+**默认全权（yolo）。** 对齐 Codex Full Access：命令和写文件不弹窗。状态栏写 `yolo`。要先问再用 `/permissions ask` 或 `--ask`；只读用 `/permissions read-only` 或 `-r`。
 
 询问档下会改文件、跑 shell、出网或委派子 agent 时才弹出授权：
 
@@ -47,24 +62,25 @@ piz -n           # 新会话，不续载
 ⠹ bash 12s/30s  4.1KB  npm install --legacy-peer-deps
 ⠹ agent 3m05s/10m  2.0KB  重构解析器，把递归下降改成 Pratt
 ⠹ model 3.1s  retry 2  HTTP 429 rate limited · retrying in 1.8s
-⏻ bash 1m05s  1.4MB  [bg]  cargo build --release
+~ bash 1m05s  1.4MB  [bg]  cargo build --release
 ```
 
 从左到右：转动的 spinner（还在动）、已耗时与墙钟上限、已收到的输出字节、正在做的事。
-`retry N` 是请求重试次数，后面跟退避倒计时。`⏻` 加 `[bg]` 是已转后台的活动。
+`retry N` 是请求重试次数，后面跟退避倒计时。`~` 加 `[bg]` 是已转后台的活动。
 
 读这几个数字就能判断该等还是该动手：字节在涨说明命令在产出；`12s/30s` 说明还有 18 秒会被超时杀掉；
 `retry 2` 说明是网络在抖而不是 piz 卡住了。
 
 执行中按 `Esc` 取消（长命令在 100ms 内停下，整个进程组一起收掉），按 `Ctrl+B` 转后台。空闲时 `Ctrl+C` 清空输入；输入为空再按一次（1 秒内）退出。
 
-引擎自己做的动作会以 `·` 开头单独打一行，与模型的输出区分开：
+引擎自己做的动作以 `piz` 开头单独打一行，与模型的输出区分开：
 
 ```
-· connection dropped mid-reply (ConnectionResetByPeer) — resuming (1/2)
-· the model called bash with identical arguments 3 times — telling it to use the result it already has
-· hit the 24-step tool limit for one turn — work may be unfinished; send another message to continue
+  piz  connection dropped mid-reply (ConnectionResetByPeer) — resuming (1/2)
+  piz  the model called bash with identical arguments 3 times — telling it to use the result it already has
 ```
+
+单轮工具循环**没有步数上限**，和 pi 一样。模型要调多少次就调多少次。真停下来的只有：模型自己收工、你按 Esc、或者它在原地空转（同一调用 / 同一输出连发，会先劝再停）。并行同时在跑的工具上限 8，那是并发不是步数。
 
 ## 编辑器行为
 
@@ -254,7 +270,7 @@ piz web [--port N] [--no-open] [--token T | --no-token]
 
 键位当前是硬编码的，暂不支持自定义配置。
 
-键位对齐 [Codex TUI](https://developers.openai.com/codex/cli/slash-commands) 的默认表：Esc 中止、Ctrl+C/D 空行再按一次才退出。piz 多出来的是 `Ctrl+B` 转后台、`Ctrl+T` 折叠思考，以及思考等级（`Alt+,/.`，与 Codex 相同）。
+键位对齐 [Codex TUI](https://developers.openai.com/codex/cli/slash-commands) 的默认表：Esc 中止、Ctrl+C/D 空行再按一次才退出。piz 多出来的是 `Ctrl+B` 转后台、`Ctrl+T` 折叠思考、`PageUp`/`PageDown` 滚对话。思考等级（`Alt+,/.`）与 Codex 相同。
 
 | 键 | 作用 |
 |----|------|
@@ -273,7 +289,9 @@ piz web [--port N] [--no-open] [--token T | --no-token]
 | `Ctrl+U` | 删除整行 |
 | `Ctrl+W` | 删除前一个单词 |
 | `Ctrl+L` | 清屏重绘 |
-| `Ctrl+T` | 折叠 / 展开本轮思考（不改等级） |
+| `Ctrl+T` | 折叠 / 展开本轮思考（不改等级；不是 Codex 的 transcript overlay） |
+| `PageUp` / `PageDown` | 向上 / 向下滚对话（半页） |
+| `Home` / `End` | 光标到行首 / 行尾 |
 | `Alt+,` / `Alt+.` | 思考更浅 / 更深（只走当前模型支持的档，例如 Flash 是 off→low→high→max，Pro 是 off→high→max） |
 | `Shift+↓` / `Shift+↑` | 同上 |
 | `↑` / `↓` | 翻输入历史 |
@@ -281,3 +299,17 @@ piz web [--port N] [--no-open] [--token T | --no-token]
 | `y` / `n` / `Esc` / `a` / `s` | 权限提示：允许 / 拒绝 / 拒绝 / 总是 / 跳过 |
 
 输入是单行的，暂不支持 `Shift+Enter` 插入换行。多行内容用 `@./file` 引用文件，或走 Web UI。
+
+## 限额
+
+这些是硬上限，不是建议。碰到会停或截断，并尽量说出来。
+
+| 限额 | 默认 | 改法 |
+|------|------|------|
+| 同一条 assistant 消息里并行工具 | 8 | 代码常量 `MAX_PARALLEL_TOOLS` |
+| 单条工具输出进模型的字节 | 16 KiB | 代码常量 `MAX_TOOL_OUTPUT`（超了留尾、带截断标记） |
+| 流中途断线自动续跑 | 2 次 | 代码常量 `MAX_STREAM_RESUMES` |
+| 相同工具调用空转干预 | 连发 3 次相同参数 | 第三次起提示模型用已有结果 |
+| 上下文占用 | 窗口的 85% 触发 compact | 见 [Architecture](architecture.md) |
+
+`-r` 启动时不暴露任何工具（含 `read`）。会话里 `/permissions read-only` 只拒危险工具，读类仍跑。

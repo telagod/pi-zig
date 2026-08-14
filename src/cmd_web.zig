@@ -961,11 +961,11 @@ fn sessionExport(alloc: std.mem.Allocator, ses: *WebSession, act: []const u8) ?[
     for (ses.agent.messages.items, 0..) |m, i| {
         if (std.mem.eql(u8, act, "tree")) {
             const tag: []const u8 = if (m.role.len > 0) switch (m.role[0]) {
-                'u' => "❯",
-                'a' => "←",
-                't' => "⚙",
-                else => "·",
-            } else "·";
+                'u' => ">",
+                'a' => "<",
+                't' => "tool",
+                else => "-",
+            } else "-";
             const head = m.content[0..@min(m.content.len, 50)];
             w.print("{d}. {s} {s}\n", .{ i + 1, tag, head }) catch {};
         } else if (html) {

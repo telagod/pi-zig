@@ -251,7 +251,7 @@ fn printOnToolStart(ctx: ?*anyopaque, name: []const u8, args: []const u8) anyerr
     var buf: [512]u8 = undefined;
     // clampUtf8:args 截断在多字节序列中间会在终端上产出乱码方块
     const clipped = util.clampUtf8(args, 200);
-    const s = std.fmt.bufPrint(&buf, "\n\x1b[36m⚙ {s} {s}\x1b[0m\n", .{ name, clipped }) catch return;
+    const s = std.fmt.bufPrint(&buf, "\n\x1b[2m  {s} {s}\x1b[0m\n", .{ name, clipped }) catch return;
     writeLocked(std.Io.File.stderr(), s);
 }
 
@@ -262,8 +262,8 @@ fn printOnToolEnd(ctx: ?*anyopaque, name: []const u8, is_error: bool, summary: [
     var bb: [24]u8 = undefined;
     var buf: [512]u8 = undefined;
     const s = std.fmt.bufPrint(&buf, "\x1b[{s}m{s} {s}\x1b[0m \x1b[2m{s}\x1b[0m\n", .{
-        if (is_error) "31" else "32",
-        if (is_error) "✗" else "✓",
+        if (is_error) "31" else "2",
+        if (is_error) "err" else "ok",
         name,
         activity.formatBytes(&bb, summary.len),
     }) catch return;
@@ -274,7 +274,7 @@ fn printOnToolEnd(ctx: ?*anyopaque, name: []const u8, is_error: bool, summary: [
 fn printOnNotice(ctx: ?*anyopaque, text: []const u8) anyerror!void {
     _ = ctx;
     var buf: [640]u8 = undefined;
-    const s = std.fmt.bufPrint(&buf, "\x1b[33m· {s}\x1b[0m\n", .{util.clampUtf8(text, 512)}) catch return;
+    const s = std.fmt.bufPrint(&buf, "\x1b[2m  piz  {s}\x1b[0m\n", .{util.clampUtf8(text, 512)}) catch return;
     writeLocked(std.Io.File.stderr(), s);
 }
 
@@ -295,12 +295,12 @@ fn printOnSubagent(ctx: ?*anyopaque, idx: usize, kind: agentmod.SubagentEvent, t
         else => {},
     }
     const tag = switch (kind) {
-        .tool_start => "⚙",
-        .tool_done => "✓",
-        .tool_failed => "✗",
-        .notice => "·",
-        .finished => "▣",
-        else => " ",
+        .tool_start => "tool",
+        .tool_done => "ok",
+        .tool_failed => "err",
+        .notice => "piz",
+        .finished => "done",
+        else => "-",
     };
     // clampUtf8 而非裸切片:切在多字节序列中间会产出坏字节
     const clipped = util.clampUtf8(text, 120);

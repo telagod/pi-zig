@@ -102,6 +102,7 @@ const EDIT_ITEMS = [_]HelpItem{
     .{ .cmd = "Tab", .desc = "忙碌时把输入入队" },
     .{ .cmd = "Ctrl+B", .desc = "忙碌时转后台" },
     .{ .cmd = "Ctrl+T", .desc = "折叠思考" },
+    .{ .cmd = "PgUp/PgDn", .desc = "滚动对话历史" },
     .{ .cmd = "Alt+,/.", .desc = "思考更浅 / 更深" },
     .{ .cmd = "Shift+↑/↓", .desc = "思考更浅 / 更深" },
 };
@@ -229,8 +230,7 @@ const App = struct {
         return std.fmt.bufPrint(buf, "{d}", .{n}) catch "?";
     }
 
-    /// 输入框下一行。几何符号分段,底色 dim;只有占用和思考等级出墨。
-    /// 段按重要性从左到右;窄宽度从右边丢掉,不换行。
+    /// 干活时要看的:在哪、哪个模型、思考档、授权、上下文满了没。
     fn statusLine(self: *App) ![]u8 {
         var parts = std.array_list.Managed([]const u8).init(self.alloc);
         defer {
@@ -246,20 +246,20 @@ const App = struct {
             if (self.agent.cwd[i] == '/') slash_count += 1;
         }
         if (slash_count >= 2) path_seg = self.agent.cwd[i + 1 ..];
-        try parts.append(try std.fmt.allocPrint(self.alloc, "\x1b[2m⌂ {s}", .{path_seg}));
+        try parts.append(try std.fmt.allocPrint(self.alloc, "\x1b[2m{s}", .{path_seg}));
 
         var model_seg: []const u8 = self.agent.model;
         if (std.mem.indexOfScalar(u8, model_seg, '-')) |dash| model_seg = model_seg[dash + 1 ..];
-        try parts.append(try std.fmt.allocPrint(self.alloc, "◆ {s}/{s}", .{ self.agent.provider.name, model_seg }));
+        try parts.append(try std.fmt.allocPrint(self.alloc, "{s}/{s}", .{ self.agent.provider.name, model_seg }));
 
         const tl = self.tui.think_level;
-        try parts.append(try std.fmt.allocPrint(self.alloc, "{s}◇ {s}\x1b[2m", .{ tui_mod.thinkColor(tl), tui_mod.thinkLabel(tl) }));
+        try parts.append(try std.fmt.allocPrint(self.alloc, "{s}{s}\x1b[2m", .{ tui_mod.thinkColor(tl), tui_mod.thinkLabel(tl) }));
 
-        try parts.append(try std.fmt.allocPrint(self.alloc, "{s}", .{switch (self.approval) {
-            .yolo => "⚡ yolo",
-            .ask => "? ask",
-            .read_only => "⊘ RO",
-        }}));
+        try parts.append(try self.alloc.dupe(u8, switch (self.approval) {
+            .yolo => "yolo",
+            .ask => "ask",
+            .read_only => "ro",
+        }));
 
         {
             const cw = self.agent.ctxWindow();
@@ -267,8 +267,8 @@ const App = struct {
             const pct = if (cw > 0) used * 100 / cw else 0;
             var ub: [16]u8 = undefined;
             var wb: [16]u8 = undefined;
-            const ink: []const u8 = if (pct > 85) "\x1b[0;31m" else if (pct > 50) "\x1b[0m" else "";
-            try parts.append(try std.fmt.allocPrint(self.alloc, "◔ {s}{d}%\x1b[2m {s}/{s}", .{
+            const ink: []const u8 = if (pct > 85) "\x1b[0;31m" else "";
+            try parts.append(try std.fmt.allocPrint(self.alloc, "{s}{d}%\x1b[2m {s}/{s}", .{
                 ink,
                 pct,
                 fmtTok(&ub, @as(u64, used)),
@@ -278,38 +278,10 @@ const App = struct {
 
         if (gitBranch(self.alloc)) |br| {
             defer self.alloc.free(br);
-            try parts.append(try std.fmt.allocPrint(self.alloc, "⎇ {s}", .{br}));
+            try parts.append(try std.fmt.allocPrint(self.alloc, "{s}", .{br}));
         }
-
-        if (self.last_usage.cache_read) |c| {
-            const w_tok = self.last_usage.cache_write orelse 0;
-            const total = c + w_tok + (self.last_usage.input orelse 0);
-            if (total > 0) {
-                if (c > 0) {
-                    try parts.append(try std.fmt.allocPrint(self.alloc, "▣ {d}%", .{c * 100 / total}));
-                } else if (w_tok > 0) {
-                    try parts.append(try self.alloc.dupe(u8, "▣ warm"));
-                }
-            }
-        }
-        if (self.last_usage.input) |inp| {
-            var ib: [16]u8 = undefined;
-            var ob: [16]u8 = undefined;
-            const out = self.last_usage.output orelse 0;
-            try parts.append(try std.fmt.allocPrint(self.alloc, "↕ {s}↑{s}↓", .{ fmtTok(&ib, inp), fmtTok(&ob, out) }));
-        }
-        if (self.tokens_total > 0) {
-            const now_ns = std.Io.Clock.now(.real, util.io).nanoseconds;
-            const elapsed_s = @max(1, @divTrunc(now_ns - self.start_ns, std.time.ns_per_s));
-            try parts.append(try std.fmt.allocPrint(self.alloc, "▸ {d}t/s", .{self.tokens_total / @as(usize, @intCast(elapsed_s))}));
-        }
-        if (self.agent.compacts > 0)
-            try parts.append(try std.fmt.allocPrint(self.alloc, "↻{d}", .{self.agent.compacts}));
-        const qn = self.queue.items.len;
-        if (qn > 0) try parts.append(try std.fmt.allocPrint(self.alloc, "≡{d}", .{qn}));
-        try parts.append(try std.fmt.allocPrint(self.alloc, "¶{d}", .{self.agent.messages.items.len}));
-        if (self.sess.title) |tt|
-            try parts.append(try std.fmt.allocPrint(self.alloc, "“{s}”", .{tt}));
+        if (self.queue.items.len > 0)
+            try parts.append(try std.fmt.allocPrint(self.alloc, "queue {d}", .{self.queue.items.len}));
 
         const width = @max(self.tui.width, 20);
         const joined = try tui_mod.joinFit(self.alloc, parts.items, "  ", width);
@@ -407,14 +379,11 @@ fn tuiOnToolStart(ctx: ?*anyopaque, name: []const u8, args: []const u8) anyerror
     buf.appendSlice(name) catch {};
     const preview = toolArgsPreview(args);
     if (preview.len > 0) {
-        buf.appendSlice("  \x1b[2m") catch {};
-        const head = preview[0..@min(preview.len, 120)];
-        buf.appendSlice(head) catch {};
-        if (preview.len > 120) buf.appendSlice("…") catch {};
-        buf.appendSlice("\x1b[0m") catch {};
+        buf.appendSlice("  ") catch {};
+        buf.appendSlice(preview[0..@min(preview.len, 120)]) catch {};
+        if (preview.len > 120) buf.appendSlice("...") catch {};
     }
-    app.tui.appendLine("", "", buf.items) catch {};
-    // 事件 payload 用临时 arena:emit 不接管所有权,jsonString 也各自分配
+    app.tui.appendLine("", "\x1b[2m", buf.items) catch {};
     var ea = util.Arena.init(app.alloc);
     defer ea.deinit();
     const ealloc = ea.allocator();
@@ -428,14 +397,13 @@ fn tuiOnToolEnd(ctx: ?*anyopaque, name: []const u8, is_error: bool, summary: []c
     const app: *App = @ptrCast(@alignCast(ctx.?));
     var buf = std.array_list.Managed(u8).init(app.alloc);
     defer buf.deinit();
-    buf.appendSlice(if (is_error) "  ✗ " else "  ✓ ") catch {};
+    buf.appendSlice("  ") catch {};
     buf.appendSlice(name) catch {};
     // 输出规模:工具产出整体进了模型上下文而用户看不到内容,
     // 至少让他知道这一步吃掉了多少 —— 12KB 和 40B 是完全不同的信号。
     var bb: [24]u8 = undefined;
-    buf.appendSlice(" \x1b[2m") catch {};
+    buf.appendSlice(if (is_error) "  err  " else "  ") catch {};
     buf.appendSlice(activity.formatBytes(&bb, summary.len)) catch {};
-    buf.appendSlice("\x1b[0m") catch {};
     app.tui.appendLine("", if (is_error) "\x1b[31m" else "\x1b[2m", buf.items) catch {};
     var ea = util.Arena.init(app.alloc);
     defer ea.deinit();
@@ -471,9 +439,9 @@ fn applyApproval(app: *App, mode: cfgmod.ApprovalMode) void {
 
 fn openApprovalPicker(app: *App) void {
     const items = [_]tui_mod.PickerItem{
-        .{ .label = "⚡ yolo", .hint = "不询问", .value = "yolo" },
-        .{ .label = "? ask", .hint = "危险工具先问", .value = "ask" },
-        .{ .label = "⊘ read-only", .hint = "拒绝危险工具", .value = "read-only" },
+        .{ .label = "yolo", .hint = "不询问", .value = "yolo" },
+        .{ .label = "ask", .hint = "危险工具先问", .value = "ask" },
+        .{ .label = "read-only", .hint = "拒绝危险工具", .value = "read-only" },
     };
     const sel: usize = switch (app.approval) {
         .yolo => 0,
@@ -531,13 +499,13 @@ fn tuiOnTurnEnd(ctx: ?*anyopaque) anyerror!void {
     app.events.emit("turn_end", "");
 }
 
-/// 引擎级告知:自愈动作、限额触顶。用 dim 加 `·` 前缀与模型输出区分开 ——
+/// 引擎级告知:自愈动作、限额触顶。用 dim 加 `piz` 前缀与模型输出区分开 ——
 /// 用户要能一眼看出「这是 piz 在说话」而不是模型在说。
 fn tuiOnNotice(ctx: ?*anyopaque, text: []const u8) anyerror!void {
     const app: *App = @ptrCast(@alignCast(ctx.?));
     var buf = std.array_list.Managed(u8).init(app.alloc);
     defer buf.deinit();
-    buf.appendSlice("· ") catch {};
+    buf.appendSlice("  piz  ") catch {};
     buf.appendSlice(text) catch {};
     app.tui.appendLine("", "\x1b[2m", buf.items) catch {};
 }
@@ -553,12 +521,12 @@ fn tuiOnSubagent(ctx: ?*anyopaque, idx: usize, kind: agentmod.SubagentEvent, tex
     }
     const app: *App = @ptrCast(@alignCast(ctx.?));
     const tag = switch (kind) {
-        .tool_start => "⚙",
-        .tool_done => "✓",
-        .tool_failed => "✗",
-        .notice => "·",
-        .finished => "▣",
-        else => " ",
+        .tool_start => "tool",
+        .tool_done => "ok",
+        .tool_failed => "err",
+        .notice => "piz",
+        .finished => "done",
+        else => "-",
     };
     // 栈缓冲而非 app.alloc:32 路 subagent 并发调这个回调,而 app.alloc 是
     // ArenaAllocator —— 它不是线程安全的。clampUtf8 保证不切断多字节字符。
@@ -875,7 +843,7 @@ fn onSubmit(tui: *tui_mod.Tui, line: []const u8) anyerror!void {
                 return;
             }
             app.sess.truncate(app.agent.messages.items.len) catch {};
-            app.tui.appendLine("", "\x1b[2m", "↶ undone last turn") catch {};
+            app.tui.appendLine("", "\x1b[2m", "undone last turn") catch {};
             return;
         }
         if (std.mem.eql(u8, cmd, "model") or std.mem.startsWith(u8, cmd, "model ")) {
@@ -1057,7 +1025,7 @@ fn onSubmit(tui: *tui_mod.Tui, line: []const u8) anyerror!void {
             app.loadSession(new_sess) catch {};
             var bw = std.Io.Writer.Allocating.init(app.alloc);
             defer bw.deinit();
-            bw.writer.print("🌿 forked {d} messages → session {s}", .{ n, std.fs.path.basename(app.sess.path) }) catch {};
+            bw.writer.print("forked {d} messages -> session {s}", .{ n, std.fs.path.basename(app.sess.path) }) catch {};
             app.tui.appendLine("", "\x1b[2m", bw.written()) catch {};
             const st = app.statusLine() catch return;
             app.tui.setStatus("\x1b[0m", st) catch {};
@@ -1069,10 +1037,10 @@ fn onSubmit(tui: *tui_mod.Tui, line: []const u8) anyerror!void {
             bw.writer.print("{d} messages:\n", .{app.agent.messages.items.len}) catch {};
             for (app.agent.messages.items, 0..) |m, i| {
                 const tag: []const u8 = switch (m.role[0]) {
-                    'u' => "❯",
-                    'a' => "←",
-                    't' => "⚙",
-                    else => "·",
+                    'u' => ">",
+                    'a' => "<",
+                    't' => "tool",
+                    else => "-",
                 };
                 const head = m.content[0..@min(m.content.len, 50)];
                 bw.writer.print("{d}. {s} {s}\n", .{ i + 1, tag, head }) catch {};

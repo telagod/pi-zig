@@ -28,7 +28,7 @@ export DEEPSEEK_API_KEY=sk-... # 或写入 ~/.piz/auth.json
 
 ## 从这里开始
 
-- [Usage](usage.md) — 交互模式、斜杠命令、CLI 参考、键位
+- [Usage](usage.md) — 交互模式、画面怎么读、斜杠命令、CLI、键位、限额
 - [Tools](tools.md) — 内置工具完整参考，含每个工具的参数 schema
 - [Configuration](configuration.md) — 配置文件、provider、认证、环境变量
 - [Web UI](web-ui.md) — `piz web` 的启动、鉴权与端点

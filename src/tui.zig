@@ -1,8 +1,8 @@
 // tui.zig — 极简交互终端:raw mode、alt screen、流式渲染、行编辑、历史、斜杠命令。
-// 设计取舍:无分页滚动、无鼠标、无补全——保持内核最小。
-// 布局跟 Codex:对话软换行,思考是可折叠块,输入跟在对话后面而不是钉死在屏幕底。
-// /permissions /model /think 无参数时弹出选择器(↑↓ Enter Esc),不走补全。
-// 底栏一行:指令提示(退出/Esc/选择器/授权)替换状态,不另占一行。
+// 设计取舍:无鼠标、无补全。输入和状态钉在屏幕底,对话在上面滚。
+// 软换行,思考可折叠。铬层不用表情符号。PageUp/PageDown 滚历史。
+// /permissions /model /think 无参数时弹出选择器。
+// 底栏永远画状态;有提示时写在状态前面,不把状态换掉。
 const std = @import("std");
 const util = @import("core").util;
 const activity = @import("core").activity;
@@ -125,13 +125,21 @@ pub const Picker = struct {
     }
 };
 
-/// 底栏指令优先于状态。perm > picker > quit > esc。
-pub fn footerHint(perm: bool, picker: bool, quit_armed: bool, esc_armed: bool) ?[]const u8 {
+/// 底栏指令优先于状态。perm > picker > quit > esc > scrolled。
+pub fn footerHint(perm: bool, picker: bool, quit_armed: bool, esc_armed: bool, scrolled: bool) ?[]const u8 {
     if (perm) return "y 允许  n 拒绝  a 全权  s 会话";
-    if (picker) return "↑↓ 选择  Enter 确认  Esc 取消";
+    if (picker) return "up/down 选择  Enter 确认  Esc 取消";
     if (quit_armed) return "再按一次退出";
     if (esc_armed) return "再按 Esc 编辑上一条";
+    if (scrolled) return "PgUp/PgDn 滚动";
     return null;
+}
+
+/// skip = 从对话顶裁掉的行数。off=0 钉住底。
+pub fn scrollSkip(off: usize, total: usize, view: usize) usize {
+    const pin = if (total > view) total - view else 0;
+    const o = @min(off, pin);
+    return pin - o;
 }
 
 pub const Tui = struct {
@@ -168,7 +176,7 @@ pub const Tui = struct {
     think_at: ?usize = null,
     think_open: bool = true,
     last_think_len: usize = 0,
-    /// 用户选的思考等级。状态栏 ◇ 显示它,不是按思考字数猜。
+    /// 用户选的思考等级。状态栏用文字显示它,不是按思考字数猜。
     think_level: ai.ThinkLevel = .high,
     think_meta: cfgmod.ModelMeta = .{ .reasoning = true },
     /// Codex:空 composer 上 Ctrl+C/D 先武装 1 秒,再按同一键才退出。
@@ -178,6 +186,10 @@ pub const Tui = struct {
     esc_armed: bool = false,
     /// 斜杠命令弹出的选择器。有值时键盘不进 composer。
     picker: ?Picker = null,
+    /// 相对钉住底部往上滚了多少行。0 = 跟着最新。
+    scroll_off: usize = 0,
+    /// 上一帧能滚的最大偏移,给 PageUp 用。
+    last_pin: usize = 0,
 
     pub fn init(alloc: std.mem.Allocator) !Tui {
         const in_fd = std.posix.STDIN_FILENO;
@@ -378,7 +390,8 @@ pub const Tui = struct {
             .user => true,
             .think => from == .user,
             .text => from == .user or from == .think or from == .chrome,
-            .chrome, .none => false,
+            .chrome => from == .text or from == .user,
+            .none => false,
         };
         if (gap) {
             try self.text.append('\n');
@@ -486,8 +499,9 @@ pub const Tui = struct {
         try self.bakeThinkLocked();
         try self.beginBlockLocked(.user);
         try self.text.appendSlice(ANSI_DIM);
-        try self.text.appendSlice("❯ ");
+        try self.text.appendSlice("> ");
         try self.text.appendSlice(ANSI_RESET);
+        self.scroll_off = 0;
         try self.appendStyledLocked(s);
         try self.text.appendSlice(ANSI_RESET);
         try self.ensureNlLocked();
@@ -528,6 +542,7 @@ pub const Tui = struct {
         self.think_buf.clearRetainingCapacity();
         self.think_at = null;
         self.think_open = true;
+        self.scroll_off = 0;
         self.dirty.store(true, .release);
     }
 
@@ -545,7 +560,7 @@ pub const Tui = struct {
         // 活动行最多占屏幕的三分之一 —— 8 个并行工具不该淹掉对话内容
         const act_cap = @max(1, h / 3);
         if (nact > act_cap) nact = act_cap;
-        // 底栏只留状态;输入跟在对话后面。内容太长时滚窗口吃掉上沿。
+        // 输入和状态钉在屏幕底。对话占剩下的行,太长从顶裁。
         var perm_lines: usize = 0;
         if (self.perm_prompt.load(.acquire)) |pp| {
             perm_lines = 1;
@@ -572,7 +587,10 @@ pub const Tui = struct {
         }
         if (self.think_at == nlines) total_vis += thinkRowCount(self.think_buf.items, self.think_open, w);
 
-        var skip = if (total_vis > scroll_h) total_vis - scroll_h else 0;
+        const pin = if (total_vis > scroll_h) total_vis - scroll_h else 0;
+        if (self.scroll_off > pin) self.scroll_off = pin;
+        self.last_pin = pin;
+        var skip = pin - self.scroll_off;
         var emitted: usize = 0;
         li = 0;
         while (li < nlines) : (li += 1) {
@@ -602,8 +620,10 @@ pub const Tui = struct {
                 emitted += try emitThink(&fw.writer, self.think_buf.items, self.think_open, w, skip, scroll_h - emitted);
             }
         }
-        // 活动行:每个在跑的工具/请求/子 agent 一行,带 spinner + 耗时 + 进度。
-        // 放在状态栏之上,紧贴输入区 —— 用户视线本来就在这里。
+        while (emitted < scroll_h) : (emitted += 1) {
+            try fw.writer.writeAll("\r\n");
+        }
+        // 活动行紧贴输入。
         if (nact > 0) {
             const frame_ms = @as(i64, @intCast(@divTrunc(std.Io.Clock.now(.awake, util.io).nanoseconds, std.time.ns_per_ms)));
             for (views[0..nact]) |v| {
@@ -650,7 +670,7 @@ pub const Tui = struct {
                 try fw.writer.writeAll(ANSI_RESET ++ "\r\n");
             }
         }
-        try fw.writer.writeAll(ANSI_DIM ++ "❯ " ++ ANSI_RESET);
+        try fw.writer.writeAll(ANSI_DIM ++ "> " ++ ANSI_RESET);
         try fw.writer.writeAll(self.input.items);
         try fw.writer.writeAll("\x1b[K\r\n");
         try fw.writer.writeAll(ANSI_RESET);
@@ -659,17 +679,25 @@ pub const Tui = struct {
             self.picker != null,
             self.quit_arm_ns != 0,
             self.esc_armed,
+            self.scroll_off > 0,
         );
+        var foot_used: usize = 0;
         if (hint) |msg| {
             try fw.writer.writeAll(ANSI_DIM);
             try writeTrunc(&fw.writer, msg, w);
             try fw.writer.writeAll(ANSI_RESET);
-        } else {
+            foot_used = visibleCols(msg);
+            if (foot_used + 2 < w) {
+                try fw.writer.writeAll("  ");
+                foot_used += 2;
+            }
+        }
+        if (foot_used < w) {
             try fw.writer.writeAll(self.status_style);
-            try writeTrunc(&fw.writer, self.status.items, w);
+            try writeTrunc(&fw.writer, self.status.items, w - foot_used);
             try fw.writer.writeAll(ANSI_RESET);
         }
-        const input_row = @max(@as(usize, 1), @min(h -| 1, 1 + emitted + nact + perm_lines + picker_rows));
+        const input_row = @max(@as(usize, 1), h -| 1);
         const typed = activity.displayWidth(self.input.items[0..@min(self.cursor, self.input.items.len)]);
         const col = @max(@as(usize, 1), @min(w, 3 + typed));
         try fw.writer.print("\x1b[{d};{d}H", .{ input_row, col });
@@ -826,6 +854,8 @@ pub const Tui = struct {
                     switch (classifyCsi(params, final)) {
                         .up => self.historyPrev(),
                         .down => self.historyNext(),
+                        .page_up => self.scrollBy(@intCast(self.pageRows())),
+                        .page_down => self.scrollBy(-@as(isize, @intCast(self.pageRows()))),
                         .shift_up => {
                             self.cycleThink(true);
                             return .think;
@@ -1015,6 +1045,8 @@ pub const Tui = struct {
                         switch (classifyCsi(params, final)) {
                             .up => p.move(-1),
                             .down => p.move(1),
+                            .page_up => self.scrollBy(@intCast(self.pageRows())),
+                            .page_down => self.scrollBy(-@as(isize, @intCast(self.pageRows()))),
                             else => {},
                         }
                     }
@@ -1053,6 +1085,20 @@ pub const Tui = struct {
             return .none;
         self.closePicker();
         return .{ .submit = line };
+    }
+
+    fn pageRows(self: *const Tui) usize {
+        return @max(1, self.height / 2);
+    }
+
+    fn scrollBy(self: *Tui, delta: isize) void {
+        if (delta < 0) {
+            const d: usize = @intCast(-delta);
+            self.scroll_off = if (self.scroll_off > d) self.scroll_off - d else 0;
+        } else {
+            self.scroll_off = @min(self.last_pin, self.scroll_off + @as(usize, @intCast(delta)));
+        }
+        self.dirty.store(true, .release);
     }
 
     fn cycleThink(self: *Tui, up: bool) void {
@@ -1275,7 +1321,7 @@ fn emitWrapped(wr: *std.Io.Writer, line: []const u8, width: usize, skip: usize, 
     return emitWrappedPrefixed(wr, "", line, width, skip, limit);
 }
 
-const CsiKey = enum { up, down, left, right, home, end, delete, shift_up, shift_down, other };
+const CsiKey = enum { up, down, left, right, home, end, delete, page_up, page_down, shift_up, shift_down, other };
 
 fn csiShift(params: []const u8) bool {
     if (std.mem.lastIndexOfScalar(u8, params, ';')) |i| {
@@ -1293,7 +1339,12 @@ fn classifyCsi(params: []const u8, final: u8) CsiKey {
         'D' => .left,
         'H' => .home,
         'F' => .end,
-        '~' => if (std.mem.eql(u8, params, "3")) .delete else .other,
+        '~' => blk: {
+            if (std.mem.eql(u8, params, "3") or std.mem.startsWith(u8, params, "3;")) break :blk .delete;
+            if (std.mem.eql(u8, params, "5") or std.mem.startsWith(u8, params, "5;")) break :blk .page_up;
+            if (std.mem.eql(u8, params, "6") or std.mem.startsWith(u8, params, "6;")) break :blk .page_down;
+            break :blk .other;
+        },
         else => .other,
     };
 }
@@ -1398,7 +1449,7 @@ pub fn writeActivityLine(wr: *std.Io.Writer, v: activity.View, frame_ms: i64, wi
     var used: usize = 0;
     // spinner:转后台的活动不转 —— 它不再占用前台注意力
     if (v.detached) {
-        try wr.writeAll(ANSI_DIM ++ "⏻" ++ ANSI_RESET ++ " ");
+        try wr.writeAll(ANSI_DIM ++ "~" ++ ANSI_RESET ++ " ");
     } else {
         try wr.writeAll(ANSI_DIM);
         try wr.writeAll(activity.spinnerFrame(frame_ms));
@@ -1549,16 +1600,28 @@ test "CSI shift arrows and delete" {
     try t.expect(classifyCsi("1;2", 'B') == .shift_down);
     try t.expect(classifyCsi("2", 'A') == .shift_up);
     try t.expect(classifyCsi("3", '~') == .delete);
+    try t.expect(classifyCsi("5", '~') == .page_up);
+    try t.expect(classifyCsi("6", '~') == .page_down);
     try t.expect(classifyCsi("", 'H') == .home);
 }
 
 test "footer hint wins over status" {
     const t = std.testing;
-    try t.expectEqualStrings("y 允许  n 拒绝  a 全权  s 会话", footerHint(true, true, true, true).?);
-    try t.expectEqualStrings("↑↓ 选择  Enter 确认  Esc 取消", footerHint(false, true, true, true).?);
-    try t.expectEqualStrings("再按一次退出", footerHint(false, false, true, true).?);
-    try t.expectEqualStrings("再按 Esc 编辑上一条", footerHint(false, false, false, true).?);
-    try t.expect(footerHint(false, false, false, false) == null);
+    try t.expectEqualStrings("y 允许  n 拒绝  a 全权  s 会话", footerHint(true, true, true, true, true).?);
+    try t.expectEqualStrings("up/down 选择  Enter 确认  Esc 取消", footerHint(false, true, true, true, true).?);
+    try t.expectEqualStrings("再按一次退出", footerHint(false, false, true, true, true).?);
+    try t.expectEqualStrings("再按 Esc 编辑上一条", footerHint(false, false, false, true, true).?);
+    try t.expectEqualStrings("PgUp/PgDn 滚动", footerHint(false, false, false, false, true).?);
+    try t.expect(footerHint(false, false, false, false, false) == null);
+}
+
+test "scrollSkip pins to bottom then walks up" {
+    const t = std.testing;
+    try t.expectEqual(@as(usize, 10), scrollSkip(0, 20, 10));
+    try t.expectEqual(@as(usize, 5), scrollSkip(5, 20, 10));
+    try t.expectEqual(@as(usize, 0), scrollSkip(10, 20, 10));
+    try t.expectEqual(@as(usize, 0), scrollSkip(99, 20, 10));
+    try t.expectEqual(@as(usize, 0), scrollSkip(0, 5, 10));
 }
 
 test "joinFit drops trailing segments then truncates" {
@@ -1579,9 +1642,9 @@ test "joinFit drops trailing segments then truncates" {
 test "picker moves, confirms, and stays exclusive" {
     const t = std.testing;
     const items = [_]PickerItem{
-        .{ .label = "⚡ yolo", .hint = "不询问", .value = "yolo" },
-        .{ .label = "? ask", .hint = "危险工具先问", .value = "ask" },
-        .{ .label = "⊘ read-only", .value = "read-only" },
+        .{ .label = "yolo", .hint = "不询问", .value = "yolo" },
+        .{ .label = "ask", .hint = "危险工具先问", .value = "ask" },
+        .{ .label = "read-only", .value = "read-only" },
     };
     var p = try Picker.init(t.allocator, "permissions", "授权", &items, 0);
     defer p.deinit(t.allocator);

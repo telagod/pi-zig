@@ -2467,7 +2467,7 @@
                     class="perm-pill perm-allow"
                     id="permPill"
                     title="授权模式"
-                    >⚡ 全权</span
+                    >yolo</span
                   >
                   <span class="mode-pill" id="modePill" title="斜杠命令"
                     >/ 命令<span
@@ -2477,14 +2477,14 @@
                     ></span
                   ></span>
                   <span class="mode-pill" id="hModel" title="切换模型">…</span>
-                  <span class="mode-pill" id="hThink" title="思考等级">◇ high</span>
+                  <span class="mode-pill" id="hThink" title="思考等级">high</span>
                   <span id="turnMeta" class="turn-meta" hidden></span>
                   <button
                     class="compact-chip"
                     id="compactChip"
                     style="display: none"
                   >
-                    ⚡ 上下文已满
+                    上下文已满
                   </button>
                 </div>
                 <div class="toolbar-right">
@@ -3410,7 +3410,7 @@
       function renderThink() {
         const el = $("hThink");
         if (!el) return;
-        el.textContent = "◇ " + (curThink || "high");
+        el.textContent = curThink || "high";
         el.title = "思考 " + (curThink || "high");
       }
       function setThink(level) {
@@ -3447,9 +3447,9 @@
       // ---- 授权模式(Codex /permissions: yolo / ask / read-only) ----
       let approvalMode = "yolo";
       const APPROVALS = [
-        { id: "yolo", label: "⚡ 全权", hint: "不询问，默认" },
-        { id: "ask", label: "? 询问", hint: "危险工具先问" },
-        { id: "read-only", label: "⊘ 只读", hint: "危险工具直接拒" },
+        { id: "yolo", label: "yolo", hint: "不询问，默认" },
+        { id: "ask", label: "ask", hint: "危险工具先问" },
+        { id: "read-only", label: "read-only", hint: "危险工具直接拒" },
       ];
       function setModeBtn() {
         const p = $("permPill");

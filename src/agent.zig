@@ -1,4 +1,4 @@
-// agent.zig — 工具循环编排:消息组装、AGENTS.md、迭代上限、压缩、上下文裁剪。
+// agent.zig — 工具循环编排:消息组装、AGENTS.md、空转止损、压缩、上下文裁剪。
 const std = @import("std");
 pub const util = @import("util.zig");
 pub const ai = @import("ai.zig");
@@ -9,7 +9,6 @@ const seams = @import("seams.zig");
 const httpcmod = @import("httpc.zig");
 const imgxmod = @import("imgx.zig");
 
-pub const MAX_TOOL_ITER = 24;
 /// 消息列表的预分配容量。
 ///
 /// 跨线程读安全契约:worker 线程 append 消息的同时,HTTP/主线程会无锁读
@@ -731,7 +730,6 @@ pub const Agent = struct {
             }
         }
         var last_result = ai.RunResult{};
-        var iter: usize = 0;
         // 断线续跑计数:一轮之内累计,不因迭代推进而重置。
         var stream_retries: usize = 0;
         // 空转检测有两个判据:调用完全相同(参数级),或成功输出完全相同(结果级)。
@@ -750,7 +748,8 @@ pub const Agent = struct {
         // 模型把工具调用写成正文的重试次数。给 2 次:一次纠正通常够,
         // 再多就是这个模型在这个模式下压不住,该把实情告诉用户。
         var fake_call_retries: usize = 0;
-        while (iter < MAX_TOOL_ITER) : (iter += 1) {
+        // 无步数帽。pi 也没有。空转由相同调用 / 相同输出两条判据收,用户 Esc 中止。
+        while (true) {
             if (self.aborted.load(.acquire)) return error.Aborted;
             // 组装完整消息(system 在前)
             var all = std.array_list.Managed(ai.Message).init(self.alloc);
@@ -881,10 +880,10 @@ pub const Agent = struct {
 
             // 空转检测:模型反复发同一批工具调用。
             //
-            // 实测某些模型拿到工具结果后不收尾,原样重发同一个调用,把 24 轮
-            // 迭代额度全烧在一条 `echo hi` 上 —— 请求体、tool_call_id、结果回传
+            // 实测某些模型拿到工具结果后不收尾,原样重发同一个调用,
+            // 把一轮全烧在一条 `echo hi` 上 —— 请求体、tool_call_id、结果回传
             // 全都正确,是模型侧行为。piz 拦不住它想调什么,但可以在结果里
-            // 直说「你在重复」,并在连续多轮后停下,而不是默默转到额度耗尽。
+            // 直说「你在重复」,并在连续多轮后停下。
             const same_as_last = sameToolCalls(last_calls, result.tool_calls);
             if (same_as_last) {
                 repeat_rounds += 1;
@@ -910,7 +909,6 @@ pub const Agent = struct {
                     continue;
                 }
                 // 劝过还在重复:这是死循环换了个形状,停下并把已有内容交出去。
-                // 继续烧迭代额度只是把同一件事重复到 24 轮。
                 if (self.cbs.on_notice) |f| {
                     var nb: [220]u8 = undefined;
                     const msg = std.fmt.bufPrint(&nb, "stopped: the model kept repeating {s} even after being told to stop — the tool results above are correct, the model is not using them", .{result.tool_calls[0].name}) catch "stopped: the model would not stop repeating one tool call";
@@ -925,7 +923,6 @@ pub const Agent = struct {
             // ---- 工具执行:串行 preflight(权限/拦截)→ 并行执行 → 按原序写回 ----
             // 顺序保证:模型看到的 tool 结果顺序必须与它发出的 tool_calls 顺序一致,
             // 否则同一对话重放会得到不同上下文。故并行只作用于执行阶段。
-            var any_error = false;
             const n = result.tool_calls.len;
             const slots = try self.alloc.alloc(ToolSlot, n);
             defer self.alloc.free(slots);
@@ -998,9 +995,8 @@ pub const Agent = struct {
                         tres.content = new_content;
                     }
                 }
-                if (tres.is_error) any_error = true;
                 // 输出指纹:同一份成功输出被反复拿到,说明模型没在用它。
-                // 只看成功的 —— 错误反复相同是模型在试错,那由迭代上限兜。
+                // 只看成功的 —— 错误反复相同是模型在试错,用户 Esc 可停。
                 if (!tres.is_error) {
                     const fp = outputFingerprint(slot.call.name, tres.content);
                     if (fp == last_output_fp) {
@@ -1065,18 +1061,7 @@ pub const Agent = struct {
                 if (self.cbs.on_turn_end) |f| try f(self.cbs.ctx);
                 return last_result;
             }
-            if (any_error and iter + 1 >= MAX_TOOL_ITER) break;
         }
-        // 循环额度用尽。原先这里静默返回,用户无法区分「模型自己收工」和
-        // 「被系统截断」—— 后者意味着活儿可能只干了一半,必须说出来。
-        if (self.cbs.on_notice) |f| {
-            var nb: [160]u8 = undefined;
-            const msg = std.fmt.bufPrint(&nb, "hit the {d}-step tool limit for one turn — work may be unfinished; send another message to continue", .{MAX_TOOL_ITER}) catch "hit the tool-iteration limit for one turn";
-            f(self.cbs.ctx, msg) catch {};
-        }
-        salvageText(self.alloc, &last_result, last_good_tool, last_good_output, self.cbs);
-        if (self.cbs.on_turn_end) |f| try f(self.cbs.ctx);
-        return last_result;
     }
 
     /// 撤销最近一轮:删除最后一条 user 消息及其后所有消息。

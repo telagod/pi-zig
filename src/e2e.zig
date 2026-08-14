@@ -770,7 +770,7 @@ test "identical tool calls in a row are cut off well before the iteration limit"
     // 远早于 24 轮就停了。阈值 2 → 劝一次 → 再重复 2 轮 → 停,约 6 轮。
     const reqs = state.requests.load(.acquire);
     try t.expect(reqs >= 3); // 至少要观察到重复才判定
-    try t.expect(reqs <= 8); // 关键:不是烧到 MAX_TOOL_ITER=24
+    try t.expect(reqs <= 8); // 空转判据应早停,不是无限转
 }
 
 // ---------------------------------------------------------------------
@@ -859,7 +859,7 @@ test "different commands that return identical output are also cut off" {
     try t.expect(state.nudge_seen.load(.acquire));
     const reqs = state.requests.load(.acquire);
     try t.expect(reqs >= 3);
-    try t.expect(reqs <= 9); // 远早于 MAX_TOOL_ITER=24
+    try t.expect(reqs <= 9); // 空转判据应早停
 }
 
 // ---------------------------------------------------------------------
@@ -872,8 +872,8 @@ const SalvageState = struct {
     requests: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
 };
 
-/// 永远只发 tool_calls,一个字正文都不发 —— 复现「模型烧光额度也不给结论」。
-/// 每轮命令不同且输出不同,好让两条空转判据都不触发,逼到迭代上限那条路径。
+/// 永远只发同一条 tool_call,一个字正文都不发 —— 复现「模型空转也不给结论」。
+/// 相同调用会触发空转判据,止损时要把最后一份工具输出交出去。
 fn salvageServerMain(state: *SalvageState) void {
     const addr = std.Io.net.IpAddress.parseIp4("127.0.0.1", state.port) catch return;
     var server = addr.listen(util.io, .{ .reuse_address = true }) catch return;
@@ -894,13 +894,10 @@ fn salvageServerMain(state: *SalvageState) void {
         _ = readFd(fd, &rbuf) catch continue;
         const req_no = state.requests.fetchAdd(1, .acq_rel) + 1;
 
-        // 每轮 echo 不同的数字:输出各不相同,空转判据不触发。
-        var cbuf: [64]u8 = undefined;
-        const cmd = std.fmt.bufPrint(&cbuf, "echo round-{d}", .{req_no}) catch continue;
         var sbuf: [1024]u8 = undefined;
-        const sse = std.fmt.bufPrint(&sbuf, "data: {{\"choices\":[{{\"delta\":{{\"tool_calls\":[{{\"index\":0,\"id\":\"c{d}\",\"type\":\"function\",\"function\":{{\"name\":\"bash\",\"arguments\":\"{{\\\"command\\\":\\\"{s}\\\"}}\"}}}}]}},\"finish_reason\":null}}]}}\n\n" ++
+        const sse = std.fmt.bufPrint(&sbuf, "data: {{\"choices\":[{{\"delta\":{{\"tool_calls\":[{{\"index\":0,\"id\":\"c{d}\",\"type\":\"function\",\"function\":{{\"name\":\"bash\",\"arguments\":\"{{\\\"command\\\":\\\"echo salvage-marker\\\"}}\"}}}}]}},\"finish_reason\":null}}]}}\n\n" ++
             "data: {{\"choices\":[{{\"delta\":{{}},\"finish_reason\":\"tool_calls\"}}]}}\n\n" ++
-            "data: [DONE]\n\n", .{ req_no, cmd }) catch continue;
+            "data: [DONE]\n\n", .{req_no}) catch continue;
         var hbuf: [256]u8 = undefined;
         const head = std.fmt.bufPrint(&hbuf, "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {d}\r\nconnection: close\r\n\r\n", .{sse.len}) catch continue;
         _ = writeFd(fd, head) catch {};
@@ -935,7 +932,7 @@ test "cutoff with no model text hands back the last tool output" {
     // 关键:模型一个字正文都没发,但用户不能拿到空回复 ——
     // 答案在最后一份工具输出里,piz 要把它交出来。
     try t.expect(res.text.len > 0);
-    try t.expect(std.mem.indexOf(u8, res.text, "round-") != null);
+    try t.expect(std.mem.indexOf(u8, res.text, "salvage-marker") != null);
     // 必须说清这是原始工具输出,不能让用户误以为模型作过判断
     try t.expect(std.mem.indexOf(u8, res.text, "原始输出") != null);
 }
