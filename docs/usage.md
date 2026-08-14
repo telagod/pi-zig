@@ -29,8 +29,8 @@ piz -n           # 新会话，不续载
 **工具执行默认逐次询问。** 每次工具调用会弹出授权提示：
 
 ```
-? bash: cargo test --lib
-  [y] 允许  [n] 拒绝  [a] 本会话总是允许  [s] 跳过本次
+? bash  {"command":"zig test src/parser.zig"}
+  [y] 允许  [n] 拒绝  [a] 本会话总是  [s] 跳过
 ```
 
 用 `-x` 关掉询问（工具自动执行），用 `-r` 走只读模式（一个工具都不发，连 `read` 也没有 —— 见 [Tools](tools.md)）。

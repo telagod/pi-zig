@@ -299,7 +299,7 @@ fn tuiOnToolEnd(ctx: ?*anyopaque, name: []const u8, is_error: bool, summary: []c
 fn tuiOnTurnEnd(ctx: ?*anyopaque) anyerror!void {
     const app: *App = @ptrCast(@alignCast(ctx.?));
     const st = app.statusLine() catch return;
-    app.tui.setStatus("\x1b[2m", st) catch {};
+    app.tui.setStatus("\x1b[0m", st) catch {};
     app.events.emit("turn_end", "");
 }
 
@@ -349,13 +349,13 @@ fn tuiOnRequirePermission(ctx: ?*anyopaque, name: []const u8, args: []const u8) 
     if (app.read_only) return false;
     // 构建提示(截断 args)
     app.perm.buf.clearRetainingCapacity();
-    try app.perm.buf.appendSlice("⛔ run ");
+    try app.perm.buf.appendSlice("\x1b[38;2;77;107;254m?\x1b[0m ");
     try app.perm.buf.appendSlice(name);
-    try app.perm.buf.append(' ');
+    try app.perm.buf.appendSlice("  ");
     const head = args[0..@min(args.len, 160)];
     try app.perm.buf.appendSlice(head);
     if (args.len > 160) try app.perm.buf.appendSlice("…");
-    try app.perm.buf.appendSlice("   [y]es [n]o [a]lways [s]kip");
+    try app.perm.buf.appendSlice("\n  \x1b[32m[y]\x1b[0m 允许  \x1b[31m[n]\x1b[0m 拒绝  \x1b[36m[a]\x1b[0m 本会话总是  \x1b[2m[s]\x1b[0m 跳过");
     app.perm.decision.store(0, .release);
     app.perm.pending.store(true, .release);
     app.perm.slice = app.perm.buf.items;
@@ -473,7 +473,7 @@ fn workerMain(wctx: *WorkerCtx) void {
         // 发布本轮后的上下文占用:主线程状态栏经它读,不碰活 messages
         app.est_ctx.store(app.agent.estTokens(), .release);
         const st = app.statusLine() catch return;
-        app.tui.setStatus("\x1b[2m", st) catch {};
+        app.tui.setStatus("\x1b[0m", st) catch {};
         if (err_msg != null) break; // 出错停止投递后续队列
     }
 }
@@ -1187,7 +1187,7 @@ pub fn runInteractive(alloc: std.mem.Allocator, cfg: *cfgmod.Config, cwd: []cons
     gw.writer.print("piz v{s} — pi 的 Zig 重写 · {s}/{s} · {s}\n/help 查看命令", .{ VERSION, agent.provider.name, agent.model, abs_cwd }) catch {};
     try tui.appendLine("", "\x1b[36m", gw.written());
     const st = try app.statusLine();
-    try tui.setStatus("\x1b[2m", st);
+    try tui.setStatus("\x1b[0m", st);
 
     // 会话续载提示
     if (loaded.len > 0) {

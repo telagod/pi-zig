@@ -319,7 +319,14 @@ pub const Tui = struct {
         const act_cap = @max(1, h / 3);
         if (nact > act_cap) nact = act_cap;
         // 滚动区 = h - 2(状态行 + 输入行) - 活动行
-        const reserved = 2 + nact;
+        var perm_lines: usize = 0;
+        if (self.perm_prompt.load(.acquire)) |pp| {
+            perm_lines = 1;
+            for (pp.*) |c| {
+                if (c == '\n') perm_lines += 1;
+            }
+        }
+        const reserved = 2 + nact + perm_lines;
         const scroll_h = if (h > reserved) h - reserved else 1;
 
         self.mutex.lock(util.io) catch {};
@@ -394,16 +401,18 @@ pub const Tui = struct {
         try fw.writer.writeAll("\r\n");
         // 权限提示行(若有)
         if (self.perm_prompt.load(.acquire)) |pp| {
-            const ps = pp.*;
-            try fw.writer.writeAll(ANSI_CYAN); // 权限提示=状态指示色
-            try fw.writer.writeAll(ps[0..@min(ps.len, w)]);
-            try fw.writer.writeAll(ANSI_RESET);
-            try fw.writer.writeAll("\r\n");
+            var rest = pp.*;
+            while (rest.len > 0) {
+                const nl = std.mem.indexOfScalar(u8, rest, '\n');
+                const line = if (nl) |n| rest[0..n] else rest;
+                rest = if (nl) |n| rest[n + 1 ..] else &.{};
+                try fw.writer.writeAll(line[0..@min(line.len, w)]);
+                try fw.writer.writeAll(ANSI_RESET);
+                try fw.writer.writeAll("\r\n");
+            }
         }
-        // 输入行
-        try fw.writer.writeAll(ANSI_GREEN);
-        try fw.writer.writeAll("❯ ");
-        try fw.writer.writeAll(ANSI_RESET);
+        // 输入行:品牌蓝,不是绿 —— 绿留给「允许 / 成功」
+        try fw.writer.writeAll("\x1b[38;2;77;107;254m❯ \x1b[0m");
         try fw.writer.writeAll(self.input.items);
         try fw.writer.print("\x1b[{d};{d}H", .{ h, 2 + self.cursor });
         try self.writeAll(try fw.toOwnedSlice());

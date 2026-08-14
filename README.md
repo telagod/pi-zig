@@ -10,12 +10,12 @@
 <p align="center">
   <img src="docs/images/tui.png" width="720" alt="piz 交互模式：状态栏、子 agent、权限门">
 </p>
-<p align="center"><sub>交互模式。状态栏带上下文占用和 cache 命中；子 agent 进 8 线程池，中间过程能看见；工具默认逐次询问。</sub></p>
+<p align="center"><sub>交互模式。状态栏带占用和 cache；子 agent 进池；工具默认逐次问。[y] 允许 [n] 拒绝 [a] 本会话总是 [s] 跳过。</sub></p>
 
 <p align="center">
   <img src="docs/images/web.png" width="720" alt="piz Web UI：侧栏会话、工具卡片、输入框">
 </p>
-<p align="center"><sub><code>piz web</code>。单进程 HTTP + SSE，页面编进二进制。URL 带一次性 token。</sub></p>
+<p align="center"><sub><code>piz web</code>，这张是跑着截的。单进程 HTTP + SSE，页面编进二进制。</sub></p>
 
 核心只做一条链路：组消息 → 调模型 → 跑工具 → 压缩。其余是编译期插件表，随二进制发布。不用的工具不进请求——少付 schema，也不打乱 prompt 前缀缓存。
 
