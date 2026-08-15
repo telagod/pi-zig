@@ -1,0 +1,26 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Zig 0.16
+        uses: mlugg/setup-zig@v1
+        with:
+          version: 0.16.0
+
+      - name: Format check
+        run: zig fmt --check build.zig src/
+
+      - name: Build (ReleaseFast)
+        run: zig build
+
+      - name: Test (unit + e2e, local mock providers only)
+        run: zig build test
