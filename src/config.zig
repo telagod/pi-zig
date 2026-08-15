@@ -212,7 +212,16 @@ pub const Provider = struct {
     /// provider 默认上下文窗口。0 = 未写,windowFor 再走目录或 DEFAULT。
     context_window: u32 = DEFAULT_CONTEXT_WINDOW,
     compat: Compat = .{},
+    /// 订阅制 provider(pi 式:codex bearer / kimi-coding / 配置显式标)。
+    /// 页脚费用后缀 (sub)。
+    subscription: bool = false,
 };
+
+/// pi 式订阅判定:配置显式标,或 codex(ChatGPT bearer)/ kimi-coding。
+pub fn providerIsSub(p: *const Provider) bool {
+    if (p.subscription) return true;
+    return std.mem.eql(u8, p.name, "codex") or std.mem.eql(u8, p.name, "kimi-coding");
+}
 
 pub fn parsePositiveU32(v: std.json.Value) ?u32 {
     switch (v) {
@@ -738,6 +747,8 @@ pub const Config = struct {
     enabled_plugins: []const []const u8 = &.{},
     /// settings.json 的 `disabled_plugins` 数组:要从出厂集关掉的插件名。
     disabled_plugins: []const []const u8 = &.{},
+    /// settings.json 的 `theme`:dark|light|auto|自定义名(读 ~/.piz/themes/{name}.json)。
+    theme: []const u8 = "auto",
     /// 加载时解析失败的配置文件名(不含路径)。
     ///
     /// 语法错误的配置会被静默当成不存在,于是用户看到的是「unknown provider」
@@ -861,6 +872,7 @@ pub const Config = struct {
                                 .model_metas = try metas.toOwnedSlice(),
                                 .context_window = context_window,
                                 .compat = parseCompat(p.object),
+                                .subscription = if (p.object.get("subscription")) |sv| sv == .bool and sv.bool else false,
                             });
                         }
                     }
@@ -940,6 +952,9 @@ pub const Config = struct {
                         }
                         self.enabled_plugins = try names.toOwnedSlice();
                     }
+                }
+                if (getStr(root, "theme")) |s| {
+                    if (s.len > 0) self.theme = s;
                 }
                 if (root.object.get("disabled_plugins")) |arr| {
                     if (arr == .array) {
@@ -1151,6 +1166,25 @@ pub const Config = struct {
         } else |_| {}
         try root.object.put(alloc, "approvalMode", .{ .string = mode.label() });
         self.default_approval = mode;
+        try writeJsonFile(alloc, path, root);
+    }
+
+    /// 写 settings.json 的 `theme`(dark|light|auto|自定义名)。
+    pub fn saveTheme(self: *Config, name: []const u8) !void {
+        const alloc = self.allocator();
+        const cfg_dir = try util.configDir(alloc);
+        defer alloc.free(cfg_dir);
+        const path = try util.joinPath(alloc, cfg_dir, "settings.json");
+        defer alloc.free(path);
+        var root = std.json.Value{ .object = .{} };
+        if (std.Io.Dir.cwd().readFileAlloc(util.io, path, alloc, .limited(2 * 1024 * 1024))) |content| {
+            defer alloc.free(content);
+            root = self.jsonVal(content) catch return error.ConfigUnparseable;
+            if (root != .object) return error.ConfigUnparseable;
+        } else |_| {}
+        const duped = try alloc.dupe(u8, name);
+        try root.object.put(alloc, "theme", .{ .string = duped });
+        self.theme = duped;
         try writeJsonFile(alloc, path, root);
     }
 
@@ -1729,4 +1763,16 @@ test "settings.json thinkingBudgets loads" {
     try c.load();
     try t.expectEqual(@as(u32, 32768), c.thinking_budgets.high);
     try t.expectEqual(@as(u32, 1024), c.thinking_budgets.minimal);
+}
+
+test "providerIsSub: codex/kimi-coding 自动,显式标,普通 provider 否" {
+    const t = std.testing;
+    const codex = Provider{ .name = "codex", .api = .openai_responses, .base_url = "https://x" };
+    const kimi = Provider{ .name = "kimi-coding", .api = .openai_completions, .base_url = "https://x" };
+    const marked = Provider{ .name = "corp", .api = .openai_completions, .base_url = "https://x", .subscription = true };
+    const plain = Provider{ .name = "deepseek", .api = .openai_completions, .base_url = "https://x" };
+    try t.expect(providerIsSub(&codex));
+    try t.expect(providerIsSub(&kimi));
+    try t.expect(providerIsSub(&marked));
+    try t.expect(!providerIsSub(&plain));
 }

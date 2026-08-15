@@ -11,6 +11,7 @@ const eventsmod = @import("core").events;
 const pluginsmod = @import("core").plugins;
 const compress = @import("core").compress;
 const tui_mod = @import("tui");
+const pricing = @import("pricing.zig");
 const webui_mod = @import("webui.zig");
 const cmd_web = @import("cmd_web.zig");
 const cmd_print = @import("cmd_print.zig");
@@ -152,6 +153,7 @@ const SLASH_ITEMS = [_]HelpItem{
     .{ .cmd = "/help", .desc = "list commands" },
     .{ .cmd = "/status", .desc = "session card" },
     .{ .cmd = "/think [lvl]", .desc = "thinking level (picker if empty)" },
+    .{ .cmd = "/theme [n]", .desc = "theme (dark|light|auto|name)" },
     .{ .cmd = "/permissions [m]", .desc = "approval (picker if empty)" },
     .{ .cmd = "/model [m]", .desc = "switch model (picker if empty)" },
     .{ .cmd = "/new", .desc = "new session" },
@@ -275,6 +277,13 @@ const App = struct {
     last_usage: ai.Usage = .{},
     /// 会话累计 token(状态栏 t/s)
     tokens_total: usize = 0,
+    /// 会话分项累计(页脚 pi 式 ↑↓ R W):入/出/缓存写
+    tok_in: u64 = 0,
+    tok_out: u64 = 0,
+    tok_cache_w: u64 = 0,
+    tok_cache_r: u64 = 0,
+    /// 会话累计费用(USD,价目命中才累加;未知模型恒 0 不显)
+    cost_usd: f64 = 0,
     /// worker 每轮结束发布的上下文 token 估算(主线程状态栏读它)。
     ///
     /// 主线程不能现场调 estTokens:那会遍历 messages,而 worker 正在 append
@@ -331,11 +340,20 @@ const App = struct {
             self.agent.last_usage
         else
             self.last_usage;
+        const br = gitBranch(self.alloc);
+        defer if (br) |b| self.alloc.free(b);
         var model_buf: [96]u8 = undefined;
         self.tui.setFooterIdentity(.{
             .model = self.modelLabel(&model_buf),
             .think = tui_mod.thinkLabel(self.tui.think_level),
             .cwd = cwd,
+            .branch = br orelse "",
+            .tok_in = self.tok_in,
+            .tok_out = self.tok_out,
+            .tok_cache_w = self.tok_cache_w,
+            .tok_cache_r = self.tok_cache_r,
+            .cost = if (self.cost_usd > 0) self.cost_usd else null,
+            .subscription = cfgmod.providerIsSub(self.agent.provider),
             .session = self.sess.sessionId(),
             .used = used,
             .window = cw,
@@ -566,6 +584,22 @@ fn tuiOnThink(ctx: ?*anyopaque) void {
     showWelcome(app, app.agent.messages.items.len);
 }
 
+fn persistTheme(app: *App, name: []const u8) void {
+    app.cfg.saveTheme(name) catch {};
+}
+
+fn openThemePicker(app: *App) void {
+    const items = [_]tui_mod.PickerItem{
+        .{ .label = "dark", .value = "dark" },
+        .{ .label = "light", .value = "light" },
+        .{ .label = "auto", .value = "auto" },
+    };
+    var sel: usize = 0;
+    if (std.mem.eql(u8, app.cfg.theme, "light")) sel = 1;
+    if (std.mem.eql(u8, app.cfg.theme, "auto")) sel = 2;
+    app.tui.openPicker("theme", "theme", &items, sel) catch {};
+}
+
 fn persistThink(app: *App) void {
     app.cfg.saveThinkLevel(app.tui.think_level) catch {};
 }
@@ -790,6 +824,17 @@ fn workerMain(wctx: *WorkerCtx) void {
             app.last_usage = result.usage;
             const u = result.usage;
             app.tokens_total += (u.input orelse 0) + (u.output orelse 0) + (u.cache_read orelse 0);
+            app.tok_in += u.input orelse 0;
+            app.tok_out += u.output orelse 0;
+            app.tok_cache_r += u.cache_read orelse 0;
+            app.tok_cache_w += u.cache_write orelse 0;
+            // pi 式费用:价目命中才累计
+            var pk: [192]u8 = undefined;
+            if (std.fmt.bufPrint(&pk, "{s}/{s}", .{ app.agent.provider.name, app.agent.model }) catch null) |key| {
+                if (pricing.lookup(key)) |r| {
+                    app.cost_usd += pricing.turnCost(r, u.input orelse 0, u.output orelse 0, u.cache_read orelse 0, u.cache_write orelse 0);
+                }
+            }
         }
         if (err_msg) |emsg| {
             var buf = std.array_list.Managed(u8).init(app.alloc);
@@ -1323,6 +1368,23 @@ fn onSubmit(tui: *tui_mod.Tui, line: []const u8) anyerror!void {
             app.tui.appendLine("", "\x1b[2m", bw.written()) catch {};
             return;
         }
+        if (std.mem.eql(u8, cmd, "theme") or std.mem.startsWith(u8, cmd, "theme ")) {
+            const arg = if (std.mem.startsWith(u8, cmd, "theme "))
+                std.mem.trim(u8, cmd["theme ".len..], " ")
+            else
+                "";
+            if (arg.len == 0) {
+                openThemePicker(app);
+                return;
+            }
+            tui_mod.applyTheme(arg);
+            persistTheme(app, arg);
+            var bw = std.Io.Writer.Allocating.init(app.alloc);
+            defer bw.deinit();
+            bw.writer.print("theme {s}", .{tui_mod.theme.name}) catch {};
+            app.tui.appendLine("", "\x1b[2m", bw.written()) catch {};
+            return;
+        }
         if (std.mem.eql(u8, cmd, "help")) {
             const text = formatHelp(app.alloc, app.tui.width) catch return;
             defer app.alloc.free(text);
@@ -1480,6 +1542,7 @@ pub fn runInteractive(alloc: std.mem.Allocator, cfg: *cfgmod.Config, cwd: []cons
         };
     }
     const abs_cwd = std.process.currentPathAlloc(util.io, alloc) catch cwd;
+    tui_mod.applyTheme(cfg.theme);
 
     // 会话:指定 id → 恢复;显式新会话/带标题 → fresh;否则续载最新
     var sess = if (opts.session_id) |id| blk: {
@@ -2010,10 +2073,9 @@ test "every slash command appears in /help" {
     //
     // 命令名取自 onSubmit 里的 `eql(u8, cmd, "…")` / `startsWith(u8, cmd, "… ")`。
     const dispatched = [_][]const u8{
-        "help",  "status", "think",         "permissions", "model", "new",   "sessions", "resume",
-        "title", "tree",   "fork",          "copy",        "undo",  "redo",  "memory",   "compact",
-        "shake", "snap",   "fast-compress", "clear",       "plan",  "queue", "export",   "dump",
-        "quit",
+        "help",  "status",        "think", "theme", "permissions", "model",  "new",    "sessions", "resume",
+        "title", "tree",          "fork",  "copy",  "undo",        "redo",   "memory", "compact",  "shake",
+        "snap",  "fast-compress", "clear", "plan",  "queue",       "export", "dump",   "quit",
     };
     for (dispatched) |cmd| {
         var found = false;
@@ -2078,15 +2140,22 @@ test "status card still builds; welcome is footer not a header cell" {
         .window = 128_000,
         .cache_read = 7_440,
         .prompt = 12_000,
+        .tok_in = 4_700,
+        .tok_out = 44,
+        .tok_cache_r = 7_440,
         .pct = 9,
     }, "? for shortcuts", 80, true);
     defer foot.deinit(t.allocator);
-    try t.expect(std.mem.indexOf(u8, foot.primary, "deepseek/flash") != null);
-    try t.expect(std.mem.indexOf(u8, foot.primary, "ctx ") != null);
-    try t.expect(std.mem.indexOf(u8, foot.primary, "12k/128k 9%") != null);
-    try t.expect(std.mem.indexOf(u8, foot.primary, "cache ") != null);
-    try t.expect(std.mem.indexOf(u8, foot.primary, "62%") != null);
-    try t.expect(std.mem.indexOf(u8, foot.secondary, "~/pi-zig") != null or std.mem.indexOf(u8, foot.secondary, "1786735635034") != null);
+    // pi 式双行:行 1 地点,行 2 stats + model
+    try t.expect(std.mem.indexOf(u8, foot.primary, "~/pi-zig") != null);
+    try t.expect(std.mem.indexOf(u8, foot.primary, "? for shortcuts") != null);
+    try t.expect(std.mem.indexOf(u8, foot.secondary, "deepseek/flash") != null);
+    try t.expect(std.mem.indexOf(u8, foot.secondary, "ctx ") != null);
+    try t.expect(std.mem.indexOf(u8, foot.secondary, "9% 12k/128k") != null);
+    // R 与数值间夹 ANSI reset,分查
+    try t.expect(std.mem.indexOf(u8, foot.secondary, "R") != null);
+    try t.expect(std.mem.indexOf(u8, foot.secondary, "7.4k") != null);
+    try t.expect(std.mem.indexOf(u8, foot.secondary, "↑4.7k") != null);
 
     const card = try formatStatusCard(t.allocator, .{
         .version = "0.1.0",

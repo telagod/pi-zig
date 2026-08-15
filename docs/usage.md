@@ -27,7 +27,7 @@ piz -n           # 新会话，不续载
 
 默认续载该目录最近一次会话，并把历史画进对话区。输入和状态钉在屏幕底，对话在上面软换行。对话区可以**拖选复制**（原生终端选区；没有开鼠标按键跟踪）。`PageUp` / `PageDown`、滚轮、`Ctrl+↑/↓` 翻历史。不用表情符号。`/copy` `/dump` 仍是剪贴板后备。
 
-开场不画会话卡。身份钉在输入框底下：模型加粗，`think` / `ctx` / `cache` 标签更淡、数字正常色，目录·会话 id 和 `? for shortcuts` 最淡。宽终端（大约 ≥100 列）全部挤在一行；挤不下才拆第二行（路径和 hint），不右对齐留空白。完整栏（授权、上下文文件、用量）仍在 `/status`，按需才画进对话。输入是底栏框，不是壳上的 `>`。空框按 `?` 看快捷键。
+开场不画会话卡。身份钉在输入框底下：模型加粗，`think` / `ctx` / `cache` 标签更淡、数字正常色，目录·会话 id 和 `? for shortcuts` 最淡。宽终端（大约 ≥100 列）全部挤在一行；80 列会拆成两行（上行指标，下行目录·会话和 hint），不右对齐留空白。完整栏（授权、上下文文件、用量）仍在 `/status`，按需才画进对话。输入是底栏框，不是壳上的 `>`。空框按 `?` 看快捷键。
 
 对话是分块分层，靠左栏、缩进和字重区分，不是同一列淡灰。用户每行一条亮竖线 `▎`（加粗正文，没有 `┌/└` 空行）；思考退后两格、淡斜体（`Ctrl+T` 收成 `· thought` 一行）；助手正文同样缩进两格、正常色、没有竖线；工具再缩两格，一行写完 `▸` 名（加粗）+ 预览（淡）+ 状态，默认折叠，`Ctrl+O` 才在下面展开正文。块与块之间空一行；同轮兄弟工具中间不加空行。忙碌时输入框上方一行 `Working`，比对话更淡。
 
@@ -44,10 +44,17 @@ piz -n           # 新会话，不续载
 ╭──────────────────────────────────────────╮
 │ › _                                      │
 ╰──────────────────────────────────────────╯
+deepseek/v4-flash think max ctx 1.2k/128k 9% cache 62%
+~/project/pi-zig · 1786741809022 ? for shortcuts
+```
+
+宽约 120 列时同一栏收成一行：
+
+```
 deepseek/v4-flash think max ctx 1.2k/128k 9% cache 62% ~/project/pi-zig · 1786741809022 ? for shortcuts
 ```
 
-页脚随 `/model`、`Alt+,/.`（或 `/think`）以及每轮结束的 usage 回调刷新。占用是 `est_ctx / 窗口`（`12k/128k 9%`），不是单独一个 `0%`。缓存是上一轮 API 回报的命中：有 `cached_tokens` / `prompt_cache_hit_tokens` / `cache_read_input_tokens` 时写 `cache 62%` 或 `cached 8.1k`；没回报就 `cache —`，不编数字。一行装不下时先把路径和 hint 挪到第二行；再窄才按 cwd → session → think → cache 标签 → ctx 绝对数的顺序收，模型不丢。思考档是当前选的（默认 `high`）。
+页脚随 `/model`、`Alt+,/.`（或 `/think`）以及每轮结束的 usage 回调刷新。占用是 `est_ctx / 窗口`（`12k/128k 9%`），不是单独一个 `0%`。缓存是上一轮 API 回报的命中：有 `cached_tokens` / `prompt_cache_hit_tokens` / `cache_read_input_tokens` 时写 `cache 62%` 或 `cached 8.1k`；没回报就 `cache —`，不编数字。一行装不下时把路径和 hint 挪到第二行，避免把 cwd 挤掉。再窄才按 hint → think → cache 标签 → ctx 绝对数 → session 的顺序收；cwd 几乎不丢（极窄时截成 `…`）。模型不丢。思考档是当前选的（默认 `high`）。
 
 上下文窗口按 pi 的声明解析：DeepSeek 只有 `deepseek-v4-flash` / `deepseek-v4-pro`（窗 1000000）；未写窗口的自定义模型缺省 128000。不是 131k。
 
@@ -113,6 +120,8 @@ deepseek/v4-flash think max ctx 1.2k/128k 9% cache 62% ~/project/pi-zig · 17867
 | `/status` | 把会话卡画进对话（模型、目录、授权、上下文） |
 | `/think` | 弹出思考等级选择器（↑↓ Enter Esc）。只列出**这个模型**能选的档 |
 | `/think off\|minimal\|low\|medium\|high\|xhigh\|max` | 直接设定。该模型没有的档会夹到最近的可用档。`浅`/`中`/`深` 仍认，分别是 low / medium / max |
+| `/theme` | 弹出主题选择器（dark / light / auto） |
+| `/theme dark\|light\|auto\|name` | 直接设定。`auto` 看 `COLORFGBG`。自定义名读 `~/.piz/themes/{name}.json`。写回 `settings.json` 的 `theme`。`$PIZ_THEME` 覆盖 |
 | `/permissions` | 弹出授权选择器。对齐 Codex `/permissions` |
 | `/permissions yolo\|ask\|read-only` | 直接设定全权 / 询问 / 只读。写回 `settings.json` 的 `approvalMode`。`/approvals` 是别名 |
 | `/model` | 弹出模型选择器（有密钥的 provider × 模型） |
@@ -313,6 +322,18 @@ piz web [--port N] [--no-open] [--token T | --no-token]
 | `y` / `n` / `Esc` / `a` / `s` | 权限提示：允许 / 拒绝 / 拒绝 / 总是 / 跳过 |
 
 输入是单行的，暂不支持 `Shift+Enter` 插入换行。多行内容用 `@./file` 引用文件，或走 Web UI。
+
+## 主题
+
+对齐 pi 的 theme JSON（`vars` + `colors`，hex 或变量名）。内置 `dark` / `light`。
+
+- `settings.json` 的 `theme`：`dark` / `light` / `auto` / 自定义名
+- 环境变量 `$PIZ_THEME` 覆盖 settings
+- `auto`：看 `$COLORFGBG` 背景色号（7 或 15 → light）
+- 自定义：把 pi 兼容 JSON 放到 `~/.piz/themes/{name}.json`，然后 `/theme name`
+- 例：仓库 `themes/dark.json`、`themes/light.json`
+
+user 消息与 assistant 回复按 Markdown 着色（标题 / 围栏与缩进代码 / 列表 / 引用 / `code` **bold** *italic* ~~strike~~ / 链接 / `\` 转义）。围栏内注释与字符串浅着色。`NO_COLOR` 时退回素文。
 
 ## 限额
 

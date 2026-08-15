@@ -4,13 +4,18 @@
 //   A. Chrome: working (dim, ephemeral) / boxed composer / footer under it.
 //      Footer packs into one row when it fits (typical width ≥ ~100): model
 //      bold, think/ctx/cache labels dim + numbers normal, cwd · session, hint
-//      dimmest. Second row only when that pack overflows. No padded desert.
+//      dimmest. Overflow splits: row 1 metrics, row 2 cwd · session + hint.
+//      Collapse drops hint → think → cache label → ctx abs → session before
+//      cwd. Model is never dropped; cwd is truncated, not omitted.
 //   B. Status card: on-demand via /status only — never cell 0 at startup.
 //   C. Turn blocks (paint-time, never baked into cell text):
-//        user      indent 0, bold, full-height bar ▎ on every line (no ┌/└)
+//        user      indent 0, bold, bar ▎ + semantic bg band to screen edge
+//                  (theme.userMessageBg, pi-aligned)
 //        thought   indent 2, dim italic (Ctrl+T → one `· thought` line)
 //        assistant indent 2, normal, no bar; siblings merge
-//        tools     indent 4, ▸ bold name + dim preview + status on one line
+//        tools     indent 4, ▸ bold name + dim preview + status on one line;
+//                  title row bg by status (pending/ok/err, pi-aligned); folded
+//                  body head + dim `· (N more lines, ctrl+o)` tail
 //                  expanded body indent 6 │ / last └
 //      One blank between top-level blocks; zero inside a tool group.
 //
@@ -36,11 +41,21 @@ const ANSI_DIM = "\x1b[2m";
 const ANSI_REV = "\x1b[7m";
 const ANSI_ITALIC = "\x1b[3m";
 
+const theme_mod = @import("theme.zig");
+const markdown = @import("markdown.zig");
+pub const Theme = theme_mod.Theme;
+pub const ColorMode = theme_mod.ColorMode;
+
+/// 全局主题。main 启动 /theme 调用 applyTheme;测试默认 dark+256。
+pub var theme: Theme = .{};
+
+pub fn applyTheme(name: []const u8) void {
+    theme = Theme.resolve(name);
+}
+
 /// Codex EnableAlternateScroll — wheel → arrows, drag-select stays native.
 const ENTER_ALT_SCROLL = "\x1b[?1007h";
 const LEAVE_ALT_SCROLL = "\x1b[?1007l";
-
-pub const Style = enum { normal, fence, code };
 
 /// Codex session header 内宽上限。见 history_cell.rs SESSION_HEADER_MAX_INNER_WIDTH。
 pub const CARD_MAX_INNER: usize = 56;
@@ -412,7 +427,17 @@ pub const FooterIdent = struct {
     model: []const u8 = "",
     think: []const u8 = "",
     cwd: []const u8 = "",
+    branch: []const u8 = "",
     session: []const u8 = "",
+    /// 会话分项累计(pi 式 ↑↓ R W)
+    tok_in: u64 = 0,
+    tok_out: u64 = 0,
+    tok_cache_w: u64 = 0,
+    tok_cache_r: u64 = 0,
+    /// 会话累计费用;null 不显 $(pi:仅 cost>0 或订阅显)
+    cost: ?f64 = null,
+    /// 订阅制 provider(pi 式 (sub) 后缀)
+    subscription: bool = false,
     used: usize = 0,
     window: usize = 0,
     cache_read: ?u64 = null,
@@ -431,48 +456,90 @@ pub const FooterRows = struct {
     }
 };
 
-/// True when model+think+ctx+cache+place+hint cannot share one row.
-/// Typical terminals (≥ ~100 cols) pack to one row; 80-col overflow splits.
+/// pi 式双行阈值:宽 >= 50 恒双行(行1 cwd (branch),行2 stats/model)。
+/// 窄端退化单行挤排,由 formatFooterRows 内 fitSingle 处置。
 pub fn footerNeedsTwoRows(ident: FooterIdent, hint: ?[]const u8, width: usize) bool {
-    var ctx_buf: [48]u8 = undefined;
-    var cache_buf: [32]u8 = undefined;
-    const ctx = formatCtx(&ctx_buf, ident.used, ident.window, true);
-    const cache = formatCache(&cache_buf, ident.cache_read, ident.prompt, true);
-    var cols: usize = 0;
-    var n: usize = 0;
-    const add = struct {
-        fn go(total: *usize, count: *usize, piece: []const u8) void {
-            if (piece.len == 0) return;
-            if (count.* > 0) total.* += 1;
-            total.* += visibleCols(piece);
-            count.* += 1;
-        }
-    }.go;
-    add(&cols, &n, ident.model);
-    if (ident.think.len > 0) {
-        if (n > 0) cols += 1;
-        cols += 6 + visibleCols(ident.think);
-        n += 1;
-    }
-    add(&cols, &n, ctx);
-    add(&cols, &n, cache);
-    if (ident.cwd.len > 0 and ident.session.len > 0) {
-        if (n > 0) cols += 1;
-        cols += visibleCols(ident.cwd) + 3 + visibleCols(ident.session);
-        n += 1;
-    } else if (ident.cwd.len > 0) {
-        add(&cols, &n, ident.cwd);
-    } else if (ident.session.len > 0) {
-        add(&cols, &n, ident.session);
-    }
-    if (hint) |h| add(&cols, &n, h);
-    return cols > width;
+    _ = ident;
+    _ = hint;
+    return width >= 50;
 }
 
-/// Pack footer facts with single spaces. Prefer one row; split only when
-/// `two_rows` is set *and* the full pack overflows. Collapse order when
-/// forced onto one row: cwd, session, hint, think, cache label, ctx absolute.
-/// Model is never dropped. Labels dim, numbers normal, model bold, hint dimmest.
+/// pi 式双行:行 1 `cwd (branch)` muted,hint 右端 dimmest;
+/// 行 2 左 stats(ctx% 随占用变色、R cache),右 `model · think`。
+fn formatFooterPi(alloc: std.mem.Allocator, ident: FooterIdent, hint: ?[]const u8, width: usize) !FooterRows {
+    const mu = theme.muted();
+    const place = if (ident.branch.len > 0)
+        try std.fmt.allocPrint(alloc, "{s}{s} ({s}){s}", .{ mu, ident.cwd, ident.branch, ANSI_RESET })
+    else
+        try std.fmt.allocPrint(alloc, "{s}{s}{s}", .{ mu, ident.cwd, ANSI_RESET });
+    defer alloc.free(place);
+    var row1: []u8 = undefined;
+    if (hint) |h| {
+        const hint_s = try std.fmt.allocPrint(alloc, "{s}{s}{s}", .{ ANSI_DIM, h, ANSI_RESET });
+        defer alloc.free(hint_s);
+        row1 = try layoutFooter(alloc, place, hint_s, width);
+    } else {
+        row1 = try alloc.dupe(u8, truncateToVisible(place, width));
+    }
+
+    var used_buf: [16]u8 = undefined;
+    var win_buf: [16]u8 = undefined;
+    const pct_ink = theme.fgCtx(ident.pct);
+    const pct_end: []const u8 = if (pct_ink.len > 0) ANSI_RESET else "";
+    var in_buf: [16]u8 = undefined;
+    var out_buf: [16]u8 = undefined;
+    var cr_buf: [16]u8 = undefined;
+    var cw_buf: [16]u8 = undefined;
+    // pi 式 stats:↑in ↓out [R cache] [W cache] + ctx 占用
+    var flow: ?[]u8 = null;
+    defer if (flow) |f| alloc.free(f);
+    if (ident.tok_in > 0 or ident.tok_out > 0) {
+        flow = try std.fmt.allocPrint(alloc, "↑{s} ↓{s}", .{ formatTok(&in_buf, ident.tok_in), formatTok(&out_buf, ident.tok_out) });
+    }
+    var cache: ?[]u8 = null;
+    defer if (cache) |c| alloc.free(c);
+    if (ident.tok_cache_r > 0 and ident.tok_cache_w > 0) {
+        cache = try std.fmt.allocPrint(alloc, " R{s} W{s}", .{ formatTok(&cr_buf, ident.tok_cache_r), formatTok(&cw_buf, ident.tok_cache_w) });
+    } else if (ident.tok_cache_r > 0) {
+        cache = try std.fmt.allocPrint(alloc, " R{s}", .{formatTok(&cr_buf, ident.tok_cache_r)});
+    } else if (ident.tok_cache_w > 0) {
+        cache = try std.fmt.allocPrint(alloc, " W{s}", .{formatTok(&cw_buf, ident.tok_cache_w)});
+    }
+    // CH% 命中率(末轮 cache_read/prompt,pi 式);$ 费用(toFixed(3) 式三位)
+    var ch: ?[]u8 = null;
+    defer if (ch) |c| alloc.free(c);
+    if (ident.cache_read) |cr| {
+        if (ident.prompt) |pr| {
+            if (cr > 0 and pr > 0) ch = try std.fmt.allocPrint(alloc, " CH{d}%", .{cr * 100 / pr});
+        }
+    }
+    var cost_s: ?[]u8 = null;
+    defer if (cost_s) |c| alloc.free(c);
+    // pi 式:cost>0 或订阅皆显 $;订阅缀 (sub)
+    if (ident.cost != null or ident.subscription) {
+        const sub_suffix: []const u8 = if (ident.subscription) " (sub)" else "";
+        cost_s = try std.fmt.allocPrint(alloc, " ${d:.3}{s}", .{ ident.cost orelse 0, sub_suffix });
+    }
+    const extra = flow != null or cache != null or ch != null or cost_s != null;
+    const stats = if (extra)
+        try std.fmt.allocPrint(alloc, "{s}{s}{s}{s}  {s}ctx {s}{s}{d}%{s} {s}/{s}", .{ flow orelse "", cache orelse "", ch orelse "", cost_s orelse "", ANSI_DIM, ANSI_RESET, pct_ink, ident.pct, pct_end, formatTok(&used_buf, ident.used), formatTok(&win_buf, ident.window) })
+    else
+        try std.fmt.allocPrint(alloc, "{s}ctx {s}{s}{d}%{s} {s}/{s}", .{ ANSI_DIM, ANSI_RESET, pct_ink, ident.pct, pct_end, formatTok(&used_buf, ident.used), formatTok(&win_buf, ident.window) });
+    defer alloc.free(stats);
+    const right = if (ident.think.len > 0)
+        try std.fmt.allocPrint(alloc, "{s}{s}{s}{s} · {s}", .{ ANSI_BOLD, ident.model, ANSI_RESET, ANSI_DIM, ident.think })
+    else
+        try std.fmt.allocPrint(alloc, "{s}{s}{s}", .{ ANSI_BOLD, ident.model, ANSI_RESET });
+    defer alloc.free(right);
+    const row2 = try layoutFooter(alloc, stats, right, width);
+    return .{ .primary = row1, .secondary = row2 };
+}
+
+/// Pack footer facts with single spaces. Prefer one row; split when
+/// `two_rows` is set *and* the full pack overflows (cwd · session on row 2).
+/// Collapse when forced onto one row: hint, think, cache label, ctx absolute,
+/// session; cwd last. Model is never dropped. Below ~40 cols, ellipsize cwd
+/// rather than omit it. Labels dim, numbers normal, model bold, hint dimmest.
 pub fn formatFooterRows(alloc: std.mem.Allocator, ident: FooterIdent, hint: ?[]const u8, width: usize, two_rows: bool) !FooterRows {
     const hint_s = if (hint) |h|
         try std.fmt.allocPrint(alloc, "{s}{s}{s}", .{ ANSI_DIM, h, ANSI_RESET })
@@ -511,16 +578,12 @@ pub fn formatFooterRows(alloc: std.mem.Allocator, ident: FooterIdent, hint: ?[]c
     defer alloc.free(cache_num);
     const place_full = try formatPlace(alloc, ident.cwd, ident.session);
     defer alloc.free(place_full);
-    const place_sid = try formatPlace(alloc, "", ident.session);
-    defer alloc.free(place_sid);
+    const place_cwd = try formatPlace(alloc, ident.cwd, "");
+    defer alloc.free(place_cwd);
 
     const split = two_rows and footerNeedsTwoRows(ident, hint, width);
-    if (split) {
-        const primary = try fitPrimary(alloc, model_s, think_s, ctx_full, ctx_pct, cache_full, cache_num, width);
-        const secondary = try fitSecondary(alloc, place_full, place_sid, hint_s, width);
-        return .{ .primary = primary, .secondary = secondary };
-    }
-    const primary = try fitSingle(alloc, model_s, think_s, ctx_full, ctx_pct, cache_full, cache_num, place_full, place_sid, hint_s, width);
+    if (split) return formatFooterPi(alloc, ident, hint, width);
+    const primary = try fitSingle(alloc, model_s, think_s, ctx_full, ctx_pct, cache_full, cache_num, place_full, place_cwd, ident.cwd, hint_s, width);
     return .{ .primary = primary, .secondary = try alloc.dupe(u8, "") };
 }
 
@@ -635,17 +698,28 @@ fn fitPrimary(
     return alloc.dupe(u8, truncateToVisible(model_s, width));
 }
 
-fn fitSecondary(alloc: std.mem.Allocator, place_full: []const u8, place_sid: []const u8, hint: []const u8, width: usize) ![]u8 {
-    const lefts = [_][]const u8{ place_full, place_sid, "" };
-    for (lefts) |left| {
-        if (left.len == 0 and hint.len == 0) continue;
-        const pair = [_][]const u8{ left, hint };
-        const joined = try joinPacked(alloc, &pair);
+fn fitSecondary(alloc: std.mem.Allocator, cwd: []const u8, session: []const u8, hint: []const u8, width: usize) ![]u8 {
+    const place_full = try formatPlace(alloc, cwd, session);
+    defer alloc.free(place_full);
+    const place_cwd = try formatPlace(alloc, cwd, "");
+    defer alloc.free(place_cwd);
+    const variants = [_][]const []const u8{
+        &.{ place_full, hint },
+        &.{place_full},
+        &.{ place_cwd, hint },
+        &.{place_cwd},
+    };
+    for (variants) |parts| {
+        const joined = try joinPacked(alloc, parts);
         if (visibleCols(joined) <= width) return joined;
         alloc.free(joined);
     }
+    if (cwd.len > 0 and width > 0) {
+        const short = try ellipsizeAlloc(alloc, cwd, width);
+        defer alloc.free(short);
+        return formatPlace(alloc, short, "");
+    }
     if (hint.len > 0) return alloc.dupe(u8, truncateToVisible(hint, width));
-    if (place_sid.len > 0) return alloc.dupe(u8, truncateToVisible(place_sid, width));
     return alloc.dupe(u8, "");
 }
 
@@ -658,43 +732,41 @@ fn fitSingle(
     cache_full: []const u8,
     cache_num: []const u8,
     place_full: []const u8,
-    place_sid: []const u8,
+    place_cwd: []const u8,
+    cwd: []const u8,
     hint: []const u8,
     width: usize,
 ) ![]u8 {
-    const primaries = [_][]const []const u8{
-        &.{ model_s, think_s, ctx_full, cache_full },
-        &.{ model_s, ctx_full, cache_full },
-        &.{ model_s, ctx_full, cache_num },
-        &.{ model_s, ctx_pct, cache_num },
-        &.{ model_s, ctx_pct },
-        &.{model_s},
+    const variants = [_][]const []const u8{
+        &.{ model_s, think_s, ctx_full, cache_full, place_full, hint },
+        &.{ model_s, think_s, ctx_full, cache_full, place_full },
+        &.{ model_s, ctx_full, cache_full, place_full },
+        &.{ model_s, ctx_full, cache_num, place_full },
+        &.{ model_s, ctx_pct, cache_num, place_full },
+        &.{ model_s, ctx_pct, cache_num, place_cwd },
+        &.{ model_s, ctx_pct, place_cwd },
+        &.{ model_s, place_cwd },
     };
-    const extras = [_][]const []const u8{
-        &.{ place_full, hint },
-        &.{ place_sid, hint },
-        &.{hint},
-        &.{place_full},
-        &.{place_sid},
-        &.{},
-    };
-    for (extras) |extra| {
-        for (primaries) |parts| {
-            var buf: [8][]const u8 = undefined;
-            var n: usize = 0;
-            for (parts) |p| {
-                if (p.len == 0) continue;
-                buf[n] = p;
-                n += 1;
-            }
-            for (extra) |p| {
-                if (p.len == 0) continue;
-                buf[n] = p;
-                n += 1;
-            }
-            const joined = try joinN(alloc, buf[0..n], " ");
+    for (variants) |parts| {
+        const joined = try joinPacked(alloc, parts);
+        if (visibleCols(joined) <= width) return joined;
+        alloc.free(joined);
+    }
+    if (cwd.len > 0) {
+        const model_cols = visibleCols(model_s);
+        const gap: usize = if (model_cols > 0) 1 else 0;
+        if (model_cols + gap < width) {
+            const short = try ellipsizeAlloc(alloc, cwd, width - model_cols - gap);
+            defer alloc.free(short);
+            const placed = try formatPlace(alloc, short, "");
+            defer alloc.free(placed);
+            const joined = try joinPacked(alloc, &.{ model_s, placed });
             if (visibleCols(joined) <= width) return joined;
             alloc.free(joined);
+        } else if (model_cols == 0) {
+            const short = try ellipsizeAlloc(alloc, cwd, width);
+            defer alloc.free(short);
+            return formatPlace(alloc, short, "");
         }
     }
     return fitPrimary(alloc, model_s, think_s, ctx_full, ctx_pct, cache_full, cache_num, width);
@@ -882,7 +954,6 @@ pub const Tui = struct {
     cells: std.array_list.Managed(Cell),
     mutex: std.Io.Mutex = .init,
     dirty: std.atomic.Value(bool) = std.atomic.Value(bool).init(true),
-    style: Style = .normal,
     input: std.array_list.Managed(u8),
     cursor: usize = 0,
     history: std.array_list.Managed([]const u8),
@@ -901,8 +972,15 @@ pub const Tui = struct {
     footer_model: std.array_list.Managed(u8),
     footer_think: std.array_list.Managed(u8),
     footer_cwd: std.array_list.Managed(u8),
+    footer_branch: std.array_list.Managed(u8),
     footer_session: std.array_list.Managed(u8),
     footer_used: usize = 0,
+    footer_tok_in: u64 = 0,
+    footer_tok_out: u64 = 0,
+    footer_tok_cache_w: u64 = 0,
+    footer_tok_cache_r: u64 = 0,
+    footer_cost: ?f64 = null,
+    footer_sub: bool = false,
     footer_window: usize = 0,
     footer_cache_read: ?u64 = null,
     footer_prompt: ?u64 = null,
@@ -966,6 +1044,7 @@ pub const Tui = struct {
             .footer_model = std.array_list.Managed(u8).init(alloc),
             .footer_think = std.array_list.Managed(u8).init(alloc),
             .footer_cwd = std.array_list.Managed(u8).init(alloc),
+            .footer_branch = std.array_list.Managed(u8).init(alloc),
             .footer_session = std.array_list.Managed(u8).init(alloc),
             .history_path = hist_path,
         };
@@ -983,6 +1062,7 @@ pub const Tui = struct {
         self.footer_model.deinit();
         self.footer_think.deinit();
         self.footer_cwd.deinit();
+        self.footer_branch.deinit();
         self.footer_session.deinit();
         self.alloc.free(self.history_path);
     }
@@ -1115,44 +1195,9 @@ pub const Tui = struct {
         return if (c.kind == kind) c else null;
     }
 
-    fn appendStyledTo(self: *Tui, buf: *std.array_list.Managed(u8), s: []const u8) !void {
-        var i: usize = 0;
-        while (i < s.len) {
-            const c = s[i];
-            if (c == '\n') {
-                try buf.appendSlice(ANSI_RESET);
-                try buf.append('\n');
-                self.style = .normal;
-                i += 1;
-                continue;
-            }
-            if (c == '`') {
-                if (self.style == .normal) {
-                    try buf.appendSlice(ANSI_DIM);
-                    self.style = .code;
-                } else if (self.style == .code) {
-                    try buf.appendSlice(ANSI_RESET);
-                    self.style = .normal;
-                } else {
-                    try buf.append(c);
-                }
-                i += 1;
-                continue;
-            }
-            if ((c == '`' or c == '~') and i + 2 < s.len and s[i + 1] == c and s[i + 2] == c) {
-                if (self.style == .fence) {
-                    try buf.appendSlice(ANSI_RESET);
-                    self.style = .normal;
-                } else {
-                    try buf.appendSlice(ANSI_DIM);
-                    self.style = .fence;
-                }
-                i += 3;
-                continue;
-            }
-            try buf.append(c);
-            i += 1;
-        }
+    /// 原文入库。Markdown / 色带在 paint 时由 styleMd 处理,此处不再剥 ` 以免代码跨度丢失。
+    fn appendStyledTo(_: *Tui, buf: *std.array_list.Managed(u8), s: []const u8) !void {
+        try buf.appendSlice(s);
     }
 
     pub fn appendText(self: *Tui, s: []const u8) !void {
@@ -1197,7 +1242,6 @@ pub const Tui = struct {
             self.last_think_len = c.text.items.len;
         }
         self.think_live = false;
-        self.style = .normal;
         self.dirty.store(true, .release);
     }
 
@@ -1205,7 +1249,6 @@ pub const Tui = struct {
         self.mutex.lock(util.io) catch {};
         defer self.mutex.unlock(util.io);
         self.think_live = false;
-        self.style = .normal;
         const cell = try self.pushCell(.user);
         try self.appendStyledTo(&cell.text, s);
         self.scroll_off = 0;
@@ -1215,7 +1258,6 @@ pub const Tui = struct {
     pub fn appendLine(self: *Tui, prefix: []const u8, color: []const u8, s: []const u8) !void {
         self.mutex.lock(util.io) catch {};
         defer self.mutex.unlock(util.io);
-        self.style = .normal;
         const cell = try self.pushCell(.chrome);
         cell.color = color;
         try cell.text.appendSlice(prefix);
@@ -1227,7 +1269,6 @@ pub const Tui = struct {
     pub fn appendTool(self: *Tui, name: []const u8, preview: []const u8) !void {
         self.mutex.lock(util.io) catch {};
         defer self.mutex.unlock(util.io);
-        self.style = .normal;
         const cell = try self.pushCell(.tool);
         const name_d = try self.alloc.dupe(u8, name);
         errdefer self.alloc.free(name_d);
@@ -1255,7 +1296,6 @@ pub const Tui = struct {
     pub fn appendToolEnd(self: *Tui, name: []const u8, is_error: bool, body: []const u8) !void {
         self.mutex.lock(util.io) catch {};
         defer self.mutex.unlock(util.io);
-        self.style = .normal;
         const cell = self.firstRunningTool(name) orelse try self.pushCell(.tool);
         if (cell.tool == null) {
             const name_d = try self.alloc.dupe(u8, name);
@@ -1315,7 +1355,6 @@ pub const Tui = struct {
     fn appendRoleCell(self: *Tui, kind: CellKind, s: []const u8) !void {
         self.mutex.lock(util.io) catch {};
         defer self.mutex.unlock(util.io);
-        self.style = .normal;
         const cell = try self.pushCell(kind);
         try self.appendStyledTo(&cell.text, s);
         self.dirty.store(true, .release);
@@ -1370,9 +1409,17 @@ pub const Tui = struct {
         try self.footer_think.appendSlice(ident.think);
         self.footer_cwd.clearRetainingCapacity();
         try self.footer_cwd.appendSlice(ident.cwd);
+        self.footer_branch.clearRetainingCapacity();
+        try self.footer_branch.appendSlice(ident.branch);
         self.footer_session.clearRetainingCapacity();
         try self.footer_session.appendSlice(ident.session);
         self.footer_used = ident.used;
+        self.footer_tok_in = ident.tok_in;
+        self.footer_tok_out = ident.tok_out;
+        self.footer_tok_cache_w = ident.tok_cache_w;
+        self.footer_tok_cache_r = ident.tok_cache_r;
+        self.footer_cost = ident.cost;
+        self.footer_sub = ident.subscription;
         self.footer_window = ident.window;
         self.footer_cache_read = ident.cache_read;
         self.footer_prompt = ident.prompt;
@@ -1385,7 +1432,6 @@ pub const Tui = struct {
         self.mutex.lock(util.io) catch {};
         defer self.mutex.unlock(util.io);
         self.freeCells();
-        self.style = .normal;
         self.think_open = true;
         self.think_live = false;
         self.scroll_off = 0;
@@ -1434,7 +1480,14 @@ pub const Tui = struct {
             .model = self.footer_model.items,
             .think = self.footer_think.items,
             .cwd = self.footer_cwd.items,
+            .branch = self.footer_branch.items,
             .session = self.footer_session.items,
+            .tok_in = self.footer_tok_in,
+            .tok_out = self.footer_tok_out,
+            .tok_cache_w = self.footer_tok_cache_w,
+            .tok_cache_r = self.footer_tok_cache_r,
+            .cost = self.footer_cost,
+            .subscription = self.footer_sub,
             .used = self.footer_used,
             .window = self.footer_window,
             .cache_read = self.footer_cache_read,
@@ -1461,7 +1514,8 @@ pub const Tui = struct {
             }
         }.go;
         // Overflow: shrink wrap-grown composer (never below 3), then drop
-        // footer row 2, then working details. Composer stays a closed box.
+        // footer row 2 (one-row pack still keeps cwd), then working details.
+        // Composer stays a closed box.
         while (working + fixed + composerOf(boxed, comp_inner) + ident_rows > h and comp_inner > min_inner) {
             comp_inner -= 1;
         }
@@ -1520,7 +1574,7 @@ pub const Tui = struct {
         while (ci < self.cells.items.len) : (ci += 1) {
             if (ci > 0 and gapBetween(self.cells.items[ci - 1].kind, self.cells.items[ci].kind)) total_vis += 1;
             const painted = cardSlice(self.cells.items[ci], cards.items, &card_i);
-            total_vis += cellRowCount(self.cells.items[ci], painted, self.think_open, w);
+            total_vis += cellRowCount(self.alloc, self.cells.items[ci], painted, self.think_open, w);
         }
 
         const pin = if (total_vis > scroll_h) total_vis - scroll_h else 0;
@@ -1541,11 +1595,11 @@ pub const Tui = struct {
             }
             const painted = cardSlice(self.cells.items[ci], cards.items, &card_i);
             if (emitted >= scroll_h) continue;
-            const n = cellRowCount(self.cells.items[ci], painted, self.think_open, w);
+            const n = cellRowCount(self.alloc, self.cells.items[ci], painted, self.think_open, w);
             if (skip >= n) {
                 skip -= n;
             } else {
-                emitted += try emitCell(&fw.writer, self.cells.items[ci], painted, self.think_open, w, skip, scroll_h - emitted);
+                emitted += try emitCell(self.alloc, &fw.writer, self.cells.items[ci], painted, self.think_open, w, skip, scroll_h - emitted);
                 skip = 0;
             }
         }
@@ -1598,7 +1652,14 @@ pub const Tui = struct {
             .model = self.footer_model.items,
             .think = self.footer_think.items,
             .cwd = self.footer_cwd.items,
+            .branch = self.footer_branch.items,
             .session = self.footer_session.items,
+            .tok_in = self.footer_tok_in,
+            .tok_out = self.footer_tok_out,
+            .tok_cache_w = self.footer_tok_cache_w,
+            .tok_cache_r = self.footer_tok_cache_r,
+            .cost = self.footer_cost,
+            .subscription = self.footer_sub,
             .used = self.footer_used,
             .window = self.footer_window,
             .cache_read = self.footer_cache_read,
@@ -2349,10 +2410,12 @@ fn formatToolStatus(buf: []u8, meta: ToolMeta, now_ms: i64) []const u8 {
     };
     var eb: [24]u8 = undefined;
     const et = activity.formatElapsed(&eb, toolElapsedMs(meta, now_ms));
+    const ink = theme.fgStatus(paintStatus(meta.status));
+    const ink_end: []const u8 = if (ink.len > 0) ANSI_RESET else "";
     if (meta.status == .running) {
         return std.fmt.bufPrint(buf, "{s} {s}", .{ outcome, et }) catch outcome;
     }
-    return std.fmt.bufPrint(buf, "{s} {s} {d}ln", .{ outcome, et, meta.lines }) catch outcome;
+    return std.fmt.bufPrint(buf, "{s}{s}{s} {s} {d}ln", .{ ink, outcome, ink_end, et, meta.lines }) catch outcome;
 }
 
 fn toolTitle(meta: ToolMeta, buf: []u8, now_ms: i64) []const u8 {
@@ -2383,7 +2446,13 @@ fn toolRowCount(meta: ToolMeta, width: usize) usize {
     var tb: [512]u8 = undefined;
     const title = toolTitle(meta, &tb, nowMs());
     var rows = wrapRowCount(title, gutterInner(.tool, width));
-    if (!meta.folded) {
+    if (meta.folded) {
+        // 折叠尾行 `· (N more lines, ctrl+o)`
+        const view = bodyView(meta.body.items);
+        if (view.len > 0 and countContentLines(view) > 2) rows += 1;
+        return rows;
+    }
+    {
         const view = bodyView(meta.body.items);
         if (view.len > 0) {
             const inner = toolBodyInner(width);
@@ -2394,6 +2463,29 @@ fn toolRowCount(meta: ToolMeta, width: usize) usize {
         }
     }
     return rows;
+}
+
+const Styled = struct {
+    owned: ?[]u8 = null,
+    text: []const u8,
+    fn deinit(self: Styled, alloc: std.mem.Allocator) void {
+        if (self.owned) |o| alloc.free(o);
+    }
+};
+
+fn paintStatus(s: ToolStatus) theme_mod.PaintStatus {
+    return switch (s) {
+        .running => .running,
+        .ok => .ok,
+        .err => .err,
+    };
+}
+
+fn styleMd(alloc: std.mem.Allocator, kind: CellKind, text: []const u8) Styled {
+    if (kind != .user and kind != .assistant) return .{ .text = text };
+    if (text.len == 0 or theme.mode == .none) return .{ .text = text };
+    const painted = markdown.render(alloc, &theme, text) catch return .{ .text = text };
+    return .{ .owned = painted, .text = painted };
 }
 
 fn userRowCount(text: []const u8, width: usize) usize {
@@ -2427,6 +2519,7 @@ fn emitPrefixed(
     skipped: *usize,
     emitted: *usize,
     limit: usize,
+    band: []const u8,
 ) !void {
     if (emitted.* >= limit) return;
     const n = wrapRowCount(text, inner);
@@ -2436,7 +2529,7 @@ fn emitPrefixed(
     }
     const local = skipped.*;
     skipped.* = 0;
-    emitted.* += try emitWrappedGutter(wr, first, rest, text, inner, local, limit - emitted.*);
+    emitted.* += try emitWrappedGutter(wr, first, rest, text, inner, local, limit - emitted.*, band);
 }
 
 fn emitTool(wr: *std.Io.Writer, meta: ToolMeta, width: usize, skip: usize, limit: usize) !usize {
@@ -2445,8 +2538,21 @@ fn emitTool(wr: *std.Io.Writer, meta: ToolMeta, width: usize, skip: usize, limit
     var emitted: usize = 0;
     var tb: [512]u8 = undefined;
     const title = toolTitle(meta, &tb, nowMs());
-    try emitPrefixed(wr, TOOL_HEAD_PREFIX, TOOL_HEAD_REST, title, gutterInner(.tool, width), &skipped, &emitted, limit);
-    if (!meta.folded) {
+    try emitPrefixed(wr, TOOL_HEAD_PREFIX, TOOL_HEAD_REST, title, gutterInner(.tool, width), &skipped, &emitted, limit, theme.bgTool(paintStatus(meta.status)));
+    if (meta.folded) {
+        // pi 式折叠尾行:体有未尽之行则缀 `· (N more lines, ctrl+o)`
+        const view = bodyView(meta.body.items);
+        if (view.len > 0) {
+            const n = countContentLines(view);
+            if (n > 2) {
+                var tail_buf: [48]u8 = undefined;
+                const tail = std.fmt.bufPrint(&tail_buf, ANSI_DIM ++ "· ({d} more lines, ctrl+o)" ++ ANSI_RESET, .{n - 2}) catch "· (more, ctrl+o)";
+                try emitPrefixed(wr, "    ", "    ", tail, width -| 4, &skipped, &emitted, limit, theme.bgTool(paintStatus(meta.status)));
+            }
+        }
+        return emitted;
+    }
+    {
         const view = bodyView(meta.body.items);
         if (view.len > 0) {
             const inner = toolBodyInner(width);
@@ -2456,7 +2562,7 @@ fn emitTool(wr: *std.Io.Writer, meta: ToolMeta, width: usize, skip: usize, limit
             while (it.next()) |part| {
                 i += 1;
                 const first = if (i == nlines) TOOL_BODY_LAST else TOOL_BODY_FIRST;
-                try emitPrefixed(wr, first, TOOL_BODY_REST, part, inner, &skipped, &emitted, limit);
+                try emitPrefixed(wr, first, TOOL_BODY_REST, part, inner, &skipped, &emitted, limit, "");
             }
         }
     }
@@ -2469,44 +2575,57 @@ fn emitUser(wr: *std.Io.Writer, text: []const u8, width: usize, skip: usize, lim
     var emitted: usize = 0;
     const g = gutter(.user);
     const inner = gutterInner(.user, width);
+    // bg + bold 一并作 band:Markdown 中途 RESET 后 writeReband 复披,行内强调后仍粗
+    var band_buf: [48]u8 = undefined;
+    const bg = theme.bgUser();
+    const band = blk: {
+        if (bg.len == 0 or bg.len + ANSI_BOLD.len > band_buf.len) break :blk bg;
+        @memcpy(band_buf[0..bg.len], bg);
+        @memcpy(band_buf[bg.len..][0..ANSI_BOLD.len], ANSI_BOLD);
+        break :blk band_buf[0 .. bg.len + ANSI_BOLD.len];
+    };
     if (text.len == 0) {
-        try emitPrefixed(wr, g.first, g.rest, "", inner, &skipped, &emitted, limit);
+        try emitPrefixed(wr, g.first, g.rest, "", inner, &skipped, &emitted, limit, band);
         return emitted;
     }
     var it = std.mem.splitScalar(u8, text, '\n');
     while (it.next()) |part| {
-        try emitPrefixed(wr, g.first, g.rest, part, inner, &skipped, &emitted, limit);
+        try emitPrefixed(wr, g.first, g.rest, part, inner, &skipped, &emitted, limit, band);
     }
     return emitted;
 }
 
-fn cellRowCount(cell: Cell, painted: []const u8, think_open: bool, width: usize) usize {
+fn cellRowCount(alloc: std.mem.Allocator, cell: Cell, painted: []const u8, think_open: bool, width: usize) usize {
     if (cell.kind == .session_header or cell.kind == .status_card) {
         if (painted.len == 0) return 0;
         return countNewlines(painted) + 1;
     }
-    if (cell.kind == .user) return userRowCount(cell.text.items, width);
+    const md = styleMd(alloc, cell.kind, cell.text.items);
+    defer md.deinit(alloc);
+    if (cell.kind == .user) return userRowCount(md.text, width);
     if (cell.kind == .think) return thinkRowCount(cell.text.items, think_open, width);
     if (cell.kind == .tool) {
         if (cell.tool) |meta| return toolRowCount(meta, width);
     }
     const inner = gutterInner(cell.kind, width);
-    if (cell.text.items.len == 0) return 1;
+    if (md.text.len == 0) return 1;
     var rows: usize = 0;
-    var it = std.mem.splitScalar(u8, cell.text.items, '\n');
+    var it = std.mem.splitScalar(u8, md.text, '\n');
     while (it.next()) |part| {
         rows += wrapRowCount(part, inner);
     }
     return if (rows == 0) 1 else rows;
 }
 
-fn emitCell(wr: *std.Io.Writer, cell: Cell, painted: []const u8, think_open: bool, width: usize, skip: usize, limit: usize) !usize {
+fn emitCell(alloc: std.mem.Allocator, wr: *std.Io.Writer, cell: Cell, painted: []const u8, think_open: bool, width: usize, skip: usize, limit: usize) !usize {
     if (limit == 0) return 0;
     if (cell.kind == .session_header or cell.kind == .status_card) {
         return emitPainted(wr, painted, width, skip, limit);
     }
+    const md = styleMd(alloc, cell.kind, cell.text.items);
+    defer md.deinit(alloc);
     if (cell.kind == .user) {
-        return emitUser(wr, cell.text.items, width, skip, limit);
+        return emitUser(wr, md.text, width, skip, limit);
     }
     if (cell.kind == .think) {
         return emitThink(wr, cell.text.items, think_open, width, skip, limit);
@@ -2520,7 +2639,7 @@ fn emitCell(wr: *std.Io.Writer, cell: Cell, painted: []const u8, think_open: boo
         const color = if (cell.color.len > 0) cell.color else ANSI_DIM;
         return emitChrome(wr, color, cell.text.items, inner, skip, limit);
     }
-    if (cell.text.items.len == 0) {
+    if (md.text.len == 0) {
         if (skip > 0) return 0;
         try wr.writeAll(g.first);
         try wr.writeAll(ANSI_RESET ++ "\x1b[K\r\n");
@@ -2528,7 +2647,7 @@ fn emitCell(wr: *std.Io.Writer, cell: Cell, painted: []const u8, think_open: boo
     }
     var emitted: usize = 0;
     var skipped: usize = 0;
-    var it = std.mem.splitScalar(u8, cell.text.items, '\n');
+    var it = std.mem.splitScalar(u8, md.text, '\n');
     var first = true;
     while (it.next()) |part| {
         const n = wrapRowCount(part, inner);
@@ -2540,7 +2659,7 @@ fn emitCell(wr: *std.Io.Writer, cell: Cell, painted: []const u8, think_open: boo
         const local = if (skipped < skip) skip - skipped else 0;
         skipped += n;
         const first_g = if (first) g.first else g.rest;
-        emitted += try emitWrappedGutter(wr, first_g, g.rest, part, inner, local, limit - emitted);
+        emitted += try emitWrappedGutter(wr, first_g, g.rest, part, inner, local, limit - emitted, "");
         first = false;
         if (emitted >= limit) return emitted;
     }
@@ -2577,7 +2696,7 @@ fn emitChrome(wr: *std.Io.Writer, color: []const u8, text: []const u8, width: us
         const local = if (skipped < skip) skip - skipped else 0;
         skipped += n;
         const prefix = if (color.len > 0) color else "";
-        emitted += try emitWrappedGutter(wr, prefix, prefix, part, width, local, limit - emitted);
+        emitted += try emitWrappedGutter(wr, prefix, prefix, part, width, local, limit - emitted, "");
         if (emitted >= limit) return emitted;
     }
     return emitted;
@@ -2657,6 +2776,14 @@ fn truncateToVisible(s: []const u8, max_cols: usize) []const u8 {
     return s;
 }
 
+fn ellipsizeAlloc(alloc: std.mem.Allocator, s: []const u8, max_cols: usize) ![]u8 {
+    if (max_cols == 0) return alloc.dupe(u8, "");
+    if (visibleCols(s) <= max_cols) return alloc.dupe(u8, s);
+    if (max_cols == 1) return alloc.dupe(u8, "…");
+    const cut = truncateToVisible(s, max_cols - 1);
+    return std.fmt.allocPrint(alloc, "{s}…", .{cut});
+}
+
 /// 从右往左丢掉段,直到拼起来不超过 width。只剩一段仍超宽就截断。
 pub fn joinFit(alloc: std.mem.Allocator, parts: []const []const u8, sep: []const u8, width: usize) ![]u8 {
     var n = parts.len;
@@ -2710,7 +2837,19 @@ fn wrapRowCount(line: []const u8, width: usize) usize {
     return rows;
 }
 
-fn emitWrappedGutter(wr: *std.Io.Writer, first: []const u8, rest: []const u8, line: []const u8, width: usize, skip: usize, limit: usize) !usize {
+/// 写 s,每遇 \x1b[0m 复披 band —— 内部 reset 会剥 bg,须重披。
+fn writeReband(wr: *std.Io.Writer, s: []const u8, band: []const u8) !void {
+    var off: usize = 0;
+    while (std.mem.indexOfPos(u8, s, off, ANSI_RESET)) |idx| {
+        try wr.writeAll(s[off .. idx + ANSI_RESET.len]);
+        try wr.writeAll(band);
+        off = idx + ANSI_RESET.len;
+    }
+    try wr.writeAll(s[off..]);
+}
+
+/// band 非空时:行首披 bg,内容复披,补白至行满再 reset —— 色带达屏缘。
+fn emitWrappedGutter(wr: *std.Io.Writer, first: []const u8, rest: []const u8, line: []const u8, width: usize, skip: usize, limit: usize, band: []const u8) !usize {
     if (limit == 0) return 0;
     const w = @max(width, 1);
     var emitted: usize = 0;
@@ -2730,8 +2869,15 @@ fn emitWrappedGutter(wr: *std.Io.Writer, first: []const u8, rest: []const u8, li
             if (skipped < skip) {
                 skipped += 1;
             } else {
+                if (band.len > 0) try wr.writeAll(band);
                 try wr.writeAll(if (row == 0) first else rest);
-                try wr.writeAll(line[row_from..i]);
+                if (band.len > 0) {
+                    try writeReband(wr, line[row_from..i], band);
+                    var p: usize = cols;
+                    while (p < w) : (p += 1) try wr.writeByte(' ');
+                } else {
+                    try wr.writeAll(line[row_from..i]);
+                }
                 try wr.writeAll(ANSI_RESET ++ "\x1b[K\r\n");
                 emitted += 1;
                 if (emitted == limit) return emitted;
@@ -2744,8 +2890,15 @@ fn emitWrappedGutter(wr: *std.Io.Writer, first: []const u8, rest: []const u8, li
         i += ch.n;
     }
     if (skipped < skip) return emitted;
+    if (band.len > 0) try wr.writeAll(band);
     try wr.writeAll(if (row == 0) first else rest);
-    try wr.writeAll(line[row_from..line.len]);
+    if (band.len > 0) {
+        try writeReband(wr, line[row_from..line.len], band);
+        var p: usize = cols;
+        while (p < w) : (p += 1) try wr.writeByte(' ');
+    } else {
+        try wr.writeAll(line[row_from..line.len]);
+    }
     try wr.writeAll(ANSI_RESET ++ "\x1b[K\r\n");
     return emitted + 1;
 }
@@ -2862,7 +3015,7 @@ fn emitThink(wr: *std.Io.Writer, buf: []const u8, open: bool, width: usize, skip
     const inner = gutterInner(.think, width);
     var it = std.mem.splitScalar(u8, buf, '\n');
     while (it.next()) |p| {
-        try emitPrefixed(wr, g.first, g.rest, p, inner, &skipped, &emitted, limit);
+        try emitPrefixed(wr, g.first, g.rest, p, inner, &skipped, &emitted, limit, "");
         if (emitted >= limit) return emitted;
     }
     return emitted;
@@ -3214,7 +3367,29 @@ fn stripForTest(alloc: std.mem.Allocator, s: []const u8) ![]u8 {
         try out.append(s[i]);
         i += 1;
     }
-    return out.toOwnedSlice();
+    // 色带补白留尾空格:剥码后逐行修剪,免扰纯文断言
+    var trimmed = std.array_list.Managed(u8).init(alloc);
+    errdefer trimmed.deinit();
+    var it = std.mem.splitScalar(u8, out.items, '\n');
+    var first = true;
+    while (it.next()) |line| {
+        if (!first) try trimmed.append('\n');
+        first = false;
+        try trimmed.appendSlice(std.mem.trimEnd(u8, line, " "));
+    }
+    out.deinit();
+    return trimmed.toOwnedSlice();
+}
+
+fn footerPlain(alloc: std.mem.Allocator, ident: FooterIdent, hint: ?[]const u8, width: usize, two_rows: bool) ![]u8 {
+    const rows = try formatFooterRows(alloc, ident, hint, width, two_rows);
+    defer rows.deinit(alloc);
+    const p = try stripForTest(alloc, rows.primary);
+    defer alloc.free(p);
+    const s = try stripForTest(alloc, rows.secondary);
+    defer alloc.free(s);
+    if (s.len == 0) return alloc.dupe(u8, p);
+    return std.fmt.allocPrint(alloc, "{s}\n{s}", .{ p, s });
 }
 
 fn countNonEmptyLines(plain: []const u8) usize {
@@ -3367,7 +3542,7 @@ fn paintCellsForTest(alloc: std.mem.Allocator, ui: *Tui, width: usize) ![]u8 {
             try fw.writer.writeAll("\x1b[K\r\n");
         }
         const painted = cardSlice(ui.cells.items[ci], cards.items, &card_i);
-        _ = try emitCell(&fw.writer, ui.cells.items[ci], painted, true, width, 0, 64);
+        _ = try emitCell(alloc, &fw.writer, ui.cells.items[ci], painted, true, width, 0, 64);
     }
     return fw.toOwnedSlice();
 }
@@ -3562,6 +3737,10 @@ test "footer identity has hierarchy and never drops model" {
         .window = 128_000,
         .cache_read = 7_440,
         .prompt = 12_000,
+        .tok_in = 4_700,
+        .tok_out = 44,
+        .tok_cache_r = 7_440,
+        .cost = 0.009,
         .pct = 9,
     };
     const rows = try formatFooterRows(t.allocator, ident, "? for shortcuts", 80, true);
@@ -3570,42 +3749,114 @@ test "footer identity has hierarchy and never drops model" {
     defer t.allocator.free(primary);
     const secondary = try stripForTest(t.allocator, rows.secondary);
     defer t.allocator.free(secondary);
-    try t.expect(std.mem.indexOf(u8, primary, "deepseek/v4-flash") != null);
-    try t.expect(std.mem.indexOf(u8, primary, "think max") != null);
-    try t.expect(std.mem.indexOf(u8, primary, "ctx 12k/128k 9%") != null);
-    try t.expect(std.mem.indexOf(u8, primary, "cache 62%") != null);
-    try t.expect(std.mem.indexOf(u8, rows.primary, ANSI_DIM ++ "deepseek/v4-flash") == null);
-    try t.expect(std.mem.indexOf(u8, rows.primary, ANSI_BOLD ++ "deepseek/v4-flash") != null);
-    try t.expect(std.mem.indexOf(u8, rows.primary, ANSI_DIM ++ "think ") != null);
-    try t.expect(std.mem.indexOf(u8, rows.primary, ANSI_DIM ++ "think max") == null);
-    try t.expect(std.mem.indexOf(u8, rows.primary, ANSI_DIM ++ "ctx ") != null);
-    try t.expect(std.mem.indexOf(u8, secondary, "~/桌面") != null);
-    try t.expect(std.mem.indexOf(u8, secondary, "1786748577703") != null);
-    try t.expect(std.mem.indexOf(u8, secondary, "? for shortcuts") != null);
+    // pi 式:行 1 = cwd (+branch),hint 右端;行 2 = stats 左,model · think 右
+    try t.expect(std.mem.indexOf(u8, primary, "~/桌面") != null);
+    try t.expect(std.mem.indexOf(u8, primary, "? for shortcuts") != null);
+    try t.expect(std.mem.indexOf(u8, secondary, "deepseek/v4-flash · max") != null);
+    try t.expect(std.mem.indexOf(u8, secondary, "ctx 9% 12k/128k") != null);
+    try t.expect(std.mem.indexOf(u8, secondary, "R7.4k") != null);
+    try t.expect(std.mem.indexOf(u8, secondary, "↑4.7k ↓44") != null);
+    // pi 式:$ 三位小数 + CH 命中率(7440/12000)
+    try t.expect(std.mem.indexOf(u8, secondary, "$0.009") != null);
+    try t.expect(std.mem.indexOf(u8, secondary, "CH62%") != null);
+    try t.expect(std.mem.indexOf(u8, rows.secondary, ANSI_BOLD ++ "deepseek/v4-flash") != null);
+    // 宽 >= 50 恒双行,窄端单行
     try t.expect(footerNeedsTwoRows(ident, "? for shortcuts", 80));
-    try t.expect(!footerNeedsTwoRows(ident, "? for shortcuts", 120));
+    try t.expect(footerNeedsTwoRows(ident, "? for shortcuts", 120));
+    try t.expect(!footerNeedsTwoRows(ident, "? for shortcuts", 49));
 
     const wide_rows = try formatFooterRows(t.allocator, ident, "? for shortcuts", 120, true);
     defer wide_rows.deinit(t.allocator);
-    const wide_p = try stripForTest(t.allocator, wide_rows.primary);
-    defer t.allocator.free(wide_p);
-    try t.expect(std.mem.indexOf(u8, wide_p, "deepseek/v4-flash") != null);
-    try t.expect(std.mem.indexOf(u8, wide_p, "ctx 12k/128k 9%") != null);
-    try t.expect(std.mem.indexOf(u8, wide_p, "cache 62%") != null);
-    try t.expectEqualStrings("", wide_rows.secondary);
+    const wide_s = try stripForTest(t.allocator, wide_rows.secondary);
+    defer t.allocator.free(wide_s);
+    try t.expect(std.mem.indexOf(u8, wide_s, "deepseek/v4-flash") != null);
+    try t.expect(std.mem.indexOf(u8, wide_s, "ctx 9% 12k/128k") != null);
 
+    // branch 缀于行 1 cwd 后
+    var with_branch = ident;
+    with_branch.branch = "main";
+    const br_rows = try formatFooterRows(t.allocator, with_branch, null, 80, true);
+    defer br_rows.deinit(t.allocator);
+    const br_p = try stripForTest(t.allocator, br_rows.primary);
+    defer t.allocator.free(br_p);
+    try t.expect(std.mem.indexOf(u8, br_p, "~/桌面 (main)") != null);
+
+    // 窄端(<50)退化为单行挤排,model 不弃
     const tight = try formatFooterRows(t.allocator, ident, "? for shortcuts", 18, true);
     defer tight.deinit(t.allocator);
     const tight_p = try stripForTest(t.allocator, tight.primary);
     defer t.allocator.free(tight_p);
     try t.expect(std.mem.indexOf(u8, tight_p, "deepseek") != null);
-    try t.expect(std.mem.indexOf(u8, tight.secondary, "~/桌面") == null);
+    try t.expectEqualStrings("", tight.secondary);
+
+    var ui = try Tui.init(t.allocator);
+    defer ui.deinit();
+    try ui.setFooterIdentity(with_branch);
+    try t.expectEqual(@as(usize, 0), ui.cells.items.len);
+    try t.expect(ui.footer_model.items.len > 0);
+    try t.expectEqualStrings("main", ui.footer_branch.items);
+}
+
+test "footer pi-style: place row 1, stats/model row 2; narrow packs" {
+    const t = std.testing;
+    const ident = FooterIdent{
+        .model = "deepseek/v4-flash",
+        .think = "max",
+        .cwd = "~/project/pi-zig",
+        .session = "1786748577703",
+        .used = 12_000,
+        .window = 128_000,
+        .cache_read = 7_440,
+        .prompt = 12_000,
+        .tok_in = 4_700,
+        .tok_out = 44,
+        .tok_cache_r = 7_440,
+        .pct = 9,
+    };
+    const hint = "? for shortcuts";
+    const widths = [_]usize{ 80, 120 };
+    for (widths) |cols| {
+        const plain = try footerPlain(t.allocator, ident, hint, cols, true);
+        defer t.allocator.free(plain);
+        // pi 式双行:行 1 地点 + hint,行 2 stats + model · think
+        try t.expect(std.mem.indexOf(u8, plain, "\n") != null);
+        try t.expect(std.mem.indexOf(u8, plain, "~/project/pi-zig") != null);
+        try t.expect(std.mem.indexOf(u8, plain, hint) != null);
+        try t.expect(std.mem.indexOf(u8, plain, "deepseek/v4-flash · max") != null);
+        try t.expect(std.mem.indexOf(u8, plain, "ctx 9% 12k/128k") != null);
+    }
+
+    // 窄端打包单行:cwd 与 model 皆在
+    const packed90 = try footerPlain(t.allocator, ident, hint, 90, false);
+    defer t.allocator.free(packed90);
+    try t.expect(std.mem.indexOf(u8, packed90, "\n") == null);
+    try t.expect(std.mem.indexOf(u8, packed90, "~/project/pi-zig") != null);
+    try t.expect(std.mem.indexOf(u8, packed90, "deepseek/v4-flash") != null);
+
+    const long_ident = FooterIdent{
+        .model = "m",
+        .cwd = "~/abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz",
+        .session = "123",
+    };
+    const squeezed = try footerPlain(t.allocator, long_ident, hint, 36, true);
+    defer t.allocator.free(squeezed);
+    try t.expect(std.mem.indexOf(u8, squeezed, "~/") != null);
+    try t.expect(std.mem.indexOf(u8, squeezed, "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz") == null);
 
     var ui = try Tui.init(t.allocator);
     defer ui.deinit();
     try ui.setFooterIdentity(ident);
-    try t.expectEqual(@as(usize, 0), ui.cells.items.len);
-    try t.expect(ui.footer_model.items.len > 0);
+    for (widths) |cols| {
+        ui.width = cols;
+        ui.height = 24;
+        const bottom = ui.measureBottom(0, false);
+        try t.expect(bottom.composer_rows >= 3);
+        try t.expectEqual(composerBoxWidth(cols), if (cols > 1) cols - 1 else cols);
+        try t.expectEqual(@as(usize, 2), bottom.footer_ident_rows);
+        const painted = try footerPlain(t.allocator, ident, hint, cols, bottom.footer_ident_rows >= 2);
+        defer t.allocator.free(painted);
+        try t.expect(std.mem.indexOf(u8, painted, "~/project/pi-zig") != null);
+    }
 }
 
 test "session card renders at paint width" {
@@ -3778,8 +4029,9 @@ test "bottom pane is reserved before transcript" {
     const idle = ui.measureBottom(0, false);
     try t.expectEqual(@as(usize, 0), idle.working_rows);
     try t.expectEqual(@as(usize, 3), idle.composer_rows);
-    try t.expectEqual(@as(usize, 1), idle.footer_rows);
-    try t.expectEqual(@as(usize, 1), idle.footer_ident_rows);
+    // pi 式:宽 >= 50 恒双行
+    try t.expectEqual(@as(usize, 2), idle.footer_rows);
+    try t.expectEqual(@as(usize, 2), idle.footer_ident_rows);
     try t.expect(idle.composer_rows >= 3);
     try t.expect(idle.height() < 24);
     const busy = ui.measureBottom(5, true);
@@ -3788,8 +4040,8 @@ test "bottom pane is reserved before transcript" {
     try t.expect(busy.composer_rows >= 3);
     ui.shortcuts_open = true;
     const help = ui.measureBottom(0, false);
-    try t.expectEqual(@as(usize, 3), help.footer_rows);
-    try t.expectEqual(@as(usize, 1), help.footer_ident_rows);
+    try t.expectEqual(@as(usize, 4), help.footer_rows);
+    try t.expectEqual(@as(usize, 2), help.footer_ident_rows);
     ui.shortcuts_open = false;
     try ui.setFooterIdentity(.{
         .model = "deepseek/v4-flash",
@@ -3800,13 +4052,19 @@ test "bottom pane is reserved before transcript" {
         .window = 128_000,
         .cache_read = 7_440,
         .prompt = 12_000,
+        .tok_in = 4_700,
+        .tok_out = 44,
+        .tok_cache_r = 7_440,
         .pct = 9,
     });
     const split = ui.measureBottom(0, false);
     try t.expectEqual(@as(usize, 2), split.footer_ident_rows);
     ui.width = 120;
     const wide = ui.measureBottom(0, false);
-    try t.expectEqual(@as(usize, 1), wide.footer_ident_rows);
+    try t.expectEqual(@as(usize, 2), wide.footer_ident_rows);
+    ui.width = 40;
+    const narrow = ui.measureBottom(0, false);
+    try t.expectEqual(@as(usize, 1), narrow.footer_ident_rows);
 }
 
 test "footer format includes ctx occupancy and cache when usage is set" {
@@ -3831,24 +4089,30 @@ test "footer format includes ctx occupancy and cache when usage is set" {
         .window = 128_000,
         .cache_read = 7_440,
         .prompt = 12_000,
+        .tok_in = 4_700,
+        .tok_out = 44,
+        .tok_cache_r = 7_440,
         .pct = 9,
     }, null, 80, true);
     defer rows.deinit(t.allocator);
-    const primary = try stripForTest(t.allocator, rows.primary);
-    defer t.allocator.free(primary);
-    try t.expect(std.mem.indexOf(u8, primary, "ctx 12k/128k 9%") != null);
-    try t.expect(std.mem.indexOf(u8, primary, "cache 62%") != null);
-    try t.expect(std.mem.indexOf(u8, primary, "deepseek/v4-flash") != null);
+    const secondary = try stripForTest(t.allocator, rows.secondary);
+    defer t.allocator.free(secondary);
+    // pi 式:行 2 左 stats 右 model · think
+    try t.expect(std.mem.indexOf(u8, secondary, "ctx 9% 12k/128k") != null);
+    try t.expect(std.mem.indexOf(u8, secondary, "R7.4k") != null);
+    try t.expect(std.mem.indexOf(u8, secondary, "↑4.7k ↓44") != null);
+    try t.expect(std.mem.indexOf(u8, secondary, "deepseek/v4-flash · max") != null);
 
     const unknown = try formatFooterRows(t.allocator, .{
         .model = "x",
         .window = 128_000,
     }, null, 80, true);
     defer unknown.deinit(t.allocator);
-    const unk = try stripForTest(t.allocator, unknown.primary);
+    const unk = try stripForTest(t.allocator, unknown.secondary);
     defer t.allocator.free(unk);
-    try t.expect(std.mem.indexOf(u8, unk, "cache —") != null);
-    try t.expect(std.mem.indexOf(u8, unk, "ctx 0/128k 0%") != null);
+    // cache 未知则不缀 R 段
+    try t.expect(std.mem.indexOf(u8, unk, " R") == null);
+    try t.expect(std.mem.indexOf(u8, unk, "ctx 0% 0/128k") != null);
 }
 
 test "slash ranking: prefix then fuzzy then description" {
@@ -3967,6 +4231,9 @@ test "measureBottom keeps a 3-row composer above the footer" {
         .window = 128_000,
         .cache_read = 7_440,
         .prompt = 12_000,
+        .tok_in = 4_700,
+        .tok_out = 44,
+        .tok_cache_r = 7_440,
         .pct = 9,
     };
     const widths = [_]usize{ 80, 120 };
@@ -4048,4 +4315,93 @@ test "composer box closes and cursor stays on the inner row" {
         try t.expect(row2 >= top2 + 1);
         try t.expect(row2 <= top2 + grown.comp_inner);
     }
+}
+test "user and tool rows carry semantic bg bands; folded tail" {
+    const t = std.testing;
+    var ui = try Tui.init(t.allocator);
+    defer ui.deinit();
+    try ui.appendUser("帮我看下这个 bug");
+    try ui.appendText("某去查日志。");
+    try ui.appendTool("read", "src/main.zig");
+    try ui.appendToolEnd("read", false, "one\ntwo\nthree\nfour\nfive");
+    const out = try paintCellsForTest(t.allocator, &ui, 80);
+    defer t.allocator.free(out);
+    // user 整行色带 + tool title 状态色带 + 折叠尾行
+    try t.expect(std.mem.indexOf(u8, out, theme.bgUser()) != null);
+    try t.expect(std.mem.indexOf(u8, out, theme.bgTool(.ok)) != null);
+    try t.expect(std.mem.indexOf(u8, out, "3 more lines, ctrl+o") != null);
+    const plain = try stripForTest(t.allocator, out);
+    defer t.allocator.free(plain);
+    try t.expect(std.mem.indexOf(u8, plain, "    · (3 more lines, ctrl+o)") != null);
+    // err 态色带
+    var ui2 = try Tui.init(t.allocator);
+    defer ui2.deinit();
+    try ui2.appendTool("bash", "ls");
+    try ui2.appendToolEnd("bash", true, "missing\n");
+    const out2 = try paintCellsForTest(t.allocator, &ui2, 80);
+    defer t.allocator.free(out2);
+    try t.expect(std.mem.indexOf(u8, out2, theme.bgTool(.err)) != null);
+    // 无色系:无色带、无补白,行为如旧
+    const saved = theme;
+    defer theme = saved;
+    theme = .{ .mode = .none };
+    const out3 = try paintCellsForTest(t.allocator, &ui2, 80);
+    defer t.allocator.free(out3);
+    try t.expect(std.mem.indexOf(u8, out3, "\x1b[48;") == null);
+    try t.expect(std.mem.indexOf(u8, out3, "\x1b[31m") != null);
+}
+
+test "footer shows (sub) for subscription provider without cost" {
+    const t = std.testing;
+    const rows = try formatFooterRows(t.allocator, .{
+        .model = "codex/gpt-5.4",
+        .cwd = "~/x",
+        .window = 272_000,
+        .subscription = true,
+    }, null, 80, true);
+    defer rows.deinit(t.allocator);
+    const s = try stripForTest(t.allocator, rows.secondary);
+    defer t.allocator.free(s);
+    // 订阅制:cost 为零亦显 $,缀 (sub)
+    try t.expect(std.mem.indexOf(u8, s, "$0.000 (sub)") != null);
+}
+
+test "assistant markdown strips markers and uses theme colors" {
+    const t = std.testing;
+    var ui = try Tui.init(t.allocator);
+    defer ui.deinit();
+    try ui.appendText("# Hello\n- item `x`");
+    const out = try paintCellsForTest(t.allocator, &ui, 80);
+    defer t.allocator.free(out);
+    try t.expect(std.mem.indexOf(u8, out, theme.fg_md_heading) != null);
+    try t.expect(std.mem.indexOf(u8, out, theme.fg_md_code) != null);
+    const plain = try stripForTest(t.allocator, out);
+    defer t.allocator.free(plain);
+    try t.expect(std.mem.indexOf(u8, plain, "Hello") != null);
+    try t.expect(std.mem.indexOf(u8, plain, "# Hello") == null);
+    try t.expect(std.mem.indexOf(u8, plain, "• item x") != null);
+}
+
+test "example theme json loads and paint keeps code color" {
+    const t = std.testing;
+    var th = Theme{};
+    const dark_json = try std.Io.Dir.cwd().readFileAlloc(util.io, "themes/dark.json", t.allocator, .limited(16 * 1024));
+    defer t.allocator.free(dark_json);
+    try t.expect(theme_mod.applyJson(&th, dark_json));
+    try t.expectEqual(@as(u8, 0x34), th.pal.user_bg.r);
+    const light_json = try std.Io.Dir.cwd().readFileAlloc(util.io, "themes/light.json", t.allocator, .limited(16 * 1024));
+    defer t.allocator.free(light_json);
+    var light = Theme{};
+    try t.expect(theme_mod.applyJson(&light, light_json));
+    try t.expectEqual(@as(u8, 0xe8), light.pal.user_bg.r);
+
+    var ui = try Tui.init(t.allocator);
+    defer ui.deinit();
+    try ui.appendText("- item `xyz`");
+    const out = try paintCellsForTest(t.allocator, &ui, 80);
+    defer t.allocator.free(out);
+    try t.expect(std.mem.indexOf(u8, out, theme.fg_md_code) != null);
+    const plain = try stripForTest(t.allocator, out);
+    defer t.allocator.free(plain);
+    try t.expect(std.mem.indexOf(u8, plain, "• item xyz") != null);
 }
