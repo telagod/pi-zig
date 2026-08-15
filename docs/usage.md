@@ -25,35 +25,29 @@ piz ~/code/api   # 指定目录
 piz -n           # 新会话，不续载
 ```
 
-默认续载该目录最近一次会话，并把历史画进对话区。输入和状态钉在屏幕底，对话在上面软换行。`PageUp` / `PageDown`、滚轮、`Ctrl+↑/↓` 翻历史。不用表情符号。
+默认续载该目录最近一次会话，并把历史画进对话区。输入和状态钉在屏幕底，对话在上面软换行。对话区可以**拖选复制**（原生终端选区；没有开鼠标按键跟踪）。`PageUp` / `PageDown`、滚轮、`Ctrl+↑/↓` 翻历史。不用表情符号。`/copy` `/dump` 仍是剪贴板后备。
 
-开场是 Codex 式会话卡：标题、模型、目录。会话、授权、上下文占用在 `/status`。输入是底栏框，不是壳上的 `>`。空框按 `?` 看快捷键。
+开场不画会话卡。身份钉在输入框底下：模型加粗，`think` / `ctx` / `cache` 标签更淡、数字正常色，目录·会话 id 和 `? for shortcuts` 最淡。宽终端（大约 ≥100 列）全部挤在一行；挤不下才拆第二行（路径和 hint），不右对齐留空白。完整栏（授权、上下文文件、用量）仍在 `/status`，按需才画进对话。输入是底栏框，不是壳上的 `>`。空框按 `?` 看快捷键。
 
-槽位对齐 Codex：用户 `›`，正文 `•`，思考同槽但淡且斜体，工具 `•` 起、`└` 收。忙碌时输入框上方一行 `Working`，不是一列活动。
+对话是分块分层，靠左栏、缩进和字重区分，不是同一列淡灰。用户每行一条亮竖线 `▎`（加粗正文，没有 `┌/└` 空行）；思考退后两格、淡斜体（`Ctrl+T` 收成 `· thought` 一行）；助手正文同样缩进两格、正常色、没有竖线；工具再缩两格，一行写完 `▸` 名（加粗）+ 预览（淡）+ 状态，默认折叠，`Ctrl+O` 才在下面展开正文。块与块之间空一行；同轮兄弟工具中间不加空行。忙碌时输入框上方一行 `Working`，比对话更淡。
 
 ```
-╭──────────────────────────────────────────╮
-│ >_ piz (v0.1.0)                          │
-│                                          │
-│ model:      deepseek/flash  high  /model │
-│ directory:  ~/project/pi-zig             │
-│ session:    1786741809022                │
-╰──────────────────────────────────────────╯
+▎ your message
 
-› your message
-• dim italic thinking
-• assistant text
-• bash  zig test src/foo.zig
-  └ 4.2KB
+  dim italic thinking
+
+  assistant text
+
+    ▸ bash  zig test src/foo.zig  ok 1.2s 12ln
 ⠹ Working (12s • esc to interrupt)
  └ bash  zig test src/foo.zig
 ╭──────────────────────────────────────────╮
 │ › _                                      │
 ╰──────────────────────────────────────────╯
-? for shortcuts                        12%
+deepseek/v4-flash think max ctx 1.2k/128k 9% cache 62% ~/project/pi-zig · 1786741809022 ? for shortcuts
 ```
 
-页脚左侧是下一步提示，右侧是上下文占用。思考档是当前选的（默认 `high`），`/think` 或 `Alt+,/.` 改。
+页脚随 `/model`、`Alt+,/.`（或 `/think`）以及每轮结束的 usage 回调刷新。占用是 `est_ctx / 窗口`（`12k/128k 9%`），不是单独一个 `0%`。缓存是上一轮 API 回报的命中：有 `cached_tokens` / `prompt_cache_hit_tokens` / `cache_read_input_tokens` 时写 `cache 62%` 或 `cached 8.1k`；没回报就 `cache —`，不编数字。一行装不下时先把路径和 hint 挪到第二行；再窄才按 cwd → session → think → cache 标签 → ctx 绝对数的顺序收，模型不丢。思考档是当前选的（默认 `high`）。
 
 上下文窗口按 pi 的声明解析：DeepSeek 只有 `deepseek-v4-flash` / `deepseek-v4-pro`（窗 1000000）；未写窗口的自定义模型缺省 128000。不是 131k。
 
@@ -81,7 +75,7 @@ piz -n           # 新会话，不续载
  └ agent  重构解析器，把递归下降改成 Pratt
 ```
 
-对话区里工具已经按 `•` / `└` 落成历史。Working 只回答「还在动、多久了、Esc 能停」。并行超过两路的活动仍在跑，只是不把输入框顶出屏幕。
+对话区里每个工具是助手下面的一行（`    ▸ bash  zig test  ok 1.2s 12ln`），默认不贴 stdout。`Ctrl+O` 在下面用 `│` / `└` 展开正文。Working 只回答「还在动、多久了、Esc 能停」。并行超过两路的活动仍在跑，只是不把输入框顶出屏幕。
 
 执行中按 `Esc` 取消（长命令在 100ms 内停下，整个进程组一起收掉），按 `Ctrl+B` 转后台。空闲时 `Ctrl+C` 清空输入；输入为空再按一次（1 秒内）退出。退出后终端印 `resume: piz -s <id>`，下次用这条回来。
 
@@ -102,6 +96,7 @@ piz -n           # 新会话，不续载
 | `!command` | 执行 shell 命令，输出发给模型 |
 | `!!command` | 执行 shell 命令，输出**不**发给模型（自己看） |
 | `/name args` | 未知斜杠命令会尝试当作 prompt 模板展开 |
+| `/` | 输入框一出现 `/` 就在上方弹出命令选择器（见下） |
 | `/permissions` `/model` `/think` | 无参数弹出选择器：↑↓ 或 j/k，Enter 确认，Esc 取消 |
 
 `@` 引用只识别 `@/`、`@./`、`@../` 三种前缀，这是为了避免误伤邮箱地址和普通 `@` 符号。裸文件名（`@foo.txt`）不会展开，写 `@./foo.txt`。
@@ -109,6 +104,8 @@ piz -n           # 新会话，不续载
 模型正在生成时输入的内容会进队列，当前轮结束后自动投递。`/queue` 清空队列。
 
 ## 斜杠命令
+
+输入框里打 `/` 立刻在输入框上方弹出选择器，每行挤在一起：`/status session model cwd tokens`（命令加粗，说明更淡）。排序：前缀匹配先于模糊子序列，再才是说明里的关键字。`st` 会把 `/status` 排到无关命令前面；`mod` 命中 `/model`；光一个 `/` 列出全部。↑↓ 移动，Tab 补全名字，Enter 执行当前选中项。没匹配上的 `/foo` 照旧当未知命令提交（prompt 模板）。
 
 | 命令 | 作用 |
 |------|------|
@@ -282,19 +279,19 @@ piz web [--port N] [--no-open] [--token T | --no-token]
 
 键位当前是硬编码的，暂不支持自定义配置。
 
-键位对齐 [Codex TUI](https://developers.openai.com/codex/cli/slash-commands) 的默认表：Esc 中止、Ctrl+C/D 空行再按一次才退出、空框 `?` 出快捷键。piz 多出来的是 `Ctrl+B` 转后台、`Ctrl+T` 折叠思考、`PageUp`/`PageDown` / 滚轮 / `Ctrl+↑↓` 滚对话。思考等级（`Alt+,/.`）与 Codex 相同。
+键位对齐 [Codex TUI](https://developers.openai.com/codex/cli/slash-commands) 的默认表：Esc 中止、Ctrl+C/D 空行再按一次才退出、空框 `?` 出快捷键。piz 多出来的是 `Ctrl+B` 转后台、`Ctrl+T` 折叠思考、`Ctrl+O` 折叠工具输出、`PageUp`/`PageDown` / 滚轮 / `Ctrl+↑↓` 滚对话。对话区拖选即可复制（原生选区）。思考等级（`Alt+,/.`）与 Codex 相同。
 
 | 键 | 作用 |
 |----|------|
 | `Enter` | 提交；模型忙碌时也投进队列 |
-| `Tab` | 模型忙碌时把当前输入入队（空闲时无补全） |
+| `Tab` | `/` 选择器打开时补全命令名；模型忙碌时把当前输入入队 |
 | `Esc` | 执行中：中止本轮；空闲空行再按一次：把上一条载回输入框 |
 | `Ctrl+C` | 有字：清空输入；空行：提示「再按一次退出」，1 秒内再按才退出 |
 | `Ctrl+D` | 空行：与 Ctrl+C 相同的两步退出 |
 | `/quit` `/exit` `/q` | 立刻退出；离开备用屏后印 `resume: piz -s <id>` |
 | `Ctrl+B` | 执行中：把在跑的活动转后台；空闲：光标左移 |
 | `Ctrl+F` | 光标右移 |
-| `Ctrl+P` / `Ctrl+N` | 上 / 下一条输入历史 |
+| `Ctrl+P` / `Ctrl+N` | `/` 选择器打开时移动选项，否则上 / 下一条输入历史 |
 | `Ctrl+A` | 光标到行首 |
 | `Ctrl+E` | 光标到行尾 |
 | `Ctrl+K` | 删到行尾 |
@@ -302,14 +299,16 @@ piz web [--port N] [--no-open] [--token T | --no-token]
 | `Ctrl+W` | 删除前一个单词 |
 | `Ctrl+L` | 清屏重绘 |
 | `Ctrl+T` | 折叠 / 展开本轮思考（不改等级；不是 Codex 的 transcript overlay） |
+| `Ctrl+O` | 折叠 / 展开工具输出（默认折叠成摘要；对齐 Claude Code 的 expand） |
 | `PageUp` / `PageDown` | 向上 / 向下滚对话（半页） |
-| 鼠标滚轮 | 向上 / 向下滚对话（3 行） |
+| 拖选 | 原生选中对话区文字并复制（终端 Shift 不是必须的） |
+| 鼠标滚轮 | 向上 / 向下滚对话（alternate-scroll；也可用 PageUp / Ctrl+↑↓） |
 | `Ctrl+↑` / `Ctrl+↓` | 向上 / 向下滚对话（3 行） |
 | `Home` / `End` | 光标到行首 / 行尾 |
 | `Alt+,` / `Alt+.` | 思考更浅 / 更深（只走当前模型支持的档，例如 Flash 是 off→low→high→max，Pro 是 off→high→max） |
 | `Shift+↓` / `Shift+↑` | 同上 |
 | `?` | 空输入框：打开 / 关闭快捷键叠层 |
-| `↑` / `↓` | 翻输入历史 |
+| `↑` / `↓` | `/` 选择器打开时移动选项，否则翻输入历史 |
 | `←` / `→` | 移动光标 |
 | `y` / `n` / `Esc` / `a` / `s` | 权限提示：允许 / 拒绝 / 拒绝 / 总是 / 跳过 |
 

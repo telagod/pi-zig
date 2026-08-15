@@ -19,14 +19,6 @@ const runopts = @import("runopts.zig");
 
 const VERSION = "0.1.0";
 
-const WelcomeRow = struct {
-    version: []const u8,
-    model: []const u8,
-    think: []const u8,
-    cwd: []const u8,
-    session: []const u8,
-};
-
 const StatusRow = struct {
     version: []const u8,
     model: []const u8,
@@ -37,16 +29,6 @@ const StatusRow = struct {
     context: []const u8,
     usage: []const u8,
 };
-
-fn formatWelcome(alloc: std.mem.Allocator, row: WelcomeRow, width: usize) ![]u8 {
-    return tui_mod.formatSessionCard(alloc, .{
-        .version = row.version,
-        .model = row.model,
-        .think = row.think,
-        .cwd = row.cwd,
-        .session = row.session,
-    }, width);
-}
 
 fn formatStatusCard(alloc: std.mem.Allocator, row: StatusRow, width: usize) ![]u8 {
     return tui_mod.formatStatusCard(alloc, .{
@@ -162,10 +144,10 @@ const HELP =
     \\
 ;
 
-const HelpItem = struct { cmd: []const u8, desc: []const u8 };
+const HelpItem = tui_mod.SlashItem;
 
 /// `/help` 清单。每个真实存在的命令都必须在这里出现 —— 漏掉的等于没实现。
-/// 下面有测试盯着这份表与实际分发的一致性。
+/// 下面有测试盯着这份表与实际分发的一致性。TUI slash picker ranks this table.
 const SLASH_ITEMS = [_]HelpItem{
     .{ .cmd = "/help", .desc = "list commands" },
     .{ .cmd = "/status", .desc = "session card" },
@@ -205,6 +187,7 @@ const EDIT_ITEMS = [_]HelpItem{
     .{ .cmd = "Tab", .desc = "queue input while busy" },
     .{ .cmd = "Ctrl+B", .desc = "background while busy" },
     .{ .cmd = "Ctrl+T", .desc = "fold thinking" },
+    .{ .cmd = "Ctrl+O", .desc = "fold tool output" },
     .{ .cmd = "PgUp/PgDn", .desc = "scroll transcript" },
     .{ .cmd = "Ctrl+↑/↓", .desc = "scroll a few lines" },
     .{ .cmd = "wheel", .desc = "scroll transcript" },
@@ -335,17 +318,32 @@ const App = struct {
         return std.fmt.bufPrint(buf, "{d}", .{n}) catch "?";
     }
 
-    /// 页脚右侧:上下文占用。模型/目录在开场卡和 `/status` 里。
-    fn statusLine(self: *App) ![]u8 {
+    /// 页脚身份:模型 / 思考档 / 占用 / 缓存 / 目录 / 会话。开场不再画卡片。
+    /// Occupancy is `est_ctx / ctxWindow`. Cache is last-turn API usage
+    /// (`ai.Usage.cache_read` / `input`) — null stays `cache —`, never faked.
+    fn refreshFooter(self: *App) void {
+        const cwd = tildePath(self.alloc, self.agent.cwd) catch return;
+        defer self.alloc.free(cwd);
         const cw = self.agent.ctxWindow();
         const used = self.est_ctx.load(.acquire);
         const pct = if (cw > 0) used * 100 / cw else 0;
-        const ink: []const u8 = if (pct > 85) "\x1b[31m" else "";
-        if (gitBranch(self.alloc)) |br| {
-            defer self.alloc.free(br);
-            return std.fmt.allocPrint(self.alloc, "{s}{d}%\x1b[0m  \x1b[2m{s}\x1b[0m", .{ ink, pct, br });
-        }
-        return std.fmt.allocPrint(self.alloc, "{s}{d}%\x1b[0m", .{ ink, pct });
+        const u = if (self.agent.last_usage.input != null or self.agent.last_usage.cache_read != null)
+            self.agent.last_usage
+        else
+            self.last_usage;
+        var model_buf: [96]u8 = undefined;
+        self.tui.setFooterIdentity(.{
+            .model = self.modelLabel(&model_buf),
+            .think = tui_mod.thinkLabel(self.tui.think_level),
+            .cwd = cwd,
+            .session = self.sess.sessionId(),
+            .used = used,
+            .window = cw,
+            .cache_read = u.cache_read,
+            .prompt = u.input,
+            .pct = pct,
+            .hot = pct > 85,
+        }) catch {};
     }
 
     fn modelLabel(self: *App, buf: *[96]u8) []const u8 {
@@ -412,16 +410,7 @@ const App = struct {
 
 fn showWelcome(app: *App, n_msgs: usize) void {
     _ = n_msgs;
-    const cwd = tildePath(app.alloc, app.agent.cwd) catch return;
-    defer app.alloc.free(cwd);
-    var model_buf: [96]u8 = undefined;
-    app.tui.setSessionHeader(.{
-        .version = VERSION,
-        .model = app.modelLabel(&model_buf),
-        .think = tui_mod.thinkLabel(app.tui.think_level),
-        .cwd = cwd,
-        .session = app.sess.sessionId(),
-    }) catch {};
+    app.refreshFooter();
 }
 
 fn replaceSession(app: *App) !void {
@@ -466,7 +455,7 @@ fn showStatusCard(app: *App) void {
 }
 
 /// 把已载入的会话画进 TUI。续载只把消息给了模型,不画的话 PageUp 没有历史可滚。
-fn replayTranscript(tui: *tui_mod.Tui, alloc: std.mem.Allocator, msgs: []const ai.Message) void {
+fn replayTranscript(tui: *tui_mod.Tui, msgs: []const ai.Message) void {
     var pending: [16][]const u8 = undefined;
     var pending_n: usize = 0;
     var pending_i: usize = 0;
@@ -485,16 +474,8 @@ fn replayTranscript(tui: *tui_mod.Tui, alloc: std.mem.Allocator, msgs: []const a
             pending_i = 0;
             if (m.tool_calls) |tcs| {
                 for (tcs) |tc| {
-                    var buf = std.array_list.Managed(u8).init(alloc);
-                    defer buf.deinit();
-                    buf.appendSlice(tc.name) catch {};
                     const preview = toolArgsPreview(tc.args);
-                    if (preview.len > 0) {
-                        buf.appendSlice("  ") catch {};
-                        buf.appendSlice(preview[0..@min(preview.len, 120)]) catch {};
-                        if (preview.len > 120) buf.appendSlice("...") catch {};
-                    }
-                    tui.appendTool(buf.items) catch {};
+                    tui.appendTool(tc.name, preview[0..@min(preview.len, 120)]) catch {};
                     if (pending_n < pending.len) {
                         pending[pending_n] = tc.name;
                         pending_n += 1;
@@ -510,15 +491,7 @@ fn replayTranscript(tui: *tui_mod.Tui, alloc: std.mem.Allocator, msgs: []const a
                 pending_i += 1;
                 break :blk n;
             } else "";
-            var buf = std.array_list.Managed(u8).init(alloc);
-            defer buf.deinit();
-            if (name.len > 0) {
-                buf.appendSlice(name) catch {};
-                buf.appendSlice("  ") catch {};
-            }
-            var bb: [24]u8 = undefined;
-            buf.appendSlice(activity.formatBytes(&bb, m.content.len)) catch {};
-            tui.appendToolEnd(buf.items) catch {};
+            tui.appendToolEnd(name, false, m.content) catch {};
         }
     }
     tui.bakeThink();
@@ -558,16 +531,8 @@ fn toolArgsPreview(args: []const u8) []const u8 {
 
 fn tuiOnToolStart(ctx: ?*anyopaque, name: []const u8, args: []const u8) anyerror!void {
     const app: *App = @ptrCast(@alignCast(ctx.?));
-    var buf = std.array_list.Managed(u8).init(app.alloc);
-    defer buf.deinit();
-    buf.appendSlice(name) catch {};
     const preview = toolArgsPreview(args);
-    if (preview.len > 0) {
-        buf.appendSlice("  ") catch {};
-        buf.appendSlice(preview[0..@min(preview.len, 120)]) catch {};
-        if (preview.len > 120) buf.appendSlice("...") catch {};
-    }
-    app.tui.appendTool(buf.items) catch {};
+    app.tui.appendTool(name, preview[0..@min(preview.len, 120)]) catch {};
     var ea = util.Arena.init(app.alloc);
     defer ea.deinit();
     const ealloc = ea.allocator();
@@ -579,13 +544,7 @@ fn tuiOnToolStart(ctx: ?*anyopaque, name: []const u8, args: []const u8) anyerror
 
 fn tuiOnToolEnd(ctx: ?*anyopaque, name: []const u8, is_error: bool, summary: []const u8) anyerror!void {
     const app: *App = @ptrCast(@alignCast(ctx.?));
-    var buf = std.array_list.Managed(u8).init(app.alloc);
-    defer buf.deinit();
-    buf.appendSlice(name) catch {};
-    var bb: [24]u8 = undefined;
-    buf.appendSlice(if (is_error) "  err  " else "  ") catch {};
-    buf.appendSlice(activity.formatBytes(&bb, summary.len)) catch {};
-    app.tui.appendToolEnd(buf.items) catch {};
+    app.tui.appendToolEnd(name, is_error, summary) catch {};
     var ea = util.Arena.init(app.alloc);
     defer ea.deinit();
     const ealloc = ea.allocator();
@@ -597,15 +556,14 @@ fn tuiOnToolEnd(ctx: ?*anyopaque, name: []const u8, is_error: bool, summary: []c
 
 fn tuiOnPaint(ctx: ?*anyopaque) void {
     const app: *App = @ptrCast(@alignCast(ctx orelse return));
-    const st = app.statusLine() catch return;
-    defer app.alloc.free(st);
-    app.tui.setStatus("\x1b[0m", st) catch {};
+    app.refreshFooter();
 }
 
 fn tuiOnThink(ctx: ?*anyopaque) void {
     const app: *App = @ptrCast(@alignCast(ctx orelse return));
     app.agent.think_level = app.tui.think_level;
     persistThink(app);
+    showWelcome(app, app.agent.messages.items.len);
 }
 
 fn persistThink(app: *App) void {
@@ -675,8 +633,7 @@ fn openModelPicker(app: *App) void {
 
 fn tuiOnTurnEnd(ctx: ?*anyopaque) anyerror!void {
     const app: *App = @ptrCast(@alignCast(ctx.?));
-    const st = app.statusLine() catch return;
-    app.tui.setStatus("\x1b[0m", st) catch {};
+    app.refreshFooter();
     app.events.emit("turn_end", "");
 }
 
@@ -860,8 +817,7 @@ fn workerMain(wctx: *WorkerCtx) void {
         app.agent.aborted.store(false, .release);
         // 发布本轮后的上下文占用:主线程状态栏经它读,不碰活 messages
         app.est_ctx.store(app.agent.estTokens(), .release);
-        const st = app.statusLine() catch return;
-        app.tui.setStatus("\x1b[0m", st) catch {};
+        app.refreshFooter();
         if (err_msg != null) break; // 出错停止投递后续队列
     }
 }
@@ -927,8 +883,6 @@ fn onSubmit(tui: *tui_mod.Tui, line: []const u8) anyerror!void {
                 return;
             };
             showWelcome(app, 0);
-            const st = app.statusLine() catch return;
-            app.tui.setStatus("\x1b[0m", st) catch {};
             return;
         }
         if (std.mem.startsWith(u8, cmd, "title ")) {
@@ -941,8 +895,7 @@ fn onSubmit(tui: *tui_mod.Tui, line: []const u8) anyerror!void {
                 return;
             };
             app.tui.appendLine("", "\x1b[2m", if (title.len > 0) "title set" else "title cleared") catch {};
-            const st = app.statusLine() catch return;
-            app.tui.setStatus("\x1b[0m", st) catch {};
+            app.refreshFooter();
             return;
         }
         if (std.mem.eql(u8, cmd, "sessions")) {
@@ -1008,9 +961,7 @@ fn onSubmit(tui: *tui_mod.Tui, line: []const u8) anyerror!void {
             }
             app.tui.clearScroll();
             showWelcome(app, app.agent.messages.items.len);
-            replayTranscript(app.tui, app.alloc, app.agent.messages.items);
-            const st = app.statusLine() catch return;
-            app.tui.setStatus("\x1b[0m", st) catch {};
+            replayTranscript(app.tui, app.agent.messages.items);
             return;
         }
         if (std.mem.eql(u8, cmd, "undo")) {
@@ -1042,8 +993,7 @@ fn onSubmit(tui: *tui_mod.Tui, line: []const u8) anyerror!void {
                 app.tui.appendLine("", "\x1b[31m", bw.written()) catch {};
                 return;
             };
-            const st = app.statusLine() catch return;
-            app.tui.setStatus("\x1b[0m", st) catch {};
+            showWelcome(app, app.agent.messages.items.len);
             return;
         }
         if (std.mem.eql(u8, cmd, "compact")) {
@@ -1207,8 +1157,7 @@ fn onSubmit(tui: *tui_mod.Tui, line: []const u8) anyerror!void {
             defer bw.deinit();
             bw.writer.print("forked {d} messages -> session {s}", .{ n, std.fs.path.basename(app.sess.path) }) catch {};
             app.tui.appendLine("", "\x1b[2m", bw.written()) catch {};
-            const st = app.statusLine() catch return;
-            app.tui.setStatus("\x1b[0m", st) catch {};
+            app.refreshFooter();
             return;
         }
         if (std.mem.eql(u8, cmd, "tree")) {
@@ -1314,8 +1263,7 @@ fn onSubmit(tui: *tui_mod.Tui, line: []const u8) anyerror!void {
         }
         if (std.mem.eql(u8, cmd, "status")) {
             showStatusCard(app);
-            const st = app.statusLine() catch return;
-            app.tui.setStatus("\x1b[0m", st) catch {};
+            app.refreshFooter();
             return;
         }
         if (std.mem.eql(u8, cmd, "permissions") or std.mem.startsWith(u8, cmd, "permissions ") or
@@ -1340,8 +1288,7 @@ fn onSubmit(tui: *tui_mod.Tui, line: []const u8) anyerror!void {
             defer bw.deinit();
             bw.writer.print("permissions {s}", .{mode.uiLabel()}) catch {};
             app.tui.appendLine("", "\x1b[2m", bw.written()) catch {};
-            const st = app.statusLine() catch return;
-            app.tui.setStatus("\x1b[0m", st) catch {};
+            app.refreshFooter();
             return;
         }
         if (std.mem.eql(u8, cmd, "think") or std.mem.startsWith(u8, cmd, "think ")) {
@@ -1366,8 +1313,7 @@ fn onSubmit(tui: *tui_mod.Tui, line: []const u8) anyerror!void {
             app.tui.think_level = clamped;
             app.agent.think_level = clamped;
             persistThink(app);
-            const st = app.statusLine() catch return;
-            app.tui.setStatus("\x1b[0m", st) catch {};
+            showWelcome(app, app.agent.messages.items.len);
             var bw = std.Io.Writer.Allocating.init(app.alloc);
             defer bw.deinit();
             if (clamped != level)
@@ -1562,6 +1508,7 @@ pub fn runInteractive(alloc: std.mem.Allocator, cfg: *cfgmod.Config, cwd: []cons
     // TUI
     var tui = try tui_mod.Tui.init(alloc);
     defer tui.deinit();
+    tui.slash_items = &SLASH_ITEMS;
     // 声明在 tui.deinit 之后 → LIFO 下先执行:长驻 subagent 先收摊,
     // 之后才还原终端,它们的收尾输出不会打在已经恢复的 shell 上。
     defer pluginsmod.shutdownAgents();
@@ -1599,6 +1546,7 @@ pub fn runInteractive(alloc: std.mem.Allocator, cfg: *cfgmod.Config, cwd: []cons
     tui.ctx = &app;
     if (cfg.default_think_level) |lv| app.tui.think_level = lv;
     app.syncThink();
+    app.est_ctx.store(agent.estTokens(), .release);
     // 接线回调:流式输出 + 工具行 + 权限询问(此前缺失,交互模式流式显示依赖于此)
     agent.cbs = .{
         .ctx = &app,
@@ -1615,9 +1563,7 @@ pub fn runInteractive(alloc: std.mem.Allocator, cfg: *cfgmod.Config, cwd: []cons
     app.perm.always.store(app.approval == .yolo, .release);
 
     showWelcome(&app, loaded.len);
-    replayTranscript(&tui, alloc, loaded);
-    const st = try app.statusLine();
-    try tui.setStatus("\x1b[0m", st);
+    replayTranscript(&tui, loaded);
 
     try tui.run(.{
         .on_submit = onSubmit,
@@ -2100,7 +2046,7 @@ test "every slash command appears in /help" {
     try t.expect(std.mem.indexOf(u8, text, "keys") != null);
 }
 
-test "welcome banner is a session table" {
+test "status card still builds; welcome is footer not a header cell" {
     const t = std.testing;
     const note = try welcomeNote(t.allocator, 12, "refactor");
     defer t.allocator.free(note);
@@ -2109,23 +2055,38 @@ test "welcome banner is a session table" {
     defer t.allocator.free(fresh);
     try t.expectEqualStrings("new", fresh);
 
-    const text = try formatWelcome(t.allocator, .{
-        .version = "0.1.0",
+    var ui = try tui_mod.Tui.init(t.allocator);
+    defer ui.deinit();
+    try ui.setFooterIdentity(.{
         .model = "deepseek/flash",
         .think = "high",
         .cwd = "~/pi-zig",
         .session = "1786735635034",
-    }, 80);
-    defer t.allocator.free(text);
-    try t.expect(std.mem.indexOf(u8, text, "piz") != null);
-    try t.expect(std.mem.indexOf(u8, text, "0.1.0") != null);
-    try t.expect(std.mem.indexOf(u8, text, "model:") != null);
-    try t.expect(std.mem.indexOf(u8, text, "directory:") != null);
-    try t.expect(std.mem.indexOf(u8, text, "session:") != null);
-    try t.expect(std.mem.indexOf(u8, text, "1786735635034") != null);
-    try t.expect(std.mem.indexOf(u8, text, "/model") != null);
-    try t.expect(std.mem.indexOf(u8, text, "╭") != null);
-    try t.expect(std.mem.indexOf(u8, text, "██▀▀█") == null);
+        .used = 0,
+        .window = 128_000,
+        .pct = 0,
+    });
+    try t.expectEqual(@as(usize, 0), ui.cells.items.len);
+    for (ui.cells.items) |c| try t.expect(c.kind != .session_header);
+
+    const foot = try tui_mod.formatFooterRows(t.allocator, .{
+        .model = "deepseek/flash",
+        .think = "high",
+        .cwd = "~/pi-zig",
+        .session = "1786735635034",
+        .used = 12_000,
+        .window = 128_000,
+        .cache_read = 7_440,
+        .prompt = 12_000,
+        .pct = 9,
+    }, "? for shortcuts", 80, true);
+    defer foot.deinit(t.allocator);
+    try t.expect(std.mem.indexOf(u8, foot.primary, "deepseek/flash") != null);
+    try t.expect(std.mem.indexOf(u8, foot.primary, "ctx ") != null);
+    try t.expect(std.mem.indexOf(u8, foot.primary, "12k/128k 9%") != null);
+    try t.expect(std.mem.indexOf(u8, foot.primary, "cache ") != null);
+    try t.expect(std.mem.indexOf(u8, foot.primary, "62%") != null);
+    try t.expect(std.mem.indexOf(u8, foot.secondary, "~/pi-zig") != null or std.mem.indexOf(u8, foot.secondary, "1786735635034") != null);
 
     const card = try formatStatusCard(t.allocator, .{
         .version = "0.1.0",
@@ -2139,8 +2100,11 @@ test "welcome banner is a session table" {
     }, 80);
     defer t.allocator.free(card);
     try t.expect(std.mem.indexOf(u8, card, "continued · refactor · 12") != null);
+    try t.expect(std.mem.indexOf(u8, card, "model:") != null);
+    try t.expect(std.mem.indexOf(u8, card, "deepseek/flash") != null);
     try t.expect(std.mem.indexOf(u8, card, "permissions:") != null);
     try t.expect(std.mem.indexOf(u8, card, "usage:") != null);
+    try t.expect(std.mem.indexOf(u8, card, "╭") != null);
 }
 
 test "replayTranscript paints user assistant tools" {
@@ -2158,7 +2122,7 @@ test "replayTranscript paints user assistant tools" {
         .{ .role = "tool", .content = "a\nb\n" },
         .{ .role = "assistant", .content = "done" },
     };
-    replayTranscript(&ui, alloc, &msgs);
+    replayTranscript(&ui, &msgs);
     try t.expect(ui.contains("list files"));
     try t.expect(ui.contains("running"));
     try t.expect(ui.contains("think first"));
