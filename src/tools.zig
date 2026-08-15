@@ -1156,10 +1156,10 @@ pub fn find(name: []const u8) ?*const Tool {
 /// 没登记的名字默认要问 —— 插件和 MCP 不能因为没写进表就放行。
 pub fn needsConfirm(name: []const u8) bool {
     const safe = [_][]const u8{
-        "read",                 "grep",                 "find",
-        "ls",                   "todo_read",            "todo_write",
-        "get_context_remaining", "git_status",           "skill",
-        "read_image",           "lsp",                  "ask_user",
+        "read",                  "grep",       "find",
+        "ls",                    "todo_read",  "todo_write",
+        "get_context_remaining", "git_status", "skill",
+        "read_image",            "lsp",        "ask_user",
     };
     for (safe) |s| {
         if (std.mem.eql(u8, name, s)) return false;
