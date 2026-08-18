@@ -712,6 +712,11 @@ pub const Agent = struct {
         o.compat = cfgmod.resolveCompat(self.provider, self.model);
         o.thinking_budgets = self.cfg.thinking_budgets;
         o.max_output = meta.max_output;
+        o.cache_retention = self.cfg.cache_retention;
+        // 环境变量优先于 settings(对齐上游 PI_CACHE_RETENTION)。
+        if (util.getEnv("PIZ_CACHE_RETENTION")) |s| {
+            if (cfgmod.CacheRetention.parse(s)) |r| o.cache_retention = r;
+        }
         return o;
     }
 

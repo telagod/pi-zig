@@ -24,7 +24,6 @@ piz 的插件是**编译期注册的 Zig 函数表**，不是运行时加载的�
 
 | 插件 | 挂载点 | 作用 |
 |------|--------|------|
-| `tool-output-pruner` | `before_turn` | 裁剪早期工具输出，省上下文 |
 | `cross-session-memory` | `on_compact` | 压缩摘要落盘，跨会话注入 |
 | `concept-graph` | `on_compact` | 从摘要提取概念 |
 | `compact-resilience` | `on_compact_failed` | 压缩失败时换备用模型重试 |
@@ -55,13 +54,13 @@ piz 的插件是**编译期注册的 Zig 函数表**，不是运行时加载的�
 ```bash
 piz --plugins                          # 列出全部插件与当前启用状态
 piz --plugin lsp --plugin todo         # 本次开启（可重复）
-piz --no-plugin tool-output-pruner     # 本次关闭（撤钩、撤工具、撤 schema）
+piz --no-plugin cross-session-memory  # 本次关闭（撤钩、撤工具、撤 schema）
 ```
 
 持久生效写进 `~/.piz/settings.json`：
 
 ```json
-{ "plugins": ["lsp", "todo"], "disabled_plugins": ["tool-output-pruner"] }
+{ "plugins": ["lsp", "todo"], "disabled_plugins": ["cross-session-memory"] }
 ```
 
 `--plugins` 显示的是**本次实际生效**的状态（出厂集 + settings.json + `--plugin` / `--no-plugin` + 技能自动检测），不是编译期默认。关在开之后应用，所以 `--no-plugin` 能盖掉 settings 里的开启。
@@ -92,16 +91,9 @@ piz --no-plugin tool-output-pruner     # 本次关闭（撤钩、撤工具、撤
 
 ## 各插件行为
 
-### tool-output-pruner
+### 快压（已入核心，不再是插件）
 
-上下文压力下先跑快压三件套，而不是直接触发全量压缩 —— 压缩要额外调一次模型，这三层不要钱。实现在 `compress.zig`。
-
-- **prune**：同 path 再 read 立刻 supersede 旧结果（保护窗内也裁）；年龄裁优先动 suffix ≤ 8K 的廉价尾，不够才深裁。保护最近 16K，能省 ≥4K 才动手。skill 永不裁，最新一次 read 保留。消息数不再卡 8192。
-- **shake**（用量 >70% 或 `/shake`）：撕掉旧 tool 结果与大 fence/XML。硬线前再救援一次。`/shake images` 只丢图。WebUI 可用 `act=shake-images` 或 `name=images`。
-- **snap**（用量 >80% 或 `/snap`）：8x13+CJK 按家塑形密图 + 原文摘；优先廉价尾护 cache；无 vision / 图 token 不过关则跳过。`/fast-compress` 看状态。
-- 被裁内容换成占位，不破坏轮结构
-
-比 omp 更狠的点：不永保全部 read；廉价尾不够省就深裁；snap 不拿汉字赌 OCR。
+大 tool 结果进门即定形（密图 + 摘录），此后不改；85% 硬线机械折页。见 `compress.zig`。旧版回溯式 prune/shake/snap 已废 —— 改已送消息会把 prompt cache 前缀整段作废。
 
 ### cross-session-memory
 
@@ -231,7 +223,7 @@ test "line_count tool" {
 工具**并行执行**（上限 8），写插件时注意：
 
 - **工具 handler 会在工作线程里跑。** 不要在 handler 里改 `Agent` 的可变状态（`messages`、`last_usage`）。现有 `ctx_handler` 只读 `provider` / `model` / 计数。
-- **`before_turn` 不在并行区。** 它可以安全地改 `messages`（`tool-output-pruner` 就这么做）。
+- **`before_turn` 不在并行区。** 它可以安全地改 `messages`。
 - **`on_tool_before` / `on_tool_result` 在串行阶段调用** —— 前者在 preflight，后者在按序写回阶段。可以安全触碰共享状态。
 - **需要跨调用的插件状态**要自己加锁，并且按 Agent 实例隔离。参考 `todo` 插件：用 `std.AutoHashMap(usize, ...)` 以 Agent 指针地址为 key，配 `std.Io.Mutex`。用全局单例会让 Web UI 的多个会话互相踩。
 - 状态用长生命周期 allocator（`self.alloc`），**不要用 arena** —— arena 每轮释放。

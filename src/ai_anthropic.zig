@@ -76,7 +76,7 @@ fn writeAnthropicThinkParams(
 }
 
 pub fn serializeAnthropic(alloc: std.mem.Allocator, model: []const u8, messages: []const Message, tools: []const ToolDef, max_tokens: u32) ![]u8 {
-    return serializeAnthropicThink(alloc, model, messages, tools, max_tokens, .off, .{}, false, .{}, .{}, 0);
+    return serializeAnthropicThink(alloc, model, messages, tools, max_tokens, .off, .{}, false, .{}, .{}, 0, .short);
 }
 
 pub fn serializeAnthropicThink(
@@ -91,7 +91,17 @@ pub fn serializeAnthropicThink(
     compat: cfgmod.Compat,
     budgets: cfgmod.ThinkingBudgets,
     max_output: u32,
+    cache_retention: cfgmod.CacheRetention,
 ) ![]u8 {
+    // prompt cache 断点(学制 pi-mono anthropic-messages.ts):
+    //   system 一块 + 末位 tool 定义 + 末条 user/tool 消息的末块,共 3 个(API 上限 4)。
+    //   none 全不打;long 加 ttl=1h(默认 ephemeral 5 分钟)。
+    // 与入境定形互为表里:已送消息永不被改,前缀稳,断点才真正命中。
+    const cache_cc: ?[]const u8 = switch (cache_retention) {
+        .none => null,
+        .short => ",\"cache_control\":{\"type\":\"ephemeral\"}",
+        .long => ",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"1h\"}",
+    };
     var aw = std.Io.Writer.Allocating.init(alloc);
     defer aw.deinit();
     const writer = &aw.writer;
@@ -116,6 +126,10 @@ pub fn serializeAnthropicThink(
             try std.json.Stringify.value(td.desc, .{}, writer);
             try writer.writeAll(",\"input_schema\":");
             try writeSchema(writer, td.schema);
+            // 末位 tool 定义是断点二:tools 数组稳则整段前缀可复用。
+            if (i == tools.len - 1) {
+                if (cache_cc) |cc| try writer.writeAll(cc);
+            }
             try writer.writeAll("}");
         }
         try writer.writeAll("]");
@@ -131,12 +145,21 @@ pub fn serializeAnthropicThink(
         if (sys.written().len > 0) {
             try writer.writeAll(",\"system\":[{\"type\":\"text\",\"text\":");
             try std.json.Stringify.value(sys.written(), .{}, writer);
-            try writer.writeAll(",\"cache_control\":{\"type\":\"ephemeral\"}}]");
+            if (cache_cc) |cc| try writer.writeAll(cc);
+            try writer.writeAll("}]");
         }
     }
     try writer.writeAll(",\"stream\":true,\"messages\":[");
     var first = true;
-    for (messages) |m| {
+    // 断点三:末条 user/tool 消息的末块(会话历史前缀的封口)。
+    var last_user_idx: ?usize = null;
+    if (cache_cc != null) {
+        for (messages, 0..) |m, i| {
+            if (std.mem.eql(u8, m.role, "user") or std.mem.eql(u8, m.role, "tool")) last_user_idx = i;
+        }
+    }
+    for (messages, 0..) |m, mi| {
+        const last_cc: ?[]const u8 = if (last_user_idx != null and last_user_idx.? == mi) cache_cc else null;
         if (std.mem.eql(u8, m.role, "system")) continue;
         if (std.mem.eql(u8, m.role, "tool")) {
             if (!first) try writer.writeByte(',');
@@ -144,6 +167,7 @@ pub fn serializeAnthropicThink(
             try std.json.Stringify.value(m.tool_call_id orelse "", .{}, writer);
             try writer.writeAll(",\"content\":");
             try writeJsonText(writer, m.content);
+            if (last_cc) |cc| try writer.writeAll(cc);
             try writer.writeAll("}]}");
             first = false;
             continue;
@@ -193,7 +217,9 @@ pub fn serializeAnthropicThink(
             try std.json.Stringify.value(m.image_mime orelse "image/png", .{}, writer);
             try writer.writeAll(",\"data\":\"");
             try writer.writeAll(img);
-            try writer.writeAll("\"}}]}");
+            try writer.writeAll("\"}}");
+            if (last_cc) |cc| try writer.writeAll(cc);
+            try writer.writeAll("]}");
         } else if (std.mem.eql(u8, m.role, "assistant") and hasAnthropicThinkingReplay(m)) {
             try writer.writeAll(",\"content\":[");
             const wrote = try writeAnthropicThinkingBlock(writer, m, compat.allow_empty_signature orelse false);
@@ -204,6 +230,12 @@ pub fn serializeAnthropicThink(
                 try writer.writeByte('}');
             }
             try writer.writeAll("]}");
+        } else if (last_cc != null) {
+            // 末条 user 纯文本:转成块数组才能挂断点。
+            try writer.writeAll(",\"content\":[{\"type\":\"text\",\"text\":");
+            try writeJsonText(writer, m.content);
+            if (last_cc) |cc| try writer.writeAll(cc);
+            try writer.writeAll("}]}");
         } else {
             try writer.writeAll(",\"content\":");
             try writeJsonText(writer, m.content);
@@ -213,20 +245,6 @@ pub fn serializeAnthropicThink(
     }
     try writer.writeAll("]");
     try writeAnthropicThinkParams(writer, think_level, think_map, reasoning, compat, budget_tokens);
-    if (tools.len > 0) {
-        try writer.writeAll(",\"tools\":[");
-        for (tools, 0..) |td, i| {
-            if (i > 0) try writer.writeByte(',');
-            try writer.writeAll("{\"name\":");
-            try std.json.Stringify.value(td.name, .{}, writer);
-            try writer.writeAll(",\"description\":");
-            try std.json.Stringify.value(td.desc, .{}, writer);
-            try writer.writeAll(",\"input_schema\":");
-            try writeSchema(writer, td.schema);
-            try writer.writeAll("}");
-        }
-        try writer.writeAll("]");
-    }
     try writer.writeAll("}");
     return aw.toOwnedSlice();
 }

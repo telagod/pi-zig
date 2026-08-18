@@ -152,10 +152,7 @@ deepseek/v4-flash think max ctx 1.2k/128k 9% cache 62% ~/project/pi-zig · 17867
 | `/undo` | 撤销最近一轮（删除最后一条 user 消息及其后全部） |
 | `/redo` | 重发上一次输入。Web 上也可 `Ctrl+Shift+R`；`Ctrl+Shift+C` 复制最后回复 |
 | `/compact` | 立即压缩上下文（密图 + 摘录，不调模型） |
-| `/shake` | 机械裁掉旧 tool 结果与大 fence/XML，不调模型 |
-| `/shake images` | 只丢掉消息上的图片附件 |
-| `/snap` | 把大段 ASCII tool 输出打成密图并留原文摘（无 vision 则跳过） |
-| `/fast-compress` | 看快压状态：用量、下一层、vision、已裁计数 |
+| `/fast-compress` | 看快压状态：窗况、vision、raw 大块清单 |
 | `/pkg` | 列出已装资源包（用户 + 项目） |
 | `/plugins` | 列出本会话插件（`piz plugins` 同） |
 | `/plugins on <name>` | 开启插件（下一轮生效，写入 settings） |

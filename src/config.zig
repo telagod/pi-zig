@@ -10,6 +10,21 @@ pub const SandboxMode = sandboxmod.Mode;
 
 pub const Api = enum { openai_completions, anthropic_messages, openai_responses };
 
+/// prompt cache 保留档:none 全关 / short 默认 5 分钟 / long 一小时(Anthropic ttl=1h)。
+/// 学制 pi-mono:PI_CACHE_RETENTION 或 settings 的 cacheRetention。
+pub const CacheRetention = enum {
+    none,
+    short,
+    long,
+
+    pub fn parse(s: []const u8) ?CacheRetention {
+        if (std.mem.eql(u8, s, "none")) return .none;
+        if (std.mem.eql(u8, s, "short")) return .short;
+        if (std.mem.eql(u8, s, "long")) return .long;
+        return null;
+    }
+};
+
 /// 未知模型缺省窗口。跟 pi 一样是十进制 128000,不是 128*1024。
 /// 后者会显示成 131k,就是状态栏上那个错数。
 pub const DEFAULT_CONTEXT_WINDOW: u32 = 128000;
@@ -887,6 +902,8 @@ pub const Config = struct {
     disabled_plugins: []const []const u8 = &.{},
     /// settings.json 的 `theme`:dark|light|auto|自定义名(读 ~/.piz/themes/{name}.json)。
     theme: []const u8 = "auto",
+    /// settings.json 的 `cacheRetention`:none|short|long。缺省 short。
+    cache_retention: CacheRetention = .short,
     /// 加载时解析失败的配置文件名(不含路径)。
     ///
     /// 语法错误的配置会被静默当成不存在,于是用户看到的是「unknown provider」
@@ -1109,6 +1126,9 @@ pub const Config = struct {
                 if (getStr(root, "theme")) |s| {
                     if (s.len > 0) self.theme = s;
                 }
+                if (getStr(root, "cacheRetention")) |s| {
+                    if (CacheRetention.parse(s)) |r| self.cache_retention = r;
+                }
                 if (root.object.get("disabled_plugins")) |arr| {
                     if (arr == .array) {
                         var names = std.array_list.Managed([]const u8).init(alloc);
@@ -1300,6 +1320,9 @@ pub const Config = struct {
         }
         if (getStr(root, "theme")) |s| {
             if (s.len > 0) self.theme = try alloc.dupe(u8, s);
+        }
+        if (getStr(root, "cacheRetention")) |s| {
+            if (CacheRetention.parse(s)) |r| self.cache_retention = r;
         }
         if (root.object.get("disabled_plugins")) |arr| {
             if (arr == .array) {
@@ -2098,6 +2121,24 @@ test "settings.json defaultThinkingLevel loads" {
     defer c.deinit();
     try c.load();
     try t.expectEqual(ThinkLevel.low, c.default_think_level.?);
+}
+
+test "settings.json cacheRetention loads" {
+    const t = std.testing;
+    try util.testInit();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = util.Arena.init(t.allocator);
+    const a = arena.allocator();
+    const cwd_abs = try std.process.currentPathAlloc(util.io, a);
+    const tmp_path = try std.fmt.allocPrint(a, "{s}/.zig-cache/tmp/{s}", .{ cwd_abs, tmp.sub_path });
+    try util.environ_map.?.put("PIZ_DIR", tmp_path);
+    try tmp.dir.writeFile(util.io, .{ .sub_path = "settings.json", .data = "{\"cacheRetention\":\"long\"}" });
+    var c = Config{ .arena = &arena };
+    defer c.deinit();
+    try c.load();
+    try t.expectEqual(CacheRetention.long, c.cache_retention);
+    try t.expect(CacheRetention.parse("bogus") == null);
 }
 
 test "Anthropic adaptive maps and detect match pi generate-models.ts" {

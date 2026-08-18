@@ -67,7 +67,7 @@ graph TD
     tui --> core
 
     core --> agent["agent.zig — 工具循环 / 压缩"]
-    core --> compress["compress.zig — prune/shake/snap"]
+    core --> compress["compress.zig — 入境定形/折页"]
     core --> ai["ai.zig — provider 协议 / SSE"]
     ai --> markers["ai_markers.zig — 漏进正文的 tool-call 标记"]
     ai --> astream["ai_stream.zig — SSE 解析 / 工具累积"]
@@ -114,7 +114,7 @@ graph TD
 | 文件 | 职责 |
 |------|------|
 | `agent.zig` | 工具循环编排、消息组装、压缩、并行执行与写锁 |
-| `compress.zig` | 快压三件套：prune / shake / snap，无 LLM |
+| `compress.zig` | 快压：入境定形（shapeIngress）+ 机械折页（compactHistory），无 LLM |
 | `ai.zig` | 两种 provider 协议的序列化与 SSE 流式解析 |
 | `ai_markers.zig` | 漏进正文的 tool-call 标记清单 |
 | `ai_json.zig` | provider 请求体 JSON 字符串 / schema |
@@ -219,16 +219,17 @@ sequenceDiagram
 
 ## 上下文管理
 
-四层，从便宜到贵：
+两层，无 LLM（学制 pi-moke 快压新制：入境定形 + 折页）：
 
-1. **快压**（`compress.zig`，`tool-output-pruner` 的 `before_turn`）— 无 LLM。
-   - **prune**：同 path 再 read 立刻 supersede 旧结果；年龄裁优先动 cache 廉价尾（suffix ≤ 8K），不够才深裁。保护最近 16K，能省 ≥4K 才动手。skill 永不裁，最新一次 read 保留。
-   - **shake**（用量 >70% 或 `/shake`）：撕掉旧 tool 结果与大 fence/XML。硬线前（>85%）再跑一次 protect=0 救援，避免单轮过大切不动。`/shake images` 只丢图。
-   - **snap**（用量 >80% 或 `/snap`）：大段输出打成 8x13+CJK 密图并留 head/tail 摘。Anthropic 用 `11on16`，OpenAI 系用 `8on22`。优先廉价尾（suffix ≤ 8K），无货才深打，少炸 prompt cache。无 vision / 图 token 不过关则跳过。tool 上的图在发请求时拆成 user 图块。`/fast-compress` 看用量与下一层。
-2. **压缩**（`agent.zig` 的 `compact`）— 总 token 超窗口 85% 时触发，密图 + 摘录替换被裁段（不调模型），保留最近 20% 窗口预算。切点只落在 `user`/`assistant`，绝不切断 tool 结果对。增量式：只总结上次边界之后的内容。
+1. **入境定形**（`compress.zig` 的 `shapeIngress`，agent 核心写回工具结果时调用）—— 大 tool 结果（≥3000 tok）进门即定稿：有 vision 打 8x13+CJK 密图 + 首尾摘录，无 vision 仅摘录；图比原文贵（省不到 15%）退摘录，摘录也不省则原样放行。**已送前缀永不改** —— 不回溯裁旧消息，Anthropic prompt cache 前缀才稳定。skill/context 工具不裁。窗况脚注只在任务节点盖（回合首个工具批 / 入境定形 / 85% 硬线），≥40% 的 turn 节点带 `/compact` 提示。
+2. **折页**（`agent.zig` 的 `compact` → `compress.compactHistory`）—— 总 token 超窗口 85%（或 `/compact`）把旧段收成短卡（FILES/INTENTS/EXCERPT + 密图），不调模型，保留最近 20% 窗口预算。切点只落在 `user`/`assistant`，绝不切断 tool 结果对。增量式：只折上次边界之后的内容。`/fast-compress` 看窗况与 raw 大块清单。
 3. **跨会话记忆**（`cross-session-memory` 插件，`on_compact`）— 复用压缩摘要落盘，下次同目录启动注入。零额外调用。
 
 压缩失败时 `compact-resilience` 换备用模型重试一次。
+
+### prompt cache 控制
+
+Anthropic 请求打三处断点（API 上限 4）：末位 tool 定义、system 块、末条 user/tool 消息末块。保留档：`cacheRetention: none|short|long`（settings.json）或环境变量 `PIZ_CACHE_RETENTION`（优先）；short = ephemeral 5 分钟（默认），long = ttl 1h，none 全关。OpenAI 系自动缓存，`prompt_cache_key` 按 cwd 路由（retention=none 时不发）。
 
 ## 并发模型
 

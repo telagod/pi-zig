@@ -64,6 +64,7 @@ piz 用自己的配置目录 `~/.piz`。配置**文件格式**与 pi 兼容（`s
 | `thinkingBudgets` | 旧 Claude 预算思考每档 token。缺省 `minimal:1024` / `low:2048` / `medium:8192` / `high:16384`（pi `adjustMaxTokensForThinking`）。`xhigh`/`max` 夹到 `high` |
 | `plugins` | 要开启的可选插件名数组，见 [Plugins](plugins.md#开启方式) |
 | `disabled_plugins` | 要从出厂集关掉的插件名数组（撤钩 / 工具 / schema） |
+| `cacheRetention` | prompt cache 保留档：`none`（全关）/ `short`（ephemeral 5 分钟，缺省）/ `long`（Anthropic ttl 1h）。Anthropic 打三断点：末位 tool、system、末条 user 消息末块 |
 
 `plugins` 里的未知名字只警告不报错（配置可能是为更新版本写的）；`--plugin` 传的未知名字直接失败。
 
@@ -281,6 +282,7 @@ my-router     → MYROUTER_API_KEY
 | `PIZ_MODEL` | 覆盖默认模型，**优先级最高** |
 | `<PROVIDER>_API_KEY` | 该 provider 的 key |
 | `PIZ_WEB_SEARCH_URL` | SearXNG 端点，供 `web_search` 工具用 |
+| `PIZ_CACHE_RETENTION` | 覆盖 `cacheRetention`（none/short/long），优先级最高 |
 
 `PIZ_PROVIDER` / `PIZ_MODEL` 是 piz 自己的变量，与 pi 无关。
 

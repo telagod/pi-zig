@@ -65,6 +65,7 @@ pub const Callbacks = struct {
 pub const Options = struct {
     max_tokens: u32 = 8192,
     cache_key: ?[]const u8 = null,
+    cache_retention: cfgmod.CacheRetention = .short,
     think_level: ThinkLevel = .high,
     think_map: cfgmod.ThinkingLevelMap = .{},
     reasoning: bool = true,

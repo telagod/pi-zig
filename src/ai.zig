@@ -104,8 +104,9 @@ fn serializeAnthropicThink(
     compat: cfgmod.Compat,
     budgets: cfgmod.ThinkingBudgets,
     max_output: u32,
+    cache_retention: cfgmod.CacheRetention,
 ) ![]u8 {
-    return aanthro.serializeAnthropicThink(alloc, model, messages, tools, max_tokens, think_level, think_map, reasoning, compat, budgets, max_output);
+    return aanthro.serializeAnthropicThink(alloc, model, messages, tools, max_tokens, think_level, think_map, reasoning, compat, budgets, max_output, cache_retention);
 }
 
 /// 主入口:发送请求并流式解析,结果写 result(arena 或调用方 allocator)。
@@ -171,11 +172,11 @@ pub fn run(
     const msgs = clampProviderImages(alloc, messages, provider.api) catch messages;
 
     const body = if (provider.api == .anthropic_messages)
-        try serializeAnthropicThink(alloc, model, msgs, tools, options.max_tokens, options.think_level, options.think_map, options.reasoning, options.compat, options.thinking_budgets, options.max_output)
+        try serializeAnthropicThink(alloc, model, msgs, tools, options.max_tokens, options.think_level, options.think_map, options.reasoning, options.compat, options.thinking_budgets, options.max_output, options.cache_retention)
     else if (provider.api == .openai_responses)
         try serializeResponses(alloc, model, msgs, tools, options.max_tokens, options.think_level, options.think_map, options.reasoning, options.compat)
     else
-        try serializeOpenAIThink(alloc, model, msgs, tools, options.max_tokens, options.cache_key, options.think_level, options.think_map, options.reasoning, options.compat);
+        try serializeOpenAIThink(alloc, model, msgs, tools, options.max_tokens, if (options.cache_retention == .none) null else options.cache_key, options.think_level, options.think_map, options.reasoning, options.compat);
     defer alloc.free(body);
 
     var headers = std.array_list.Managed(httpc.Header).init(alloc);
@@ -601,24 +602,24 @@ test "Anthropic adaptive and budget thinking match pi anthropic-messages.ts" {
     };
     const sonnet = cfgmod.metaFor(&ant, "claude-sonnet-4-6");
     const sonnet_c = cfgmod.resolveCompat(&ant, "claude-sonnet-4-6");
-    const adaptive = try serializeAnthropicThink(a, "claude-sonnet-4-6", &msgs, &.{}, 8192, .high, sonnet.think_map, true, sonnet_c, .{}, sonnet.max_output);
+    const adaptive = try serializeAnthropicThink(a, "claude-sonnet-4-6", &msgs, &.{}, 8192, .high, sonnet.think_map, true, sonnet_c, .{}, sonnet.max_output, .short);
     try t.expect(std.mem.indexOf(u8, adaptive, "\"thinking\":{\"type\":\"adaptive\",\"display\":\"summarized\"}") != null);
     try t.expect(std.mem.indexOf(u8, adaptive, "\"output_config\":{\"effort\":\"high\"}") != null);
     try t.expect(std.mem.indexOf(u8, adaptive, "budget_tokens") == null);
 
     const opus = cfgmod.metaFor(&ant, "claude-opus-4-7");
     const opus_c = cfgmod.resolveCompat(&ant, "claude-opus-4-7");
-    const xhigh = try serializeAnthropicThink(a, "claude-opus-4-7", &msgs, &.{}, 8192, .xhigh, opus.think_map, true, opus_c, .{}, 0);
+    const xhigh = try serializeAnthropicThink(a, "claude-opus-4-7", &msgs, &.{}, 8192, .xhigh, opus.think_map, true, opus_c, .{}, 0, .short);
     try t.expect(std.mem.indexOf(u8, xhigh, "\"effort\":\"xhigh\"") != null);
 
-    const off = try serializeAnthropicThink(a, "claude-sonnet-4-6", &msgs, &.{}, 8192, .off, sonnet.think_map, true, sonnet_c, .{}, 0);
+    const off = try serializeAnthropicThink(a, "claude-sonnet-4-6", &msgs, &.{}, 8192, .off, sonnet.think_map, true, sonnet_c, .{}, 0, .short);
     try t.expect(std.mem.indexOf(u8, off, "\"thinking\":{\"type\":\"disabled\"}") != null);
 
-    const silent = try serializeAnthropicThink(a, "claude-sonnet-4-6", &msgs, &.{}, 8192, .high, sonnet.think_map, false, sonnet_c, .{}, 0);
+    const silent = try serializeAnthropicThink(a, "claude-sonnet-4-6", &msgs, &.{}, 8192, .high, sonnet.think_map, false, sonnet_c, .{}, 0, .short);
     try t.expect(std.mem.indexOf(u8, silent, "thinking") == null);
 
     const budget_c = cfgmod.Compat{};
-    const budget = try serializeAnthropicThink(a, "claude-sonnet-4-20250514", &msgs, &.{}, 8192, .high, .{}, true, budget_c, .{}, 64000);
+    const budget = try serializeAnthropicThink(a, "claude-sonnet-4-20250514", &msgs, &.{}, 8192, .high, .{}, true, budget_c, .{}, 64000, .short);
     try t.expect(std.mem.indexOf(u8, budget, "\"thinking\":{\"type\":\"enabled\",\"budget_tokens\":16384") != null);
     try t.expect(std.mem.indexOf(u8, budget, "\"max_tokens\":24576") != null);
 
@@ -629,7 +630,7 @@ test "Anthropic adaptive and budget thinking match pi anthropic-messages.ts" {
         .reasoning = "step",
         .thinking_signature = "sig",
     }};
-    const replay = try serializeAnthropicThink(a, "claude-sonnet-4-6", &replay_msgs, &.{}, 100, .high, sonnet.think_map, true, sonnet_c, .{}, 0);
+    const replay = try serializeAnthropicThink(a, "claude-sonnet-4-6", &replay_msgs, &.{}, 100, .high, sonnet.think_map, true, sonnet_c, .{}, 0, .short);
     try t.expect(std.mem.indexOf(u8, replay, "\"type\":\"thinking\",\"thinking\":\"step\",\"signature\":\"sig\"") != null);
 
     const nosig = [_]Message{.{
@@ -637,7 +638,7 @@ test "Anthropic adaptive and budget thinking match pi anthropic-messages.ts" {
         .content = "hi",
         .reasoning = "step",
     }};
-    const as_text = try serializeAnthropicThink(a, "m", &nosig, &.{}, 100, .off, .{}, false, .{}, .{}, 0);
+    const as_text = try serializeAnthropicThink(a, "m", &nosig, &.{}, 100, .off, .{}, false, .{}, .{}, 0, .short);
     try t.expect(std.mem.indexOf(u8, as_text, "\"type\":\"text\",\"text\":\"step\"") != null);
     try t.expect(std.mem.indexOf(u8, as_text, "\"type\":\"thinking\"") == null);
 }
@@ -930,25 +931,48 @@ test "anthropic request carries a cache breakpoint on system" {
     // 系统提示内容仍然在
     try t.expect(std.mem.indexOf(u8, body, "long system prompt with project rules") != null);
 
-    // 断点必须在 system 上,不在 tools 上 —— Anthropic 按 tools→system→messages
-    // 拼前缀,标在 system 末尾就已覆盖 tools,标在 tools 上反而漏掉 system。
+    // 新制三断点(学制 pi-mono):末位 tool(tools 段在 system 前) + system 末块
+    // + 末条 user 消息末块。Anthropic 按 tools→system→messages 拼前缀,三处封口。
     const i_tools = std.mem.indexOf(u8, body, "\"tools\":[").?;
     const i_sys = std.mem.indexOf(u8, body, "\"system\":[").?;
-    const i_cc = std.mem.indexOf(u8, body, "\"cache_control\"").?;
     try t.expect(i_tools < i_sys);
-    try t.expect(i_cc > i_sys);
+    try t.expect(std.mem.indexOf(u8, body[i_tools..i_sys], "\"cache_control\"") != null); // 末位 tool
+    try t.expect(std.mem.indexOf(u8, body[i_sys..], "\"cache_control\"") != null); // system 块
+    var n_cc: usize = 0;
+    var scan: usize = 0;
+    while (std.mem.indexOfPos(u8, body, scan, "\"cache_control\"")) |p| {
+        n_cc += 1;
+        scan = p + 1;
+    }
+    try t.expectEqual(@as(usize, 3), n_cc);
 }
 
-test "no cache breakpoint when there is no system prompt" {
+test "anthropic cache retention none and long" {
+    const t = std.testing;
+    var arena = util.Arena.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const msgs = [_]Message{
+        .{ .role = "system", .content = "rules" },
+        .{ .role = "user", .content = "hi" },
+    };
+    var defs = [_]ToolDef{.{ .name = "read", .desc = "read a file", .schema = "{\"type\":\"object\"}" }};
+    const off = try @import("ai_anthropic.zig").serializeAnthropicThink(a, "m", &msgs, &defs, 100, .off, .{}, false, .{}, .{}, 0, .none);
+    try t.expect(std.mem.indexOf(u8, off, "cache_control") == null);
+    const long = try @import("ai_anthropic.zig").serializeAnthropicThink(a, "m", &msgs, &defs, 100, .off, .{}, false, .{}, .{}, 0, .long);
+    try t.expect(std.mem.indexOf(u8, long, "\"ttl\":\"1h\"") != null);
+}
+
+test "no system prompt still seals history on the last user message" {
     const t = std.testing;
     var arena = util.Arena.init(t.allocator);
     defer arena.deinit();
     const a = arena.allocator();
     const msgs = [_]Message{.{ .role = "user", .content = "hi" }};
     const body = try serializeAnthropic(a, "m", &msgs, &.{}, 100);
-    // 没有 system 就不该出现空的 system 数组或孤立的断点
+    // 没有 system 就不该出现空的 system 数组;断点落在末条 user 消息上。
     try t.expect(std.mem.indexOf(u8, body, "\"system\"") == null);
-    try t.expect(std.mem.indexOf(u8, body, "\"cache_control\"") == null);
+    try t.expect(std.mem.indexOf(u8, body, "\"content\":[{\"type\":\"text\",\"text\":\"hi\",\"cache_control\":{\"type\":\"ephemeral\"}}]") != null);
 }
 
 test "static parts precede messages so the cacheable prefix stays intact" {
