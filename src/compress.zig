@@ -1,13 +1,18 @@
-// compress.zig — 快压三件套:prune → shake → snap。无 LLM。
+// compress.zig — 快压四层:prune → shake → snap → fold。无 LLM。
 //
-// 比 omp 更好的四处:
+// 窗管(runAuto):就地裁大工具结果,对话骨架不动。
+// 折页(compactHistory):/compact 与 85% 硬线把旧段收成短卡,不调模型。
+//
+// 比 omp 更好的几处:
 //   1. 同 path 再 read 立刻 supersede 旧结果(保护窗内也裁)。omp/旧 piz 永保全部 read。
 //   2. 年龄裁与 snap 优先动 cache 廉价尾(suffix ≤ 8K),不够才深裁,不无故炸热前缀。
 //   3. shake 可卸 fence/XML 大块;硬线前自动救援(protect=0),避免「单轮过大切不动」。
 //   4. snap 多带+留原文摘,无 vision / CJK / 图 token 不过关则跳过。
+//   5. fold 打短卡(FILES/意图/摘录),旧摘要不再塞进 PREVIOUS。
 const std = @import("std");
 const ai = @import("ai.zig");
 const imgx = @import("imgx.zig");
+const snapfont = @import("snapfont.zig");
 const util = @import("util.zig");
 const cfgmod = @import("config.zig");
 
@@ -196,7 +201,7 @@ pub fn prune(in: Input) Report {
             r.superseded += 1;
             r.tokens_saved += if (tok > PLACEHOLDER_EST) tok - PLACEHOLDER_EST else 0;
         } else {
-            seen_paths.put(path, {}) catch {};
+            seen_paths.put(path, {}) catch |err| util.debugCatch("compact.seen", err);
         }
     }
 
@@ -374,7 +379,7 @@ fn collectFences(text: []const u8, ranges: *std.array_list.Managed(ElideRange)) 
             } else {
                 in_fence = false;
                 const tok = est(text[fence_start..idx]);
-                if (tok >= FENCE_MIN_TOKENS) ranges.append(.{ .start = fence_start, .end = idx, .kind = .fence }) catch {};
+                if (tok >= FENCE_MIN_TOKENS) ranges.append(.{ .start = fence_start, .end = idx, .kind = .fence }) catch |err| util.debugCatch("compact.fence", err);
             }
         }
         line_start = idx + 1;
@@ -434,7 +439,7 @@ fn collectXml(text: []const u8, ranges: *std.array_list.Managed(ElideRange)) voi
         };
         const tok = est(text[i..close]);
         if (tok >= FENCE_MIN_TOKENS) {
-            ranges.append(.{ .start = i, .end = close, .kind = .xml }) catch {};
+            ranges.append(.{ .start = i, .end = close, .kind = .xml }) catch |err| util.debugCatch("compact.xml", err);
             i = close;
             continue;
         }
@@ -525,6 +530,166 @@ pub fn appendForRequest(out: *std.array_list.Managed(ai.Message), m: ai.Message)
         return;
     }
     try out.append(m);
+}
+
+/// /compact 与 85% 硬线的折页结果:短卡 + 可选密图(打卡,不打原文)。
+pub const Fold = struct {
+    summary: []const u8,
+    image: ?[]const u8 = null,
+    width: u32 = 0,
+    height: u32 = 0,
+};
+
+const FOLD_FILE_MAX: usize = 24;
+const FOLD_INTENT_MAX: usize = 3;
+const FOLD_INTENT_CHARS: usize = 200;
+const FOLD_HEAD_LINES: usize = 16;
+const FOLD_TAIL_LINES: usize = 8;
+const FOLD_MSG_CLAMP: usize = 400;
+
+fn isOldFold(s: []const u8) bool {
+    return std.mem.startsWith(u8, s, "(Conversation compacted") or
+        std.mem.startsWith(u8, s, "[Snapcompact]") or
+        std.mem.eql(u8, s, "[Snapcompact frame]");
+}
+
+fn jsonPath(s: []const u8) ?[]const u8 {
+    const key = "\"path\"";
+    const i = std.mem.indexOf(u8, s, key) orelse return null;
+    var j = i + key.len;
+    while (j < s.len and (s[j] == ' ' or s[j] == '\t' or s[j] == ':' or s[j] == '\n' or s[j] == '\r')) j += 1;
+    if (j >= s.len or s[j] != '"') return null;
+    j += 1;
+    const start = j;
+    while (j < s.len and s[j] != '"') j += 1;
+    if (j > start) return s[start..j];
+    return null;
+}
+
+fn pushUnique(list: *std.array_list.Managed([]const u8), p: []const u8) !void {
+    if (p.len == 0 or p.len > 512) return;
+    for (list.items) |x| {
+        if (std.mem.eql(u8, x, p)) return;
+    }
+    if (list.items.len >= FOLD_FILE_MAX) return;
+    try list.append(p);
+}
+
+fn collectFiles(alloc: std.mem.Allocator, discarded: []const ai.Message) ![][]const u8 {
+    var files = std.array_list.Managed([]const u8).init(alloc);
+    for (discarded) |m| {
+        if (isOldFold(m.content)) continue;
+        if (jsonPath(m.content)) |p| try pushUnique(&files, p);
+        if (m.tool_calls) |tcs| {
+            for (tcs) |tc| {
+                if (jsonPath(tc.args)) |p| try pushUnique(&files, p);
+            }
+        }
+    }
+    return files.toOwnedSlice();
+}
+
+fn collectIntents(alloc: std.mem.Allocator, discarded: []const ai.Message) ![][]const u8 {
+    var found: [FOLD_INTENT_MAX][]const u8 = undefined;
+    var n: usize = 0;
+    var i = discarded.len;
+    while (i > 0 and n < FOLD_INTENT_MAX) {
+        i -= 1;
+        const m = discarded[i];
+        if (!std.mem.eql(u8, m.role, "user")) continue;
+        if (isOldFold(m.content)) continue;
+        found[n] = util.clampUtf8(std.mem.trim(u8, m.content, " \t\r\n"), FOLD_INTENT_CHARS);
+        n += 1;
+    }
+    const out = try alloc.alloc([]const u8, n);
+    var k: usize = 0;
+    while (k < n) : (k += 1) out[k] = found[n - 1 - k];
+    return out;
+}
+
+fn collectExcerpt(alloc: std.mem.Allocator, discarded: []const ai.Message) ![]u8 {
+    var lines = std.array_list.Managed([]const u8).init(alloc);
+    defer lines.deinit();
+    for (discarded) |m| {
+        if (isOldFold(m.content)) continue;
+        const body = util.clampUtf8(m.content, FOLD_MSG_CLAMP);
+        try lines.append(try std.fmt.allocPrint(alloc, "[{s}] {s}", .{ m.role, body }));
+    }
+    var out = std.array_list.Managed(u8).init(alloc);
+    if (lines.items.len == 0) return out.toOwnedSlice();
+    if (lines.items.len <= FOLD_HEAD_LINES + FOLD_TAIL_LINES) {
+        for (lines.items) |ln| {
+            try out.appendSlice(ln);
+            try out.append('\n');
+        }
+    } else {
+        for (lines.items[0..FOLD_HEAD_LINES]) |ln| {
+            try out.appendSlice(ln);
+            try out.append('\n');
+        }
+        try out.appendSlice("...\n");
+        const tail_start = lines.items.len - FOLD_TAIL_LINES;
+        for (lines.items[tail_start..]) |ln| {
+            try out.appendSlice(ln);
+            try out.append('\n');
+        }
+    }
+    return out.toOwnedSlice();
+}
+
+/// 把 [0..cut) 折成短卡。旧摘要占位丢弃。有 vision 且图比原文省才贴 PNG。
+pub fn compactHistory(
+    alloc: std.mem.Allocator,
+    discarded: []const ai.Message,
+    api: cfgmod.Api,
+    vision: bool,
+) !Fold {
+    var discarded_tok: usize = 0;
+    for (discarded) |m| discarded_tok += est(m.content);
+
+    const files = try collectFiles(alloc, discarded);
+    const intents = try collectIntents(alloc, discarded);
+    const excerpt = try collectExcerpt(alloc, discarded);
+
+    var card = std.array_list.Managed(u8).init(alloc);
+    try card.appendSlice(try std.fmt.allocPrint(alloc, "[Snapcompact] Fold ~{d} tok.\n", .{discarded_tok}));
+    if (files.len > 0) {
+        try card.appendSlice("FILES\n");
+        for (files) |p| {
+            try card.appendSlice(try std.fmt.allocPrint(alloc, "- {s}\n", .{p}));
+        }
+    }
+    if (intents.len > 0) {
+        try card.appendSlice("INTENTS\n");
+        for (intents) |s| {
+            try card.appendSlice(try std.fmt.allocPrint(alloc, "- {s}\n", .{s}));
+        }
+    }
+    if (excerpt.len > 0) {
+        try card.appendSlice("EXCERPT\n");
+        try card.appendSlice(excerpt);
+    }
+    const summary = try card.toOwnedSlice();
+
+    var image: ?[]const u8 = null;
+    var iw: u32 = 0;
+    var ih: u32 = 0;
+    if (vision and summary.len > 0) {
+        const shape = snapfont.resolveShape(api);
+        const hard: u32 = if (shape.cell_h == 0) 64 else shape.frame_h / shape.cell_h;
+        if (snapfont.raster(alloc, summary, shape, hard) catch null) |frame| {
+            defer alloc.free(frame.rgba);
+            const img_tok = imgx.estImageTokens(frame.w, frame.h, api, 128_000);
+            if (img_tok > 0 and img_tok * 100 < discarded_tok * SNAP_SAVINGS_NUM) {
+                if (imgx.encodeRgbaPngB64(alloc, frame.rgba, frame.w, frame.h)) |enc| {
+                    image = enc.data;
+                    iw = frame.w;
+                    ih = frame.h;
+                } else |_| {}
+            }
+        }
+    }
+    return .{ .summary = summary, .image = image, .width = iw, .height = ih };
 }
 
 fn asciiRatio(s: []const u8) usize {
@@ -1116,4 +1281,44 @@ test "formatStatus reports usage next-layer and vision" {
     try t.expect(std.mem.indexOf(u8, s, "fast-compress:") != null);
     try t.expect(std.mem.indexOf(u8, s, "vision=no") != null);
     try t.expect(std.mem.indexOf(u8, s, "next=") != null);
+}
+
+test "compactHistory builds a short card and skips old summaries" {
+    const t = std.testing;
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const blob = "s" ** 4000;
+    const msgs = [_]ai.Message{
+        .{ .role = "system", .content = "(Conversation compacted. Summary:)\n" ++ blob },
+        .{ .role = "assistant", .content = "{\"path\":\"src/foo.zig\"}", .tool_calls = &[_]ai.ToolCall{.{ .name = "read", .args = "{\"path\":\"src/foo.zig\"}" }} },
+        .{ .role = "user", .content = "fix the parser" },
+        .{ .role = "user", .content = "then run tests" },
+    };
+    const fold = try compactHistory(a, &msgs, .openai_completions, false);
+    try t.expect(std.mem.startsWith(u8, fold.summary, "[Snapcompact]"));
+    try t.expect(std.mem.indexOf(u8, fold.summary, "FILES") != null);
+    try t.expect(std.mem.indexOf(u8, fold.summary, "src/foo.zig") != null);
+    try t.expect(std.mem.indexOf(u8, fold.summary, "INTENTS") != null);
+    try t.expect(std.mem.indexOf(u8, fold.summary, "fix the parser") != null);
+    try t.expect(std.mem.indexOf(u8, fold.summary, "then run tests") != null);
+    try t.expect(std.mem.indexOf(u8, fold.summary, blob) == null);
+    try t.expect(fold.image == null);
+}
+
+test "compactHistory attaches a card PNG when vision saves tokens" {
+    const t = std.testing;
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const fat = "w" ** (80 * 1024);
+    const msgs = [_]ai.Message{
+        .{ .role = "user", .content = fat },
+        .{ .role = "user", .content = "work item 1" },
+    };
+    const fold = try compactHistory(a, &msgs, .openai_completions, true);
+    try t.expect(std.mem.startsWith(u8, fold.summary, "[Snapcompact]"));
+    try t.expect(fold.image != null);
+    try t.expect(fold.width > 0);
+    try t.expect(fold.height > 0);
 }

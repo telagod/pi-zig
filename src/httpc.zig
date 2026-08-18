@@ -238,6 +238,10 @@ pub const Stream = struct {
     transfer_buffer: [8192]u8 = undefined,
 
     pub fn init(alloc: std.mem.Allocator, url: []const u8, headers: []const Header, body: []const u8) !*Stream {
+        return initWith(alloc, url, headers, body, .POST);
+    }
+
+    pub fn initWith(alloc: std.mem.Allocator, url: []const u8, headers: []const Header, body: []const u8, method: std.http.Method) !*Stream {
         const self = try alloc.create(Stream);
         errdefer alloc.destroy(self);
         self.* = .{ .alloc = alloc, .req = undefined, .response = undefined, .content_type = null, .retry_after = null, .reader = undefined };
@@ -256,7 +260,7 @@ pub const Stream = struct {
         };
 
         const uri = try std.Uri.parse(url);
-        var req = client.request(.POST, uri, .{
+        var req = client.request(method, uri, .{
             .headers = .{ .content_type = .{ .override = "application/json" } },
             .extra_headers = headers,
             // 复用的前提。false 会让 std 在响应结束后关闭连接。
@@ -348,6 +352,22 @@ pub const Stream = struct {
         self.alloc.destroy(self);
     }
 };
+
+/// GET 整包正文。给 /models 自动探测用。
+pub fn getBytes(alloc: std.mem.Allocator, url: []const u8, headers: []const Header) ![]u8 {
+    var s = try Stream.initWith(alloc, url, headers, &.{}, .GET);
+    defer s.deinit();
+    if (s.status() >= 400) return error.HttpError;
+    var aw = std.Io.Writer.Allocating.init(alloc);
+    errdefer aw.deinit();
+    var tmp: [4096]u8 = undefined;
+    while (true) {
+        const n = s.reader.readSliceShort(&tmp) catch break;
+        if (n == 0) break;
+        try aw.writer.writeAll(tmp[0..n]);
+    }
+    return aw.toOwnedSlice();
+}
 
 /// 简单 SSE 解析:按行消费,返回 data 载荷(累积多行 data:),[DONE] 返回 null。
 pub const SseParser = struct {

@@ -45,8 +45,10 @@ pub fn render(alloc: std.mem.Allocator, t: *const Theme, src: []const u8) ![]u8 
         if (quoteOf(line)) |q| {
             try out.appendSlice(t.fg_md_quote_border);
             try out.appendSlice("│ ");
-            try out.appendSlice(RESET);
+            try out.appendSlice(RESET ++ ITALIC);
+            if (t.fg_md_quote.len > 0) try out.appendSlice(t.fg_md_quote);
             try writeInline(&out, t, q);
+            try out.appendSlice(RESET);
             continue;
         }
         if (listOf(line)) |l| {

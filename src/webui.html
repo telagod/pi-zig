@@ -883,12 +883,358 @@
         color: var(--color-text);
       }
       /* ==== 聊天区 ==== */
+      #stage {
+        flex: 1;
+        min-height: 0;
+        min-width: 0;
+        display: flex;
+        flex-direction: row;
+      }
+      #col {
+        flex: 1;
+        min-width: 0;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+      }
       #panes {
         flex: 1;
         min-height: 0;
         overflow-y: auto;
         overscroll-behavior: contain;
         position: relative;
+      }
+      #inspect[hidden] {
+        display: none !important;
+      }
+      #inspect {
+        display: flex;
+        flex-direction: column;
+        flex: 0 0 min(44vw, 560px);
+        width: min(44vw, 560px);
+        min-width: 300px;
+        min-height: 0;
+        margin: 0;
+        padding: 0 4px 0 0;
+        border: none;
+        border-left: 1px solid var(--color-line);
+        border-radius: 0;
+        background: var(--bg);
+        box-shadow: none;
+        overflow: hidden;
+      }
+      .insp-hd {
+        display: flex;
+        align-items: flex-start;
+        gap: 12px;
+        flex: none;
+        padding: 16px 16px 12px 20px;
+        border-bottom: 1px solid var(--color-line);
+      }
+      .insp-hd-main {
+        flex: 1;
+        min-width: 0;
+      }
+      .insp-t {
+        display: block;
+        min-width: 0;
+        font: 14px/1.35 var(--sans);
+        font-weight: 550;
+        color: var(--color-text);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .insp-k {
+        display: block;
+        margin-top: 3px;
+        font: 11px/1.3 var(--sans);
+        letter-spacing: 0.02em;
+        text-transform: none;
+        color: var(--color-text-faint);
+      }
+      .insp-x {
+        flex: none;
+        width: 28px;
+        height: 28px;
+        border: 0;
+        background: none;
+        color: var(--color-text-faint);
+        cursor: pointer;
+        font-size: 18px;
+        line-height: 1;
+        padding: 0;
+        border-radius: 8px;
+      }
+      .insp-x:hover {
+        color: var(--color-text);
+        background: var(--color-surface-sunken);
+      }
+      #inspBd {
+        flex: 1;
+        min-height: 0;
+        overflow: auto;
+        display: flex;
+        flex-direction: column;
+      }
+      #inspBd pre {
+        margin: 0;
+        padding: 16px 20px 28px;
+        font: 12.5px/1.6 var(--mono);
+      }
+      .insp-think {
+        flex: 1;
+        min-height: 0;
+        margin: 0;
+        padding: 20px 22px 36px;
+        overflow: auto;
+        font: 14.5px/1.75 var(--sans);
+        color: var(--color-text);
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        word-break: break-word;
+      }
+      .insp-md {
+        padding: 18px 22px 36px;
+        font: 14.5px/1.7 var(--sans);
+        color: var(--color-text);
+      }
+      .insp-md h1,
+      .insp-md h2,
+      .insp-md h3 {
+        line-height: 1.3;
+        font-weight: 650;
+        color: var(--color-text);
+      }
+      .insp-md h1 {
+        font-size: 1.4em;
+        margin: 0 0 0.65em;
+      }
+      .insp-md h2 {
+        font-size: 1.18em;
+        margin: 1.25em 0 0.45em;
+      }
+      .insp-md h3 {
+        font-size: 1.05em;
+        margin: 1.1em 0 0.35em;
+      }
+      .insp-md p {
+        margin: 0 0 0.75em;
+      }
+      .insp-md ul,
+      .insp-md ol {
+        margin: 0 0 0.75em;
+        padding-left: 1.35em;
+      }
+      .insp-md li {
+        margin: 0.18em 0;
+      }
+      .insp-md blockquote {
+        margin: 0 0 0.75em;
+        padding: 0.15em 0 0.15em 0.9em;
+        border-left: 2px solid var(--color-line-strong);
+        color: var(--color-text-muted);
+      }
+      .insp-md hr {
+        border: 0;
+        border-top: 1px solid var(--color-line);
+        margin: 1.1em 0;
+      }
+      .insp-md pre {
+        background: var(--color-surface);
+        border: 1px solid var(--color-line);
+        border-radius: var(--radius-md);
+        padding: 10px 12px;
+        overflow-x: auto;
+        font: 12.5px/1.6 var(--mono);
+        margin: 0.7em 0 1em;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+      .insp-md code {
+        font: 12.5px var(--mono);
+        background: var(--color-surface);
+        border-radius: 4px;
+        padding: 1px 5px;
+        color: var(--color-accent);
+      }
+      .insp-md pre code {
+        background: none;
+        padding: 0;
+        color: var(--color-text);
+      }
+      .insp-md a {
+        color: var(--color-accent);
+        text-decoration: none;
+      }
+      .insp-md a:hover {
+        text-decoration: underline;
+      }
+      .diff-view {
+        font: 12.5px/1.55 var(--mono);
+        padding-bottom: 20px;
+      }
+      .diff-file {
+        padding: 10px 18px;
+        font: 12px/1.4 var(--sans);
+        color: var(--color-text-muted);
+        border-bottom: 1px solid var(--color-line);
+        background: var(--color-surface);
+      }
+      .diff-meta {
+        padding: 8px 18px 4px;
+        font: 12px/1.4 var(--sans);
+        color: var(--color-text-faint);
+      }
+      .diff-row {
+        display: flex;
+        min-height: 1.5em;
+      }
+      .diff-row .g {
+        flex: none;
+        width: 1.4em;
+        text-align: center;
+        color: var(--color-text-faint);
+        user-select: none;
+      }
+      .diff-row .ln {
+        flex: 1;
+        min-width: 0;
+        padding: 0 16px 0 6px;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+      }
+      .diff-row.add {
+        background: color-mix(in srgb, var(--color-success) 14%, transparent);
+      }
+      .diff-row.add .g {
+        color: var(--color-success);
+      }
+      .diff-row.del {
+        background: color-mix(in srgb, var(--color-danger) 14%, transparent);
+      }
+      .diff-row.del .g {
+        color: var(--color-danger);
+      }
+      .diff-row.hunk {
+        background: color-mix(in srgb, var(--color-accent) 10%, transparent);
+        color: var(--color-text-faint);
+        font-size: 12px;
+      }
+      .todo-view {
+        padding: 16px 20px 28px;
+      }
+      .todo-i {
+        display: flex;
+        align-items: flex-start;
+        gap: 10px;
+        padding: 6px 0;
+        font: 14px/1.5 var(--sans);
+      }
+      .todo-box {
+        flex: none;
+        width: 14px;
+        height: 14px;
+        margin-top: 3px;
+        border: 1px solid var(--color-line-strong);
+        border-radius: 4px;
+      }
+      .todo-i.done .todo-box {
+        background: var(--color-success);
+        border-color: var(--color-success);
+      }
+      .todo-i.run .todo-box {
+        border-color: var(--color-accent);
+        box-shadow: inset 0 0 0 3px var(--color-accent);
+      }
+      .todo-i.done .todo-tx {
+        color: var(--color-text-faint);
+        text-decoration: line-through;
+      }
+      .todo-i.run .todo-tx {
+        color: var(--color-text);
+      }
+      .todo-foot {
+        margin-top: 10px;
+        font: 12px/1.4 var(--sans);
+        color: var(--color-text-faint);
+      }
+      .agent-view {
+        padding: 16px 20px 28px;
+      }
+      .todo-bind {
+        margin-left: 6px; font-size: 11px; color: var(--color-text-faint);
+        font-family: var(--mono, ui-monospace, monospace);
+      }
+      .agent-desc {
+        font: 14px/1.55 var(--sans);
+        color: var(--color-text);
+        margin-bottom: 12px;
+      }
+      .sub-log {
+        margin: 8px 0 4px;
+        padding: 4px 0 4px 2px;
+      }
+      .sub-i {
+        display: flex;
+        align-items: baseline;
+        gap: 8px;
+        font: 12px/1.45 var(--sans);
+        color: var(--color-text-faint);
+        padding: 2px 0;
+      }
+      .sub-idx {
+        flex: none;
+        min-width: 1.2em;
+        color: var(--color-text-muted);
+        font-variant-numeric: tabular-nums;
+      }
+      .sub-k {
+        flex: none;
+        color: var(--color-text-muted);
+      }
+      .sub-i.tool_failed .sub-k {
+        color: var(--color-danger);
+      }
+      .sub-i.finished .sub-k {
+        color: var(--color-success);
+      }
+      .sub-t {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      #inspBd .insp-wait {
+        flex: 1;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+        font: 13px/1.5 var(--sans);
+        color: var(--color-text-faint);
+      }
+      .tcall.watching .bh {
+        box-shadow: inset 2px 0 0 var(--color-accent);
+      }
+      #app.hero #inspect {
+        display: none !important;
+      }
+      @media (max-width: 900px) {
+        #inspect:not([hidden]) {
+          position: fixed;
+          inset: 8px;
+          z-index: var(--z-modal);
+          width: auto;
+          flex: none;
+          margin: 0;
+        }
+      }
+      #stage:has(#inspect:not([hidden])) #wrap {
+        padding-right: 28px;
+      }
+      #stage:has(#inspect:not([hidden])) #cmp {
+        padding-right: 24px;
       }
       #wrap {
         width: 100%;
@@ -908,6 +1254,33 @@
         flex-direction: column;
         gap: 16px;
       }
+      .hist-more {
+        display: block;
+        align-self: center;
+        margin: 4px 0 4px;
+        padding: 6px 14px;
+        border: 1px solid var(--line);
+        background: transparent;
+        color: var(--dim);
+        font: inherit;
+        font-size: 12px;
+        cursor: pointer;
+        border-radius: 999px;
+      }
+      .hist-more:hover { color: var(--blue); border-color: var(--bd); }
+      .hist-more[hidden] { display: none; }
+      .find-hit { outline: 2px solid var(--blue); outline-offset: 2px; border-radius: 4px; }
+      .img-chip {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin: 0 0 6px;
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .img-chip[hidden] { display: none; }
+      .img-chip img { width: 48px; height: 48px; object-fit: cover; border-radius: 6px; border: 1px solid var(--line); }
+      .img-chip button { border: 0; background: transparent; color: var(--muted); cursor: pointer; }
       .empty-spacer {
         flex: 1;
       }
@@ -1003,9 +1376,28 @@
         white-space: pre-wrap;
         word-break: break-word;
       }
-      .undo-chip {
-        flex: none;
+      .u-img {
+        display: block;
+        max-width: 240px;
+        max-height: 180px;
+        border-radius: 8px;
+        margin: 0 0 6px;
+        object-fit: contain;
+        background: var(--color-bg);
+      }
+      .u-ops {
+        display: flex;
+        gap: 2px;
         margin-top: 6px;
+        opacity: 0;
+        transition: opacity 0.15s;
+      }
+      .u-turn:hover .u-ops {
+        opacity: 1;
+      }
+      .undo-chip,
+      .copy-chip {
+        flex: none;
         width: 22px;
         height: 22px;
         border: none;
@@ -1013,13 +1405,9 @@
         color: var(--color-text-faint);
         font-size: 13px;
         cursor: pointer;
-        opacity: 0;
-        transition: opacity 0.15s;
       }
-      .u-turn:hover .undo-chip {
-        opacity: 1;
-      }
-      .undo-chip:hover {
+      .undo-chip:hover,
+      .copy-chip:hover {
         color: var(--color-text);
       }
       .a-turn {
@@ -1095,18 +1483,26 @@
         max-width: 46em;
       }
       .think-sum {
-        display: block;
+        display: flex;
+        align-items: center;
+        gap: 6px;
         width: 100%;
         text-align: left;
         border: none;
         background: transparent;
         color: var(--color-text-faint);
         font-size: 13px;
-        padding: 0;
+        padding: 2px 0;
         cursor: pointer;
       }
       .think-sum:hover {
         color: var(--color-text-muted);
+      }
+      .think-sum:focus {
+        outline: none;
+      }
+      .think.open .work-caret {
+        transform: rotate(90deg);
       }
       .think .tk {
         display: none;
@@ -1124,32 +1520,143 @@
         max-width: 46em;
       }
       .work-sum {
-        display: block;
+        display: flex;
+        align-items: center;
+        gap: 6px;
         width: 100%;
         text-align: left;
         border: none;
         background: transparent;
         color: var(--color-text-faint);
         font: 13px/1.45 var(--mono);
-        padding: 0;
+        padding: 2px 0;
         cursor: pointer;
       }
       .work-sum:hover {
         color: var(--color-text-muted);
+      }
+      .work-sum:focus {
+        outline: none;
+      }
+      .work-sum:focus-visible {
+        color: var(--color-text);
+      }
+      .work-caret {
+        display: inline-block;
+        width: 0.8em;
+        transition: transform 0.12s ease;
+      }
+      .work.open .work-caret {
+        transform: rotate(90deg);
       }
       .work-sum.edit {
         color: var(--color-success);
       }
       .work-list {
         display: none;
-        margin-top: 6px;
+        margin: 8px 0 2px;
+        padding: 0 0 0 2px;
       }
       .work.open .work-list,
       .work.live .work-list {
         display: block;
       }
-      .tcall {
+      .flow {
+        max-width: 46em;
+        margin: 14px 0 18px;
+      }
+      .flow-hd {
+        display: flex;
+        align-items: baseline;
+        gap: 10px;
+        margin: 0 0 10px;
+        cursor: pointer;
+      }
+      .flow-k {
+        flex: none;
+        font: 12px/1.4 var(--mono);
+        color: var(--color-text-faint);
+      }
+      .flow-goal {
+        flex: 1;
+        min-width: 0;
+        font: 14px/1.45 var(--sans);
+        color: var(--color-text);
+      }
+      .flow-meta {
+        flex: none;
+        font: 12px/1.4 var(--mono);
+        color: var(--color-text-faint);
+      }
+      .flow-list {
+        list-style: none;
         margin: 0;
+        padding: 0 0 0 4px;
+      }
+      .flow-n {
+        display: grid;
+        grid-template-columns: 14px 1fr;
+        gap: 10px;
+        position: relative;
+        padding: 0 0 14px;
+        cursor: pointer;
+      }
+      .flow-n:last-child { padding-bottom: 0; }
+      .flow-n:not(:last-child)::before {
+        content: "";
+        position: absolute;
+        left: 4px;
+        top: 12px;
+        bottom: -2px;
+        width: 1px;
+        background: color-mix(in srgb, var(--color-text) 12%, transparent);
+      }
+      .flow-dot {
+        width: 9px;
+        height: 9px;
+        margin-top: 5px;
+        border-radius: 50%;
+        background: var(--color-text-faint);
+        box-shadow: 0 0 0 3px var(--color-bg);
+        position: relative;
+        z-index: 1;
+      }
+      .flow-n.run .flow-dot {
+        background: var(--color-accent, #6af);
+        animation: flowPulse 1.1s ease-in-out infinite;
+      }
+      .flow-n.ok .flow-dot { background: var(--color-ok, #3a9); }
+      .flow-n.fail .flow-dot { background: var(--color-danger, #c55); }
+      .flow-n.skip .flow-dot { opacity: 0.35; }
+      @keyframes flowPulse { 50% { opacity: 0.28; } }
+      .flow-row {
+        display: flex;
+        align-items: baseline;
+        gap: 8px;
+        font: 13px/1.45 var(--sans);
+      }
+      .flow-row b { font-weight: 600; font-family: var(--mono); }
+      .flow-row em {
+        font-style: normal;
+        color: var(--color-text-faint);
+        font-size: 12px;
+      }
+      .flow-act {
+        margin-left: auto;
+        font: 12px/1.4 var(--mono);
+        color: var(--color-text-faint);
+      }
+      .flow-body {
+        margin: 6px 0 0;
+        max-height: 220px;
+        overflow: auto;
+        font: 12px/1.45 var(--mono);
+        white-space: pre-wrap;
+        color: var(--color-text-muted);
+      }
+      .insp-bd .flow { margin: 0; }
+      .tcall {
+        margin: 2px 0;
         background: transparent;
         border: none;
         overflow: hidden;
@@ -1174,6 +1681,30 @@
       }
       .tcall.err .bh {
         color: var(--color-danger);
+      }
+      .ico {
+        width: 14px;
+        height: 14px;
+        flex: 0 0 auto;
+        fill: none;
+        stroke: currentColor;
+        stroke-width: 1.4;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+      .work-bits {
+        display: inline-flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 6px;
+      }
+      .work-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+      }
+      .work-dot {
+        opacity: 0.45;
       }
       .tcall .gl {
         display: inline-flex;
@@ -1250,9 +1781,6 @@
       }
       .tcall .bb {
         display: none;
-      }
-      .tcall.open .bb {
-        display: block;
       }
       .tcall .bb-pad {
         padding: 0;
@@ -1537,8 +2065,21 @@
         position: relative;
         z-index: 1;
       }
+      .act-strip {
+        max-width: var(--p-content-max);
+        width: 100%;
+        margin: 0 auto 4px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        font-size: 12px;
+        color: var(--color-faint, #888);
+        font-variant-numeric: tabular-nums;
+      }
+      .act-chip.bg { opacity: 0.7; }
       .cmp-row {
         max-width: var(--p-content-max);
+        width: 100%;
         margin: 0 auto;
         display: flex;
         gap: 8px;
@@ -1548,7 +2089,7 @@
         flex: 1;
         position: relative;
         border: 1px solid var(--color-line);
-        border-radius: 22px;
+        border-radius: 18px;
         background: var(--color-surface-raised);
         box-shadow: var(--shadow-lg);
         transition:
@@ -1562,7 +2103,7 @@
       }
       .cin-wrap {
         position: relative;
-        padding: 12px 16px 4px;
+        padding: 10px 14px 2px;
       }
       #inp {
         color: var(--color-text);
@@ -1572,7 +2113,7 @@
         resize: none;
         font-size: 16px;
         background: transparent;
-        min-height: 48px;
+        min-height: 36px;
         max-height: calc(100vh / 4);
         overflow-y: auto;
         line-height: 1.5;
@@ -2024,16 +2565,36 @@
         inset: 0;
         z-index: var(--z-modal);
         background: rgba(0, 0, 0, 0.35);
-        align-items: flex-start;
+        align-items: center;
         justify-content: center;
-        padding: 10vh 16px 24px;
+        padding: 24px 20px;
       }
       #overlay.open {
         display: flex;
       }
+      #overlay.sheet {
+        justify-content: flex-end;
+        align-items: stretch;
+        padding: 0;
+        background: rgba(0, 0, 0, 0.25);
+      }
+      #overlay.sheet .dlg.set {
+        width: min(400px, 100vw);
+        max-height: none;
+        height: 100%;
+        border-radius: 0;
+        border: none;
+        border-left: 1px solid var(--color-line);
+        box-shadow: -12px 0 40px rgba(0, 0, 0, 0.18);
+      }
+      #overlay.sheet .dlg-bd {
+        flex: 1;
+        overflow: auto;
+      }
       .dlg {
-        width: min(520px, 100%);
+        width: min(400px, 100%);
         max-height: min(80vh, 720px);
+        flex: 0 0 auto;
         display: flex;
         flex-direction: column;
         background: var(--color-surface-raised);
@@ -2043,7 +2604,58 @@
         overflow: hidden;
       }
       .dlg.set {
-        width: min(560px, 100%);
+        width: min(400px, 100%);
+      }
+      .dlg.wide {
+        width: min(var(--p-content-max), 100%);
+      }
+      .set-sel {
+        width: 100%;
+        max-width: 320px;
+        background: var(--color-surface);
+        color: var(--color-text);
+        border: 1px solid var(--color-line);
+        border-radius: 8px;
+        padding: 6px 8px;
+        font: inherit;
+      }
+      .cmp-hint {
+        margin: 0 0 8px;
+        padding: 8px 12px;
+        border: 1px solid var(--color-line);
+        border-radius: 10px;
+        background: var(--color-surface-raised);
+        color: var(--color-text-muted);
+        font-size: 12px;
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+      .cmp-hint[hidden] {
+        display: none;
+      }
+      .cmp-hint b {
+        color: var(--color-text);
+        font-weight: 600;
+      }
+      .cmp-hint .bang-run {
+        color: #7dcea0;
+        font-weight: 600;
+      }
+      .cmp-hint .bang-local {
+        color: #e6b455;
+        font-weight: 600;
+      }
+      .slash-item .mark {
+        color: var(--color-text-muted);
+        margin-left: auto;
+        font-size: 11px;
+      }
+      .slash-name mark {
+        background: transparent;
+        color: var(--color-success);
+        font-weight: 600;
       }
       .dlg-hd {
         display: flex;
@@ -2156,6 +2768,28 @@
         border-bottom: 1px solid var(--color-line);
         font-size: 13px;
       }
+      .auth-row {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 8px;
+      }
+      .auth-row .set-lab {
+        flex-direction: row;
+        align-items: baseline;
+        gap: 8px;
+      }
+      .auth-row .set-lab .set-hint {
+        white-space: nowrap;
+      }
+      .auth-actions {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .auth-row .auth-key {
+        flex: 1;
+        max-width: none;
+      }
       .set-row:last-child {
         border-bottom: 0;
       }
@@ -2258,9 +2892,12 @@
         box-shadow: var(--shadow-lg);
         z-index: var(--z-dropdown);
         max-height: 280px;
-        display: flex;
+        display: none;
         flex-direction: column;
         overflow: hidden;
+      }
+      .slash-menu:not([hidden]) {
+        display: flex;
       }
       .slash-list {
         overflow-y: auto;
@@ -2297,6 +2934,12 @@
         color: var(--color-text-faint);
         font-size: 11px;
       }
+      .cost-lbl {
+        font: 12px/1 var(--mono);
+        color: var(--color-text-faint);
+        font-variant-numeric: tabular-nums;
+        margin-right: 8px;
+      }
       .ctx-wrap {
         display: inline-flex;
         align-items: center;
@@ -2328,6 +2971,23 @@
         font-size: 12px;
         color: var(--color-text-muted);
       }
+      #keysHint {
+        position: fixed;
+        left: 50%;
+        bottom: 88px;
+        transform: translateX(-50%);
+        z-index: 40;
+        max-width: min(420px, calc(100vw - 32px));
+        padding: 12px 14px;
+        border-radius: 12px;
+        background: var(--color-surface);
+        border: 1px solid var(--color-line);
+        box-shadow: 0 8px 32px color-mix(in srgb, #000 18%, transparent);
+        font-size: 12px;
+        color: var(--color-text-muted);
+        line-height: 1.7;
+      }
+      #keysHint kbd { margin-right: 4px; }
       .empty-keys span {
         display: inline-flex;
         align-items: center;
@@ -2438,11 +3098,14 @@
           ><span id="plugin-status" data-piz-slot="status"></span>
           <button class="ib" id="hKebab" title="会话操作">⋯</button>
         </header>
-        <div id="panes">
-          <div id="wrap" class=""><div id="thread"></div></div>
-        </div>
-        <div id="dock"></div>
-        <div id="cmp">
+        <div id="stage">
+          <div id="col">
+            <div id="panes">
+              <div id="wrap" class=""><div id="thread"></div></div>
+            </div>
+            <div id="dock"></div>
+            <div id="cmp">
+          <div id="actStrip" class="act-strip" hidden></div>
           <div id="qbox" hidden>
             <div class="q-head">
               <b id="qCount">待发</b><span class="q-to">轮到就发</span>
@@ -2453,6 +3116,7 @@
           <div class="cmp-row">
             <div class="composer-card">
               <div id="slashMenu" class="slash-menu" hidden></div>
+              <div id="cmpHint" class="cmp-hint" hidden></div>
               <div class="cin-wrap">
                 <textarea
                   id="inp"
@@ -2469,6 +3133,7 @@
                     title="授权模式"
                     >yolo</span
                   >
+                  <span class="perm-pill" id="sbPill" title="bash 沙箱">off</span>
                   <span class="mode-pill" id="modePill" title="斜杠命令"
                     >/ 命令<span
                       class="mode-tag"
@@ -2488,7 +3153,8 @@
                   </button>
                 </div>
                 <div class="toolbar-right">
-                  <span id="ctxWrap" class="ctx-wrap" title="上下文占用" hidden
+                  <span id="costLbl" class="cost-lbl" hidden></span>
+                  <span id="ctxWrap" class="ctx-wrap" title="Context" hidden
                     ><svg class="ctx-ring" viewBox="0 0 20 20" aria-hidden="true">
                       <circle class="ctx-ring-track" cx="10" cy="10" r="7" fill="none" stroke-width="2.5"></circle>
                       <circle id="ctxFill" class="ctx-ring-fill" cx="10" cy="10" r="7" fill="none" stroke-width="2.5" stroke-linecap="round" stroke-dasharray="43.98" stroke-dashoffset="43.98"></circle></svg
@@ -2500,6 +3166,18 @@
             </div>
           </div>
         </div>
+          </div>
+          <aside id="inspect" hidden aria-label="Inspect">
+            <div class="insp-hd">
+              <div class="insp-hd-main">
+                <span class="insp-t" id="inspT"></span>
+                <span class="insp-k" id="inspK"></span>
+              </div>
+              <button class="insp-x" id="inspX" type="button" title="Close">×</button>
+            </div>
+            <div id="inspBd"></div>
+          </aside>
+        </div>
       </main>
     </div>
     <div class="menu" id="kmenu"></div>
@@ -2507,6 +3185,8 @@
     <div class="menu" id="modelMenu"></div>
     <div class="menu" id="thinkMenu"></div>
     <div class="menu" id="permMenu"></div>
+    <div class="menu" id="sbMenu"></div>
+    <div id="keysHint" hidden></div>
     <div id="toast"></div>
     <div id="overlay"></div>
     <div id="sheet">
@@ -2527,6 +3207,17 @@
           .replace(/&/g, "&amp;")
           .replace(/</g, "&lt;")
           .replace(/>/g, "&gt;");
+      function histText(v) {
+        if (typeof v === "string") return v;
+        if (Array.isArray(v)) {
+          try {
+            return new TextDecoder("utf-8").decode(Uint8Array.from(v));
+          } catch {
+            return "";
+          }
+        }
+        return v == null ? "" : String(v);
+      }
       const qp = new URLSearchParams(location.search);
       const sess = qp.get("session") || "default";
       const ws = decodeURIComponent(qp.get("ws") || "");
@@ -2553,6 +3244,15 @@
         try {
           localStorage.setItem(PREF_KEY, JSON.stringify(prefs));
         } catch {}
+      }
+      function setScheme(v) {
+        const map = { auto: "system", light: "light", dark: "dark", system: "system" };
+        const next = map[String(v || "").trim()];
+        if (!next) return false;
+        prefs.scheme = next;
+        savePrefs();
+        applyScheme();
+        return true;
       }
       function applyScheme() {
         const root = document.documentElement;
@@ -2690,13 +3390,17 @@
         dlgOncancel = null;
       function closeDlg() {
         const ov = $("overlay");
-        ov.classList.remove("open");
+        ov.classList.remove("open", "sheet");
         ov.innerHTML = "";
         dlgOnok = dlgOncancel = null;
       }
       function openDlg(opts) {
+        if (typeof closeMenus === "function") closeMenus();
+        if (typeof hideSlash === "function") hideSlash();
+        if (typeof hideBang === "function") hideBang();
         const ov = $("overlay");
         ov.classList.add("open");
+        if (opts.cls === "set") ov.classList.add("sheet");
         ov.innerHTML =
           '<div class="dlg ' +
           (opts.cls || "") +
@@ -2820,13 +3524,245 @@
           fn(b.getAttribute("data-v"));
         };
       }
-      function openSettings() {
+      function authPanelHtml(cfg) {
+        const keysFirst = [
+          "deepseek",
+          "openai",
+          "anthropic",
+          "xai",
+          "openrouter",
+          "groq",
+          "mistral",
+          "together",
+          "fireworks",
+          "cerebras",
+          "moonshotai",
+          "huggingface",
+          "nvidia",
+          "zai",
+          "minimax",
+        ];
+        const src = cfg.providers || [];
+        const by = {};
+        src.forEach((p) => {
+          by[p.name] = p;
+        });
+        const list = keysFirst.map((n) => by[n] || { name: n, hasKey: false });
+        const oauthLabel = {
+          openrouter: "Sign in with OpenRouter",
+          xai: "Sign in with xAI",
+          openai: "Sign in with ChatGPT",
+        };
+        return (
+          '<div class="set-row"><div class="set-lab">API keys<span class="set-hint">Built-in providers. Paste a key and Save.</span></div></div>' +
+          list
+            .map((p) => {
+              const oauthl = oauthLabel[p.name];
+              return (
+                '<div class="set-row auth-row" data-prov="' +
+                esc(p.name) +
+                '"><div class="set-lab">' +
+                esc(p.name) +
+                '<span class="set-hint">' +
+                (p.hasKey ? "key set" : "no key") +
+                '</span></div><div class="auth-actions"><input class="set-sel auth-key" type="password" placeholder="API key" autocomplete="off">' +
+                '<button type="button" class="btn auth-save">Save</button>' +
+                (oauthl ? '<button type="button" class="btn auth-oauth">' + oauthl + "</button>" : "") +
+                '</div><div class="set-hint auth-dev" hidden></div></div>'
+              );
+            })
+            .join("")
+        );
+      }
+      function bindAuthPanel() {
+        document.querySelectorAll(".auth-row").forEach((row) => {
+          const name = row.getAttribute("data-prov");
+          const inp = row.querySelector(".auth-key");
+          const save = row.querySelector(".auth-save");
+          const oauthBtn = row.querySelector(".auth-oauth");
+          if (save)
+            save.onclick = () => {
+              const key = (inp && inp.value) || "";
+              if (!key) {
+                showToast("paste an API key");
+                return;
+              }
+              fetch("/api/config", {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({ setAuth: { name, key } }),
+              })
+                .then((r) => r.json())
+                .then((j) => {
+                  showToast(j && j.ok ? "saved " + name : "save failed");
+                  if (inp) inp.value = "";
+                })
+                .catch(() => showToast("save failed"));
+            };
+          if (oauthBtn)
+            oauthBtn.onclick = async () => {
+              const hint = row.querySelector(".auth-dev");
+              try {
+                const r = await fetch("/api/oauth/start", {
+                  method: "POST",
+                  headers: { "content-type": "application/json" },
+                  body: JSON.stringify({ provider: name }),
+                });
+                const j = await r.json();
+                if (!j || !j.ok) {
+                  showToast("oauth start failed");
+                  return;
+                }
+                if (j.user_code) {
+                  if (hint) {
+                    hint.hidden = false;
+                    hint.textContent = "Enter code " + j.user_code + " at " + (j.verification_uri || "");
+                  }
+                  if (j.verification_uri) window.open(j.verification_uri, "_blank");
+                  showToast("code " + j.user_code);
+                } else if (j.url) {
+                  window.open(j.url, "_blank");
+                  showToast("finish sign-in in the new tab");
+                } else {
+                  showToast("oauth start failed");
+                  return;
+                }
+                const path = j.user_code ? "/api/oauth/poll?state=" : "/api/oauth/status?state=";
+                const t0 = Date.now();
+                const tick = async () => {
+                  if (Date.now() - t0 > 180000) {
+                    showToast("oauth timed out");
+                    return;
+                  }
+                  const s = await fetch(path + encodeURIComponent(j.state)).then((x) => x.json());
+                  if (s && s.done && s.ok) {
+                    showToast("signed in");
+                    if (hint) hint.hidden = true;
+                    return;
+                  }
+                  if (s && s.done && !s.ok) {
+                    showToast("sign-in failed");
+                    return;
+                  }
+                  setTimeout(tick, 1500);
+                };
+                setTimeout(tick, 1500);
+              } catch {
+                showToast("oauth start failed");
+              }
+            };
+        });
+      }
+      function packageRows(data) {
+        const user = data && Array.isArray(data.user) ? data.user : [];
+        const proj = data && Array.isArray(data.project) ? data.project : [];
+        if (!user.length && !proj.length) {
+          return '<div class="set-row"><div class="set-lab">资源包<span class="set-hint">piz pkg install &lt;path&gt; [-l]</span></div></div>';
+        }
+        function one(p, scope) {
+          return (
+            '<div class="set-row"><div class="set-lab">' +
+            esc(p.name || "") +
+            '<span class="set-hint">' +
+            scope +
+            " · skills:" +
+            (p.skills || 0) +
+            " prompts:" +
+            (p.prompts || 0) +
+            (p.web ? " · web" : "") +
+            "</span></div></div>"
+          );
+        }
+        let html =
+          '<div class="set-row"><div class="set-lab">资源包<span class="set-hint">用户 ~/.piz/packages 与项目 .piz/packages</span></div></div>';
+        for (const p of user) html += one(p, "user");
+        for (const p of proj) html += one(p, "project");
+        return html;
+      }
+      function pluginRows(list) {
+        const plugs = Array.isArray(list) ? list.filter((p) => p && p.optional) : [];
+        if (!plugs.length) return "";
+        let html =
+          '<div class="set-row"><div class="set-lab">插件<span class="set-hint">task-delegation 才有 workflow / 子代理。开关后下一轮生效。</span></div></div>';
+        for (const p of plugs) {
+          html +=
+            '<div class="set-row"><div class="set-lab">' +
+            esc(p.name) +
+            '</div><button type="button" class="sw' +
+            (p.enabled ? " on" : "") +
+            '" data-plugin="' +
+            esc(p.name) +
+            '"></button></div>';
+        }
+        return html;
+      }
+      async function openSettings() {
+        let cfg = {};
+        let models = [];
+        let pkgs = { user: [], project: [] };
+        try {
+          const [cr, mr, pr] = await Promise.all([
+            fetch("/api/config"),
+            fetch("/api/models"),
+            fetch("/api/packages?" + wsp),
+          ]);
+          cfg = await cr.json();
+          models = await mr.json();
+          if (!Array.isArray(models)) models = [];
+          pkgs = await pr.json();
+        } catch {}
+        const defThink = cfg.defaultThinkingLevel || curThink || "high";
+        const defAppr = cfg.approvalMode || "yolo";
+        const defModel = cfg.defaultModel || "";
+        const thinkOpts = (typeof THINK_LEVELS !== "undefined" ? THINK_LEVELS : ["off", "low", "medium", "high"]).map(
+          (v) => ({ v, l: v }),
+        );
+        const apprOpts = (typeof APPROVALS !== "undefined" ? APPROVALS : []).map((x) => ({ v: x.id, l: x.label }));
+        function optHtml(id, cur, list) {
+          const xs = list.slice();
+          if (cur && xs.indexOf(cur) < 0) xs.unshift(cur);
+          if (!xs.length) xs.push(cur || "");
+          return (
+            '<select id="' +
+            id +
+            '" class="set-sel">' +
+            xs
+              .map(
+                (m) =>
+                  '<option value="' +
+                  esc(m) +
+                  '"' +
+                  (m === cur ? " selected" : "") +
+                  ">" +
+                  esc(m) +
+                  "</option>",
+              )
+              .join("") +
+            "</select>"
+          );
+        }
+        const provHtml =
+          (cfg.providers || [])
+            .map(
+              (p) =>
+                '<div class="set-row"><div class="set-lab">' +
+                esc(p.name || "") +
+                '<span class="set-hint">' +
+                esc(p.api || "") +
+                (p.hasKey ? " · 已配 key" : " · 无 key") +
+                "</span></div></div>",
+            )
+            .join("") ||
+          '<div class="set-row"><div class="set-lab">无自定义 provider<span class="set-hint">见 ~/.piz/models.json</span></div></div>';
         openDlg({
           cls: "set",
           title: "设置",
           body:
-            '<div class="set-tabs" id="setTabs"><button type="button" data-tab="look" class="on">外观</button><button type="button" data-tab="note">通知</button><button type="button" data-tab="about">关于</button></div>' +
-            '<div id="setLook">' +
+            '<div class="set-tabs" id="setTabs"><button type="button" data-tab="auth" class="on">Account</button><button type="button" data-tab="look">外观</button><button type="button" data-tab="agent">智能体</button><button type="button" data-tab="note">通知</button><button type="button" data-tab="about">关于</button></div>' +
+            '<div id="setAuth">' +
+            authPanelHtml(cfg) +
+            "</div>" +
+            '<div id="setLook" hidden>' +
             '<div class="set-row"><div class="set-lab">配色</div>' +
             segHtml("scheme", [{ v: "light", l: "浅色" }, { v: "dark", l: "深色" }, { v: "system", l: "系统" }], prefs.scheme) +
             "</div>" +
@@ -2836,6 +3772,28 @@
             '<div class="set-row"><div class="set-lab">界面字号</div><input id="setFont" class="num-in" type="number" min="12" max="20" value="' +
             (prefs.uiFont || 14) +
             '"></div></div>' +
+            '<div id="setAgent" hidden>' +
+            '<div class="set-row"><div class="set-lab">本会话模型</div>' +
+            optHtml("setSessModel", curModel, models) +
+            "</div>" +
+            '<div class="set-row"><div class="set-lab">思考等级<span class="set-hint">写入默认并作用于当前会话</span></div>' +
+            segHtml("think", thinkOpts, defThink) +
+            "</div>" +
+            '<div class="set-row"><div class="set-lab">本会话授权</div>' +
+            segHtml("sessappr", apprOpts.length ? apprOpts : [{ v: "yolo", l: "yolo" }, { v: "ask", l: "ask" }, { v: "read-only", l: "read-only" }], approvalMode) +
+            "</div>" +
+            '<div class="set-row"><div class="set-lab">新会话默认授权</div>' +
+            segHtml("defappr", apprOpts.length ? apprOpts : [{ v: "yolo", l: "yolo" }, { v: "ask", l: "ask" }, { v: "read-only", l: "read-only" }], defAppr) +
+            "</div>" +
+            '<div class="set-row"><div class="set-lab">bash 沙箱<span class="set-hint">workspace 工作区可写；strict 再断网</span></div>' +
+            segHtml("sandbox", [{ v: "off", l: "off" }, { v: "workspace", l: "workspace" }, { v: "strict", l: "strict" }], cfg.sandboxMode || "off") +
+            "</div>" +
+            '<div class="set-row"><div class="set-lab">默认模型<span class="set-hint">新会话用</span></div>' +
+            optHtml("setDefModel", defModel || curModel, models) +
+            "</div>" +
+            pluginRows(cfg.plugins) +
+            packageRows(pkgs) +
+            "</div>" +
             '<div id="setNote" hidden>' +
             '<div class="set-row"><div class="set-lab">完成时通知<span class="set-hint">浏览器系统通知</span></div><button type="button" class="sw' +
             (prefs.notify ? " on" : "") +
@@ -2845,10 +3803,13 @@
             '" id="swSound"></button></div></div>' +
             '<div id="setAbout" hidden>' +
             '<div class="set-row"><div class="set-lab">piz web<span class="set-hint">配置见 ~/.piz/</span></div></div>' +
-            '<div class="set-row"><div class="set-lab">快捷键<span class="set-hint"><kbd>Ctrl</kbd><kbd>K</kbd> 搜会话 · <kbd>Ctrl</kbd><kbd>,</kbd> 设置 · <kbd>/</kbd> 命令</span></div></div></div>',
+            '<div class="set-row"><div class="set-lab">快捷键<span class="set-hint"><kbd>Ctrl</kbd><kbd>K</kbd> 搜会话 · <kbd>Ctrl</kbd><kbd>,</kbd> 设置 · <kbd>/</kbd> 命令 · <kbd>@./</kbd> 文件 · <kbd>!</kbd> 命令</span></div></div>' +
+            provHtml +
+            "</div>",
         });
         const tabs = $("setTabs");
-        const panels = { look: $("setLook"), note: $("setNote"), about: $("setAbout") };
+        const panels = { auth: $("setAuth"), look: $("setLook"), agent: $("setAgent"), note: $("setNote"), about: $("setAbout") };
+        bindAuthPanel();
         tabs.onclick = (e) => {
           const b = e.target.closest("button");
           if (!b) return;
@@ -2856,9 +3817,7 @@
           for (const k of Object.keys(panels)) panels[k].hidden = k !== b.dataset.tab;
         };
         bindSeg("scheme", (v) => {
-          prefs.scheme = v;
-          savePrefs();
-          applyScheme();
+          setScheme(v);
         });
         bindSeg("accent", (v) => {
           prefs.accent = v;
@@ -2871,6 +3830,56 @@
           savePrefs();
           applyScheme();
         };
+        if ($("setSessModel"))
+          $("setSessModel").onchange = async () => {
+            await applySessionModel($("setSessModel").value);
+          };
+        if ($("setDefModel"))
+          $("setDefModel").onchange = () => {
+            fetch("/api/config", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ setDefaultModel: $("setDefModel").value }),
+            })
+              .then((r) => r.json().catch(() => ({})))
+              .then((j) => {
+                if (j && j.ok === false) showToast(j.error || "save default model failed");
+              })
+              .catch(() => showToast("save default model failed"));
+          };
+        bindSeg("think", (v) => setThink(v));
+        bindSeg("sessappr", (v) => setApproval(v));
+        bindSeg("defappr", (v) => {
+          fetch("/api/config", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ setApprovalMode: v }),
+          })
+            .then((r) => r.json().catch(() => ({})))
+            .then((j) => {
+              if (j && j.ok === false) showToast(j.error || "save approval failed");
+            })
+            .catch(() => showToast("save approval failed"));
+        });
+        bindSeg("sandbox", (v) => {
+          setSandbox(v);
+        });
+        document.querySelectorAll("[data-plugin]").forEach((btn) => {
+          btn.onclick = async () => {
+            const name = btn.getAttribute("data-plugin");
+            const on = !btn.classList.contains("on");
+            btn.classList.toggle("on", on);
+            try {
+              await fetch("/api/config", {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({ setPlugin: { name, enabled: on } }),
+              });
+            } catch {
+              btn.classList.toggle("on", !on);
+            }
+          };
+        });
         $("swNotify").onclick = async () => {
           if (!prefs.notify && window.Notification && Notification.permission === "default") {
             try {
@@ -2891,6 +3900,7 @@
         const hits = sessList.slice();
         let sel = 0;
         openDlg({
+          cls: "wide",
           title: "搜索会话",
           body:
             '<input id="dlgIn" class="dlg-in" placeholder="按标题或名字过滤…">' +
@@ -2976,7 +3986,25 @@
           openSettings();
           return;
         }
+        if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "c") {
+          e.preventDefault();
+          const md = th.querySelector(".a-turn:last-of-type .md");
+          clipText(md && (md.dataset.raw || md.textContent), "已复制最后回复", "还没有回复");
+          return;
+        }
+        if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "r") {
+          e.preventDefault();
+          if (lastUser) sendPlain(lastUser);
+          else showToast("没有可重发的输入");
+          return;
+        }
         if (e.key === "Escape") {
+          const kh = $("keysHint");
+          if (kh && !kh.hidden) {
+            kh.hidden = true;
+            kh.innerHTML = "";
+            return;
+          }
           if ($("overlay").classList.contains("open")) {
             e.preventDefault();
             if (dlgOncancel) dlgOncancel();
@@ -2986,6 +4014,11 @@
           const sm = $("slashMenu");
           if (sm && !sm.hidden) {
             sm.hidden = true;
+            return;
+          }
+          if ($("inspect") && !$("inspect").hidden) {
+            e.preventDefault();
+            inspect.close();
           }
         }
       });
@@ -3330,7 +4363,7 @@
               }
             }
           })
-          .catch(() => {});
+          .catch(() => showToast("sessions load failed"));
       }
       const searchQ = document.createElement("input");
       searchQ.id = "searchQ";
@@ -3346,9 +4379,32 @@
           .then((j) => {
             if (then) then(j);
           })
-          .catch(() => {});
+          .catch(() => showToast("action failed"));
       }
       // ---- 模型 ----
+      async function applySessionModel(md) {
+        try {
+          const r = await fetch(
+            "/api/model?" + wsp + "session=" + encodeURIComponent(sess),
+            {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ model: md }),
+            },
+          );
+          const j = await r.json().catch(() => ({}));
+          if (!r.ok || j.ok === false || !j.model) {
+            showToast(j.error || "switch model failed");
+            return false;
+          }
+          curModel = j.model;
+          renderModel();
+          return true;
+        } catch {
+          showToast("switch model failed");
+          return false;
+        }
+      }
       function loadModels(sel) {
         fetch("/api/models")
           .then((r) => r.json())
@@ -3360,28 +4416,13 @@
               d.className = "mi" + (md === curModel ? " check" : "");
               d.textContent = md;
               d.onclick = async () => {
-                try {
-                  const r = await fetch(
-                    "/api/model?" + wsp + "session=" + encodeURIComponent(sess),
-                    {
-                      method: "POST",
-                      headers: { "content-type": "application/json" },
-                      body: JSON.stringify({ model: md }),
-                    },
-                  );
-                  const j = await r.json();
-                  if (j.model) {
-                    curModel = j.model;
-                    renderModel();
-                  }
-                  closeMenus();
-                } catch {}
+                if (await applySessionModel(md)) closeMenus();
               };
               m.appendChild(d);
             }
             openAt("modelMenu", sel);
           })
-          .catch(() => {});
+          .catch(() => showToast("models load failed"));
       }
       function modelShort(m) {
         if (!m) return "模型";
@@ -3413,20 +4454,27 @@
         el.textContent = curThink || "high";
         el.title = "思考 " + (curThink || "high");
       }
-      function setThink(level) {
-        fetch("/api/config", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ setDefaultThinkingLevel: level }),
-        })
-          .then((r) => r.json())
-          .then((j) => {
-            if (j && j.defaultThinkingLevel) {
-              curThink = j.defaultThinkingLevel;
-              renderThink();
-            }
-          })
-          .catch(() => {});
+      async function setThink(level) {
+        try {
+          const r = await fetch("/api/config", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ setDefaultThinkingLevel: level }),
+          });
+          const j = await r.json().catch(() => ({}));
+          if (!r.ok || j.ok === false) {
+            showToast(j.error || "switch think failed");
+            return false;
+          }
+          if (j && j.defaultThinkingLevel) {
+            curThink = j.defaultThinkingLevel;
+            renderThink();
+          }
+          return true;
+        } catch {
+          showToast("switch think failed");
+          return false;
+        }
       }
       $("hThink").onclick = (e) => {
         e.stopPropagation();
@@ -3476,7 +4524,11 @@
               body: JSON.stringify({ mode }),
             },
           );
-          const j = await r.json();
+          const j = await r.json().catch(() => ({}));
+          if (!r.ok || j.ok === false) {
+            showToast(j.error || "授权切换失败");
+            return;
+          }
           if (j.mode) approvalMode = j.mode;
           else if (j.auto !== undefined) approvalMode = j.auto ? "yolo" : "ask";
           setModeBtn();
@@ -3501,6 +4553,62 @@
         });
         openAt("permMenu", e.currentTarget);
       };
+      let sandboxMode = "off";
+      const SANDBOXES = [
+        { id: "off", label: "off", hint: "不隔离" },
+        { id: "workspace", label: "workspace", hint: "工作区可写，其余只读" },
+        { id: "strict", label: "strict", hint: "工作区 + 断网" },
+      ];
+      function setSandboxBtn() {
+        const p = $("sbPill");
+        if (!p) return;
+        const cur = SANDBOXES.find((x) => x.id === sandboxMode) || SANDBOXES[0];
+        const be = window.sandboxBackend || "";
+        p.textContent =
+          cur.label === "off" ? "sb off" : be ? cur.label + "/" + be : cur.label;
+        p.className =
+          "perm-pill " +
+          (sandboxMode === "strict" ? "perm-deny" : sandboxMode === "workspace" ? "perm-ask" : "");
+        p.title = "沙箱 " + cur.hint + (be ? " · " + be : "");
+      }
+      async function setSandbox(mode) {
+        sandboxMode = mode;
+        setSandboxBtn();
+        try {
+          const r = await fetch("/api/config", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ setSandboxMode: mode }),
+          });
+          const j = await r.json().catch(() => ({}));
+          if (!r.ok || j.ok === false) {
+            showToast(j.error || "沙箱切换失败");
+            return;
+          }
+          if (j && j.sandboxMode) sandboxMode = j.sandboxMode;
+          if (j && j.sandboxBackend) window.sandboxBackend = j.sandboxBackend;
+          setSandboxBtn();
+        } catch {
+          showToast("沙箱切换失败");
+        }
+      }
+      $("sbPill").onclick = (e) => {
+        e.stopPropagation();
+        const m = $("sbMenu");
+        m.innerHTML = "";
+        SANDBOXES.forEach((it) => {
+          const d = document.createElement("div");
+          d.className = "mi" + (it.id === sandboxMode ? " check" : "");
+          d.textContent = it.label + "  " + it.hint;
+          d.onclick = (ev) => {
+            ev.stopPropagation();
+            closeMenus();
+            setSandbox(it.id);
+          };
+          m.appendChild(d);
+        });
+        openAt("sbMenu", e.currentTarget);
+      };
       $("modePill").onclick = () => {
         const i = $("inp");
         if (!i.value.startsWith("/")) i.value = "/";
@@ -3508,21 +4616,51 @@
         i.dispatchEvent(new Event("input"));
       };
       // ---- 压缩提示 ----
-      function setCtx(pct) {
+      function fmtTok(n) {
+        n = +n || 0;
+        if (n >= 1e6) return (n / 1e6).toFixed(n % 1e6 ? 1 : 0) + "M";
+        if (n >= 1000) return (n / 1000).toFixed(n % 1000 ? 1 : 0) + "k";
+        return String(Math.round(n));
+      }
+      function setCost(n) {
+        const el = $("costLbl");
+        if (!el) return;
+        if (n == null || !(Number(n) > 0)) {
+          el.hidden = true;
+          el.textContent = "";
+          return;
+        }
+        const v = Number(n);
+        el.hidden = false;
+        el.textContent = v < 0.01 ? "$" + v.toFixed(4) : "$" + v.toFixed(3);
+        el.title = "Session cost";
+      }
+      function setCtx(pct, used, win) {
         const wrap = $("ctxWrap"),
           fill = $("ctxFill"),
           lbl = $("ctxLbl");
         if (wrap && fill && lbl) {
-          const n = Math.max(0, Math.min(100, +pct || 0));
+          const frac =
+            win > 0 ? used / win : Math.max(0, Math.min(1, (+pct || 0) / 100));
+          const n = Math.max(0, Math.min(100, frac * 100));
           const C = 2 * Math.PI * 7;
-          fill.style.strokeDashoffset = String(C * (1 - n / 100));
-          lbl.textContent = n + "%";
+          fill.style.strokeDashoffset = String(C * (1 - frac));
+          lbl.textContent =
+            n < 1 && (used > 0 || pct > 0) ? "<1%" : Math.round(n) + "%";
           wrap.hidden = false;
-          wrap.title = "上下文 " + n + "%";
+          const pretty =
+            n < 0.1 && used > 0
+              ? "<0.1%"
+              : (n < 10 ? n.toFixed(1) : Math.round(n)) + "%";
+          wrap.dataset.baseTitle =
+            used != null && win
+              ? fmtTok(used) + " / " + fmtTok(win) + " · " + pretty
+              : "上下文 " + pretty;
+          wrap.title = wrap.dataset.baseTitle;
           fill.style.stroke =
             n > 85 ? "var(--color-danger)" : "var(--color-accent)";
         }
-        if (pct > 85) {
+        if ((win > 0 ? used / win : (+pct || 0) / 100) > 0.85) {
           const c = $("compactChip");
           c.style.display = "";
           c.onclick = () => {
@@ -3547,13 +4685,13 @@
         el.hidden = false;
         el.textContent = bits.join(" · ");
         const wrap = $("ctxWrap");
-        if (wrap && evt.pct !== undefined) {
+        if (wrap && !wrap.hidden) {
+          const extra = [];
+          if (evt.cache !== undefined && evt.cache !== "") extra.push("缓存 " + evt.cache + "%");
+          if (evt.tps) extra.push(evt.tps + " tok/s");
           wrap.title =
-            "上下文 " +
-            evt.pct +
-            "%" +
-            (evt.cache !== undefined ? " · 缓存 " + evt.cache + "%" : "") +
-            (evt.tps ? " · " + evt.tps + " tok/s" : "");
+            (wrap.dataset.baseTitle || wrap.title || "上下文") +
+            (extra.length ? " · " + extra.join(" · ") : "");
         }
       }
       // ---- 头部 ----
@@ -3601,23 +4739,34 @@
           git.appendChild(pill);
         }
       }
+      async function applySessionTitle(t, hdr) {
+        try {
+          const r = await fetch(
+            "/api/title?" + wsp + "session=" + encodeURIComponent(sess),
+            {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ title: t }),
+            },
+          );
+          const j = await r.json().catch(() => ({}));
+          if (!r.ok || j.ok === false || j.title === undefined) {
+            showToast(j.error || "set title failed");
+            return false;
+          }
+          curTitle = j.title;
+          if (hdr) renderHdr({ title: j.title });
+          loadSessions();
+          return true;
+        } catch {
+          showToast("set title failed");
+          return false;
+        }
+      }
       $("hSes").onclick = async () => {
         const t = await askText("会话标题", curTitle || "", "");
         if (t === null) return;
-        fetch("/api/title?" + wsp + "session=" + encodeURIComponent(sess), {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ title: t }),
-        })
-          .then((r) => r.json())
-          .then((j) => {
-            if (j.title !== undefined) {
-              curTitle = j.title;
-              renderHdr({ title: j.title });
-              loadSessions();
-            }
-          })
-          .catch(() => {});
+        await applySessionTitle(t, true);
       };
       $("hKebab").onclick = (e) => {
         e.stopPropagation();
@@ -3644,19 +4793,7 @@
         mi("✎ 重命名", async () => {
           const t = await askText("会话标题", curTitle || "", "");
           if (t === null) return;
-          fetch("/api/title?" + wsp + "session=" + encodeURIComponent(sess), {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ title: t }),
-          })
-            .then((r) => r.json())
-            .then((j) => {
-              if (j.title !== undefined) {
-                curTitle = j.title;
-                loadSessions();
-              }
-            })
-            .catch(() => {});
+          await applySessionTitle(t, false);
         });
         mi("✱ 派生会话", async () => {
           const n = await askText("派生会话", "", "新会话名，留空自动");
@@ -3716,56 +4853,475 @@
         stick = p.scrollHeight - p.scrollTop - p.clientHeight < 80;
       });
       function scrl() {
+        if (replayQuiet) return;
         if (stick) $("panes").scrollTop = $("panes").scrollHeight;
+      }
+      let replayQuiet = false;
+      let webFindQ = "",
+        webFindIdx = -1;
+      async function findInThread(q, reverse, retried) {
+        q = String(q || "").trim();
+        if (!q) return false;
+        if (q !== webFindQ) {
+          webFindQ = q;
+          webFindIdx = reverse ? 1e9 : -1;
+        }
+        const nodes = th.querySelectorAll(".u-bub, .md, .p, .bb-pad");
+        const hits = [];
+        const low = q.toLowerCase();
+        nodes.forEach((el) => {
+          if ((el.textContent || "").toLowerCase().indexOf(low) >= 0) hits.push(el);
+        });
+        th.querySelectorAll(".find-hit").forEach((e) => e.classList.remove("find-hit"));
+        if (!hits.length) {
+          if (!retried && histStart > 0) {
+            await loadOlder();
+            return findInThread(q, reverse, true);
+          }
+          return false;
+        }
+        if (reverse) webFindIdx = (webFindIdx - 1 + hits.length) % hits.length;
+        else webFindIdx = (webFindIdx + 1) % hits.length;
+        const el = hits[webFindIdx];
+        el.classList.add("find-hit");
+        el.scrollIntoView({ block: "center", behavior: "smooth" });
+        return true;
+      }
+      document.addEventListener("keydown", (ev) => {
+        if (ev.key !== "F3" || !webFindQ) return;
+        ev.preventDefault();
+        findInThread(webFindQ, ev.shiftKey);
+      });
+      let histStart = 0,
+        histTotal = 0;
+      function paintHistMore() {
+        let b = $("hist-more");
+        if (!b) {
+          b = document.createElement("button");
+          b.id = "hist-more";
+          b.className = "hist-more";
+          b.type = "button";
+          b.onclick = loadOlder;
+          th.insertBefore(b, th.firstChild);
+        } else if (th.firstChild !== b) th.insertBefore(b, th.firstChild);
+        const n = histStart;
+        b.hidden = n <= 0;
+        b.textContent = n > 0 ? "↑ 更早 " + n + " 条" : "";
+      }
+      function replayHist(items, prepend) {
+        if (!items || !items.length) return;
+        hideWelcome();
+        const saved = [];
+        if (prepend) {
+          const more = $("hist-more");
+          while (th.firstChild) {
+            const n = th.firstChild;
+            th.removeChild(n);
+            if (n !== more) saved.push(n);
+          }
+        }
+        replayQuiet = true;
+        try {
+          for (const h of items) {
+            const text = histText(h.content);
+            if (h.role === "user") {
+              finishRsn();
+              finishWork();
+              lastUser = text;
+              addUser(h.has_image && !text ? "[image]" : h.has_image ? text + "  [image]" : text, h.image_file ? "/api/image?name=" + encodeURIComponent(h.image_file) : null);
+            } else if (h.role === "assistant") {
+              const rsn = histText(h.reasoning);
+              if (rsn) addRsn(rsn);
+              if (text) {
+                finishRsn();
+                const e = asstEl().querySelector(".md");
+                e.textContent = text;
+                finishAsst();
+              }
+            } else if (h.role === "system") {
+              continue;
+            } else {
+              const name = h.name || "tool";
+              const args = h.args || "";
+              if (isWorkflow(name, args, text)) Flow.upsert(args, text);
+              else {
+                addTool(name, args);
+                toolDone(name, false, text);
+              }
+            }
+          }
+          finishWork();
+        } finally {
+          replayQuiet = false;
+        }
+        if (prepend) {
+          for (const n of saved) th.appendChild(n);
+        }
+        paintHistMore();
+      }
+      async function loadOlder() {
+        if (histStart <= 0) return;
+        const lim = 80;
+        const off = Math.max(0, histStart - lim);
+        const take = histStart - off;
+        const r = await fetch(
+          "/api/history?" + wsp + "session=" + encodeURIComponent(sess) + "&offset=" + off + "&limit=" + take,
+        );
+        if (!r.ok) return;
+        const j = await r.json();
+        const panes = $("panes");
+        const oldH = panes.scrollHeight;
+        replayHist(j.history || [], true);
+        histStart = j.start ?? off;
+        histTotal = j.total ?? histTotal;
+        paintHistMore();
+        panes.scrollTop += panes.scrollHeight - oldH;
       }
       let curAsst = null,
         rsnEl = null,
         undoBtn = null;
       let workEl = null;
-      let workCounts = { read: 0, search: 0, edit: 0, bash: 0, other: 0 };
+      let workCounts = { read: 0, search: 0, edit: 0, bash: 0, web: 0, mcp: 0, todo: 0, agent: 0, other: 0 };
+      function ico(kind) {
+        const p = {
+          think:
+            '<circle cx="8" cy="6.5" r="4"/><path d="M6 11.2h4M6.4 13h3.2M8 2.2v-1M3.2 6.5h-1M13.8 6.5h1"/>',
+          read: '<path d="M3 2.6h6.6L13 6v7.4H3z"/><path d="M9.4 2.6V6H13"/>',
+          search: '<circle cx="7" cy="7" r="4"/><path d="M10.1 10.1L14 14"/>',
+          bash: '<rect x="2.4" y="3.2" width="11.2" height="9.6" rx="1.2"/><path d="M5 6.4l2 1.6-2 1.6M8.4 10.2h3"/>',
+          edit: '<path d="M9.2 2.8l4 4L6 14H2v-4z"/>',
+          web: '<circle cx="8" cy="8" r="5.6"/><path d="M2.4 8h11.2M8 2.4c2 2.4 2 8.8 0 11.2M8 2.4c-2 2.4-2 8.8 0 11.2"/>',
+          mcp: '<path d="M6 3.2h4v2.6h2.8v4H10v2.8H6v-2.8H3.2v-4H6z"/>',
+          todo: '<rect x="3" y="3" width="10" height="10" rx="2"/><path d="M5.4 8.1l1.8 1.8 3.5-3.7"/>',
+          agent: '<circle cx="8" cy="5.6" r="2.3"/><path d="M3.4 13c.5-2.3 2.3-3.5 4.6-3.5s4.1 1.2 4.6 3.5"/>',
+          tool: '<path d="M10.2 2.6l3.2 3.2-2 1-2.4 2.4-1.6-1.6 2.4-2.4zM3 13l4-4"/>',
+        };
+        return (
+          '<svg class="ico" viewBox="0 0 16 16" aria-hidden="true">' +
+          (p[kind] || p.tool) +
+          "</svg>"
+        );
+      }
+      function icoKind(name) {
+        const k = workKind(name);
+        return k === "other" ? "tool" : k;
+      }
       let turnAt = 0;
       function noteTurn() {
         if (!turnAt) turnAt = Date.now();
       }
       function workKind(name) {
-        if (name === "read") return "read";
-        if (/^(grep|find|ls)$/.test(name)) return "search";
-        if (/^(edit|write|multi_edit|apply_patch)$/.test(name)) return "edit";
-        if (name === "bash" || name === "exec") return "bash";
+        const n = String(name || "");
+        if (n === "read" || n === "read_image") return "read";
+        if (/^(grep|find|ls)$/.test(n)) return "search";
+        if (/^(edit|write|multi_edit|apply_patch)$/.test(n)) return "edit";
+        if (n === "bash" || n === "exec") return "bash";
+        if (/^(web_search|fetch_url|webfetch|web_fetch|search_web|browse)$/.test(n) || /web/i.test(n))
+          return "web";
+        if (/^mcp/i.test(n) || /mcp/i.test(n)) return "mcp";
+        if (/^todo_/.test(n)) return "todo";
+        if (/^(task|workflow|spawn_agent|wait_agent|send_agent|read_agent|close_agent|list_agents)$/.test(n))
+          return "agent";
         return "other";
       }
-      function workLabel() {
+      function workBitsHtml(live) {
         const bits = [];
-        if (workCounts.read) bits.push("读了 " + workCounts.read + " 个文件");
-        if (workCounts.search) bits.push(workCounts.search + " 次搜索");
-        if (workCounts.bash) bits.push("跑了 " + workCounts.bash + " 条命令");
-        if (workCounts.edit) bits.push("改了 " + workCounts.edit + " 个文件");
-        if (workCounts.other) bits.push(workCounts.other + " 个工具");
-        return bits.join(" · ");
+        if (workCounts.read) bits.push(ico("read") + "<span>" + nunit(workCounts.read, "file") + "</span>");
+        if (workCounts.search) bits.push(ico("search") + "<span>" + nunit(workCounts.search, "search", "searches") + "</span>");
+        if (workCounts.web) bits.push(ico("web") + "<span>" + nunit(workCounts.web, "web") + "</span>");
+        if (workCounts.mcp) bits.push(ico("mcp") + "<span>" + nunit(workCounts.mcp, "MCP") + "</span>");
+        if (workCounts.bash) bits.push(ico("bash") + "<span>" + nunit(workCounts.bash, "command") + "</span>");
+        if (workCounts.edit) bits.push(ico("edit") + "<span>" + nunit(workCounts.edit, "edit") + "</span>");
+        if (workCounts.todo) bits.push(ico("todo") + "<span>" + nunit(workCounts.todo, "plan") + "</span>");
+        if (workCounts.agent) bits.push(ico("agent") + "<span>" + nunit(workCounts.agent, "agent") + "</span>");
+        if (workCounts.other) bits.push(ico("tool") + "<span>" + nunit(workCounts.other, "tool") + "</span>");
+        if (!bits.length) return live ? "Working" : "Worked";
+        return bits.map((b) => '<span class="work-chip">' + b + "</span>").join('<span class="work-dot">·</span>');
       }
       function refreshWorkSum(live) {
         if (!workEl) return;
         const sum = workEl.querySelector(".work-sum");
-        const label = workLabel();
-        sum.textContent = live
-          ? label || "正在做"
-          : label || "做了一些事";
+        const bits = sum.querySelector(".work-bits") || sum;
+        bits.innerHTML = workBitsHtml(live);
         sum.classList.toggle("edit", !live && workCounts.edit > 0);
       }
       function ensureWork() {
         if (workEl && workEl.isConnected) return workEl;
-        workEl = document.createElement("div");
-        workEl.className = "work live";
-        workEl.innerHTML =
-          '<button type="button" class="work-sum">正在做</button><div class="work-list"></div>';
-        workEl.querySelector(".work-sum").onclick = () =>
-          workEl.classList.toggle("open");
-        th.appendChild(workEl);
-        workCounts = { read: 0, search: 0, edit: 0, bash: 0, other: 0 };
+        const el = document.createElement("div");
+        el.className = "work live";
+        el.innerHTML =
+          '<button type="button" class="work-sum"><span class="work-caret">▸</span><span class="work-bits">Working</span></button><div class="work-list"></div>';
+        el.querySelector(".work-sum").onclick = () => el.classList.toggle("open");
+        th.appendChild(el);
+        workEl = el;
+        workCounts = { read: 0, search: 0, edit: 0, bash: 0, web: 0, mcp: 0, todo: 0, agent: 0, other: 0 };
         return workEl;
+      }
+      const Flow = {
+        el: null,
+        id: "",
+        goal: "",
+        nodes: [],
+        args: "",
+        out: "",
+        done: false,
+        openId: "",
+        ident(args, out) {
+          const o = parseToolArgs(args);
+          const gm = /^Workflow\s+"([^"]+)"/.exec(String(out || ""));
+          const goal = (o.goal && String(o.goal)) || (gm && gm[1]) || "";
+          const ids = (Array.isArray(o.nodes) ? o.nodes.map((n) => n && n.id) : this.nodesFrom(out).map((n) => n.id))
+            .filter(Boolean)
+            .join(">");
+          return { goal, ids };
+        },
+        nodesFrom(out) {
+          const nodes = [];
+          const re = /===\s+([A-Za-z][A-Za-z0-9_-]*)\b(?:\s+\(([^)]+)\))?\s+(ok|FAILED|skipped)/g;
+          let m;
+          while ((m = re.exec(String(out || "")))) {
+            nodes.push({
+              id: m[1],
+              role: m[2] || "",
+              needs: [],
+              st: m[3] === "ok" ? "ok" : m[3] === "FAILED" ? "fail" : "skip",
+              last: "",
+              body: "",
+              idx: nodes.length + 1,
+            });
+          }
+          return nodes;
+        },
+        slice(out, id) {
+          if (!out || !id) return "";
+          const re = new RegExp("===\\s+" + id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\b[^\\n]*===\\n");
+          const m = re.exec(out);
+          if (!m) return "";
+          const rest = out.slice(m.index + m[0].length);
+          const next = rest.search(/\n===\s+/);
+          return (next < 0 ? rest : rest.slice(0, next)).trim();
+        },
+        parse(args, out) {
+          const o = parseToolArgs(args);
+          let nodes = (Array.isArray(o.nodes) ? o.nodes : [])
+            .map((n, i) => ({
+              id: String((n && n.id) || ""),
+              role: (n && n.role) || "",
+              needs: Array.isArray(n && n.needs) ? n.needs : [],
+              st: "wait",
+              last: "",
+              body: "",
+              idx: i + 1,
+            }))
+            .filter((n) => n.id);
+          if (!nodes.length) nodes = this.nodesFrom(out);
+          let goal = o.goal ? String(o.goal) : "";
+          if (!goal) {
+            const gm = /^Workflow\s+"([^"]+)"/.exec(String(out || ""));
+            if (gm) goal = gm[1];
+          }
+          return { goal, nodes };
+        },
+        same(a, b) {
+          if (a.goal && b.goal) return a.goal === b.goal;
+          if (a.ids && b.ids) return a.ids === b.ids;
+          return false;
+        },
+        applyOut(out) {
+          if (!out) return;
+          this.out = out;
+          for (const e of this.nodesFrom(out)) {
+            let n = this.nodes.find((x) => x.id === e.id);
+            if (!n) {
+              e.idx = this.nodes.length + 1;
+              this.nodes.push(e);
+              n = e;
+            } else {
+              n.st = e.st;
+              if (e.role && !n.role) n.role = e.role;
+            }
+            n.body = this.slice(out, n.id);
+          }
+        },
+        queue() {
+          if (!pendingByName.workflow) pendingByName.workflow = [];
+          if (this.id && !pendingByName.workflow.includes(this.id)) pendingByName.workflow.push(this.id);
+        },
+        upsert(args, out) {
+          const parsed = this.parse(args, out);
+          const want = this.ident(args, out);
+          if (this.el && this.el.isConnected && this.same(want, this.ident(this.args, this.out))) {
+            if (args) this.args = args;
+            if (parsed.goal) this.goal = parsed.goal;
+            if (parsed.nodes.length && !this.nodes.length) this.nodes = parsed.nodes;
+            if (out) {
+              this.applyOut(out);
+              this.done = true;
+              if (cards[this.id]) {
+                cards[this.id].out = this.out;
+                cards[this.id].done = true;
+                cards[this.id].args = this.args;
+              }
+            } else if (!this.done) this.queue();
+            this.paint();
+            return this.id;
+          }
+          finishWork();
+          seq++;
+          this.id = "t" + seq;
+          this.args = args || "";
+          this.goal = parsed.goal;
+          this.nodes = parsed.nodes;
+          this.out = out || "";
+          this.done = !!out;
+          this.openId = "";
+          if (out) this.applyOut(out);
+          this.el = document.createElement("section");
+          this.el.className = "flow";
+          this.el.id = this.id;
+          this.el.dataset.ty = "agent";
+          th.appendChild(this.el);
+          cards[this.id] = {
+            el: this.el,
+            name: "workflow",
+            ty: "agent",
+            args: this.args,
+            out: this.out,
+            done: this.done,
+          };
+          if (!this.done) this.queue();
+          this.paint();
+          curAsst = null;
+          scrl();
+          return this.id;
+        },
+        event(idx, kind, text) {
+          if (!this.el || !this.el.isConnected || this.done) return false;
+          let n = kind === "notice" && text ? this.nodes.find((x) => x.id === text) : null;
+          if (!n) n = this.nodes.find((x) => x.idx === Number(idx));
+          if (!n) return false;
+          if (kind === "notice") n.st = n.st === "wait" ? "run" : n.st;
+          else if (kind === "tool_start") {
+            n.st = "run";
+            n.last = text || n.last;
+          } else if (kind === "tool_done") n.last = text || n.last;
+          else if (kind === "finished") n.st = n.st === "fail" ? "fail" : "ok";
+          else if (kind === "tool_failed") n.st = "fail";
+          this.paint();
+          return true;
+        },
+        finish(out) {
+          this.applyOut(out);
+          this.done = true;
+          if (cards[this.id]) {
+            cards[this.id].out = this.out;
+            cards[this.id].done = true;
+          }
+          this.paint();
+        },
+        nodeHtml(n) {
+          const open = this.openId === n.id && n.body;
+          const act = n.st === "run" ? n.last || "running" : n.st === "fail" ? "fail" : n.st === "skip" ? "skip" : "";
+          return (
+            '<li class="flow-n ' +
+            n.st +
+            (open ? " open" : "") +
+            '" data-id="' +
+            esc(n.id) +
+            '"><i class="flow-dot"></i><div class="flow-main"><div class="flow-row"><b>' +
+            esc(n.id) +
+            "</b>" +
+            (n.role ? "<em>" + esc(n.role) + "</em>" : "") +
+            (act ? '<span class="flow-act">' + esc(act) + "</span>" : "") +
+            "</div>" +
+            (open ? '<pre class="flow-body">' + esc(n.body) + "</pre>" : "") +
+            "</div></li>"
+          );
+        },
+        paint() {
+          if (!this.el) return;
+          const doneN = this.nodes.filter((n) => n.st === "ok" || n.st === "fail" || n.st === "skip").length;
+          const meta = this.nodes.length ? doneN + "/" + this.nodes.length : "";
+          this.el.classList.toggle("done", this.done);
+          this.el.innerHTML =
+            '<div class="flow-hd"><span class="flow-k">workflow</span>' +
+            (this.goal ? '<div class="flow-goal">' + esc(this.goal) + "</div>" : "") +
+            (meta ? '<div class="flow-meta">' + esc(meta) + "</div>" : "") +
+            '</div><ol class="flow-list">' +
+            this.nodes.map((n) => this.nodeHtml(n)).join("") +
+            "</ol>";
+          const hd = this.el.querySelector(".flow-hd");
+          if (hd) hd.onclick = () => inspect.open(this.el);
+          this.el.querySelectorAll(".flow-n").forEach((li) => {
+            li.onclick = (e) => {
+              e.stopPropagation();
+              const id = li.getAttribute("data-id");
+              this.openId = this.openId === id ? "" : id;
+              this.paint();
+            };
+          });
+          if (inspect.src === this.id) inspect.paint(this.el);
+        },
+        html() {
+          return this.el ? this.el.innerHTML : "";
+        },
+      };
+      function isWorkflow(name, args, out) {
+        if (name === "workflow") return true;
+        const o = parseToolArgs(args);
+        if (Array.isArray(o.nodes) && o.nodes.length) return true;
+        return /^Workflow\b/.test(String(out || ""));
+      }
+
+
+
+      function addSub(idx, kind, text) {
+        if (Flow.event(idx, kind, text)) return;
+        const w = workEl && workEl.isConnected ? workEl : ensureWork();
+        let log = w.querySelector(".sub-log");
+        if (!log) {
+          log = document.createElement("div");
+          log.className = "sub-log";
+          w.appendChild(log);
+        }
+        const row = document.createElement("div");
+        row.className = "sub-i " + String(kind || "");
+        const tag =
+          kind === "tool_start"
+            ? "tool"
+            : kind === "tool_done"
+              ? "ok"
+              : kind === "tool_failed"
+                ? "err"
+                : kind === "finished"
+                  ? "done"
+                  : kind === "notice"
+                    ? "piz"
+                    : String(kind || "-");
+        const ix = document.createElement("span");
+        ix.className = "sub-idx";
+        ix.textContent = String(idx);
+        const k = document.createElement("span");
+        k.className = "sub-k";
+        k.textContent = tag;
+        const tx = document.createElement("span");
+        tx.className = "sub-t";
+        tx.textContent = text || "";
+        row.append(ix, k, tx);
+        log.appendChild(row);
+        while (log.children.length > 48) log.removeChild(log.firstChild);
+        scrl();
       }
       function finishWork() {
         if (!workEl) return;
+        workEl.querySelectorAll(".tcall:not(.done):not(.err)").forEach((d) => {
+          d.classList.add("done");
+          const g = d.querySelector(".st-glyph");
+          if (g) {
+            g.className = "st-glyph ok";
+            g.textContent = "✓";
+          }
+        });
         refreshWorkSum(false);
         workEl.classList.remove("live");
         workEl.classList.remove("open");
@@ -3788,15 +5344,42 @@
         m.textContent = label;
         host.prepend(m);
       }
-      function addUser(txt) {
+      function pruneTranscript() {
+        const kids = [...th.querySelectorAll(":scope > .u-turn, :scope > .a-turn")];
+        const cap = 200;
+        if (kids.length <= cap) return;
+        const drop = kids.length - cap + 32;
+        for (let i = 0; i < drop; i++) kids[i].remove();
+        const more = $("hist-more");
+        if (more) more.hidden = false;
+      }
+      function addUser(txt, imgSrc) {
         hideWelcome();
         finishWork();
         noteTurn();
+        pruneTranscript();
         const t = document.createElement("div");
         t.className = "u-turn";
         t.innerHTML =
-          '<div class="u-bub"></div><button class="undo-chip" title="撤销">↶</button>';
-        t.querySelector(".u-bub").textContent = txt;
+          '<div class="u-bub"></div><div class="u-ops"><button type="button" class="copy-chip" title="复制">⧉</button><button type="button" class="undo-chip" title="撤销">↶</button></div>';
+        const bub = t.querySelector(".u-bub");
+        if (imgSrc) {
+          const im = document.createElement("img");
+          im.className = "u-img";
+          im.alt = "image";
+          im.src = imgSrc;
+          bub.appendChild(im);
+        }
+        const shown = String(txt || "").replace(/\s*\[image\]\s*$/, "").replace(/^\[image\]$/, "");
+        if (shown) {
+          const s = document.createElement("span");
+          s.textContent = shown;
+          bub.appendChild(s);
+        } else if (!imgSrc) {
+          bub.textContent = txt || "";
+        }
+        const rawUser = shown || txt || "";
+        t.querySelector(".copy-chip").onclick = () => clipText(rawUser, "已复制", "复制失败");
         t.querySelector(".undo-chip").onclick = () => {
           act({ act: "undo" }, (j) => {
             showToast(j && j.ok ? "已撤销" : "无可撤销");
@@ -3817,23 +5400,49 @@
         }
         return curAsst;
       }
+      let mdTimer = 0;
+      function closeFences(s) {
+        const n = (s.match(/```/g) || []).length;
+        return n % 2 ? s + "\n```" : s;
+      }
+      function paintAsst(final) {
+        if (!curAsst) return;
+        const e = curAsst.querySelector(".md");
+        if (!e) return;
+        const raw = e.dataset.raw || "";
+        e.innerHTML = md(final ? raw : closeFences(raw));
+        scrl();
+      }
       function addAsst(txt) {
         if (!txt) return;
         const e = asstEl().querySelector(".md");
-        e.textContent += txt;
+        e.dataset.raw = (e.dataset.raw || "") + txt;
+        if (!mdTimer)
+          mdTimer = setTimeout(() => {
+            mdTimer = 0;
+            paintAsst(false);
+          }, 80);
         scrl();
       }
       function finishAsst() {
+        if (mdTimer) {
+          clearTimeout(mdTimer);
+          mdTimer = 0;
+        }
         if (curAsst) {
           const e = curAsst.querySelector(".md");
-          const raw = e.textContent;
+          const raw = e.dataset.raw || e.textContent;
+          e.dataset.raw = raw;
           e.innerHTML = md(raw);
           if (!curAsst.querySelector(".a-ops")) {
             const ops = document.createElement("div");
             ops.className = "a-ops";
-            ops.innerHTML = '<button type="button" title="复制">⧉</button>';
-            ops.querySelector("button").onclick = () =>
-              clipText(raw, "已复制", "复制失败");
+            ops.innerHTML =
+              '<button type="button" class="copy-a" title="复制">⧉</button>' +
+              (lastUser ? '<button type="button" class="redo-a" title="重新生成">↻</button>' : "");
+            ops.querySelector(".copy-a").onclick = () => clipText(raw, "已复制", "复制失败");
+            const redo = ops.querySelector(".redo-a");
+            if (redo) redo.onclick = () => sendPlain(lastUser);
             curAsst.appendChild(ops);
           }
           pluginEmit("message-rendered", {
@@ -3844,41 +5453,52 @@
           curAsst = null;
         }
       }
+      function nunit(n, one, many) {
+        const w = n === 1 ? one : many || one + "s";
+        return n + " " + w;
+      }
       function addRsn(txt) {
         if (!txt) return;
         if (!rsnEl) {
-          rsnEl = document.createElement("div");
-          rsnEl.className = "think";
-          rsnEl.innerHTML =
-            '<button type="button" class="think-sum">思考中</button><pre class="tk"></pre>';
-          rsnEl.querySelector(".think-sum").onclick = () =>
-            rsnEl.classList.toggle("open");
-          th.appendChild(rsnEl);
+          const el = document.createElement("div");
+          el.className = "think";
+          el.innerHTML =
+            '<button type="button" class="think-sum"><span class="work-caret">▸</span>' +
+            ico("think") +
+            '<span class="think-txt">Thinking</span></button><pre class="tk"></pre>';
+          el.querySelector(".think-sum").onclick = () => el.classList.toggle("open");
+          th.appendChild(el);
+          rsnEl = el;
           scrl();
         }
         const tc = rsnEl.querySelector(".tk");
+        if (tc.textContent) tc.textContent += "\n\n";
         tc.textContent += txt;
         scrl();
+        if (inspect.thinkEl === rsnEl && $("inspect") && !$("inspect").hidden) inspect.openThink(rsnEl);
       }
       function finishRsn() {
-        if (rsnEl) {
-          const sum = rsnEl.querySelector(".think-sum");
-          if (sum) sum.textContent = "思考了一下";
-          rsnEl = null;
-        }
+        if (!rsnEl) return;
+        const txt = rsnEl.querySelector(".think-txt");
+        if (txt) txt.textContent = "Thought";
+        rsnEl = null;
       }
       // 工具卡
       const cards = {};
       let seq = 0;
-      const lastByName = {};
+      const pendingByName = {};
       function toolType(n) {
         if (/^(bash|exec|sh|git|cmd|powershell)$/.test(n)) return "term";
         if (/^(edit|write|apply_patch)$/.test(n)) return "diff";
         if (/^(read|skill|show)$/.test(n)) return "code";
+        if (/^todo_/.test(n)) return "todo";
+        if (/^(task|workflow|spawn_agent|wait_agent|send_agent|read_agent|close_agent|list_agents)$/.test(n))
+          return "agent";
         return "sum";
       }
       function parseToolArgs(raw) {
         if (!raw) return {};
+        if (typeof raw === "object") return raw;
         try {
           const o = JSON.parse(raw);
           return o && typeof o === "object" ? o : {};
@@ -3891,7 +5511,129 @@
         const s = o.command || o.path || o.pattern || o.query || raw || "";
         return String(s).slice(0, 140);
       }
+      const inspect = {
+        src: "",
+        kind(d) {
+          if (!d) return "Tool";
+          const ty = d.dataset.ty;
+          if (ty === "diff") return "Diff";
+          if (ty === "code") return "File";
+          if (ty === "term") return "Output";
+          if (ty === "todo") return "Plan";
+          if (ty === "agent") return (cards[d.id] && cards[d.id].name) === "workflow" ? "Workflow" : "Agent";
+          const n = (cards[d.id] && cards[d.id].name) || "";
+          if (/^(ls|find)$/.test(n)) return "List";
+          if (/^(grep|search)$/.test(n)) return "Search";
+          return n || "Output";
+        },
+        pathOf(d) {
+          const c = cards[d.id];
+          if (!c) return "";
+          const o = parseToolArgs(c.args);
+          return String(o.path || o.file || "");
+        },
+        title(d) {
+          const p = this.pathOf(d);
+          if (p) return p.split(/[/\\]/).pop() || p;
+          const c = cards[d.id];
+          if (!c) return "Inspect";
+          const o = parseToolArgs(c.args);
+          if (c.name === "workflow") return String(o.goal || "workflow");
+          return String(o.command || c.name || "Inspect");
+        },
+        workEl: null,
+        setHead(k, t) {
+          const hk = $("inspK");
+          const ht = $("inspT");
+          if (ht) {
+            ht.textContent = t || k || "";
+            ht.title = t || k || "";
+          }
+          if (hk) {
+            hk.textContent = k && k !== t ? k : "";
+            hk.hidden = !hk.textContent;
+          }
+        },
+        show() {
+          const el = $("inspect");
+          if (el) el.hidden = false;
+        },
+        open(d) {
+          if (!d) return;
+          this.workEl = null;
+          if (this.src && cards[this.src]) cards[this.src].el.classList.remove("watching");
+          this.src = d.id;
+          d.classList.add("watching");
+          this.show();
+          this.paintInto(d, $("inspBd"));
+        },
+        thinkEl: null,
+        openThink(el) {
+          if (!el) return;
+          this.workEl = null;
+          this.thinkEl = el;
+          this.src = "";
+          this.show();
+          this.setHead("Thought", "Thought");
+          const txt = el.querySelector(".tk");
+          const box = document.createElement("div");
+          box.className = "insp-think";
+          box.textContent = txt ? txt.textContent : "";
+          const host = $("inspBd");
+          if (host) host.replaceChildren(box);
+        },
+
+        close() {
+          const el = $("inspect");
+          if (!el) return;
+          if (this.src && cards[this.src]) cards[this.src].el.classList.remove("watching");
+          this.src = "";
+          this.workEl = null;
+          this.thinkEl = null;
+          el.hidden = true;
+          const bd = $("inspBd");
+          if (bd) bd.innerHTML = "";
+        },
+        async paintInto(d, host) {
+          if (!d || !host) return;
+          const c = cards[d.id];
+          this.setHead(this.kind(d), this.title(d));
+          if (c && !c.done) {
+            if (c.name === "workflow" || d.classList.contains("flow")) {
+              host.innerHTML = '<div class="flow">' + Flow.html() + "</div>";
+              return;
+            }
+            host.innerHTML = '<div class="insp-wait">Running…</div>';
+            return;
+          }
+          let out = (c && c.out) || "";
+          const path = this.pathOf(d);
+          if (path && d.dataset.ty === "code") {
+            try {
+              const r = await fetch("/api/file?" + wsp + "path=" + encodeURIComponent(path));
+              if (r.ok) {
+                const j = await r.json();
+                if (j && j.text) out = j.text;
+              }
+            } catch {}
+          }
+          if (!out) {
+            host.innerHTML = '<div class="insp-wait">No output.</div>';
+            return;
+          }
+          d.dataset.out = out;
+          host.replaceChildren(toolBody(d.dataset.ty || "code", out, path, c && c.args));
+        },
+        paint(d) {
+          this.paintInto(d, $("inspBd"));
+        },
+        init() {
+          const x = $("inspX");
+          if (x) x.onclick = () => inspect.close();
+        },
+      };
       function addTool(name, args) {
+        if (isWorkflow(name, args)) return Flow.upsert(args, "");
         seq++;
         const id = "t" + seq;
         const ty = toolType(name);
@@ -3900,21 +5642,21 @@
         d.id = id;
         d.dataset.ty = ty;
         d.innerHTML =
-          '<div class="bh"><span class="a">' +
+          '<div class="bh">' +
+          ico(icoKind(name)) +
+          '<span class="a">' +
           esc(name) +
           '</span><span class="p">' +
           esc(argsPreview(args)) +
           '</span><span class="rt"><span class="st-glyph run"></span></span></div><div class="bb"><div class="bb-pad"></div></div>';
-        d.querySelector(".bh").onclick = () => {
-          d.classList.toggle("open");
-          if (d.classList.contains("open")) fillTool(d);
-        };
+        d.querySelector(".bh").onclick = () => inspect.open(d);
         const w = ensureWork();
         workCounts[workKind(name)]++;
         refreshWorkSum(true);
         w.querySelector(".work-list").appendChild(d);
         scrl();
-        cards[id] = { el: d, name, ty, args: args || "" };
+        cards[id] = { el: d, name, ty, args: args || "", out: "", done: false };
+        (pendingByName[name] || (pendingByName[name] = [])).push(id);
         curAsst = null;
         return id;
       }
@@ -3924,9 +5666,27 @@
         if (n === "bash" || n === "exec") return "$";
         return "⚙";
       }
-      function fillTool(d) {
+      function artifactName(out) {
+        const m = /\[Artifact stored: ([^\]\n]+?) \((\d+) bytes\)\]/.exec(out || "");
+        if (!m) return null;
+        const base = m[1].split(/[/\\]/).pop() || "";
+        return /^[\w.-]+$/.test(base) ? base : null;
+      }
+      async function fillTool(d) {
         const ty = d.dataset.ty || "sum";
-        const out = d.dataset.out || "";
+        let out = d.dataset.out || "";
+        const art = artifactName(out);
+        if (art && !d.dataset.full) {
+          try {
+            const r = await fetch("/api/artifact?name=" + encodeURIComponent(art));
+            const j = await r.json();
+            if (j && j.ok && typeof j.text === "string") {
+              d.dataset.full = "1";
+              d.dataset.out = j.text;
+              out = j.text;
+            }
+          } catch {}
+        }
         const bd = d.querySelector(".bb-pad");
         const card = cards[d.id];
         const custom = card && toolRenderers.get(card.name);
@@ -3947,22 +5707,13 @@
             console.error("[piz plugin]", x);
           }
         }
-        const pre = document.createElement("pre");
-        if (ty === "term") {
-          pre.className = "term";
-          pre.innerHTML = ansiHtml(out);
-        } else if (ty === "diff") {
-          pre.className = "diff";
-          pre.innerHTML = diffHtml(out);
-        } else {
-          pre.className = "code";
-          pre.textContent =
-            out.length > 2000 ? out.slice(0, 2000) + "\n…(截断)" : out;
-        }
-        bd.replaceChildren(pre);
+        const c = cards[d.id];
+        const o = c ? parseToolArgs(c.args) : {};
+        bd.replaceChildren(toolBody(ty, out, String(o.path || o.file || ""), (c && c.args) || ""));
       }
       function toolDone(name, err, summary) {
-        const id = lastByName[name];
+        const q = pendingByName[name];
+        const id = q && q.shift();
         if (!id) return;
         const c = cards[id];
         if (!c) return;
@@ -3973,9 +5724,12 @@
           g.className = "st-glyph " + (err ? "err" : "ok");
           g.textContent = err ? "✗" : "✓";
         }
-        d.dataset.out = summary || "";
-        if (err) d.classList.add("open");
-        if (d.classList.contains("open")) fillTool(d);
+        c.out = summary || "";
+        c.done = true;
+        d.dataset.out = c.out;
+        if (name === "workflow") Flow.finish(c.out);
+        if (inspect.src === id && $("inspect") && !$("inspect").hidden) inspect.paint(d);
+        else if (err) inspect.open(d);
       }
       // 审批
       function addPerm(id, name, args) {
@@ -4135,21 +5889,214 @@
         o += esc(t.slice(last));
         return fg ? '<span style="color:' + fg + '">' + o + "</span>" : o;
       }
+      function isMarkdownPath(p) {
+        return /\.(md|markdown|mdx)$/i.test(p || "");
+      }
+      function looksLikeMd(t) {
+        if (!t || t.length < 8) return false;
+        return /^#{1,3}\s/m.test(t) || /```/.test(t) || /^\s*[-*]\s+\S/m.test(t);
+      }
+      function mdInline(s) {
+        s = esc(s);
+        s = s.replace(/`([^`]+)`/g, "<code>$1</code>");
+        s = s.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+        s = s.replace(/(^|[^\*])\*(?!\*)([^*]+)\*(?!\*)/g, "$1<em>$2</em>");
+        s = s.replace(
+          /\[([^\]]+)\]\((https?:[^)\s]+)\)/g,
+          '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>',
+        );
+        return s;
+      }
+      function mdBlocks(s) {
+        const lines = String(s).replace(/\r\n/g, "\n").split("\n");
+        let html = "";
+        let i = 0;
+        let para = [];
+        const flushP = () => {
+          if (!para.length) return;
+          html += "<p>" + mdInline(para.join(" ")) + "</p>";
+          para = [];
+        };
+        while (i < lines.length) {
+          const line = lines[i];
+          if (/^\s*$/.test(line)) {
+            flushP();
+            i++;
+            continue;
+          }
+          const hm = /^(#{1,3})\s+(.+)$/.exec(line);
+          if (hm) {
+            flushP();
+            html += "<h" + hm[1].length + ">" + mdInline(hm[2]) + "</h" + hm[1].length + ">";
+            i++;
+            continue;
+          }
+          if (/^---+$/.test(line.trim())) {
+            flushP();
+            html += "<hr/>";
+            i++;
+            continue;
+          }
+          if (/^>\s?/.test(line)) {
+            flushP();
+            const qs = [];
+            while (i < lines.length && /^>\s?/.test(lines[i])) {
+              qs.push(lines[i].replace(/^>\s?/, ""));
+              i++;
+            }
+            html += "<blockquote>" + mdInline(qs.join(" ")) + "</blockquote>";
+            continue;
+          }
+          if (/^\s*[-*]\s+/.test(line)) {
+            flushP();
+            html += "<ul>";
+            while (i < lines.length && /^\s*[-*]\s+/.test(lines[i])) {
+              html += "<li>" + mdInline(lines[i].replace(/^\s*[-*]\s+/, "")) + "</li>";
+              i++;
+            }
+            html += "</ul>";
+            continue;
+          }
+          if (/^\s*\d+\.\s+/.test(line)) {
+            flushP();
+            html += "<ol>";
+            while (i < lines.length && /^\s*\d+\.\s+/.test(lines[i])) {
+              html += "<li>" + mdInline(lines[i].replace(/^\s*\d+\.\s+/, "")) + "</li>";
+              i++;
+            }
+            html += "</ol>";
+            continue;
+          }
+          para.push(line);
+          i++;
+        }
+        flushP();
+        return html;
+      }
+      function renderMd(src) {
+        const text = String(src || "");
+        const re = /```(\w*)\n?([\s\S]*?)```/g;
+        let html = "";
+        let last = 0;
+        let m;
+        while ((m = re.exec(text))) {
+          if (m.index > last) html += mdBlocks(text.slice(last, m.index));
+          html += "<pre><code>" + esc(m[2].replace(/\n$/, "")) + "</code></pre>";
+          last = m.index + m[0].length;
+        }
+        if (last < text.length) html += mdBlocks(text.slice(last));
+        return html;
+      }
       function diffHtml(t) {
-        return t
-          .split("\n")
-          .map((l) => {
-            if (l.startsWith("+++") || l.startsWith("---"))
-              return '<span class="ad">' + esc(l) + "</span>";
-            if (l.startsWith("+"))
-              return '<span class="ap">' + esc(l) + "</span>";
-            if (l.startsWith("-"))
-              return '<span class="am">' + esc(l) + "</span>";
-            if (l.startsWith("@@"))
-              return '<span class="ah">' + esc(l) + "</span>";
-            return esc(l);
-          })
-          .join("\n");
+        const lines = String(t || "").split("\n");
+        let html = "";
+        let file = "";
+        for (const l of lines) {
+          if (/^(edited|wrote|created)\b/i.test(l)) {
+            html += '<div class="diff-meta">' + esc(l) + "</div>";
+            continue;
+          }
+          if (l.startsWith("+++ ")) {
+            file = l.slice(4).replace(/^[ab]\//, "");
+            continue;
+          }
+          if (l.startsWith("--- ")) continue;
+          if (l.startsWith("@@")) {
+            html +=
+              '<div class="diff-row hunk"><span class="g"></span><span class="ln">' +
+              esc(l) +
+              "</span></div>";
+            continue;
+          }
+          if (l.startsWith("+")) {
+            html +=
+              '<div class="diff-row add"><span class="g">+</span><span class="ln">' +
+              esc(l.slice(1)) +
+              "</span></div>";
+            continue;
+          }
+          if (l.startsWith("-")) {
+            html +=
+              '<div class="diff-row del"><span class="g">−</span><span class="ln">' +
+              esc(l.slice(1)) +
+              "</span></div>";
+            continue;
+          }
+          html +=
+            '<div class="diff-row"><span class="g"></span><span class="ln">' + esc(l) + "</span></div>";
+        }
+        if (file) html = '<div class="diff-file">' + esc(file) + "</div>" + html;
+        return html;
+      }
+      function todoHtml(t) {
+        let html = "";
+        for (const l of String(t || "").split("\n")) {
+          const m = /^\[([ x>X])\]\s*(.*)$/.exec(l);
+          if (m) {
+            const st = m[1] === "x" || m[1] === "X" ? "done" : m[1] === ">" ? "run" : "pend";
+            const bm = /^(.*)\s+@([A-Za-z][A-Za-z0-9_-]*)$/.exec(m[2]);
+            const tx = bm ? bm[1] : m[2];
+            const bind = bm ? bm[2] : "";
+            html +=
+              '<div class="todo-i ' +
+              st +
+              '"><span class="todo-box"></span><span class="todo-tx">' +
+              esc(tx) +
+              (bind ? '<span class="todo-bind">@' + esc(bind) + "</span>" : "") +
+              "</span></div>";
+          } else if (l.trim()) {
+            html += '<div class="todo-foot">' + esc(l) + "</div>";
+          }
+        }
+        return html;
+      }
+      function agentHtml(out, args) {
+        if (Flow.el && (Flow.out === out || Flow.args === args || parseToolArgs(args).nodes)) {
+          return Flow.html();
+        }
+        const o = parseToolArgs(args);
+        let html = "";
+        const desc = o.description || o.task || o.prompt || "";
+        if (desc) html += '<div class="agent-desc">' + esc(desc) + "</div>";
+        if (out) html += '<pre class="code">' + esc(out) + "</pre>";
+        return html;
+      }
+      function toolBody(ty, out, path, args) {
+        const text = String(out || "");
+        if (ty === "term") {
+          const pre = document.createElement("pre");
+          pre.className = "term";
+          pre.innerHTML = ansiHtml(text);
+          return pre;
+        }
+        if (ty === "diff") {
+          const box = document.createElement("div");
+          box.className = "diff-view";
+          box.innerHTML = diffHtml(text);
+          return box;
+        }
+        if (ty === "todo") {
+          const box = document.createElement("div");
+          box.className = "todo-view";
+          box.innerHTML = todoHtml(text);
+          return box;
+        }
+        if (ty === "agent") {
+          const box = document.createElement("div");
+          box.className = "agent-view";
+          box.innerHTML = agentHtml(text, args || "");
+          return box;
+        }
+        if (isMarkdownPath(path) || (ty === "code" && looksLikeMd(text))) {
+          const box = document.createElement("div");
+          box.className = "insp-md";
+          box.innerHTML = renderMd(text);
+          return box;
+        }
+        const pre = document.createElement("pre");
+        pre.className = "code";
+        pre.textContent = text.length > 32000 ? text.slice(0, 32000) + "\n…" : text;
+        return pre;
       }
       // ---- SSE ----
       // SSE:EventSource 无法带 Bearer header → fetch + ReadableStream 解析(kimi ws.ts 等价)
@@ -4191,6 +6138,7 @@
       }
       let running = false;
       let lastUser = "";
+      let lastImgUrl = null;
       let pending = [];
       function refreshSend() {
         const t = $("inp").value.trim();
@@ -4208,6 +6156,54 @@
       function setRun(r) {
         running = r;
         refreshSend();
+        if (r) ensureActPoll();
+      }
+      let actTimer = 0;
+      function fmtActChip(a) {
+        const sec = a.ms < 10000 ? (a.ms / 1000).toFixed(1) : String(Math.round(a.ms / 1000));
+        const lim = a.limit_ms && !a.detached ? "/" + Math.round(a.limit_ms / 1000) + "s" : "";
+        const by = a.bytes ? " · " + fmtTok(a.bytes) : "";
+        return (
+          '<span class="act-chip' +
+          (a.detached ? " bg" : "") +
+          '">' +
+          esc(a.name || "job") +
+          " " +
+          sec +
+          "s" +
+          lim +
+          by +
+          (a.detached ? " · bg" : "") +
+          "</span>"
+        );
+      }
+      async function tickActivity() {
+        const el = $("actStrip");
+        if (!el) return 0;
+        try {
+          const r = await fetch("/api/activity");
+          const list = await r.json();
+          if (!list || !list.length) {
+            el.hidden = true;
+            el.innerHTML = "";
+            return 0;
+          }
+          el.hidden = false;
+          el.innerHTML = list.map(fmtActChip).join("");
+          return list.length;
+        } catch {
+          return 0;
+        }
+      }
+      function ensureActPoll() {
+        if (actTimer) return;
+        actTimer = setInterval(async () => {
+          const n = await tickActivity();
+          if (!n && !running) {
+            clearInterval(actTimer);
+            actTimer = 0;
+          }
+        }, 400);
       }
       function renderQueue() {
         const box = $("qbox"),
@@ -4245,13 +6241,22 @@
           case "user_message":
             lastUser = evt.text || lastUser;
             dropPending(evt.text);
-            addUser(evt.text);
+            addUser(evt.has_image && !evt.text ? "[image]" : evt.has_image ? (evt.text || "") + "  [image]" : (evt.text || ""), evt.image_file ? "/api/image?name=" + encodeURIComponent(evt.image_file) : evt.has_image ? lastImgUrl : null);
+            lastImgUrl = null;
             noteTurn();
             setRun(true);
             break;
           case "queued":
             if (evt.text && pending.indexOf(evt.text) < 0) pending.push(evt.text);
             renderQueue();
+            break;
+          case "title":
+            if (evt.title) {
+              curTitle = evt.title;
+              if ($("hSes") && sess !== "default") $("hSes").textContent = evt.title;
+              if ($("tbSe") && sess !== "default") $("tbSe").textContent = evt.title;
+              loadSessions();
+            }
             break;
           case "notice":
             addNotice(evt.text);
@@ -4265,10 +6270,13 @@
             addAsst(evt.text);
             break;
           case "tool_call":
-            lastByName[evt.name] = addTool(evt.name, evt.args);
+            addTool(evt.name, evt.args);
             break;
           case "tool_result":
             toolDone(evt.name, evt.error, evt.summary);
+            break;
+          case "subagent":
+            addSub(evt.idx, evt.kind, evt.text);
             break;
           case "permission":
             addPerm(evt.id, evt.name, evt.args);
@@ -4312,8 +6320,9 @@
             }
             break;
           case "status":
-            if (evt.pct !== undefined) {
-              setCtx(evt.pct);
+            if (evt.cost !== undefined) setCost(evt.cost);
+            if (evt.pct !== undefined || evt.used !== undefined) {
+              setCtx(evt.pct, evt.used, evt.window);
             }
             setTurnMeta(evt);
             if (evt.model) renderModel();
@@ -4334,8 +6343,25 @@
           );
         } else send();
       };
-      const SLASH = [
-        { name: "/help", desc: "列出命令" },
+      function applyHelpCatalog(j) {
+        if (j && Array.isArray(j.commands) && j.commands.length) {
+          SLASH = j.commands.map((c) => ({
+            name: c.name,
+            desc: c.desc,
+            accepts: !!c.accepts,
+          }));
+          window.HELP_KEYS = Array.isArray(j.keys) ? j.keys : window.HELP_KEYS || [];
+        }
+      }
+      function loadHelpCatalog() {
+        return fetch("/api/help?" + wsp + "session=" + encodeURIComponent(sess))
+          .then((r) => r.json())
+          .then(applyHelpCatalog)
+          .catch(() => showToast("help catalog load failed"));
+      }
+      let SLASH = [
+        { name: "/help", desc: "list commands" },
+        { name: "/login", desc: "save API key", accepts: true },
         { name: "/new", desc: "新会话" },
         { name: "/clear", desc: "清空并重开" },
         { name: "/sessions", desc: "搜索会话" },
@@ -4348,24 +6374,145 @@
         { name: "/fork", desc: "派生会话" },
         { name: "/title", desc: "改会话标题", accepts: true },
         { name: "/model", desc: "切换模型" },
+        { name: "/refresh", desc: "拉取 provider 模型列表" },
         { name: "/think", desc: "思考等级", accepts: true },
         { name: "/permissions", desc: "授权 yolo/ask/read-only", accepts: true },
+        { name: "/sandbox", desc: "bash 沙箱 off/workspace/strict", accepts: true },
         { name: "/status", desc: "当前状态" },
+        { name: "/doctor", desc: "环境体检" },
+        { name: "/init", desc: "写 AGENTS.md（已有不覆盖）" },
+        { name: "/diff", desc: "git status + diffstat" },
+        { name: "/commit", desc: "提交已暂存（需说明）", accepts: true },
+        { name: "/log", desc: "git log --oneline", accepts: true },
+        { name: "/branch", desc: "当前与最近分支" },
+        { name: "/mcp", desc: "MCP server 列表" },
+        { name: "/reload", desc: "重读 settings.json" },
+        { name: "/theme", desc: "外观 light/dark/system", accepts: true },
+        { name: "/paste", desc: "从剪贴板附图" },
+        { name: "/usage", desc: "token 账本" },
+        { name: "/jobs", desc: "在跑 / 后台任务", accepts: true },
+        { name: "/find", desc: "搜对话", accepts: true },
         { name: "/plan", desc: "写 PLAN.md 再执行", accepts: true },
         { name: "/queue", desc: "清空输入队列" },
         { name: "/memory", desc: "跨会话记忆", accepts: true },
+        { name: "/plugins", desc: "列出或开关插件", accepts: true },
+        { name: "/pkg", desc: "已装资源包" },
         { name: "/tree", desc: "消息列表" },
         { name: "/copy", desc: "复制最后一条回复" },
         { name: "/export", desc: "导出 HTML" },
         { name: "/dump", desc: "整段会话到剪贴板" },
         { name: "/redo", desc: "重发上一次输入" },
       ];
+      window.HELP_KEYS = window.HELP_KEYS || [
+        { name: "@./path", desc: "embed a file" },
+        { name: "!cmd", desc: "run shell, send to model" },
+        { name: "!!cmd", desc: "run shell, show only" },
+        { name: "?", desc: "shortcut overlay when empty" },
+        { name: "c", desc: "copy last reply when empty" },
+        { name: "d", desc: "doctor when empty" },
+        { name: "g", desc: "git diff when empty" },
+        { name: "l", desc: "git log when empty" },
+        { name: "r", desc: "redo last input when empty" },
+        { name: "s", desc: "sandbox picker when empty" },
+        { name: "j", desc: "list jobs when empty" },
+        { name: "u", desc: "token ledger when empty" },
+        { name: "Esc", desc: "abort; empty again edits last" },
+        { name: "Ctrl+C", desc: "clear; empty again quits" },
+        { name: "Ctrl+D", desc: "empty again quits" },
+        { name: "Tab", desc: "queue input while busy" },
+        { name: "Ctrl+B", desc: "background while busy" },
+        { name: "Ctrl+T", desc: "fold thinking" },
+        { name: "Ctrl+O", desc: "fold tool output" },
+        { name: "PgUp/PgDn", desc: "scroll transcript" },
+        { name: "Ctrl+↑/↓", desc: "scroll a few lines" },
+        { name: "wheel", desc: "scroll transcript" },
+        { name: "Alt+,/.", desc: "think less / more" },
+        { name: "Shift+↑/↓", desc: "think less / more" },
+      ];
       let slashItems = [],
-        slashIdx = 0;
+        slashIdx = 0,
+        pickKind = "",
+        atTok = null,
+        fileTimer = 0;
+      function slashStem(cmd) {
+        const s = cmd[0] === "/" ? cmd.slice(1) : cmd;
+        const i = s.indexOf(" ");
+        return i < 0 ? s : s.slice(0, i);
+      }
+      function startsWithInsens(hay, needle) {
+        return hay.slice(0, needle.length).toLowerCase() === needle.toLowerCase();
+      }
+      function indexOfInsens(hay, needle) {
+        return hay.toLowerCase().indexOf(needle.toLowerCase());
+      }
+      function fuzzySubseq(hay, needle) {
+        if (!needle) return { from: 0, to: 0 };
+        let i = 0,
+          first = -1,
+          last = 0;
+        const n = needle.toLowerCase();
+        const h = hay.toLowerCase();
+        for (let hi = 0; hi < h.length; hi++) {
+          if (i < n.length && h[hi] === n[i]) {
+            if (first < 0) first = hi;
+            last = hi + 1;
+            i++;
+          }
+        }
+        return i === n.length ? { from: first, to: last } : null;
+      }
+      function rankSlash(items, query) {
+        if (!query) return items.map((it) => ({ it, kind: 0, hlFrom: 0, hlLen: 0, score: 0 }));
+        const out = [];
+        for (const it of items) {
+          const name = slashStem(it.name);
+          if (startsWithInsens(name, query)) {
+            out.push({
+              it,
+              kind: 0,
+              hlFrom: 0,
+              hlLen: query.length,
+              score: 2000 + (name.length === query.length ? 1000 : 0) - Math.min(name.length, 500),
+            });
+            continue;
+          }
+          const span = fuzzySubseq(name, query);
+          if (span) {
+            out.push({
+              it,
+              kind: 1,
+              hlFrom: span.from,
+              hlLen: span.to - span.from,
+              score: 1000 - Math.min(span.to - span.from, 500),
+            });
+            continue;
+          }
+          const at = indexOfInsens(it.desc, query);
+          if (at >= 0) out.push({ it, kind: 2, hlFrom: at, hlLen: query.length, score: 100 });
+        }
+        out.sort((a, b) => a.kind - b.kind || b.score - a.score);
+        return out;
+      }
+      function hlSpan(s, from, len) {
+        if (!len) return esc(s);
+        return (
+          esc(s.slice(0, from)) +
+          "<mark>" +
+          esc(s.slice(from, from + len)) +
+          "</mark>" +
+          esc(s.slice(from + len))
+        );
+      }
       function hideSlash() {
         const m = $("slashMenu");
         if (m) m.hidden = true;
         slashItems = [];
+        pickKind = "";
+        atTok = null;
+        if (fileTimer) {
+          clearTimeout(fileTimer);
+          fileTimer = 0;
+        }
       }
       function slashOpen() {
         const m = $("slashMenu");
@@ -4379,53 +6526,178 @@
           return;
         }
         m.hidden = false;
+        const file = pickKind === "file";
+        const foot = file
+          ? "<span>↑↓ 选择</span><span>Enter 填入</span><span>Tab 补全</span><span>Esc 关闭</span>"
+          : "<span>↑↓ 选择</span><span>Enter 执行</span><span>Tab 补全</span><span>Esc 关闭</span>";
         m.innerHTML =
           '<div class="slash-list">' +
           slashItems
-            .map(
-              (it, i) =>
+            .map((it, i) => {
+              const name = file ? it.path || it.name : it.name;
+              const desc = file ? (it.dir ? "目录" : "文件") : it.desc;
+              const mark = file && it.dir ? '<span class="mark">/</span>' : "";
+              return (
                 '<div class="slash-item' +
                 (i === slashIdx ? " active" : "") +
                 '" data-i="' +
                 i +
                 '" role="option"><span class="slash-name">' +
-                esc(it.name) +
+                (it.hlLen ? hlSpan(name, it.hlFrom || 0, it.hlLen) : esc(name)) +
                 '</span><span class="slash-desc">' +
-                esc(it.desc) +
-                "</span></div>",
-            )
+                esc(desc || "") +
+                "</span>" +
+                mark +
+                "</div>"
+              );
+            })
             .join("") +
-          '</div><div class="slash-foot"><span>↑↓ 选择</span><span>Enter 执行</span><span>Esc 关闭</span></div>';
+          '</div><div class="slash-foot">' +
+          foot +
+          "</div>";
         const on = m.querySelector(".slash-item.active");
         if (on) on.scrollIntoView({ block: "nearest" });
       }
-      function updateSlash() {
-        const v = $("inp").value;
-        if (!v.startsWith("/") || v.includes("\n")) {
+      function updateSlashList(q) {
+        pickKind = "slash";
+        const ranked = rankSlash(SLASH, q);
+        slashItems = ranked.map((r) =>
+          Object.assign({}, r.it, { hlFrom: r.hlFrom, hlLen: r.kind === 2 ? 0 : r.hlLen }),
+        );
+        if (slashIdx >= slashItems.length) slashIdx = 0;
+        renderSlash();
+      }
+      function atToken(v, caret) {
+        const left = v.slice(0, caret == null ? v.length : caret);
+        const m = /(^|[\s])(@(?:\.\/[^\s]*|\.?))$/.exec(left);
+        if (!m) return null;
+        const raw = m[2];
+        return { start: left.length - raw.length, raw, q: raw.startsWith("@./") ? raw.slice(3) : "" };
+      }
+      function scheduleFiles(tok) {
+        atTok = tok;
+        pickKind = "file";
+        if (fileTimer) clearTimeout(fileTimer);
+        fileTimer = setTimeout(async () => {
+          fileTimer = 0;
+          const cur = atToken($("inp").value, $("inp").selectionStart);
+          if (!cur) {
+            hideSlash();
+            return;
+          }
+          atTok = cur;
+          try {
+            const r = await fetch("/api/files?" + wsp + "q=" + encodeURIComponent(cur.q));
+            const j = await r.json();
+            if (!j || !j.ok) {
+              slashItems = [];
+              renderSlash();
+              return;
+            }
+            slashItems = (j.items || []).map((it) =>
+              Object.assign({ desc: it.link ? "→ " + it.link : it.dir ? "目录" : "文件" }, it),
+            );
+            if (slashIdx >= slashItems.length) slashIdx = 0;
+            pickKind = "file";
+            renderSlash();
+          } catch {
+            hideSlash();
+          }
+        }, 60);
+      }
+      function insertFile() {
+        const it = slashItems[slashIdx];
+        const inp = $("inp");
+        const tok = atToken(inp.value, inp.selectionStart) || atTok;
+        if (!it || !tok) {
           hideSlash();
           return;
         }
-        const q = v.slice(1).split(" ")[0].toLowerCase();
-        slashItems = SLASH.filter((it) => {
-          const n = it.name.slice(1);
-          return !q || n.startsWith(q) || n.includes(q);
-        });
-        slashItems.sort((a, b) => {
-          const qa = a.name.slice(1),
-            qb = b.name.slice(1);
-          const sa = qa === q ? 3 : qa.startsWith(q) ? 2 : 1;
-          const sb = qb === q ? 3 : qb.startsWith(q) ? 2 : 1;
-          return sb - sa;
-        });
-        if (slashIdx >= slashItems.length) slashIdx = 0;
-        renderSlash();
+        const prefix = inp.value.slice(0, tok.start);
+        const suffix = inp.value.slice(tok.start + tok.raw.length);
+        if (it.dir) {
+          const filled = prefix + "@./" + it.path + "/";
+          inp.value = filled + suffix;
+          inp.setSelectionRange(filled.length, filled.length);
+          hideSlash();
+          scheduleFiles(atToken(inp.value, filled.length));
+        } else {
+          const filled = prefix + "@./" + it.path + " ";
+          inp.value = filled + suffix;
+          inp.setSelectionRange(filled.length, filled.length);
+          hideSlash();
+        }
+        autosizeInp();
+        saveDraft();
+        refreshSend();
+      }
+      function hideBang() {
+        const el = $("cmpHint");
+        if (!el) return;
+        el.hidden = true;
+        el.innerHTML = "";
+      }
+      function showBang(v) {
+        const el = $("cmpHint");
+        if (!el) return;
+        const local = v.startsWith("!!");
+        const cmd = v.slice(local ? 2 : 1).trim();
+        el.hidden = false;
+        el.innerHTML = local
+          ? '<span class="bang-local">!! 只跑</span><b>' +
+            esc(cmd || "…") +
+            "</b><span>结果留在本页，不送模型</span>"
+          : '<span class="bang-run">! 跑并送</span><b>' +
+            esc(cmd || "…") +
+            "</b><span>输出会一并交给模型</span>";
+      }
+      function updateComposerChrome() {
+        const inp = $("inp");
+        const v = inp.value;
+        if (v.startsWith("/") && v.indexOf("\n") < 0 && v.indexOf(" ") < 0) {
+          hideBang();
+          updateSlashList(v.slice(1));
+          return;
+        }
+        if (v.startsWith("!")) {
+          hideSlash();
+          showBang(v);
+          return;
+        }
+        const tok = atToken(v, inp.selectionStart);
+        if (tok) {
+          hideBang();
+          scheduleFiles(tok);
+          return;
+        }
+        hideSlash();
+        hideBang();
+      }
+      function updateSlash() {
+        updateComposerChrome();
       }
       function slashMove(d) {
         if (!slashItems.length) return;
         slashIdx = (slashIdx + d + slashItems.length) % slashItems.length;
         renderSlash();
       }
+      function slashComplete() {
+        if (pickKind === "file") {
+          insertFile();
+          return;
+        }
+        const it = slashItems[slashIdx];
+        if (!it) return;
+        $("inp").value = it.name + (it.accepts ? " " : "");
+        hideSlash();
+        autosizeInp();
+        saveDraft();
+      }
       function slashPick() {
+        if (pickKind === "file") {
+          insertFile();
+          return;
+        }
         const it = slashItems[slashIdx];
         if (!it) return;
         if (it.accepts) {
@@ -4527,10 +6799,36 @@
       }
       async function runSlash(item, arg) {
         switch (item.name) {
+          case "/login": {
+            const parts = (arg || "").trim().split(/\s+/);
+            const name = parts[0] || "";
+            const key = parts.slice(1).join(" ").trim();
+            if (!name || !key) {
+              showToast("usage: /login <provider> <api-key>");
+              break;
+            }
+            fetch("/api/config", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ setAuth: { name, key } }),
+            })
+              .then((r) => r.json())
+              .then((j) => showToast(j && j.ok ? "saved " + name : "login failed"))
+              .catch(() => showToast("login failed"));
+            break;
+          }
+          case "/quit":
+            showToast("close the tab to quit");
+            break;
           case "/help":
             addUser("/help");
+            const cmds = SLASH.map((s) => s.name.padEnd(16) + s.desc).join("\n");
+            const keys = (window.HELP_KEYS || [])
+              .map((s) => String(s.name || "").padEnd(16) + (s.desc || ""))
+              .join("\n");
             addAsst(
-              SLASH.map((s) => s.name.padEnd(16) + s.desc).join("\n") +
+              cmds +
+                (keys ? "\n\n" + keys : "") +
                 "\n\n@./path 嵌文件 · !cmd 跑命令并送给模型 · !!cmd 只跑不送\nCtrl+K 搜会话 · 发送中再按 Enter 会接着发",
             );
             finishAsst();
@@ -4575,19 +6873,28 @@
           case "/title": {
             const t = arg || (await askText("会话标题", curTitle || "", ""));
             if (t === null || !t) return;
-            fetch("/api/title?" + wsp + "session=" + encodeURIComponent(sess), {
-              method: "POST",
-              headers: { "content-type": "application/json" },
-              body: JSON.stringify({ title: t }),
-            })
-              .then((r) => r.json())
-              .then((j) => {
-                if (j && j.title) {
-                  curTitle = j.title;
-                  $("hSes").textContent = j.title;
-                  loadSessions();
-                }
+            await applySessionTitle(t, true);
+            break;
+          }
+          case "/refresh": {
+            addUser("/refresh");
+            try {
+              const r = await fetch("/api/config", {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({ refreshModels: true }),
               });
+              const j = await r.json().catch(() => ({}));
+              if (!r.ok || j.ok === false) {
+                addAsst(j.error || "cannot refresh models");
+              } else {
+                addAsst("refreshed " + (j.refreshed || 0) + " provider(s), +" + (j.added || 0) + " models" +
+                  (j.fail ? "\n" + j.fail + " provider(s) failed GET /models" : ""));
+              }
+            } catch {
+              addAsst("cannot refresh models");
+            }
+            finishAsst();
             break;
           }
           case "/model":
@@ -4606,31 +6913,324 @@
             finishAsst();
             break;
           }
+          case "/jobs": {
+            const raw = (arg || "").trim();
+            addUser(raw ? "/jobs " + raw : "/jobs");
+            try {
+              if (/^kill\s+\d+/.test(raw) || /^\d+$/.test(raw)) {
+                const pid = parseInt(raw.replace(/^kill\s+/, ""), 10);
+                const r = await fetch("/api/activity", {
+                  method: "POST",
+                  headers: { "content-type": "application/json" },
+                  body: JSON.stringify({ kill: pid }),
+                });
+                const j = await r.json();
+                addAsst(j.ok ? "killed pid " + pid : "no tracked job with that pid");
+              } else {
+                const r = await fetch("/api/activity");
+                const list = await r.json();
+                if (!list || !list.length) addAsst("no running jobs");
+                else
+                  addAsst(
+                    list
+                      .map((a) => {
+                        const sec = Math.round((a.ms || 0) / 1000);
+                        return (
+                          (a.detached ? "~ " : "* ") +
+                          (a.pid ? "pid " + a.pid + "  " : "") +
+                          (a.name || "job") +
+                          " " +
+                          sec +
+                          "s" +
+                          (a.detail ? "  " + a.detail : "")
+                        );
+                      })
+                      .join("\n"),
+                  );
+              }
+              ensureActPoll();
+            } catch {
+              addAsst("cannot read activity");
+            }
+            finishAsst();
+            break;
+          }
+          case "/usage": {
+            addUser("/usage");
+            try {
+              const r = await fetch("/api/usage");
+              const j = await r.json();
+              const cost = j.usd > 0 ? "  $" + Number(j.usd).toFixed(4) : "";
+              const head = "usage  " + (j.lines || 0) + " turns  ↑" + fmtTok(j.in || 0) + " ↓" + fmtTok(j.out || 0) + cost;
+              addAsst(j.tail ? head + "\n" + j.tail : head);
+            } catch {
+              addAsst("cannot read usage.jsonl");
+            }
+            finishAsst();
+            break;
+          }
+          case "/sandbox": {
+            const lv = (arg || "").trim();
+            if (!lv) {
+              addUser("/sandbox");
+              addAsst("usage: /sandbox off|workspace|strict");
+              finishAsst();
+              break;
+            }
+            addUser("/sandbox " + lv);
+            await setSandbox(lv);
+            addAsst("sandbox " + sandboxMode);
+            finishAsst();
+            break;
+          }
           case "/think": {
             const lv = (arg || "").trim();
             if (!lv) {
               $("hThink").click();
               break;
             }
-            setThink(lv);
             addUser("/think " + lv);
-            addAsst("思考 " + lv);
+            await setThink(lv);
+            addAsst("思考 " + (curThink || lv));
             finishAsst();
             break;
           }
-          case "/status":
-            addUser("/status");
-            addAsst(
-              "模型 " +
-                (curModel || "?") +
-                " · 思考 " +
-                (curThink || "high") +
-                " · 会话 " +
-                sess +
-                " · 项目 " +
-                (ws || "."),
-            );
+          case "/find": {
+            const q = (arg || "").trim();
+            addUser("/find" + (q ? " " + q : ""));
+            const e = asstEl().querySelector(".md");
+            if (!q && !webFindQ) e.textContent = "usage: /find <text>";
+            else if (findInThread(q || webFindQ, false)) e.textContent = "found: " + (q || webFindQ);
+            else e.textContent = "no match";
             finishAsst();
+            break;
+          }
+          case "/paste": {
+            addUser("/paste");
+            try {
+              if (await attachClipboardImage()) {
+                addAsst(curVision ? "image attached — enter to send" : "image attached — this model has no vision");
+              } else {
+                addAsst("no image on clipboard — use Ctrl+V");
+              }
+            } catch {
+              addAsst("no image on clipboard — use Ctrl+V");
+            }
+            finishAsst();
+            break;
+          }
+          case "/theme": {
+            const lv = (arg || "").trim().toLowerCase();
+            addUser(lv ? "/theme " + lv : "/theme");
+            if (!lv) {
+              addAsst("theme " + (prefs.scheme || "dark") + "\nusage: /theme light|dark|system");
+            } else if (setScheme(lv)) {
+              addAsst("theme " + prefs.scheme);
+            } else {
+              addAsst("usage: /theme light|dark|system");
+            }
+            finishAsst();
+            break;
+          }
+          case "/reload":
+            fetch("/api/slash?" + wsp + "session=" + encodeURIComponent(sess), {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ name: "reload", args: "" }),
+            })
+              .then((r) => r.json())
+              .then((j) => {
+                const text = (j && j.text) || "reload failed";
+                String(text)
+                  .split("\n")
+                  .forEach((line) => {
+                    const m = line.match(/^(theme|approval|sandbox|think)\s+(\S+)/);
+                    if (!m) return;
+                    if (m[1] === "theme") setScheme(m[2]);
+                    if (m[1] === "approval") {
+                      approvalMode = m[2] === "read-only" ? "read-only" : m[2];
+                      setModeBtn();
+                    }
+                    if (m[1] === "sandbox") {
+                      sandboxMode = m[2];
+                      setSandboxBtn();
+                    }
+                    if (m[1] === "think") {
+                      curThink = m[2];
+                      renderThink();
+                    }
+                  });
+                addUser("/reload");
+                addAsst(text);
+                finishAsst();
+              })
+              .catch(() => {
+                addUser("/reload");
+                addAsst("reload failed");
+                finishAsst();
+              });
+            break;
+          case "/mcp":
+            fetch("/api/slash?" + wsp + "session=" + encodeURIComponent(sess), {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ name: "mcp", args: "" }),
+            })
+              .then((r) => r.json())
+              .then((j) => {
+                addUser("/mcp");
+                addAsst((j && j.text) || "mcp failed");
+                finishAsst();
+              })
+              .catch(() => {
+                addUser("/mcp");
+                addAsst("mcp failed");
+                finishAsst();
+              });
+            break;
+          case "/branch":
+            fetch("/api/slash?" + wsp + "session=" + encodeURIComponent(sess), {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ name: "branch", args: "" }),
+            })
+              .then((r) => r.json())
+              .then((j) => {
+                addUser("/branch");
+                addAsst((j && j.text) || "branch failed");
+                finishAsst();
+              })
+              .catch(() => {
+                addUser("/branch");
+                addAsst("branch failed");
+                finishAsst();
+              });
+            break;
+          case "/log":
+            fetch("/api/slash?" + wsp + "session=" + encodeURIComponent(sess), {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ name: "log", args: arg || "" }),
+            })
+              .then((r) => r.json())
+              .then((j) => {
+                addUser("/log" + (arg ? " " + arg : ""));
+                addAsst((j && j.text) || "log failed");
+                finishAsst();
+              })
+              .catch(() => {
+                addUser("/log");
+                addAsst("log failed");
+                finishAsst();
+              });
+            break;
+          case "/commit":
+            fetch("/api/slash?" + wsp + "session=" + encodeURIComponent(sess), {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ name: "commit", args: arg || "" }),
+            })
+              .then((r) => r.json())
+              .then((j) => {
+                addUser("/commit" + (arg ? " " + arg : ""));
+                addAsst((j && j.text) || "commit failed");
+                finishAsst();
+              })
+              .catch(() => {
+                addUser("/commit");
+                addAsst("commit failed");
+                finishAsst();
+              });
+            break;
+          case "/diff":
+            fetch("/api/slash?" + wsp + "session=" + encodeURIComponent(sess), {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ name: "diff", args: "" }),
+            })
+              .then((r) => r.json())
+              .then((j) => {
+                addUser("/diff");
+                addAsst((j && j.text) || "diff failed");
+                finishAsst();
+              })
+              .catch(() => {
+                addUser("/diff");
+                addAsst("diff failed");
+                finishAsst();
+              });
+            break;
+          case "/init":
+            fetch("/api/slash?" + wsp + "session=" + encodeURIComponent(sess), {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ name: "init", args: "" }),
+            })
+              .then((r) => r.json())
+              .then((j) => {
+                addUser("/init");
+                addAsst((j && j.text) || "init failed");
+                finishAsst();
+              })
+              .catch(() => {
+                addUser("/init");
+                addAsst("init failed");
+                finishAsst();
+              });
+            break;
+          case "/doctor":
+            fetch("/api/slash?" + wsp + "session=" + encodeURIComponent(sess), {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ name: "doctor", args: "" }),
+            })
+              .then((r) => r.json())
+              .then((j) => {
+                addUser("/doctor");
+                addAsst((j && j.text) || "doctor failed");
+                finishAsst();
+              })
+              .catch(() => {
+                addUser("/doctor");
+                addAsst("doctor failed");
+                finishAsst();
+              });
+            break;
+          case "/status":
+            fetch("/api/config")
+              .then((r) => r.json())
+              .then((cfg) => {
+                const on = (Array.isArray(cfg.plugins) ? cfg.plugins : [])
+                  .filter((p) => p && p.enabled && p.optional)
+                  .map((p) => p.name);
+                addUser("/status");
+                addAsst(
+                  "模型 " +
+                    (curModel || "?") +
+                    " · 思考 " +
+                    (curThink || "high") +
+                    " · 会话 " +
+                    sess +
+                    " · 项目 " +
+                    (ws || ".") +
+                    (on.length ? " · 插件 " + on.join(" ") : ""),
+                );
+                finishAsst();
+              })
+              .catch(() => {
+                addUser("/status");
+                addAsst(
+                  "模型 " +
+                    (curModel || "?") +
+                    " · 思考 " +
+                    (curThink || "high") +
+                    " · 会话 " +
+                    sess +
+                    " · 项目 " +
+                    (ws || "."),
+                );
+                finishAsst();
+              });
             break;
           case "/resume": {
             const n = parseInt(arg, 10);
@@ -4693,6 +7293,90 @@
             });
             break;
           }
+          case "/plugins": {
+            const rest = (arg || "").trim();
+            if (!rest) {
+              fetch("/api/config")
+                .then((r) => r.json())
+                .then((cfg) => {
+                  const plugs = Array.isArray(cfg.plugins) ? cfg.plugins : [];
+                  const lines = plugs.map(
+                    (p) =>
+                      "  [" +
+                      (p.enabled ? "on " : "off") +
+                      "] " +
+                      p.name,
+                  );
+                  addUser("/plugins");
+                  addAsst(
+                    "plugins (next turn):\n" +
+                      lines.join("\n") +
+                      "\nusage: /plugins on <name> | /plugins off <name>",
+                  );
+                  finishAsst();
+                })
+                .catch(() => showToast("plugins 读取失败"));
+              break;
+            }
+            const m = rest.match(/^(on|off)\s+(\S+)$/);
+            if (!m) {
+              showToast("usage: /plugins on <name> | /plugins off <name>");
+              break;
+            }
+            const on = m[1] === "on";
+            fetch("/api/config", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ setPlugin: { name: m[2], enabled: on } }),
+            })
+              .then((r) => r.json())
+              .then((j) => {
+                if (j && j.ok === false) {
+                  showToast("插件开关失败");
+                  return;
+                }
+                showToast("plugin " + m[2] + (on ? " on" : " off") + " — next turn");
+                loadHelpCatalog();
+              })
+              .catch(() => showToast("插件开关失败"));
+            break;
+          }
+          case "/pkg":
+            fetch("/api/packages?" + wsp)
+              .then((r) => r.json())
+              .then((j) => {
+                function rows(arr, title) {
+                  const xs = Array.isArray(arr) ? arr : [];
+                  const body = xs.length
+                    ? xs
+                        .map(
+                          (p) =>
+                            "  " +
+                            p.name +
+                            "  skills:" +
+                            (p.skills || 0) +
+                            " prompts:" +
+                            (p.prompts || 0),
+                        )
+                        .join("\n")
+                    : "  (none)";
+                  return title + " (" + xs.length + "):\n" + body;
+                }
+                addUser("/pkg");
+                addAsst(
+                  rows(j.user, "user packages") +
+                    "\n" +
+                    rows(j.project, "project packages") +
+                    "\ninstall: piz pkg install <path> [-l]",
+                );
+                finishAsst();
+              })
+              .catch(() => {
+                addUser("/pkg");
+                addAsst("packages 读取失败");
+                finishAsst();
+              });
+            break;
           case "/tree":
             act({ act: "tree" }, (j) => {
               addUser("/tree");
@@ -4732,11 +7416,98 @@
             }
             await sendPlain(lastUser);
             break;
-          default:
-            showToast("未知命令");
+          default: {
+            const stem = String(item.name || "").replace(/^\//, "");
+            fetch("/api/slash?" + wsp + "session=" + encodeURIComponent(sess), {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ name: stem, args: arg || "" }),
+            })
+              .then((r) => r.json())
+              .then((j) => {
+                if (j && j.ok) {
+                  addUser("/" + stem + (arg ? " " + arg : ""));
+                  addAsst(j.text || "");
+                  finishAsst();
+                } else showToast((j && j.error) || "未知命令");
+              })
+              .catch(() => showToast("未知命令"));
+            break;
+          }
         }
       }
+      function toggleKeysHint() {
+        const el = $("keysHint");
+        if (!el) return;
+        if (!el.hidden) {
+          el.hidden = true;
+          el.innerHTML = "";
+          return;
+        }
+        el.hidden = false;
+        el.innerHTML =
+          "<div><kbd>/</kbd> 命令 · <kbd>@./</kbd> 文件 · <kbd>!</kbd> 本页命令</div>" +
+          "<div><kbd>j</kbd> 任务 · <kbd>u</kbd> 用量 · <kbd>g</kbd> 差异 · <kbd>l</kbd> 日志 · <kbd>c</kbd> 复制 · <kbd>s</kbd> 沙箱 · <kbd>?</kbd> 本卡</div>" +
+          "<div><kbd>Ctrl</kbd><kbd>K</kbd> 搜会话 · <kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>C</kbd> 复制回复</div>" +
+          "<div><kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>R</kbd> 重发 · <kbd>Ctrl</kbd><kbd>V</kbd> 贴图 · <kbd>Esc</kbd> 关</div>";
+      }
       $("inp").addEventListener("keydown", (e) => {
+        if (
+          !e.isComposing &&
+          !e.ctrlKey &&
+          !e.metaKey &&
+          !e.altKey &&
+          !$("inp").value &&
+          !slashOpen()
+        ) {
+          if (e.key === "u" || e.key === "U") {
+            e.preventDefault();
+            runSlash({ name: "/usage" }, "");
+            return;
+          }
+          if (e.key === "j" || e.key === "J") {
+            e.preventDefault();
+            runSlash({ name: "/jobs" }, "");
+            return;
+          }
+          if (e.key === "d" || e.key === "D") {
+            e.preventDefault();
+            runSlash({ name: "/doctor" }, "");
+            return;
+          }
+          if (e.key === "g" || e.key === "G") {
+            e.preventDefault();
+            runSlash({ name: "/diff" }, "");
+            return;
+          }
+          if (e.key === "l" || e.key === "L") {
+            e.preventDefault();
+            runSlash({ name: "/log" }, "");
+            return;
+          }
+          if (e.key === "r" || e.key === "R") {
+            e.preventDefault();
+            runSlash({ name: "/redo" }, "");
+            return;
+          }
+          if (e.key === "c" || e.key === "C") {
+            e.preventDefault();
+            runSlash({ name: "/copy" }, "");
+            return;
+          }
+          if (e.key === "s" || e.key === "S") {
+            e.preventDefault();
+            const p = $("sbPill");
+            if (p) p.click();
+            else runSlash({ name: "/sandbox" }, "");
+            return;
+          }
+          if (e.key === "?") {
+            e.preventDefault();
+            toggleKeysHint();
+            return;
+          }
+        }
         if (slashOpen()) {
           if (e.key === "ArrowDown") {
             e.preventDefault();
@@ -4748,7 +7519,12 @@
             slashMove(-1);
             return;
           }
-          if (e.key === "Enter" || e.key === "Tab") {
+          if (e.key === "Tab") {
+            e.preventDefault();
+            slashComplete();
+            return;
+          }
+          if (e.key === "Enter") {
             e.preventDefault();
             slashPick();
             return;
@@ -4785,31 +7561,134 @@
         }
       });
       $("inp").addEventListener("input", () => {
+        const kh = $("keysHint");
+        if (kh && !kh.hidden && $("inp").value) {
+          kh.hidden = true;
+          kh.innerHTML = "";
+        }
         autosizeInp();
         saveDraft();
         updateSlash();
         refreshSend();
       });
+      let pendingImg = null;
+      function paintImgChip() {
+        let c = $("img-chip");
+        if (!c) {
+          c = document.createElement("div");
+          c.id = "img-chip";
+          c.className = "img-chip";
+          const box = $("inp").parentNode;
+          if (box) box.insertBefore(c, $("inp"));
+        }
+        if (!pendingImg) {
+          c.hidden = true;
+          c.innerHTML = "";
+          return;
+        }
+        c.hidden = false;
+        c.innerHTML = "<img alt=\"\" /><span>image</span><button type=button>✕</button>";
+        c.querySelector("img").src = "data:" + pendingImg.mime + ";base64," + pendingImg.b64;
+        c.querySelector("button").onclick = () => {
+          pendingImg = null;
+          paintImgChip();
+        };
+      }
+      async function blobToChatImage(blob) {
+        const bmp = await createImageBitmap(blob);
+        const max = 1600;
+        let w = bmp.width,
+          h = bmp.height;
+        if (w > max || h > max) {
+          const s = max / Math.max(w, h);
+          w = Math.round(w * s);
+          h = Math.round(h * s);
+        }
+        const cv = document.createElement("canvas");
+        cv.width = w;
+        cv.height = h;
+        cv.getContext("2d").drawImage(bmp, 0, 0, w, h);
+        const url = cv.toDataURL("image/jpeg", 0.85);
+        const i = url.indexOf(",");
+        return { mime: "image/jpeg", b64: url.slice(i + 1) };
+      }
+      async function attachClipboardImage() {
+        if (navigator.clipboard && navigator.clipboard.read) {
+          try {
+            const items = await navigator.clipboard.read();
+            for (const it of items) {
+              const type = (it.types || []).find((t) => String(t).indexOf("image/") === 0);
+              if (!type) continue;
+              const blob = await it.getType(type);
+              pendingImg = await blobToChatImage(blob);
+              paintImgChip();
+              return true;
+            }
+          } catch {}
+        }
+        return false;
+      }
+      document.addEventListener("paste", async (ev) => {
+        const items = ev.clipboardData && ev.clipboardData.items;
+        if (!items) return;
+        for (const it of items) {
+          if (it.type && it.type.indexOf("image/") === 0) {
+            ev.preventDefault();
+            const blob = it.getAsFile();
+            if (!blob) return;
+            try {
+              pendingImg = await blobToChatImage(blob);
+              paintImgChip();
+            } catch {}
+            return;
+          }
+        }
+      });
       async function sendPlain(t) {
-        if (!t) return;
-        lastUser = t;
+        if (!t && !pendingImg) return;
+        lastUser = t || "(image)";
+        let img = pendingImg;
+        lastImgUrl = img || null;
+        pendingImg = null;
+        if (img && !curVision) {
+          addNotice("image dropped: model has no vision");
+          img = null;
+          if (!t) {
+            paintImgChip();
+            return;
+          }
+        }
+        paintImgChip();
         setRun(true);
         try {
-          await fetch(
+          const body = { text: t || "" };
+          if (img) {
+            body.image = img.b64;
+            body.mime = img.mime;
+          }
+          const r = await fetch(
             "/api/chat?" + wsp + "session=" + encodeURIComponent(sess),
             {
               method: "POST",
               headers: { "content-type": "application/json" },
-              body: JSON.stringify({ text: t }),
+              body: JSON.stringify(body),
             },
           );
+          const j = await r.json().catch(() => ({}));
+          if (!r.ok || j.ok === false) {
+            setRun(false);
+            showToast(j.error || "send failed");
+          }
         } catch {
           setRun(false);
+          showToast("send failed");
         }
       }
       async function send() {
+        hideSlash();
+        hideBang();
         const t = $("inp").value.trim();
-        if (!t) return;
+        if (!t && !pendingImg) return;
         if (t.startsWith("/")) {
           const space = t.indexOf(" ");
           const cmd = space < 0 ? t : t.slice(0, space);
@@ -4909,8 +7788,9 @@
           asset: (rel) =>
             pluginUrl(new URL(rel, new URL(meta.base, location.href)).href),
           on: (type, fn) => {
-            owned.push(pluginOn(type, fn));
-            return () => {};
+            const off = pluginOn(type, fn);
+            owned.push(off);
+            return off;
           },
           toast: showToast,
           fetch: async (path, opts) => {
@@ -4923,6 +7803,7 @@
             return fetch(u, opts);
           },
           send: (text) => {
+            if (running) return false;
             sendPlain(String(text));
             return true;
           },
@@ -5060,13 +7941,15 @@
       // ---- 初始化 ----
       let curModel = "",
         curThink = "high",
-        curTitle = "";
+        curTitle = "",
+        curVision = false;
       // ---- 启动门(kimi GlobalLoading + auth gate):splash → 探活 → 登录页或主界面 ----
       let booted = false;
       let splashAt = Date.now();
       function boot() {
         if (booted) return;
         booted = true;
+        inspect.init();
         const wait = Math.max(0, 450 - (Date.now() - splashAt));
         setTimeout(() => {
           $("splash")?.classList.add("hide");
@@ -5076,30 +7959,23 @@
         fetch("/api/state?" + wsp + "session=" + encodeURIComponent(sess))
         .then((r) => r.json())
         .then((s) => {
+          histStart = s.hist_start || 0;
+          histTotal = s.hist_total || (s.history ? s.history.length : 0);
           if (s.history && s.history.length) {
-            hideWelcome();
-            for (const h of s.history) {
-              if (h.role === "user") {
-                lastUser = h.content;
-                addUser(h.content);
-              } else if (h.role === "assistant") {
-                const e = asstEl().querySelector(".md");
-                e.textContent = h.content;
-                finishAsst();
-              } else addTool(h.role, h.content.slice(0, 120));
-            }
-            finishWork();
+            replayHist(s.history, false);
             if (s.running) {
               const la = th.querySelector(".a-turn:last-child");
               if (la) curAsst = la;
             }
-          }
-          if (s.pct !== undefined) setCtx(s.pct);
+          } else paintHistMore();
+          if (s.cost !== undefined) setCost(s.cost);
+          if (s.pct !== undefined || s.used !== undefined) setCtx(s.pct, s.used, s.window);
           if (s.running) setRun(true);
           if (s.model) {
             curModel = s.model;
             renderModel();
           }
+          if (typeof s.vision === "boolean") curVision = s.vision;
           if (s.think) {
             curThink = s.think;
             renderThink();
@@ -5113,8 +7989,18 @@
           }
           renderHdr(s);
         })
-        .catch(() => {});
+        .catch(() => showToast("state load failed"));
       setModeBtn();
+      setSandboxBtn();
+      fetch("/api/config")
+        .then((r) => r.json())
+        .then((cfg) => {
+          if (cfg && cfg.sandboxMode) sandboxMode = cfg.sandboxMode;
+          if (cfg && cfg.sandboxBackend) window.sandboxBackend = cfg.sandboxBackend;
+          setSandboxBtn();
+        })
+        .catch(() => showToast("config load failed"));
+      loadHelpCatalog();
       const welcome = document.createElement("div");
       welcome.id = "welcome";
       welcome.className = "empty-hint";
@@ -5124,7 +8010,7 @@
         '<span class="empty-hint-title">piz</span></div>' +
         '<button type="button" class="ws-chip" id="heroWs"><span class="ws-chip-ic">⌂</span><span id="heroWsLbl">项目</span><span class="ws-chip-chev">▾</span></button>' +
         '<div class="empty-hint-text">读、改、跑。工具默认先问你。</div>' +
-        '<div class="empty-keys"><span><kbd>/</kbd> 命令</span><span><kbd>@./</kbd> 文件</span><span><kbd>!</kbd> 命令</span><span><kbd>Enter</kbd> 发送</span></div>';
+        '<div class="empty-keys"><span><kbd>/</kbd> 命令</span><span><kbd>j</kbd> 任务</span><span><kbd>u</kbd> 用量</span><span><kbd>s</kbd> 沙箱</span><span><kbd>?</kbd> 快捷键</span></div>';
       const wrap = $("wrap");
       if (!th.children.length) {
         wrap.prepend(welcome);
@@ -5147,8 +8033,11 @@
         .then((r) => {
           if (r.ok) boot();
           else if (r.status === 401) showAuthPage("");
-          else {
-            // 服务器不可达/错误:splash 短暂停留后重试
+          else if (r.status === 403 && ws) {
+            const u = new URL(location.href);
+            u.searchParams.delete("ws");
+            location.replace(u.pathname + u.search + u.hash);
+          } else {
             setTimeout(() => location.reload(), 1500);
           }
         })

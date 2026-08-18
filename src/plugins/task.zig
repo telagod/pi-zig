@@ -177,6 +177,7 @@ fn runTaskInProcess(slot: *TaskSlot, parent: *agentmod.Agent, act: activity.Hand
         .plugins = slot.child_plugins,
         .tool_allow = slot.tool_allow,
         .depth = parent.depth + 1,
+        .think_level = parent.think_level,
     }) catch |e| {
         slot.failed = true;
         slot.err = std.fmt.allocPrint(slot.alloc, "cannot start sub-agent: {s}", .{@errorName(e)}) catch "cannot start sub-agent";
@@ -480,33 +481,106 @@ pub fn toolTask(ctx: ?*anyopaque, arena: std.mem.Allocator, args: []const u8) an
         }
     }
 
-    // 并行入池。单个任务不开线程,省一次入队。
+    try runTasks(slots, arena);
+    return formatTaskResults(arena, slots);
+}
+
+fn runTasks(slots: []TaskSlot, arena: std.mem.Allocator) !void {
     if (slots.len == 1) {
         runTaskSlot(&slots[0]);
-    } else {
-        const TaskJob = struct {
-            slot: *TaskSlot,
-            left: *std.atomic.Value(usize),
-            fn run(ptr: *anyopaque) void {
-                const job: *@This() = @ptrCast(@alignCast(ptr));
-                runTaskSlot(job.slot);
-                _ = job.left.fetchSub(1, .acq_rel);
-            }
-        };
-        var left = std.atomic.Value(usize).init(slots.len);
-        const jobs = try arena.alloc(TaskJob, slots.len);
-        for (slots, jobs) |*slot, *job| {
-            job.* = .{ .slot = slot, .left = &left };
-            poolmod.global().enqueue(.{ .run = TaskJob.run, .ctx = @ptrCast(job) }) catch {
-                TaskJob.run(@ptrCast(job));
-            };
-        }
-        while (left.load(.acquire) > 0) {
-            std.Io.sleep(agentmod.util.io, .{ .nanoseconds = 5 * std.time.ns_per_ms }, .awake) catch break;
-        }
+        return;
     }
+    const TaskJob = struct {
+        slot: *TaskSlot,
+        left: *std.atomic.Value(usize),
+        fn run(ptr: *anyopaque) void {
+            const job: *@This() = @ptrCast(@alignCast(ptr));
+            runTaskSlot(job.slot);
+            _ = job.left.fetchSub(1, .acq_rel);
+        }
+    };
+    var left = std.atomic.Value(usize).init(slots.len);
+    const jobs = try arena.alloc(TaskJob, slots.len);
+    for (slots, jobs) |*slot, *job| {
+        job.* = .{ .slot = slot, .left = &left };
+        poolmod.global().enqueue(.{ .run = TaskJob.run, .ctx = @ptrCast(job) }) catch {
+            TaskJob.run(@ptrCast(job));
+        };
+    }
+    while (left.load(.acquire) > 0) {
+        std.Io.sleep(agentmod.util.io, .{ .nanoseconds = 5 * std.time.ns_per_ms }, .awake) catch break;
+    }
+}
 
-    return formatTaskResults(arena, slots);
+/// 供 workflow 等同一路径复用的任务描述。
+pub const Spec = struct {
+    desc: []const u8,
+    read_only: bool = false,
+    plugins: ?[]const []const u8 = null,
+    tools: ?[]const []const u8 = null,
+    /// 0 = 按本批序号。workflow 传入 DAG 下标 + 1,好让前端把事件对上节点。
+    idx: usize = 0,
+};
+
+pub const RunOut = struct {
+    desc: []const u8,
+    output: []const u8,
+    err: []const u8,
+    failed: bool,
+    elapsed_ms: i64,
+};
+
+/// 跑一批独立任务。绑定失败返回 fail 字符串,否则跑完返回结果。
+/// 输出拷到 caller arena,槽 arena 在返回前回收。
+pub fn runSpecs(self: *agentmod.Agent, arena: std.mem.Allocator, specs: []const Spec) !union(enum) {
+    done: []RunOut,
+    fail: []const u8,
+} {
+    if (specs.len == 0) return .{ .fail = "error: no task given" };
+    const slot_arenas = try arena.alloc(std.heap.ArenaAllocator, specs.len);
+    for (slot_arenas) |*sa| sa.* = .init(self.alloc);
+    defer for (slot_arenas) |*sa| sa.deinit();
+
+    const slots = try arena.alloc(TaskSlot, specs.len);
+    for (slots, slot_arenas, specs, 1..) |*slot, *sa, spec, i| {
+        const child_plugins = childbind.resolveSet(self.plugins, spec.plugins) catch |e| return .{
+            .fail = switch (e) {
+                error.UnknownPlugin => "error: unknown plugin name in plugins[]",
+                error.PluginNotHeld => "error: plugins[] can only keep plugins you already have",
+                else => "error: cannot resolve child plugins",
+            },
+        };
+        const raw_tools = if (spec.tools) |names| childbind.resolveTools(sa.allocator(), self.plugins, names) catch |e| return .{
+            .fail = switch (e) {
+                error.UnknownTool => "error: unknown tool name in tools[]",
+                error.ToolNotHeld => "error: tools[] can only keep tools you already have",
+                else => "error: cannot resolve child tools",
+            },
+        } else &.{};
+        slot.* = .{
+            .desc = spec.desc,
+            .arena = sa,
+            .alloc = sa.allocator(),
+            .cwd = self.cwd,
+            .idx = if (spec.idx > 0) spec.idx else i,
+            .read_only = spec.read_only,
+            .child_plugins = child_plugins,
+            .tool_allow = raw_tools,
+            .parent = self,
+        };
+    }
+    try runTasks(slots, arena);
+    const out = try arena.alloc(RunOut, slots.len);
+    for (slots, out) |s, *o| {
+        o.* = .{
+            .desc = try arena.dupe(u8, s.desc),
+            .output = try arena.dupe(u8, s.output),
+            .err = try arena.dupe(u8, s.err),
+            .failed = s.failed,
+            .elapsed_ms = s.elapsed_ms,
+        };
+    }
+    return .{ .done = out };
 }
 
 /// 把委派结果拼成给模型看的文本。

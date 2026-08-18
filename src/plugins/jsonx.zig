@@ -23,6 +23,17 @@ pub fn jsonStrs(arena: std.mem.Allocator, v: std.json.Value, key: []const u8) !?
     return try out.toOwnedSlice();
 }
 
+/// 取布尔字段。容忍 true/false 字符串。
+pub fn jsonBool(v: std.json.Value, key: []const u8) ?bool {
+    if (v != .object) return null;
+    const f = v.object.get(key) orelse return null;
+    return switch (f) {
+        .bool => |b| b,
+        .string => |sv| if (std.mem.eql(u8, sv, "true")) true else if (std.mem.eql(u8, sv, "false")) false else null,
+        else => null,
+    };
+}
+
 /// 取整数字段。容忍模型把数字写成字符串或浮点(常见偏差)。
 pub fn jsonInt(v: std.json.Value, key: []const u8) ?i64 {
     if (v != .object) return null;

@@ -3,19 +3,30 @@ const std = @import("std");
 const util = @import("core").util;
 const activity = @import("core").activity;
 const cfgmod = @import("core").config;
+const sandboxmod = @import("core").sandbox;
+const httpc = @import("core").httpc;
 const ai = @import("core").ai;
 const agentmod = @import("core").agent;
 const sessionmod = @import("core").session;
 const toolsmod = @import("core").tools;
+const mcpmod = @import("core").mcp;
 const eventsmod = @import("core").events;
 const pluginsmod = @import("core").plugins;
+const pkgsmod = @import("core").pkgs;
 const compress = @import("core").compress;
 const tui_mod = @import("tui");
-const pricing = @import("pricing.zig");
+const pricing = @import("core").pricing;
 const webui_mod = @import("webui.zig");
 const cmd_web = @import("cmd_web.zig");
 const cmd_print = @import("cmd_print.zig");
 const cmd_pkg = @import("cmd_pkg.zig");
+const cmd_login = @import("cmd_login.zig");
+const cmd_help = @import("cmd_help.zig");
+const cmd_doctor = @import("cmd_doctor.zig");
+const cmd_init = @import("cmd_init.zig");
+const cmd_diff = @import("cmd_diff.zig");
+const cmd_commit = @import("cmd_commit.zig");
+const cmd_slash = @import("cmd_slash.zig");
 const runopts = @import("runopts.zig");
 
 const VERSION = "0.1.0";
@@ -44,209 +55,30 @@ fn formatStatusCard(alloc: std.mem.Allocator, row: StatusRow, width: usize) ![]u
     }, width);
 }
 
-fn welcomeNote(alloc: std.mem.Allocator, n_msgs: usize, title: ?[]const u8) ![]u8 {
-    if (n_msgs == 0) return alloc.dupe(u8, "new");
-    const raw = title orelse "";
-    const t = std.mem.trim(u8, raw, " ");
-    if (t.len == 0) return std.fmt.allocPrint(alloc, "continued · {d}", .{n_msgs});
-    const cut = utf8Prefix(t, 40);
-    return std.fmt.allocPrint(alloc, "continued · {s} · {d}", .{ cut, n_msgs });
-}
+const welcomeNote = cmd_help.welcomeNote;
+const tildePath = cmd_help.tildePath;
+const welcomeContext = cmd_help.welcomeContext;
 
-fn utf8Prefix(s: []const u8, max: usize) []const u8 {
-    if (s.len <= max) return s;
-    var i: usize = 0;
-    while (i < s.len) {
-        const n = std.unicode.utf8ByteSequenceLength(s[i]) catch 1;
-        if (i + n > max) return s[0..i];
-        i += n;
-    }
-    return s;
-}
+const HELP = cmd_help.USAGE;
 
-fn tildePath(alloc: std.mem.Allocator, abs: []const u8) ![]u8 {
-    const home = util.getEnv("HOME") orelse return alloc.dupe(u8, abs);
-    if (home.len > 0 and std.mem.startsWith(u8, abs, home))
-        return std.fmt.allocPrint(alloc, "~{s}", .{abs[home.len..]});
-    return alloc.dupe(u8, abs);
-}
-
-fn welcomeContext(alloc: std.mem.Allocator) ![]u8 {
-    var w = std.Io.Writer.Allocating.init(alloc);
-    errdefer w.deinit();
-    var any = false;
-    if (std.Io.Dir.cwd().statFile(util.io, "AGENTS.md", .{})) |_| {
-        try w.writer.writeAll("AGENTS.md");
-        any = true;
-    } else |_| {}
-    if (util.loadSkillsIndex(alloc)) |idx| {
-        defer alloc.free(idx);
-        var n: usize = 0;
-        var it = std.mem.splitScalar(u8, idx, '\n');
-        while (it.next()) |line| {
-            if (std.mem.startsWith(u8, line, "- ")) n += 1;
-        }
-        if (n > 0) {
-            if (any) try w.writer.writeAll(" · ");
-            try w.writer.print("{d} skills", .{n});
-            any = true;
-        }
-    } else |_| {}
-    if (util.loadMemoryMd(alloc)) |mem| {
-        defer alloc.free(mem);
-        if (mem.len > 0) {
-            if (any) try w.writer.writeAll(" · ");
-            try w.writer.writeAll("memory");
-            any = true;
-        }
-    } else |_| {}
-    if (!any) try w.writer.writeAll("none");
-    return w.toOwnedSlice();
-}
-
-const HELP =
-    \\piz — pi 的 Zig 重写:极简终端编码 agent
-    \\
-    \\用法:
-    \\  piz [目录] [选项]         交互模式
-    \\  piz -p "提示词" [选项]    一次性问答(print 模式)
-    \\  echo "提示词" | piz -p
-    \\
-    \\选项:
-    \\  -p, --print      print 模式,流式输出到 stdout
-    \\  -m, --model M    指定模型
-    \\      --provider P 指定 provider
-    \\  -n, --new        新会话(不续载旧会话)
-    \\  -c, --continue   续载最近会话(默认行为,显式指明可覆盖 -n 前置)
-    \\  -t, --title T    新会话标题
-    \\  -r, --read-only  只读:危险工具直接拒
-    \\  -x, --execute    全权(默认):工具不询问
-    \\      --ask        危险工具先问(Codex on-request)
-    \\  -i, --input FILE 从文件读提示词(print 模式)
-    \\  -s, --session ID  恢复指定会话(id 见退出提示、/sessions 或 -a 输出)
-    \\  -a, --async       print 模式后台运行,立即返回会话 id 与日志路径
-    \\  -o, --output FMT  print 模式输出格式:text|json|jsonl(默认 text)
-    \\      --system TEXT 自定义系统提示(替代默认)
-    \\      --models     列出可用模型
-    \\      --plugin N   开启插件(可重复)
-    \\      --no-plugin N 关闭插件(可重复,撤钩/工具/schema)
-    \\      --plugins    列出全部内置插件与启用状态
-    \\      --           之后的参数不再当选项(提示词以 '-' 开头时用)
-    \\  pkg 子命令: piz pkg install <path> [-l] [-y] | piz pkg list | piz pkg remove <name> [-l]
-    \\    (资源包:含 skills/、prompts/ 或 AGENTS.md 的目录;-l 安装到项目 .piz/packages)
-    \\    (-y 跳过生命周期钩子确认;包声明的钩子会以 bash -c 执行)
-    \\  web 子命令: piz web [--port N] [--no-open] [--token T | --no-token]
-    \\    (内置 Web UI;默认 127.0.0.1:5494 + 随机 token,URL 含 #token= 片段)
-    \\  -v, --version    版本
-    \\  -h, --help       帮助
-    \\
-    \\配置:~/.piz/settings.json、auth.json、models.json
-    \\环境变量:PIZ_DIR、PIZ_PROVIDER、PIZ_MODEL、<PROVIDER>_API_KEY
-    \\
-;
-
-const HelpItem = tui_mod.SlashItem;
-
-/// `/help` 清单。每个真实存在的命令都必须在这里出现 —— 漏掉的等于没实现。
-/// 下面有测试盯着这份表与实际分发的一致性。TUI slash picker ranks this table.
-const SLASH_ITEMS = [_]HelpItem{
-    .{ .cmd = "/help", .desc = "list commands" },
-    .{ .cmd = "/status", .desc = "session card" },
-    .{ .cmd = "/think [lvl]", .desc = "thinking level (picker if empty)" },
-    .{ .cmd = "/theme [n]", .desc = "theme (dark|light|auto|name)" },
-    .{ .cmd = "/permissions [m]", .desc = "approval (picker if empty)" },
-    .{ .cmd = "/model [m]", .desc = "switch model (picker if empty)" },
-    .{ .cmd = "/new", .desc = "new session" },
-    .{ .cmd = "/sessions", .desc = "sessions in this dir" },
-    .{ .cmd = "/resume <n>", .desc = "switch to session n" },
-    .{ .cmd = "/title <t>", .desc = "set title" },
-    .{ .cmd = "/tree", .desc = "message list" },
-    .{ .cmd = "/fork <n>", .desc = "fork from message n" },
-    .{ .cmd = "/copy", .desc = "copy last reply" },
-    .{ .cmd = "/undo", .desc = "undo last turn" },
-    .{ .cmd = "/redo", .desc = "resend last input" },
-    .{ .cmd = "/memory", .desc = "cross-session memory" },
-    .{ .cmd = "/compact", .desc = "compact context" },
-    .{ .cmd = "/shake [images]", .desc = "trim old tool output" },
-    .{ .cmd = "/snap", .desc = "pack long text as image" },
-    .{ .cmd = "/fast-compress", .desc = "fast-compress status" },
-    .{ .cmd = "/clear", .desc = "clear and start over" },
-    .{ .cmd = "/plan <goal>", .desc = "write PLAN.md then run" },
-    .{ .cmd = "/queue", .desc = "clear input queue" },
-    .{ .cmd = "/export", .desc = "export HTML" },
-    .{ .cmd = "/dump", .desc = "copy transcript" },
-    .{ .cmd = "/quit", .desc = "quit" },
-};
-
-const EDIT_ITEMS = [_]HelpItem{
-    .{ .cmd = "@./path", .desc = "embed a file" },
-    .{ .cmd = "!cmd", .desc = "run shell, send to model" },
-    .{ .cmd = "!!cmd", .desc = "run shell, show only" },
-    .{ .cmd = "?", .desc = "shortcut overlay when empty" },
-    .{ .cmd = "Esc", .desc = "abort; empty again edits last" },
-    .{ .cmd = "Ctrl+C", .desc = "clear; empty again quits" },
-    .{ .cmd = "Ctrl+D", .desc = "empty again quits" },
-    .{ .cmd = "Tab", .desc = "queue input while busy" },
-    .{ .cmd = "Ctrl+B", .desc = "background while busy" },
-    .{ .cmd = "Ctrl+T", .desc = "fold thinking" },
-    .{ .cmd = "Ctrl+O", .desc = "fold tool output" },
-    .{ .cmd = "PgUp/PgDn", .desc = "scroll transcript" },
-    .{ .cmd = "Ctrl+↑/↓", .desc = "scroll a few lines" },
-    .{ .cmd = "wheel", .desc = "scroll transcript" },
-    .{ .cmd = "Alt+,/.", .desc = "think less / more" },
-    .{ .cmd = "Shift+↑/↓", .desc = "think less / more" },
-};
-
-fn writeHelpCell(w: *std.Io.Writer, it: HelpItem, cmd_cols: usize, cell_cols: usize, pad_cell: bool) !void {
-    try w.writeAll("  ");
-    try w.writeAll(it.cmd);
-    var used: usize = 2 + activity.displayWidth(it.cmd);
-    while (used < 2 + cmd_cols) : (used += 1) try w.writeByte(' ');
-    try w.writeAll("\x1b[2m");
-    const room = if (cell_cols > used) cell_cols - used else 0;
-    const cut = activity.truncateToCols(it.desc, room);
-    try w.writeAll(it.desc[0..cut]);
-    try w.writeAll("\x1b[0m");
-    if (pad_cell) {
-        used += activity.displayWidth(it.desc[0..cut]);
-        while (used < cell_cols) : (used += 1) try w.writeByte(' ');
-    }
-}
-
-fn writeHelpSection(w: *std.Io.Writer, title: []const u8, items: []const HelpItem, width: usize) !void {
-    try w.print("\x1b[2m{s}\x1b[0m\n", .{title});
-    const two = width >= 72;
-    const cell: usize = if (two) width / 2 else width;
-    const cmd_cols: usize = @min(18, if (cell > 12) cell / 2 else 8);
-    var i: usize = 0;
-    while (i < items.len) {
-        try writeHelpCell(w, items[i], cmd_cols, cell, two and i + 1 < items.len);
-        if (two and i + 1 < items.len) {
-            try writeHelpCell(w, items[i + 1], cmd_cols, cell, false);
-        }
-        try w.writeByte('\n');
-        i += if (two) 2 else 1;
-    }
-}
-
-fn formatHelp(alloc: std.mem.Allocator, width: usize) ![]u8 {
-    var stw = std.Io.Writer.Allocating.init(alloc);
-    defer stw.deinit();
-    try writeHelpSection(&stw.writer, "commands", &SLASH_ITEMS, width);
-    try stw.writer.writeByte('\n');
-    try writeHelpSection(&stw.writer, "keys", &EDIT_ITEMS, width);
-    return stw.toOwnedSlice();
-}
+const HelpItem = cmd_help.HelpItem;
+const SLASH_ITEMS = cmd_help.SLASH_ITEMS;
+const formatHelp = cmd_help.formatHelp;
 
 // ---------- 交互模式 ----------
 
-const App = struct {
+pub const App = struct {
     alloc: std.mem.Allocator,
     tui: *tui_mod.Tui,
     agent: *agentmod.Agent,
     sess: *sessionmod.Session,
     cfg: *cfgmod.Config,
     events: *eventsmod.Bus,
+    slash_names: [32][48]u8 = undefined,
+    slash_extra: [32]tui_mod.SlashItem = undefined,
+    slash_extra_n: usize = 0,
+    slash_merged: [96]tui_mod.SlashItem = undefined,
+    slash_merged_n: usize = 0,
     quit: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     abort: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     worker: ?std.Thread = null,
@@ -284,6 +116,8 @@ const App = struct {
     tok_cache_r: u64 = 0,
     /// 会话累计费用(USD,价目命中才累加;未知模型恒 0 不显)
     cost_usd: f64 = 0,
+    git_brief: cmd_diff.Brief = .{},
+    git_brief_ms: i64 = 0,
     /// worker 每轮结束发布的上下文 token 估算(主线程状态栏读它)。
     ///
     /// 主线程不能现场调 estTokens:那会遍历 messages,而 worker 正在 append
@@ -293,24 +127,38 @@ const App = struct {
     /// 会话起始时刻(ns,状态栏 t/s)
     start_ns: i128,
 
-    /// 队列消息入队(主线程调用)。
-    fn enqueue(self: *App, line: []const u8) void {
-        self.queue_mutex.lock(util.io) catch {};
+    /// 队列消息入队(主线程调用)。失败须告诉用户,否则排队消息会无声消失。
+    fn enqueue(self: *App, line: []const u8) bool {
+        self.queue_mutex.lock(util.io) catch |err| {
+            util.debugCatch("queue.lock", err);
+            return false;
+        };
         defer self.queue_mutex.unlock(util.io);
-        self.queue.append(self.alloc.dupe(u8, line) catch return) catch {};
+        const copy = self.alloc.dupe(u8, line) catch return false;
+        self.queue.append(copy) catch {
+            self.alloc.free(copy);
+            return false;
+        };
+        return true;
     }
 
     /// 取队首消息(worker 调用);空返回 null。
     fn dequeue(self: *App) ?[]const u8 {
-        self.queue_mutex.lock(util.io) catch {};
+        self.queue_mutex.lock(util.io) catch |err| {
+            util.debugCatch("queue.deq", err);
+            return null;
+        };
         defer self.queue_mutex.unlock(util.io);
         if (self.queue.items.len == 0) return null;
         return self.queue.orderedRemove(0);
     }
 
     /// 清空队列。
-    fn clearQueue(self: *App) void {
-        self.queue_mutex.lock(util.io) catch {};
+    pub fn clearQueue(self: *App) void {
+        self.queue_mutex.lock(util.io) catch |err| {
+            util.debugCatch("queue.clear", err);
+            return;
+        };
         defer self.queue_mutex.unlock(util.io);
         for (self.queue.items) |q| self.alloc.free(q);
         self.queue.clearRetainingCapacity();
@@ -330,7 +178,7 @@ const App = struct {
     /// 页脚身份:模型 / 思考档 / 占用 / 缓存 / 目录 / 会话。开场不再画卡片。
     /// Occupancy is `est_ctx / ctxWindow`. Cache is last-turn API usage
     /// (`ai.Usage.cache_read` / `input`) — null stays `cache —`, never faked.
-    fn refreshFooter(self: *App) void {
+    pub fn refreshFooter(self: *App) void {
         const cwd = tildePath(self.alloc, self.agent.cwd) catch return;
         defer self.alloc.free(cwd);
         const cw = self.agent.ctxWindow();
@@ -340,28 +188,34 @@ const App = struct {
             self.agent.last_usage
         else
             self.last_usage;
-        const br = gitBranch(self.alloc);
+        const br = self.gitBranch();
         defer if (br) |b| self.alloc.free(b);
+        var br_label_buf: [160]u8 = undefined;
+        const br_label = cmd_diff.formatBranchLabel(&br_label_buf, br orelse "", self.gitBriefCached());
         var model_buf: [96]u8 = undefined;
         self.tui.setFooterIdentity(.{
             .model = self.modelLabel(&model_buf),
             .think = tui_mod.thinkLabel(self.tui.think_level),
             .cwd = cwd,
-            .branch = br orelse "",
+            .branch = br_label,
             .tok_in = self.tok_in,
             .tok_out = self.tok_out,
             .tok_cache_w = self.tok_cache_w,
             .tok_cache_r = self.tok_cache_r,
             .cost = if (self.cost_usd > 0) self.cost_usd else null,
             .subscription = cfgmod.providerIsSub(self.agent.provider),
-            .session = self.sess.sessionId(),
+            .session = if (self.sess.title) |t| (if (t.len > 0) t else self.sess.sessionId()) else self.sess.sessionId(),
             .used = used,
             .window = cw,
             .cache_read = u.cache_read,
             .prompt = u.input,
             .pct = pct,
             .hot = pct > 85,
-        }) catch {};
+            .sandbox = if (self.cfg.default_sandbox != .off)
+                (sandboxmod.describe(self.alloc, self.cfg.default_sandbox) catch self.cfg.default_sandbox.label())
+            else
+                "",
+        }) catch |err| util.debugCatch("footer.ident", err);
     }
 
     fn modelLabel(self: *App, buf: *[96]u8) []const u8 {
@@ -371,24 +225,30 @@ const App = struct {
     }
 
     fn permsLabel(self: *const App) []const u8 {
-        return switch (self.approval) {
+        const a = switch (self.approval) {
             .yolo => "yolo",
             .ask => "ask",
             .read_only => "read-only",
         };
+        const sb = sandboxmod.describe(self.alloc, self.cfg.default_sandbox) catch self.cfg.default_sandbox.label();
+        return std.fmt.allocPrint(self.alloc, "{s} · sandbox {s}", .{ a, sb }) catch a;
     }
 
     /// 读 .git/HEAD 取分支名(极简,无子进程)。
-    fn gitBranch(alloc: std.mem.Allocator) ?[]u8 {
-        const head = std.Io.Dir.cwd().readFileAlloc(util.io, ".git/HEAD", alloc, .limited(1024)) catch return null;
-        defer alloc.free(head);
-        const ref = "ref: refs/heads/";
-        if (!std.mem.startsWith(u8, head, ref)) return null;
-        const br = std.mem.trim(u8, head[ref.len..], " \r\n");
-        return alloc.dupe(u8, br) catch null;
+    fn gitBranch(self: *App) ?[]u8 {
+        return cmd_diff.currentBranch(self.alloc, self.agent.cwd);
     }
 
-    fn switchModel(self: *App, spec: []const u8) !void {
+    fn gitBriefCached(self: *App) cmd_diff.Brief {
+        const now: i64 = @intCast(@divTrunc(std.Io.Clock.now(.real, util.io).nanoseconds, std.time.ns_per_ms));
+        if (self.git_brief_ms != 0 and now - self.git_brief_ms < 2000)
+            return self.git_brief;
+        self.git_brief = cmd_diff.statusBrief(self.alloc, self.agent.cwd) orelse .{};
+        self.git_brief_ms = now;
+        return self.git_brief;
+    }
+
+    pub fn switchModel(self: *App, spec: []const u8) !void {
         // 支持 provider/model 与 model 两种写法
         const ro = self.read_only;
         if (std.mem.indexOfScalar(u8, spec, '/')) |slash| {
@@ -416,7 +276,7 @@ const App = struct {
     }
 
     /// 切换会话:载入消息并替换 app.sess。
-    fn loadSession(self: *App, sess: sessionmod.Session) !void {
+    pub fn loadSession(self: *App, sess: sessionmod.Session) !void {
         var s = sess;
         const loaded = try s.loadMessages();
         self.agent.messages.clearRetainingCapacity();
@@ -426,12 +286,35 @@ const App = struct {
     }
 };
 
-fn showWelcome(app: *App, n_msgs: usize) void {
+pub fn rebuildSlashCatalog(app: *App) void {
+    var n: usize = 0;
+    for (SLASH_ITEMS) |it| {
+        if (n >= app.slash_merged.len) break;
+        app.slash_merged[n] = it;
+        n += 1;
+    }
+    var plug: [32]pluginsmod.SlashCommand = undefined;
+    const pn = pluginsmod.collectSlash(app.agent.plugins, &plug);
+    app.slash_extra_n = 0;
+    for (plug[0..pn]) |sc| {
+        if (n >= app.slash_merged.len or app.slash_extra_n >= app.slash_extra.len) break;
+        const labeled = if (sc.name.len > 0 and sc.name[0] == '/') sc.name else (std.fmt.bufPrint(&app.slash_names[app.slash_extra_n], "/{s}", .{sc.name}) catch continue);
+        const item = tui_mod.SlashItem{ .cmd = labeled, .desc = sc.desc };
+        app.slash_extra[app.slash_extra_n] = item;
+        app.slash_extra_n += 1;
+        app.slash_merged[n] = item;
+        n += 1;
+    }
+    app.slash_merged_n = n;
+    app.tui.slash_items = app.slash_merged[0..n];
+}
+
+pub fn showWelcome(app: *App, n_msgs: usize) void {
     _ = n_msgs;
     app.refreshFooter();
 }
 
-fn replaceSession(app: *App) !void {
+pub fn replaceSession(app: *App) !void {
     const next = try sessionmod.Session.fresh(app.alloc, app.agent.cwd);
     app.agent.messages.clearRetainingCapacity();
     app.tui.clearScroll();
@@ -439,7 +322,7 @@ fn replaceSession(app: *App) !void {
     app.sess.* = next;
 }
 
-fn showStatusCard(app: *App) void {
+pub fn showStatusCard(app: *App) void {
     const note = welcomeNote(app.alloc, app.agent.messages.items.len, app.sess.title) catch return;
     defer app.alloc.free(note);
     const session = std.fmt.allocPrint(app.alloc, "{s}  {s}", .{ app.sess.sessionId(), note }) catch return;
@@ -453,47 +336,112 @@ fn showStatusCard(app: *App) void {
     const pct = if (cw > 0) used * 100 / cw else 0;
     var ub: [16]u8 = undefined;
     var wb: [16]u8 = undefined;
-    const usage = std.fmt.allocPrint(app.alloc, "{d}%  {s}/{s}", .{
-        pct,
-        App.fmtTok(&ub, @as(u64, used)),
-        App.fmtTok(&wb, @as(u64, cw)),
-    }) catch return;
+    const meta = app.agent.modelMeta();
+    const rates = pricing.lookupAny(app.agent.provider.name, app.agent.model);
+    const usage = blk: {
+        if (rates) |r| {
+            const think = if (meta.reasoning == true) " · think" else "";
+            const vis = if (meta.vision == true) " · vis" else "";
+            break :blk std.fmt.allocPrint(app.alloc, "{d}%  {s}/{s}  ·  ${d:.2}/{d:.2}{s}{s}", .{
+                pct,
+                App.fmtTok(&ub, @as(u64, used)),
+                App.fmtTok(&wb, @as(u64, cw)),
+                r.input,
+                r.output,
+                think,
+                vis,
+            }) catch return;
+        }
+        break :blk std.fmt.allocPrint(app.alloc, "{d}%  {s}/{s}", .{
+            pct,
+            App.fmtTok(&ub, @as(u64, used)),
+            App.fmtTok(&wb, @as(u64, cw)),
+        }) catch return;
+    };
     defer app.alloc.free(usage);
+    const plugs = pluginsmod.enabledOptionalLine(app.alloc, app.agent.plugins) catch "";
+    const usage_line = if (plugs.len == 0) usage else (std.fmt.allocPrint(app.alloc, "{s}  ·  {s}", .{ usage, plugs }) catch usage);
+    defer if (usage_line.ptr != usage.ptr) app.alloc.free(usage_line);
     var model_buf: [96]u8 = undefined;
+    var br_buf: [128]u8 = undefined;
+    const branch = cmd_diff.currentBranchBuf(app.agent.cwd, &br_buf) orelse "";
     app.tui.appendStatusCard(.{
         .version = VERSION,
         .model = app.modelLabel(&model_buf),
         .think = tui_mod.thinkLabel(app.tui.think_level),
         .cwd = cwd,
+        .branch = branch,
         .session = session,
         .perms = app.permsLabel(),
         .context = ctx,
-        .usage = usage,
-    }) catch {};
+        .usage = usage_line,
+    }) catch |err| util.debugCatch("tui.status", err);
+}
+
+pub fn showDoctor(app: *App) void {
+    const plugs = pluginsmod.enabledOptionalLine(app.alloc, app.agent.plugins) catch "";
+    const sb = sandboxmod.describe(app.alloc, app.cfg.default_sandbox) catch app.cfg.default_sandbox.label();
+    const key = app.agent.key orelse "";
+    const text = cmd_doctor.format(app.alloc, .{
+        .version = VERSION,
+        .cwd = app.agent.cwd,
+        .provider = app.agent.provider.name,
+        .model = app.agent.model,
+        .has_key = key.len > 0,
+        .think = tui_mod.thinkLabel(app.tui.think_level),
+        .approval = app.approval.label(),
+        .sandbox_mode = sb,
+        .plugins = plugs,
+    }) catch return;
+    defer app.alloc.free(text);
+    tuiNotes(app, "\x1b[2m", text);
+}
+
+pub fn tuiOk(comptime where: []const u8, result: anyerror!void) void {
+    result catch |err| util.debugCatch(where, err);
+}
+
+pub fn tuiNote(app: *App, color: []const u8, text: []const u8) void {
+    tuiOk("tui.note", app.tui.appendLine("", color, text));
+}
+
+pub fn tuiNotes(app: *App, color: []const u8, text: []const u8) void {
+    var it = std.mem.splitScalar(u8, std.mem.trim(u8, text, "\n"), '\n');
+    while (it.next()) |ln| tuiNote(app, color, ln);
 }
 
 /// 把已载入的会话画进 TUI。续载只把消息给了模型,不画的话 PageUp 没有历史可滚。
-fn replayTranscript(tui: *tui_mod.Tui, msgs: []const ai.Message) void {
+pub fn replayTranscript(tui: *tui_mod.Tui, msgs: []const ai.Message) void {
     var pending: [16][]const u8 = undefined;
     var pending_n: usize = 0;
     var pending_i: usize = 0;
     for (msgs) |m| {
         if (std.mem.eql(u8, m.role, "system")) continue;
         if (std.mem.eql(u8, m.role, "user")) {
-            if (m.content.len > 0) tui.appendUser(m.content) catch {};
+            if (m.image != null) {
+                const shown = if (m.content.len > 0 and !std.mem.eql(u8, m.content, "(image)"))
+                    m.content
+                else
+                    "[image]";
+                tuiOk("replay.user.img", tui.appendUser(shown));
+            } else if (m.content.len > 0) tuiOk("replay.user", tui.appendUser(m.content));
             continue;
         }
         if (std.mem.eql(u8, m.role, "assistant")) {
             if (m.reasoning) |r| {
-                if (r.len > 0) tui.appendThink(r) catch {};
+                if (r.len > 0) tuiOk("replay.think", tui.appendThink(r));
             }
-            if (m.content.len > 0) tui.appendText(m.content) catch {};
+            if (m.content.len > 0) tuiOk("replay.text", tui.appendText(m.content));
             pending_n = 0;
             pending_i = 0;
             if (m.tool_calls) |tcs| {
                 for (tcs) |tc| {
-                    const preview = toolArgsPreview(tc.args);
-                    tui.appendTool(tc.name, preview[0..@min(preview.len, 120)]) catch {};
+                    if (std.mem.eql(u8, tc.name, "workflow")) {
+                        tuiOk("replay.flow", tui.appendWorkflow(tc.args));
+                    } else {
+                        const preview = toolArgsPreview(tc.args);
+                        tuiOk("replay.tool", tui.appendTool(tc.name, preview[0..@min(preview.len, 120)]));
+                    }
                     if (pending_n < pending.len) {
                         pending[pending_n] = tc.name;
                         pending_n += 1;
@@ -509,7 +457,7 @@ fn replayTranscript(tui: *tui_mod.Tui, msgs: []const ai.Message) void {
                 pending_i += 1;
                 break :blk n;
             } else "";
-            tui.appendToolEnd(name, false, m.content) catch {};
+            tuiOk("replay.toolend", tui.appendToolEnd(name, false, m.content));
         }
     }
     tui.bakeThink();
@@ -517,19 +465,19 @@ fn replayTranscript(tui: *tui_mod.Tui, msgs: []const ai.Message) void {
 
 fn tuiOnText(ctx: ?*anyopaque, text: []const u8) anyerror!void {
     const app: *App = @ptrCast(@alignCast(ctx.?));
-    app.tui.appendText(text) catch {};
+    tuiOk("stream.text", app.tui.appendText(text));
     if (app.abort.load(.acquire)) return error.Aborted;
 }
 
 fn tuiOnReasoning(ctx: ?*anyopaque, text: []const u8) anyerror!void {
     const app: *App = @ptrCast(@alignCast(ctx.?));
-    app.tui.appendThink(text) catch {};
+    tuiOk("stream.think", app.tui.appendThink(text));
     if (app.abort.load(.acquire)) return error.Aborted;
 }
 
 /// 工具参数预览:优先抽出 command / path / pattern,别整段 JSON 糊在一行上。
 fn toolArgsPreview(args: []const u8) []const u8 {
-    const keys = [_][]const u8{ "\"command\":\"", "\"pattern\":\"", "\"query\":\"", "\"path\":\"" };
+    const keys = [_][]const u8{ "\"command\":\"", "\"pattern\":\"", "\"query\":\"", "\"path\":\"", "\"goal\":\"" };
     for (keys) |k| {
         if (std.mem.indexOf(u8, args, k)) |i| {
             const start = i + k.len;
@@ -549,8 +497,12 @@ fn toolArgsPreview(args: []const u8) []const u8 {
 
 fn tuiOnToolStart(ctx: ?*anyopaque, name: []const u8, args: []const u8) anyerror!void {
     const app: *App = @ptrCast(@alignCast(ctx.?));
-    const preview = toolArgsPreview(args);
-    app.tui.appendTool(name, preview[0..@min(preview.len, 120)]) catch {};
+    if (std.mem.eql(u8, name, "workflow")) {
+        tuiOk("stream.flow", app.tui.appendWorkflow(args));
+    } else {
+        const preview = toolArgsPreview(args);
+        tuiOk("stream.tool", app.tui.appendTool(name, preview[0..@min(preview.len, 120)]));
+    }
     var ea = util.Arena.init(app.alloc);
     defer ea.deinit();
     const ealloc = ea.allocator();
@@ -562,7 +514,7 @@ fn tuiOnToolStart(ctx: ?*anyopaque, name: []const u8, args: []const u8) anyerror
 
 fn tuiOnToolEnd(ctx: ?*anyopaque, name: []const u8, is_error: bool, summary: []const u8) anyerror!void {
     const app: *App = @ptrCast(@alignCast(ctx.?));
-    app.tui.appendToolEnd(name, is_error, summary) catch {};
+    tuiOk("stream.toolend", app.tui.appendToolEnd(name, is_error, summary));
     var ea = util.Arena.init(app.alloc);
     defer ea.deinit();
     const ealloc = ea.allocator();
@@ -584,11 +536,144 @@ fn tuiOnThink(ctx: ?*anyopaque) void {
     showWelcome(app, app.agent.messages.items.len);
 }
 
-fn persistTheme(app: *App, name: []const u8) void {
-    app.cfg.saveTheme(name) catch {};
+fn tuiOnCopy(ctx: ?*anyopaque) void {
+    const app: *App = @ptrCast(@alignCast(ctx orelse return));
+    copyLastReply(app);
 }
 
-fn openThemePicker(app: *App) void {
+fn tuiOnSandbox(ctx: ?*anyopaque) void {
+    const app: *App = @ptrCast(@alignCast(ctx orelse return));
+    openSandboxPicker(app);
+}
+
+fn tuiOnJobs(ctx: ?*anyopaque) void {
+    const app: *App = @ptrCast(@alignCast(ctx orelse return));
+    showJobs(app);
+}
+
+fn tuiOnUsage(ctx: ?*anyopaque) void {
+    const app: *App = @ptrCast(@alignCast(ctx orelse return));
+    showUsage(app);
+}
+
+pub fn redoLast(app: *App) void {
+    if (app.last_line.len == 0) {
+        tuiNote(app, "\x1b[2m", "nothing to redo");
+        return;
+    }
+    tuiOk("tui.user", app.tui.appendUser(app.last_line));
+    spawnWorker(app, app.last_line, false);
+}
+
+fn tuiOnRedo(ctx: ?*anyopaque) void {
+    const app: *App = @ptrCast(@alignCast(ctx orelse return));
+    redoLast(app);
+}
+
+fn tuiOnDoctor(ctx: ?*anyopaque) void {
+    const app: *App = @ptrCast(@alignCast(ctx orelse return));
+    showDoctor(app);
+}
+
+pub fn showDiff(app: *App) void {
+    const text = cmd_diff.format(app.alloc, app.agent.cwd) catch {
+        tuiNote(app, "\x1b[31m", "diff failed");
+        return;
+    };
+    defer app.alloc.free(text);
+    tuiNotes(app, "\x1b[2m", text);
+}
+
+fn tuiOnDiff(ctx: ?*anyopaque) void {
+    const app: *App = @ptrCast(@alignCast(ctx orelse return));
+    showDiff(app);
+}
+
+pub fn showLog(app: *App, raw: []const u8) void {
+    const text = cmd_diff.formatLog(app.alloc, app.agent.cwd, cmd_diff.parseLogCount(raw)) catch {
+        tuiNote(app, "\x1b[31m", "log failed");
+        return;
+    };
+    defer app.alloc.free(text);
+    tuiNotes(app, "\x1b[2m", text);
+}
+
+fn tuiOnLog(ctx: ?*anyopaque) void {
+    const app: *App = @ptrCast(@alignCast(ctx orelse return));
+    showLog(app, "");
+}
+
+pub fn showJobs(app: *App) void {
+    var views: [activity.MAX_SLOTS]activity.View = undefined;
+    const n = activity.snapshot(&views);
+    if (n == 0) {
+        tuiNote(app, "\x1b[2m", "no running jobs");
+        return;
+    }
+    var i: usize = 0;
+    while (i < n) : (i += 1) {
+        var aw = std.Io.Writer.Allocating.init(app.alloc);
+        defer aw.deinit();
+        if (views[i].pid > 0) tuiOk("jobs.pid", aw.writer.print("pid {d}  ", .{views[i].pid}));
+        tuiOk("jobs.line", tui_mod.writeActivityLine(&aw.writer, views[i], 0, 80));
+        tuiNote(app, "", aw.written());
+    }
+}
+
+pub fn showUsage(app: *App) void {
+    const uselog = @import("core").usage_log;
+    const sum = uselog.summarize(app.alloc, 8) catch {
+        tuiNote(app, "\x1b[31m", "cannot read usage.jsonl");
+        return;
+    };
+    var inb: [16]u8 = undefined;
+    var outb: [16]u8 = undefined;
+    var bw = std.Io.Writer.Allocating.init(app.alloc);
+    defer bw.deinit();
+    if (sum.usd > 0) {
+        bw.writer.print("usage  {d} turns  ↑{s} ↓{s}  ${d:.4}", .{
+            sum.lines,
+            tui_mod.formatTok(&inb, sum.tok_in),
+            tui_mod.formatTok(&outb, sum.tok_out),
+            sum.usd,
+        }) catch |err| util.debugCatch("usage.usd", err);
+    } else {
+        bw.writer.print("usage  {d} turns  ↑{s} ↓{s}", .{
+            sum.lines,
+            tui_mod.formatTok(&inb, sum.tok_in),
+            tui_mod.formatTok(&outb, sum.tok_out),
+        }) catch |err| util.debugCatch("usage.plain", err);
+    }
+    tuiNote(app, "\x1b[2m", bw.written());
+    if (sum.tail.len > 0) tuiNote(app, "\x1b[2m", sum.tail);
+}
+
+pub fn copyLastReply(app: *App) void {
+    var last: ?[]const u8 = null;
+    var i = app.agent.messages.items.len;
+    while (i > 0) {
+        i -= 1;
+        if (std.mem.eql(u8, app.agent.messages.items[i].role, "assistant")) {
+            last = app.agent.messages.items[i].content;
+            break;
+        }
+    }
+    const text = last orelse {
+        tuiNote(app, "\x1b[2m", "no assistant message yet");
+        return;
+    };
+    if (copyToClipboard(app.alloc, text)) {
+        tuiNote(app, "\x1b[2m", "copied to clipboard");
+    } else if (util.writeFile("/tmp/piz-copy.txt", text)) |_| {
+        tuiNote(app, "\x1b[2m", "no clipboard tool — saved to /tmp/piz-copy.txt");
+    } else |_| {}
+}
+
+pub fn persistTheme(app: *App, name: []const u8) void {
+    app.cfg.saveTheme(name) catch |err| util.debugCatch("saveTheme", err);
+}
+
+pub fn openThemePicker(app: *App) void {
     const items = [_]tui_mod.PickerItem{
         .{ .label = "dark", .value = "dark" },
         .{ .label = "light", .value = "light" },
@@ -597,20 +682,39 @@ fn openThemePicker(app: *App) void {
     var sel: usize = 0;
     if (std.mem.eql(u8, app.cfg.theme, "light")) sel = 1;
     if (std.mem.eql(u8, app.cfg.theme, "auto")) sel = 2;
-    app.tui.openPicker("theme", "theme", &items, sel) catch {};
+    tuiOk("picker.theme", app.tui.openPicker("theme", "theme", &items, sel));
 }
 
-fn persistThink(app: *App) void {
-    app.cfg.saveThinkLevel(app.tui.think_level) catch {};
+pub fn persistThink(app: *App) void {
+    app.cfg.saveThinkLevel(app.tui.think_level) catch |err| util.debugCatch("saveThinkLevel", err);
 }
 
-fn applyApproval(app: *App, mode: cfgmod.ApprovalMode) void {
+pub fn applyApproval(app: *App, mode: cfgmod.ApprovalMode) void {
     app.approval = mode;
     app.perm.always.store(mode == .yolo, .release);
-    app.cfg.saveApprovalMode(mode) catch {};
+    app.cfg.saveApprovalMode(mode) catch |err| util.debugCatch("saveApprovalMode", err);
 }
 
-fn openApprovalPicker(app: *App) void {
+pub fn applySandbox(app: *App, mode: cfgmod.SandboxMode) void {
+    app.cfg.default_sandbox = mode;
+    app.cfg.saveSandboxMode(mode) catch |err| util.debugCatch("saveSandboxMode", err);
+}
+
+pub fn openSandboxPicker(app: *App) void {
+    const items = [_]tui_mod.PickerItem{
+        .{ .label = "off", .hint = "no OS isolation", .value = "off" },
+        .{ .label = "workspace", .hint = "workspace RW, rest RO", .value = "workspace" },
+        .{ .label = "strict", .hint = "workspace + no network", .value = "strict" },
+    };
+    const sel: usize = switch (app.cfg.default_sandbox) {
+        .off => 0,
+        .workspace => 1,
+        .strict => 2,
+    };
+    app.tui.openPicker("sandbox", "沙箱", &items, sel) catch |err| util.debugCatch("openSandboxPicker", err);
+}
+
+pub fn openApprovalPicker(app: *App) void {
     const items = [_]tui_mod.PickerItem{
         .{ .label = "yolo", .hint = "never ask", .value = "yolo" },
         .{ .label = "ask", .hint = "ask on dangerous tools", .value = "ask" },
@@ -621,10 +725,10 @@ fn openApprovalPicker(app: *App) void {
         .ask => 1,
         .read_only => 2,
     };
-    app.tui.openPicker("permissions", "permissions", &items, sel) catch {};
+    tuiOk("tui.picker", app.tui.openPicker("permissions", "permissions", &items, sel));
 }
 
-fn openThinkPicker(app: *App) void {
+pub fn openThinkPicker(app: *App) void {
     var buf: [cfgmod.ThinkLevel.all.len]cfgmod.ThinkLevel = undefined;
     const avail = cfgmod.fillSupportedThinkLevels(app.agent.modelMeta(), &buf);
     var items: [cfgmod.ThinkLevel.all.len]tui_mod.PickerItem = undefined;
@@ -633,19 +737,75 @@ fn openThinkPicker(app: *App) void {
         items[i] = .{ .label = tui_mod.thinkLabel(lv), .value = lv.label() };
         if (lv == app.tui.think_level) sel = i;
     }
-    app.tui.openPicker("think", "thinking", items[0..avail.len], sel) catch {};
+    tuiOk("tui.picker", app.tui.openPicker("think", "thinking", items[0..avail.len], sel));
 }
 
-fn openModelPicker(app: *App) void {
+fn fmtWindow(buf: []u8, n: u32) []const u8 {
+    if (n == 0) return "";
+    if (n >= 1_000_000 and n % 1_000_000 == 0)
+        return std.fmt.bufPrint(buf, "{d}M", .{n / 1_000_000}) catch "";
+    if (n >= 1000) return std.fmt.bufPrint(buf, "{d}k", .{n / 1000}) catch "";
+    return std.fmt.bufPrint(buf, "{d}", .{n}) catch "";
+}
+
+fn modelCapsHint(alloc: std.mem.Allocator, p: *const cfgmod.Provider, model: []const u8) ![]u8 {
+    const meta = cfgmod.metaFor(p, model);
+    const rates = pricing.lookupAny(p.name, model);
+    var wb: [16]u8 = undefined;
+    const win = fmtWindow(&wb, meta.context_window);
+    var bits = std.array_list.Managed(u8).init(alloc);
+    errdefer bits.deinit();
+    var need = false;
+    if (win.len > 0) {
+        try bits.appendSlice(win);
+        need = true;
+    }
+    if (rates) |r| {
+        if (need) try bits.appendSlice(" · ");
+        const price = try std.fmt.allocPrint(alloc, "${d:.2}/{d:.2}", .{ r.input, r.output });
+        defer alloc.free(price);
+        try bits.appendSlice(price);
+        need = true;
+    }
+    if (meta.reasoning == true) {
+        if (need) try bits.appendSlice(" · ");
+        try bits.appendSlice("think");
+        need = true;
+    }
+    if (meta.vision == true) {
+        if (need) try bits.appendSlice(" · ");
+        try bits.appendSlice("vis");
+    }
+    return bits.toOwnedSlice();
+}
+
+pub fn refreshProviderModels(app: *App) void {
+    const r = cfgmod.refreshProviders(app.alloc, app.cfg.providers);
+    const msg = std.fmt.allocPrint(app.alloc, "refreshed {d} provider(s), +{d} models", .{ r.ok, r.added }) catch return;
+    defer app.alloc.free(msg);
+    tuiNote(app, "\x1b[2m", msg);
+    if (r.fail > 0) {
+        const warn = std.fmt.allocPrint(app.alloc, "{d} provider(s) failed GET /models", .{r.fail}) catch return;
+        defer app.alloc.free(warn);
+        tuiNote(app, "\x1b[2m", warn);
+    }
+}
+
+pub fn openModelPicker(app: *App) void {
     var specs = std.array_list.Managed([]u8).init(app.alloc);
     defer {
         for (specs.items) |s| app.alloc.free(s);
         specs.deinit();
     }
+    var hints = std.array_list.Managed([]u8).init(app.alloc);
+    defer {
+        for (hints.items) |s| app.alloc.free(s);
+        hints.deinit();
+    }
     var items = std.array_list.Managed(tui_mod.PickerItem).init(app.alloc);
     defer items.deinit();
     var sel: usize = 0;
-    for (app.cfg.providers) |p| {
+    for (app.cfg.providers) |*p| {
         if (p.api_key == null) continue;
         for (p.models) |m| {
             const spec = std.fmt.allocPrint(app.alloc, "{s}/{s}", .{ p.name, m }) catch continue;
@@ -655,14 +815,89 @@ fn openModelPicker(app: *App) void {
             };
             if (std.mem.eql(u8, p.name, app.agent.provider.name) and std.mem.eql(u8, m, app.agent.model))
                 sel = specs.items.len - 1;
-            items.append(.{ .label = spec, .value = spec }) catch {};
+            var hint: []const u8 = "";
+            if (modelCapsHint(app.alloc, p, m)) |h| {
+                hints.append(h) catch app.alloc.free(h);
+                hint = h;
+            } else |_| {}
+            items.append(.{ .label = spec, .hint = hint, .value = spec }) catch |err| util.debugCatch("picker.model", err);
         }
     }
     if (items.items.len == 0) {
-        app.tui.appendLine("", "\x1b[2m", "no models configured") catch {};
+        tuiNote(app, "\x1b[2m", "no models configured");
         return;
     }
-    app.tui.openPicker("model", "模型", items.items, sel) catch {};
+    tuiOk("tui.picker", app.tui.openPicker("model", "模型", items.items, sel));
+}
+
+pub fn openResumePicker(app: *App) void {
+    const list = sessionmod.Session.list(app.alloc, app.agent.cwd) catch &.{};
+    defer for (list) |s| {
+        var s2 = s;
+        s2.deinit();
+    };
+    if (list.len == 0) {
+        tuiNote(app, "\x1b[2m", "no sessions yet — /new to start one");
+        return;
+    }
+    var labels = std.array_list.Managed([]u8).init(app.alloc);
+    defer {
+        for (labels.items) |s| app.alloc.free(s);
+        labels.deinit();
+    }
+    var hints = std.array_list.Managed([]u8).init(app.alloc);
+    defer {
+        for (hints.items) |s| app.alloc.free(s);
+        hints.deinit();
+    }
+    var values = std.array_list.Managed([]u8).init(app.alloc);
+    defer {
+        for (values.items) |s| app.alloc.free(s);
+        values.deinit();
+    }
+    var items = std.array_list.Managed(tui_mod.PickerItem).init(app.alloc);
+    defer items.deinit();
+    var sel: usize = 0;
+    const now_ns = std.Io.Clock.now(.real, util.io).nanoseconds;
+    for (list, 0..) |s, i| {
+        const nstr = std.fmt.allocPrint(app.alloc, "{d}", .{i + 1}) catch continue;
+        values.append(nstr) catch {
+            app.alloc.free(nstr);
+            continue;
+        };
+        var d = s.describe(app.alloc, now_ns) catch {
+            const fallback = app.alloc.dupe(u8, s.sessionId()) catch continue;
+            labels.append(fallback) catch {
+                app.alloc.free(fallback);
+                continue;
+            };
+            const hint = if (std.mem.eql(u8, s.path, app.sess.path)) "current" else "";
+            if (std.mem.eql(u8, s.path, app.sess.path)) sel = i;
+            items.append(.{ .label = fallback, .hint = hint, .value = nstr }) catch |err| util.debugCatch("picker.sess", err);
+            continue;
+        };
+        labels.append(d.headline) catch {
+            d.deinit(app.alloc);
+            continue;
+        };
+        const cur = std.mem.eql(u8, s.path, app.sess.path);
+        if (cur) sel = i;
+        const hint = if (cur)
+            std.fmt.allocPrint(app.alloc, "{d}  {s} · current", .{ i + 1, d.hint }) catch d.hint
+        else
+            std.fmt.allocPrint(app.alloc, "{d}  {s}", .{ i + 1, d.hint }) catch d.hint;
+        if (hint.ptr != d.hint.ptr) app.alloc.free(d.hint);
+        hints.append(hint) catch {
+            app.alloc.free(hint);
+            continue;
+        };
+        items.append(.{ .label = d.headline, .hint = hint, .value = nstr }) catch |err| util.debugCatch("picker.sess.d", err);
+    }
+    if (items.items.len == 0) {
+        tuiNote(app, "\x1b[2m", "no sessions yet — /new to start one");
+        return;
+    }
+    tuiOk("tui.picker", app.tui.openPicker("resume", "sessions", items.items, sel));
 }
 
 fn tuiOnTurnEnd(ctx: ?*anyopaque) anyerror!void {
@@ -677,9 +912,9 @@ fn tuiOnNotice(ctx: ?*anyopaque, text: []const u8) anyerror!void {
     const app: *App = @ptrCast(@alignCast(ctx.?));
     var buf = std.array_list.Managed(u8).init(app.alloc);
     defer buf.deinit();
-    buf.appendSlice("  piz  ") catch {};
-    buf.appendSlice(text) catch {};
-    app.tui.appendLine("", "\x1b[2m", buf.items) catch {};
+    tuiOk("tui.buf", buf.appendSlice("  piz  "));
+    tuiOk("tui.buf", buf.appendSlice(text));
+    tuiNote(app, "\x1b[2m", buf.items);
 }
 
 /// subagent 中间事件 → TUI 一行。
@@ -692,6 +927,15 @@ fn tuiOnSubagent(ctx: ?*anyopaque, idx: usize, kind: agentmod.SubagentEvent, tex
         else => {},
     }
     const app: *App = @ptrCast(@alignCast(ctx.?));
+    const flow_kind = switch (kind) {
+        .tool_start => "tool_start",
+        .tool_done => "tool_done",
+        .tool_failed => "tool_failed",
+        .notice => "notice",
+        .finished => "finished",
+        else => "",
+    };
+    if (flow_kind.len > 0 and app.tui.applyFlowEvent(idx, flow_kind, text)) return;
     const tag = switch (kind) {
         .tool_start => "tool",
         .tool_done => "ok",
@@ -707,7 +951,7 @@ fn tuiOnSubagent(ctx: ?*anyopaque, idx: usize, kind: agentmod.SubagentEvent, tex
     const s = std.fmt.bufPrint(&line, "[sub {d}] {s} {s}", .{ idx, tag, clipped }) catch return;
     const color = if (kind == .tool_failed) "\x1b[31m" else "\x1b[2m";
     // appendLine 自己有锁(tui.zig),行不会交错
-    app.tui.appendLine("", color, s) catch {};
+    tuiNote(app, color, s);
 }
 
 /// 权限询问(worker 线程):构建提示 → 置 pending → 轮询决策。
@@ -797,7 +1041,7 @@ fn workerMain(wctx: *WorkerCtx) void {
         } else {
             line = app.dequeue();
             if (line == null) break;
-            app.tui.appendUser(line.?) catch {}; // 显示排队消息
+            tuiOk("tui.user", app.tui.appendUser(line.?)); // 显示排队消息
         }
         const msg = line.?;
         const n_before = app.agent.messages.items.len;
@@ -808,11 +1052,16 @@ fn workerMain(wctx: *WorkerCtx) void {
                 break :blk "";
             };
             if (err_msg == null) {
-                app.tui.appendLine("", "\x1b[2m", "conversation compacted") catch {};
+                tuiNote(app, "\x1b[2m", "conversation compacted");
                 _ = summary;
             }
         } else {
-            const result = app.agent.send(msg) catch |err| blk: {
+            const img = app.tui.takePendingImage();
+            defer if (img) |im| app.tui.alloc.free(im.data);
+            const result = (if (img) |im|
+                app.agent.sendWithImage(msg, im.data, im.mime)
+            else
+                app.agent.send(msg)) catch |err| blk: {
                 if (err == error.Aborted) {
                     // 中断:partial 已流式输出,静默收尾(保存增量照常)
                     break :blk ai.RunResult{};
@@ -828,20 +1077,19 @@ fn workerMain(wctx: *WorkerCtx) void {
             app.tok_out += u.output orelse 0;
             app.tok_cache_r += u.cache_read orelse 0;
             app.tok_cache_w += u.cache_write orelse 0;
-            // pi 式费用:价目命中才累计
-            var pk: [192]u8 = undefined;
-            if (std.fmt.bufPrint(&pk, "{s}/{s}", .{ app.agent.provider.name, app.agent.model }) catch null) |key| {
-                if (pricing.lookup(key)) |r| {
-                    app.cost_usd += pricing.turnCost(r, u.input orelse 0, u.output orelse 0, u.cache_read orelse 0, u.cache_write orelse 0);
-                }
+            // 远端 usage.cost 优先;没有再走本地价目。
+            if (u.cost) |c| {
+                app.cost_usd += c;
+            } else if (pricing.lookupAny(app.agent.provider.name, app.agent.model)) |r| {
+                app.cost_usd += pricing.turnCost(r, u.input orelse 0, u.output orelse 0, u.cache_read orelse 0, u.cache_write orelse 0);
             }
         }
         if (err_msg) |emsg| {
             var buf = std.array_list.Managed(u8).init(app.alloc);
             defer buf.deinit();
-            buf.appendSlice("⚠ ") catch {};
-            buf.appendSlice(emsg) catch {};
-            app.tui.appendLine("", "\x1b[31m", buf.items) catch {};
+            tuiOk("tui.buf", buf.appendSlice("⚠ "));
+            tuiOk("tui.buf", buf.appendSlice(emsg));
+            tuiNote(app, "\x1b[31m", buf.items);
         } else {
             // 保存会话增量。失败要提醒(只一次,防刷屏):磁盘满/权限错时
             // 静默吞掉会让用户在重启后丢历史而不自知。
@@ -852,10 +1100,10 @@ fn workerMain(wctx: *WorkerCtx) void {
                     save_warned = true;
                     var wbuf = std.array_list.Managed(u8).init(app.alloc);
                     defer wbuf.deinit();
-                    wbuf.appendSlice("⚠ 会话保存失败(") catch {};
-                    wbuf.appendSlice(@errorName(e)) catch {};
-                    wbuf.appendSlice("),重启后可能丢失 —— 检查磁盘空间与 ~/.piz/sessions 权限") catch {};
-                    app.tui.appendLine("", "\x1b[31m", wbuf.items) catch {};
+                    tuiOk("tui.wbuf", wbuf.appendSlice("⚠ 会话保存失败("));
+                    tuiOk("tui.wbuf", wbuf.appendSlice(@errorName(e)));
+                    tuiOk("tui.wbuf", wbuf.appendSlice("),重启后可能丢失 —— 检查磁盘空间与 ~/.piz/sessions 权限"));
+                    tuiNote(app, "\x1b[31m", wbuf.items);
                 };
             }
         }
@@ -868,7 +1116,7 @@ fn workerMain(wctx: *WorkerCtx) void {
 }
 
 /// 复制文本到剪贴板:wl-copy(Wayland) → xclip(X11);均不可用返回 false。
-fn copyToClipboard(alloc: std.mem.Allocator, text: []const u8) bool {
+pub fn copyToClipboard(alloc: std.mem.Allocator, text: []const u8) bool {
     const candidates = [_][]const []const u8{
         &.{"wl-copy"},
         &.{ "xclip", "-selection", "clipboard" },
@@ -910,486 +1158,20 @@ fn onSubmit(tui: *tui_mod.Tui, line: []const u8) anyerror!void {
     // 斜杠命令
     if (line.len > 0 and line[0] == '/') {
         const cmd = line[1..];
-        if (std.mem.eql(u8, cmd, "quit") or std.mem.eql(u8, cmd, "exit") or std.mem.eql(u8, cmd, "q")) {
-            app.quit.store(true, .release);
-            return;
-        }
-        if (std.mem.eql(u8, cmd, "clear")) {
-            replaceSession(app) catch {
-                app.tui.appendLine("", "\x1b[31m", "cannot start new session") catch {};
-                return;
-            };
-            showWelcome(app, 0);
-            return;
-        }
-        if (std.mem.eql(u8, cmd, "new")) {
-            replaceSession(app) catch {
-                app.tui.appendLine("", "\x1b[31m", "cannot start new session") catch {};
-                return;
-            };
-            showWelcome(app, 0);
-            return;
-        }
-        if (std.mem.startsWith(u8, cmd, "title ")) {
-            const title = std.mem.trim(u8, cmd["title ".len..], " ");
-            app.sess.setTitle(title) catch |err| {
-                var bw = std.Io.Writer.Allocating.init(app.alloc);
-                defer bw.deinit();
-                bw.writer.print("set title failed: {s}", .{@errorName(err)}) catch {};
-                app.tui.appendLine("", "\x1b[31m", bw.written()) catch {};
-                return;
-            };
-            app.tui.appendLine("", "\x1b[2m", if (title.len > 0) "title set" else "title cleared") catch {};
-            app.refreshFooter();
-            return;
-        }
-        if (std.mem.eql(u8, cmd, "sessions")) {
-            const list = sessionmod.Session.list(app.alloc, app.agent.cwd) catch &.{};
-            defer for (list) |s| {
-                var s2 = s;
-                s2.deinit();
-            };
-            if (list.len == 0) {
-                app.tui.appendLine("", "\x1b[2m", "no sessions yet — /new to start one") catch {};
-                return;
-            }
-            var bw = std.Io.Writer.Allocating.init(app.alloc);
-            defer bw.deinit();
-            bw.writer.print("{d} sessions:\n", .{list.len}) catch {};
-            for (list, 0..) |s, i| {
-                const id = s.sessionId();
-                if (std.mem.eql(u8, s.path, app.sess.path)) {
-                    bw.writer.print("{d}. {s} (current)", .{ i + 1, id }) catch {};
-                } else {
-                    bw.writer.print("{d}. {s}", .{ i + 1, id }) catch {};
-                }
-                if (s.title) |tt| bw.writer.print(" — {s}", .{tt}) catch {};
-                bw.writer.print("\n", .{}) catch {};
-            }
-            bw.writer.writeAll("use /resume <n> to switch") catch {};
-            app.tui.appendLine("", "\x1b[2m", bw.written()) catch {};
-            return;
-        }
-        if (std.mem.startsWith(u8, cmd, "resume ")) {
-            const nstr = std.mem.trim(u8, cmd["resume ".len..], " ");
-            const n = std.fmt.parseInt(usize, nstr, 10) catch {
-                app.tui.appendLine("", "\x1b[31m", "usage: /resume <n>  (see /sessions)") catch {};
-                return;
-            };
-            const list = sessionmod.Session.list(app.alloc, app.agent.cwd) catch &.{};
-            if (n == 0 or n > list.len) {
-                for (list) |s| {
-                    var s2 = s;
-                    s2.deinit();
-                }
-                app.tui.appendLine("", "\x1b[31m", "no such session") catch {};
-                return;
-            }
-            const target = list[n - 1];
-            app.loadSession(target) catch |err| {
-                for (list) |s| {
-                    var s2 = s;
-                    s2.deinit();
-                }
-                var bw = std.Io.Writer.Allocating.init(app.alloc);
-                defer bw.deinit();
-                bw.writer.print("resume failed: {s}", .{@errorName(err)}) catch {};
-                app.tui.appendLine("", "\x1b[31m", bw.written()) catch {};
-                return;
-            };
-            // target 所有权已移交 app.sess;其余释放
-            for (list, 0..) |s, i| {
-                if (i != n - 1) {
-                    var s2 = s;
-                    s2.deinit();
-                }
-            }
-            app.tui.clearScroll();
-            showWelcome(app, app.agent.messages.items.len);
-            replayTranscript(app.tui, app.agent.messages.items);
-            return;
-        }
-        if (std.mem.eql(u8, cmd, "undo")) {
-            if (app.worker_active.load(.acquire)) {
-                app.tui.appendLine("", "\x1b[31m", "cannot undo while a turn is running") catch {};
-                return;
-            }
-            if (!app.agent.undo()) {
-                app.tui.appendLine("", "\x1b[2m", "nothing to undo") catch {};
-                return;
-            }
-            app.sess.truncate(app.agent.messages.items.len) catch {};
-            app.tui.appendLine("", "\x1b[2m", "undone last turn") catch {};
-            return;
-        }
-        if (std.mem.eql(u8, cmd, "model") or std.mem.startsWith(u8, cmd, "model ")) {
-            const spec = if (std.mem.startsWith(u8, cmd, "model "))
-                std.mem.trim(u8, cmd["model ".len..], " ")
-            else
-                "";
-            if (spec.len == 0) {
-                openModelPicker(app);
-                return;
-            }
-            app.switchModel(spec) catch |err| {
-                var bw = std.Io.Writer.Allocating.init(app.alloc);
-                defer bw.deinit();
-                bw.writer.print("switch model failed: {s}", .{@errorName(err)}) catch {};
-                app.tui.appendLine("", "\x1b[31m", bw.written()) catch {};
-                return;
-            };
-            showWelcome(app, app.agent.messages.items.len);
-            return;
-        }
-        if (std.mem.eql(u8, cmd, "compact")) {
-            app.tui.appendLine("", "\x1b[2m", "compacting conversation…") catch {};
-            spawnWorker(app, "", true);
-            return;
-        }
-        if (std.mem.eql(u8, cmd, "shake") or std.mem.startsWith(u8, cmd, "shake ")) {
-            if (app.worker_active.load(.acquire)) {
-                app.tui.appendLine("", "\x1b[31m", "cannot shake while a turn is running") catch {};
-                return;
-            }
-            const args = if (std.mem.startsWith(u8, cmd, "shake ")) std.mem.trim(u8, cmd["shake ".len..], " ") else "";
-            const r = compress.shake(.{
-                .alloc = app.alloc,
-                .messages = &app.agent.messages,
-                .window = app.agent.ctxWindow(),
-                .api = app.agent.provider.api,
-                .vision = app.agent.hasVision(),
-            }, .{ .protect_tokens = 0, .min_savings = 0, .drop_images = std.mem.eql(u8, args, "images") });
-            const msg = compress.formatNotice(app.alloc, r) orelse "shake: nothing to elide";
-            app.tui.appendLine("", "\x1b[2m", msg) catch {};
-            return;
-        }
-        if (std.mem.eql(u8, cmd, "snap")) {
-            if (app.worker_active.load(.acquire)) {
-                app.tui.appendLine("", "\x1b[31m", "cannot snap while a turn is running") catch {};
-                return;
-            }
-            const vision = app.agent.hasVision();
-            const r = compress.snap(.{
-                .alloc = app.alloc,
-                .messages = &app.agent.messages,
-                .window = app.agent.ctxWindow(),
-                .api = app.agent.provider.api,
-                .vision = vision,
-            });
-            const msg = compress.formatNotice(app.alloc, r) orelse if (!vision)
-                "snap: model has no vision"
-            else
-                "snap: nothing eligible (need large ASCII tool output + vision)";
-            app.tui.appendLine("", "\x1b[2m", msg) catch {};
-            return;
-        }
-        if (std.mem.eql(u8, cmd, "fast-compress")) {
-            const msg = compress.formatStatus(app.alloc, .{
-                .alloc = app.alloc,
-                .messages = &app.agent.messages,
-                .window = app.agent.ctxWindow(),
-                .api = app.agent.provider.api,
-                .vision = app.agent.hasVision(),
-            });
-            app.tui.appendLine("", "\x1b[2m", msg) catch {};
-            return;
-        }
-        if (std.mem.eql(u8, cmd, "redo")) {
-            if (app.last_line.len == 0) {
-                app.tui.appendLine("", "\x1b[2m", "nothing to redo") catch {};
-                return;
-            }
-            app.tui.appendUser(app.last_line) catch {};
-            spawnWorker(app, app.last_line, false);
-            return;
-        }
-        if (std.mem.eql(u8, cmd, "memory")) {
-            const mem_path = util.configDir(app.alloc) catch {
-                app.tui.appendLine("", "\x1b[31m", "no config dir") catch {};
-                return;
-            };
-            const full = util.joinPath(app.alloc, mem_path, "memory.md") catch {
-                app.tui.appendLine("", "\x1b[31m", "cannot build path") catch {};
-                return;
-            };
-            const content = std.Io.Dir.cwd().readFileAlloc(util.io, full, app.alloc, .limited(512 * 1024)) catch {
-                app.tui.appendLine("", "\x1b[2m", "memory is empty — /memory set <text> to add") catch {};
-                return;
-            };
-            defer app.alloc.free(content);
-            var bw = std.Io.Writer.Allocating.init(app.alloc);
-            defer bw.deinit();
-            bw.writer.writeAll("🧠 memory.md:\n") catch {};
-            bw.writer.writeAll(content[0..@min(content.len, 4000)]) catch {};
-            if (content.len > 4000) bw.writer.writeAll("\n…(truncated)") catch {};
-            bw.writer.print("\nusage: /memory set <text> | /memory clear", .{}) catch {};
-            app.tui.appendLine("", "\x1b[2m", bw.written()) catch {};
-            return;
-        }
-        if (std.mem.startsWith(u8, cmd, "memory set ")) {
-            const text = std.mem.trim(u8, cmd["memory set ".len..], " ");
-            if (text.len == 0) {
-                app.tui.appendLine("", "\x1b[31m", "usage: /memory set <text>") catch {};
-                return;
-            }
-            const mem_path = util.configDir(app.alloc) catch {
-                app.tui.appendLine("", "\x1b[31m", "no config dir") catch {};
-                return;
-            };
-            const full = util.joinPath(app.alloc, mem_path, "memory.md") catch {
-                app.tui.appendLine("", "\x1b[31m", "cannot build path") catch {};
-                return;
-            };
-            const mline = std.fmt.allocPrint(app.alloc, "{s}\n", .{text}) catch {
-                app.tui.appendLine("", "\x1b[31m", "oom") catch {};
-                return;
-            };
-            // 追加(已存在)或新建
-            var f = std.Io.Dir.cwd().createFile(util.io, full, .{ .exclusive = true, .permissions = @enumFromInt(0o600) }) catch |err| switch (err) {
-                error.PathAlreadyExists => std.Io.Dir.cwd().openFile(util.io, full, .{ .mode = .write_only }) catch {
-                    app.tui.appendLine("", "\x1b[31m", "cannot open memory.md") catch {};
-                    return;
-                },
-                else => {
-                    app.tui.appendLine("", "\x1b[31m", "cannot create memory.md") catch {};
-                    return;
-                },
-            };
-            defer f.close(util.io);
-            var wbuf: [1024]u8 = undefined;
-            var w = f.writer(util.io, &wbuf);
-            w.seekTo(f.length(util.io) catch 0) catch {};
-            w.interface.writeAll(mline) catch {};
-            w.flush() catch {};
-            var bw = std.Io.Writer.Allocating.init(app.alloc);
-            defer bw.deinit();
-            bw.writer.print("🧠 memory saved: {s}", .{text[0..@min(text.len, 60)]}) catch {};
-            app.tui.appendLine("", "\x1b[2m", bw.written()) catch {};
-            return;
-        }
-        if (std.mem.eql(u8, cmd, "memory clear")) {
-            const mem_path = util.configDir(app.alloc) catch {
-                app.tui.appendLine("", "\x1b[31m", "no config dir") catch {};
-                return;
-            };
-            const full = util.joinPath(app.alloc, mem_path, "memory.md") catch {
-                app.tui.appendLine("", "\x1b[31m", "cannot build path") catch {};
-                return;
-            };
-            std.Io.Dir.cwd().deleteFile(util.io, full) catch {};
-            app.tui.appendLine("", "\x1b[2m", "memory cleared") catch {};
-            return;
-        }
-        if (std.mem.startsWith(u8, cmd, "fork ")) {
-            const nstr = std.mem.trim(u8, cmd["fork ".len..], " ");
-            const n = std.fmt.parseInt(usize, nstr, 10) catch {
-                app.tui.appendLine("", "\x1b[31m", "usage: /fork <n>  (see /tree)") catch {};
-                return;
-            };
-            if (n == 0 or n > app.agent.messages.items.len) {
-                app.tui.appendLine("", "\x1b[31m", "no such message") catch {};
-                return;
-            }
-            const new_sess = app.sess.fork(n) catch |err| {
-                var bw = std.Io.Writer.Allocating.init(app.alloc);
-                defer bw.deinit();
-                bw.writer.print("fork failed: {s}", .{@errorName(err)}) catch {};
-                app.tui.appendLine("", "\x1b[31m", bw.written()) catch {};
-                return;
-            };
-            app.loadSession(new_sess) catch {};
-            var bw = std.Io.Writer.Allocating.init(app.alloc);
-            defer bw.deinit();
-            bw.writer.print("forked {d} messages -> session {s}", .{ n, std.fs.path.basename(app.sess.path) }) catch {};
-            app.tui.appendLine("", "\x1b[2m", bw.written()) catch {};
-            app.refreshFooter();
-            return;
-        }
-        if (std.mem.eql(u8, cmd, "tree")) {
-            var bw = std.Io.Writer.Allocating.init(app.alloc);
-            defer bw.deinit();
-            bw.writer.print("{d} messages:\n", .{app.agent.messages.items.len}) catch {};
-            for (app.agent.messages.items, 0..) |m, i| {
-                const tag: []const u8 = switch (m.role[0]) {
-                    'u' => ">",
-                    'a' => "<",
-                    't' => "tool",
-                    else => "-",
-                };
-                const head = m.content[0..@min(m.content.len, 50)];
-                bw.writer.print("{d}. {s} {s}\n", .{ i + 1, tag, head }) catch {};
-            }
-            bw.writer.writeAll("use /fork <n> to branch from a message") catch {};
-            app.tui.appendLine("", "\x1b[2m", bw.written()) catch {};
-            return;
-        }
-        if (std.mem.startsWith(u8, cmd, "plan")) {
-            // 计划模式:让模型制定计划写入 PLAN.md,随后按计划执行。
-            // startsWith:既匹配 /plan(显示用法)也匹配 /plan <goal>。
-            const goal = std.mem.trim(u8, cmd["plan".len..], " ");
-            if (goal.len == 0) {
-                app.tui.appendLine("", "\x1b[31m", "usage: /plan <goal>") catch {};
-                return;
-            }
-            app.tui.appendUser(line) catch {};
-            spawnWorker(app, try std.fmt.allocPrint(app.alloc, "Create a detailed step-by-step plan for: {s}. Write the plan to PLAN.md in the project root, then briefly state you are ready to execute it.", .{goal}), false);
-            return;
-        }
-        if (std.mem.eql(u8, cmd, "export") or std.mem.eql(u8, cmd, "dump")) {
-            // 导出会话:HTML 文件(/export)或剪贴板文本(/dump)
-            const is_export = std.mem.eql(u8, cmd, "export");
-            var ww = std.Io.Writer.Allocating.init(app.alloc);
-            defer ww.deinit();
-            const w = &ww.writer;
-            if (is_export) try w.writeAll("<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>piz session</title></head><body>");
-            for (app.agent.messages.items) |m| {
-                const role = m.role;
-                const body = std.mem.replaceOwned(u8, app.alloc, m.content, "&", "&amp;") catch continue;
-                defer app.alloc.free(body);
-                const esc = std.mem.replaceOwned(u8, app.alloc, body, "<", "&lt;") catch continue;
-                defer app.alloc.free(esc);
-                if (is_export) {
-                    try w.print("<p><b>{s}</b><br><pre>{s}</pre></p>\n", .{ role, esc });
-                } else {
-                    try w.print("--- {s} ---\n{s}\n", .{ role, esc });
-                }
-            }
-            if (is_export) try w.writeAll("</body></html>\n");
-            if (is_export) {
-                const fname = "piz-export.html";
-                std.Io.Dir.cwd().writeFile(util.io, .{ .sub_path = fname, .data = ww.written() }) catch {
-                    app.tui.appendLine("", "\x1b[31m", "export failed") catch {};
-                    return;
-                };
-                app.tui.appendLine("", "\x1b[2m", "exported to piz-export.html") catch {};
-            } else {
-                if (copyToClipboard(app.alloc, ww.written())) {
-                    app.tui.appendLine("", "\x1b[2m", "session copied to clipboard") catch {};
-                } else {
-                    app.tui.appendLine("", "\x1b[31m", "no clipboard tool (wl-copy/xclip); /tmp fallback") catch {};
-                    std.Io.Dir.cwd().writeFile(util.io, .{ .sub_path = "/tmp/piz-dump.txt", .data = ww.written() }) catch {};
-                }
-            }
-            return;
-        }
-        if (std.mem.eql(u8, cmd, "copy")) {
-            // 最后一条 assistant 消息 → 剪贴板
-            var last: ?[]const u8 = null;
-            var i = app.agent.messages.items.len;
-            while (i > 0) {
-                i -= 1;
-                if (std.mem.eql(u8, app.agent.messages.items[i].role, "assistant")) {
-                    last = app.agent.messages.items[i].content;
-                    break;
-                }
-            }
-            const text = last orelse {
-                app.tui.appendLine("", "\x1b[2m", "no assistant message yet") catch {};
-                return;
-            };
-            if (copyToClipboard(app.alloc, text)) {
-                app.tui.appendLine("", "\x1b[2m", "copied to clipboard") catch {};
-            } else {
-                // 回退:写临时文件并提示
-                if (util.writeFile("/tmp/piz-copy.txt", text)) |_| {
-                    app.tui.appendLine("", "\x1b[2m", "no clipboard tool — saved to /tmp/piz-copy.txt") catch {};
-                } else |_| {}
-            }
-            return;
-        }
-        if (std.mem.eql(u8, cmd, "queue")) {
-            if (app.queue.items.len == 0) {
-                app.tui.appendLine("", "\x1b[2m", "queue empty") catch {};
-                return;
-            }
-            app.clearQueue();
-            app.tui.appendLine("", "\x1b[2m", "queued messages cleared") catch {};
-            return;
-        }
-        if (std.mem.eql(u8, cmd, "status")) {
-            showStatusCard(app);
-            app.refreshFooter();
-            return;
-        }
-        if (std.mem.eql(u8, cmd, "permissions") or std.mem.startsWith(u8, cmd, "permissions ") or
-            std.mem.eql(u8, cmd, "approvals") or std.mem.startsWith(u8, cmd, "approvals "))
+        if (try cmd_slash.dispatch(tui, app, cmd)) return;
         {
-            const raw = if (std.mem.startsWith(u8, cmd, "permissions "))
-                std.mem.trim(u8, cmd["permissions ".len..], " ")
-            else if (std.mem.startsWith(u8, cmd, "approvals "))
-                std.mem.trim(u8, cmd["approvals ".len..], " ")
-            else
-                "";
-            if (raw.len == 0) {
-                openApprovalPicker(app);
+            const space = std.mem.indexOfScalar(u8, cmd, ' ');
+            const sname = if (space) |sp| cmd[0..sp] else cmd;
+            const sargs = if (space) |sp| std.mem.trim(u8, cmd[sp + 1 ..], " ") else "";
+            if (pluginsmod.dispatchSlash(app.agent.plugins, app.agent, sname, sargs)) |res_or_err| {
+                const text = res_or_err catch {
+                    tuiNote(app, "\x1b[31m", "plugin slash failed");
+                    return;
+                };
+                defer app.alloc.free(text);
+                tuiNote(app, "", text);
                 return;
             }
-            const mode = cfgmod.ApprovalMode.parse(raw) orelse {
-                app.tui.appendLine("", "\x1b[31m", "usage: /permissions yolo|ask|read-only") catch {};
-                return;
-            };
-            applyApproval(app, mode);
-            var bw = std.Io.Writer.Allocating.init(app.alloc);
-            defer bw.deinit();
-            bw.writer.print("permissions {s}", .{mode.uiLabel()}) catch {};
-            app.tui.appendLine("", "\x1b[2m", bw.written()) catch {};
-            app.refreshFooter();
-            return;
-        }
-        if (std.mem.eql(u8, cmd, "think") or std.mem.startsWith(u8, cmd, "think ")) {
-            const arg = if (std.mem.startsWith(u8, cmd, "think "))
-                std.mem.trim(u8, cmd["think ".len..], " ")
-            else
-                "";
-            const meta = app.agent.modelMeta();
-            if (arg.len == 0) {
-                openThinkPicker(app);
-                return;
-            }
-            const level = ai.ThinkLevel.parse(arg) orelse {
-                var bw = std.Io.Writer.Allocating.init(app.alloc);
-                defer bw.deinit();
-                bw.writer.writeAll("usage: /think ") catch {};
-                cfgmod.writeSupportedThink(&bw.writer, meta) catch {};
-                app.tui.appendLine("", "\x1b[31m", bw.written()) catch {};
-                return;
-            };
-            const clamped = cfgmod.clampThinkLevel(meta, level);
-            app.tui.think_level = clamped;
-            app.agent.think_level = clamped;
-            persistThink(app);
-            showWelcome(app, app.agent.messages.items.len);
-            var bw = std.Io.Writer.Allocating.init(app.alloc);
-            defer bw.deinit();
-            if (clamped != level)
-                bw.writer.print("think {s} (this model has no {s})", .{ tui_mod.thinkLabel(clamped), level.label() }) catch {}
-            else
-                bw.writer.print("think {s}", .{tui_mod.thinkLabel(clamped)}) catch {};
-            app.tui.appendLine("", "\x1b[2m", bw.written()) catch {};
-            return;
-        }
-        if (std.mem.eql(u8, cmd, "theme") or std.mem.startsWith(u8, cmd, "theme ")) {
-            const arg = if (std.mem.startsWith(u8, cmd, "theme "))
-                std.mem.trim(u8, cmd["theme ".len..], " ")
-            else
-                "";
-            if (arg.len == 0) {
-                openThemePicker(app);
-                return;
-            }
-            tui_mod.applyTheme(arg);
-            persistTheme(app, arg);
-            var bw = std.Io.Writer.Allocating.init(app.alloc);
-            defer bw.deinit();
-            bw.writer.print("theme {s}", .{tui_mod.theme.name}) catch {};
-            app.tui.appendLine("", "\x1b[2m", bw.written()) catch {};
-            return;
-        }
-        if (std.mem.eql(u8, cmd, "help")) {
-            const text = formatHelp(app.alloc, app.tui.width) catch return;
-            defer app.alloc.free(text);
-            app.tui.appendLine("", "", text) catch {};
-            return;
         }
         // 未知斜杠命令:尝试 prompt 模板(/name [args])
         if (std.mem.indexOfScalar(u8, cmd, ' ') orelse cmd.len > 0) {
@@ -1406,7 +1188,7 @@ fn onSubmit(tui: *tui_mod.Tui, line: []const u8) anyerror!void {
                     if (a.len > 0) try args.append(a);
                 }
                 const rendered = try util.renderTemplate(app.alloc, tpl, args.items);
-                app.tui.appendUser(rendered) catch {};
+                tuiOk("tui.user", app.tui.appendUser(rendered));
                 const old = app.last_line;
                 app.last_line = app.alloc.dupe(u8, rendered) catch rendered;
                 if (old.len > 0 and old.ptr != rendered.ptr) app.alloc.free(old);
@@ -1416,8 +1198,8 @@ fn onSubmit(tui: *tui_mod.Tui, line: []const u8) anyerror!void {
         }
         var bw = std.Io.Writer.Allocating.init(app.alloc);
         defer bw.deinit();
-        bw.writer.print("unknown command: /{s} (try /help)", .{cmd}) catch {};
-        app.tui.appendLine("", "\x1b[31m", bw.written()) catch {};
+        tuiOk("tui.wr", bw.writer.print("unknown command: /{s} (try /help)", .{cmd}));
+        tuiNote(app, "\x1b[31m", bw.written());
         return;
     }
     // 正常消息:!cmd 运行并发送;!!cmd 运行不发送;@path 展开文件内容
@@ -1428,34 +1210,40 @@ fn onSubmit(tui: *tui_mod.Tui, line: []const u8) anyerror!void {
             return;
         };
         const res: toolsmod.Result = if (toolsmod.find("bash")) |tb|
-            (tb.handler(app.alloc, json_args) catch .{ .content = "tool crashed", .is_error = true })
+            (tb.handler(app.alloc, json_args) catch |err| toolsmod.crashResult(app.alloc, "bash", err))
         else
             .{ .content = "no bash tool", .is_error = true };
-        app.tui.appendLine("", if (res.is_error) "\x1b[31m" else "\x1b[2m", res.content) catch {};
+        tuiNote(app, if (res.is_error) "\x1b[31m" else "\x1b[2m", res.content);
         if (send_to_llm) {
             const msg = std.fmt.allocPrint(app.alloc, "!{s}\n\nOutput:\n{s}", .{ cmd, res.content }) catch {
                 return;
             };
-            app.tui.appendUser(msg) catch {};
+            tuiOk("tui.user", app.tui.appendUser(msg));
             spawnWorker(app, msg, false);
         }
         return;
     }
     const expanded = util.expandRefs(app.alloc, line, app.agent.cwd) catch line;
+    const keep_img = keepPendingImage(app);
     if (app.worker_active.load(.acquire)) {
         // worker 忙:入队(steering),轮次间自动投递
-        app.enqueue(expanded);
+        if (!app.enqueue(expanded)) {
+            tuiNote(app, "\x1b[31m", "queue failed — message not queued");
+            return;
+        }
         var bw = std.Io.Writer.Allocating.init(app.alloc);
         defer bw.deinit();
         const head = expanded[0..@min(expanded.len, 72)];
         if (app.queue.items.len == 1)
-            bw.writer.print("→ 待发  {s}", .{head}) catch {}
+            tuiOk("tui.wr", bw.writer.print("→ 待发  {s}", .{head}))
         else
-            bw.writer.print("→ 待发 {d}  {s}", .{ app.queue.items.len, head }) catch {};
-        app.tui.appendLine("", "\x1b[2m", bw.written()) catch {};
+            tuiOk("tui.wr", bw.writer.print("→ 待发 {d}  {s}", .{ app.queue.items.len, head }));
+        if (keep_img) tuiOk("tui.wr", bw.writer.writeAll("  [image]"));
+        tuiNote(app, "\x1b[2m", bw.written());
         return;
     }
-    app.tui.appendUser(expanded) catch {};
+    tuiOk("tui.user", app.tui.appendUser(shownUser(app.alloc, expanded, keep_img)));
+    maybeAutoTitle(app, expanded);
     {
         var ea = util.Arena.init(app.alloc);
         defer ea.deinit();
@@ -1470,13 +1258,37 @@ fn onSubmit(tui: *tui_mod.Tui, line: []const u8) anyerror!void {
     spawnWorker(app, expanded, false);
 }
 
-fn spawnWorker(app: *App, line: []const u8, is_compact: bool) void {
+fn maybeAutoTitle(app: *App, text: []const u8) void {
+    if (app.sess.title) |cur| {
+        if (cur.len > 0) return;
+    }
+    const t = sessionmod.deriveTitle(app.alloc, text) orelse return;
+    defer app.alloc.free(t);
+    app.sess.setTitle(t) catch |err| util.debugCatch("sess.title", err);
+    app.refreshFooter();
+}
+
+fn keepPendingImage(app: *App) bool {
+    if (!app.tui.hasPendingImage()) return false;
+    if (app.agent.hasVision()) return true;
+    _ = app.tui.takePendingImage();
+    tuiNote(app, "\x1b[2m", "image dropped: model has no vision");
+    return false;
+}
+
+fn shownUser(alloc: std.mem.Allocator, text: []const u8, has_img: bool) []const u8 {
+    if (!has_img) return text;
+    if (text.len == 0 or std.mem.eql(u8, text, "(image)")) return "[image]";
+    return std.fmt.allocPrint(alloc, "{s}  [image]", .{text}) catch text;
+}
+
+pub fn spawnWorker(app: *App, line: []const u8, is_compact: bool) void {
     app.agent.think_level = app.tui.think_level;
     const wctx = app.alloc.create(WorkerCtx) catch return;
     wctx.* = .{ .app = app, .line = line, .is_compact = is_compact };
     const thread = std.Thread.spawn(.{}, workerMain, .{wctx}) catch {
         app.alloc.destroy(wctx);
-        app.tui.appendLine("", "\x1b[31m", "failed to spawn worker thread") catch {};
+        tuiNote(app, "\x1b[31m", "failed to spawn worker thread");
         return;
     };
     app.worker = thread;
@@ -1499,7 +1311,7 @@ fn onAbort(ctx: ?*anyopaque) void {
         std.fmt.bufPrint(&buf, "interrupted — cancelling {d} running activity(s)", .{n}) catch "interrupted"
     else
         "interrupted";
-    app.tui.appendLine("", "\x1b[2m", msg) catch {};
+    tuiNote(app, "\x1b[2m", msg);
 }
 
 /// Ctrl+B:把在跑的活动转后台。
@@ -1516,7 +1328,7 @@ fn onDetach(ctx: ?*anyopaque) void {
         std.fmt.bufPrint(&buf, "{d} activity(s) moved to background — no wall-clock limit, Ctrl+C won't cancel them", .{n}) catch "moved to background"
     else
         "nothing running to move to background";
-    app.tui.appendLine("", "\x1b[2m", msg) catch {};
+    tuiNote(app, "\x1b[2m", msg);
 }
 
 fn tuiOnAbort(ctx: ?*anyopaque) bool {
@@ -1609,6 +1421,7 @@ pub fn runInteractive(alloc: std.mem.Allocator, cfg: *cfgmod.Config, cwd: []cons
     tui.ctx = &app;
     if (cfg.default_think_level) |lv| app.tui.think_level = lv;
     app.syncThink();
+    rebuildSlashCatalog(&app);
     app.est_ctx.store(agent.estTokens(), .release);
     // 接线回调:流式输出 + 工具行 + 权限询问(此前缺失,交互模式流式显示依赖于此)
     agent.cbs = .{
@@ -1636,6 +1449,14 @@ pub fn runInteractive(alloc: std.mem.Allocator, cfg: *cfgmod.Config, cwd: []cons
         .on_perm = tuiOnPermKey,
         .on_paint = tuiOnPaint,
         .on_think = tuiOnThink,
+        .on_copy = tuiOnCopy,
+        .on_sandbox = tuiOnSandbox,
+        .on_jobs = tuiOnJobs,
+        .on_usage = tuiOnUsage,
+        .on_redo = tuiOnRedo,
+        .on_doctor = tuiOnDoctor,
+        .on_diff = tuiOnDiff,
+        .on_log = tuiOnLog,
         .ctx = &app,
     });
 
@@ -1709,6 +1530,11 @@ pub fn main(init: std.process.Init) !void {
             opts.execute = true;
         } else if (std.mem.eql(u8, arg, "--ask")) {
             opts.ask = true;
+        } else if (std.mem.eql(u8, arg, "--sandbox")) {
+            opts.sandbox = args.next() orelse {
+                std.debug.print("piz: missing value for --sandbox\n", .{});
+                std.process.exit(1);
+            };
         } else if (std.mem.eql(u8, arg, "-t") or std.mem.eql(u8, arg, "--title")) {
             opts.title = args.next() orelse {
                 std.debug.print("piz: missing value for {s}\n", .{arg});
@@ -1771,8 +1597,90 @@ pub fn main(init: std.process.Init) !void {
             std.process.exit(0);
         } else if (std.mem.eql(u8, arg, "pkg")) {
             cmd_pkg.runPkgCmd(alloc, &args); // 不返回
+        } else if (std.mem.eql(u8, arg, "login")) {
+            cmd_login.run(alloc, &args);
+            return;
+        } else if (std.mem.eql(u8, arg, "reload")) {
+            var arena = util.Arena.init(alloc);
+            defer arena.deinit();
+            var cfg = cfgmod.Config{ .arena = &arena };
+            cfg.load() catch {
+                std.debug.print("piz: reload failed\n", .{});
+                std.process.exit(1);
+            };
+            const text = cfg.reloadSettings() catch {
+                std.debug.print("piz: reload failed\n", .{});
+                std.process.exit(1);
+            };
+            std.debug.print("{s}", .{text});
+            if (text.len == 0 or text[text.len - 1] != '\n') std.debug.print("\n", .{});
+            std.process.exit(0);
+        } else if (std.mem.eql(u8, arg, "mcp")) {
+            const text = mcpmod.formatStatus(alloc) catch {
+                std.debug.print("piz: mcp failed\n", .{});
+                std.process.exit(1);
+            };
+            std.debug.print("{s}", .{text});
+            if (text.len == 0 or text[text.len - 1] != '\n') std.debug.print("\n", .{});
+            std.process.exit(0);
+        } else if (std.mem.eql(u8, arg, "branch")) {
+            const here = std.process.currentPathAlloc(util.io, alloc) catch ".";
+            const text = cmd_diff.formatBranch(alloc, here) catch {
+                std.debug.print("piz: branch failed\n", .{});
+                std.process.exit(1);
+            };
+            std.debug.print("{s}", .{text});
+            if (text.len == 0 or text[text.len - 1] != '\n') std.debug.print("\n", .{});
+            std.process.exit(0);
+        } else if (std.mem.eql(u8, arg, "log")) {
+            const narg = args.next() orelse "";
+            const here = std.process.currentPathAlloc(util.io, alloc) catch ".";
+            const text = cmd_diff.formatLog(alloc, here, cmd_diff.parseLogCount(narg)) catch {
+                std.debug.print("piz: log failed\n", .{});
+                std.process.exit(1);
+            };
+            std.debug.print("{s}", .{text});
+            if (text.len == 0 or text[text.len - 1] != '\n') std.debug.print("\n", .{});
+            std.process.exit(0);
+        } else if (std.mem.eql(u8, arg, "commit")) {
+            var parts = std.array_list.Managed([]const u8).init(alloc);
+            while (args.next()) |a| parts.append(a) catch {};
+            const msg = if (parts.items.len == 0) "" else std.mem.join(alloc, " ", parts.items) catch "";
+            const here = std.process.currentPathAlloc(util.io, alloc) catch ".";
+            const text = cmd_commit.run(alloc, here, msg) catch {
+                std.debug.print("piz: commit failed\n", .{});
+                std.process.exit(1);
+            };
+            std.debug.print("{s}\n", .{text});
+            std.process.exit(0);
+        } else if (std.mem.eql(u8, arg, "diff")) {
+            const here = std.process.currentPathAlloc(util.io, alloc) catch ".";
+            const text = cmd_diff.format(alloc, here) catch {
+                std.debug.print("piz: diff failed\n", .{});
+                std.process.exit(1);
+            };
+            std.debug.print("{s}", .{text});
+            std.process.exit(0);
+        } else if (std.mem.eql(u8, arg, "init")) {
+            const here = std.process.currentPathAlloc(util.io, alloc) catch ".";
+            const text = cmd_init.writeAgents(alloc, here) catch {
+                std.debug.print("piz: init failed\n", .{});
+                std.process.exit(1);
+            };
+            std.debug.print("{s}\n", .{text});
+            std.process.exit(0);
+        } else if (std.mem.eql(u8, arg, "doctor")) {
+            const here = std.process.currentPathAlloc(util.io, alloc) catch ".";
+            const text = cmd_doctor.format(alloc, .{ .version = VERSION, .cwd = here }) catch {
+                std.debug.print("piz: doctor failed\n", .{});
+                std.process.exit(1);
+            };
+            std.debug.print("{s}", .{text});
+            std.process.exit(0);
         } else if (std.mem.eql(u8, arg, "web")) {
             cmd_web.runWebCmd(alloc, &args); // 不返回
+        } else if (std.mem.eql(u8, arg, "sandbox-exec")) {
+            sandboxmod.runExec(&args);
         } else if (std.mem.eql(u8, arg, "--")) {
             // 之后全部当字面量 —— 提示词以 '-' 开头时唯一的写法,
             // 比如 `piz -p -- "-rf 是什么意思"`。少了它这种提问无法输入。
@@ -1836,6 +1744,12 @@ pub fn main(init: std.process.Init) !void {
     defer cfg.deinit();
     try cfg.load();
     cfg.warnBroken();
+    if (opts.sandbox) |raw| {
+        cfg.default_sandbox = cfgmod.SandboxMode.parse(raw) orelse {
+            std.debug.print("piz: unknown --sandbox {s} (off|workspace|strict)\n", .{raw});
+            std.process.exit(1);
+        };
+    }
 
     // 插件启用:settings.json 的 plugins 数组,再叠加 --plugin 参数。
     // settings 里的未知名字只警告(配置可能为更新版本写的);CLI 里的直接失败。
@@ -1926,6 +1840,12 @@ fn printPlugins(alloc: std.mem.Allocator) void {
         \\开启方式:piz --plugin <name>  或  ~/.piz/settings.json 的 "plugins": ["name"]
         \\
     , .{ pluginsmod.builtin_plugins.len, body });
+    const cwd = std.process.currentPathAlloc(util.io, arena.allocator()) catch "";
+    const pkg_tools = pkgsmod.loadPkgTools(arena.allocator(), cwd) catch &.{};
+    if (pkg_tools.len > 0) {
+        std.debug.print("包声明工具:\n", .{});
+        for (pkg_tools) |t| std.debug.print("  [pkg] {s}\n", .{t.name});
+    }
     std.process.exit(0);
 }
 
@@ -1958,7 +1878,12 @@ test {
     _ = @import("core");
     _ = @import("tui");
     _ = @import("cmd_web.zig");
+    _ = @import("cmd_doctor.zig");
+    _ = @import("cmd_init.zig");
+    _ = @import("cmd_diff.zig");
+    _ = @import("cmd_commit.zig");
     _ = cmd_print;
+    _ = cmd_login;
     _ = cmd_pkg;
     // webui 只被 main 引入(HTTP 服务属 app 层,不在 core 库里)。Zig 只收集
     // 显式列出的测试 —— 少了这行,webui.zig 的 test 块一个都不会跑。
@@ -1980,12 +1905,10 @@ test "gitBranch reads HEAD" {
     const tmp_path = try std.fmt.allocPrint(t.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path[0..]});
     defer t.allocator.free(tmp_path);
     std.Io.Threaded.chdir(tmp_path) catch unreachable;
-    // 无 git → null
-    try t.expect(App.gitBranch(t.allocator) == null);
-    // 构造 .git/HEAD
+    try t.expect(cmd_diff.currentBranch(t.allocator, ".") == null);
     std.Io.Dir.cwd().createDirPath(util.io, ".git") catch {};
     try std.Io.Dir.cwd().writeFile(util.io, .{ .sub_path = ".git/HEAD", .data = "ref: refs/heads/main\n" });
-    const br = App.gitBranch(t.allocator).?;
+    const br = cmd_diff.currentBranch(t.allocator, ".").?;
     defer t.allocator.free(br);
     try t.expectEqualStrings("main", br);
 }
@@ -2073,9 +1996,8 @@ test "every slash command appears in /help" {
     //
     // 命令名取自 onSubmit 里的 `eql(u8, cmd, "…")` / `startsWith(u8, cmd, "… ")`。
     const dispatched = [_][]const u8{
-        "help",  "status",        "think", "theme", "permissions", "model",  "new",    "sessions", "resume",
-        "title", "tree",          "fork",  "copy",  "undo",        "redo",   "memory", "compact",  "shake",
-        "snap",  "fast-compress", "clear", "plan",  "queue",       "export", "dump",   "quit",
+        "help",  "status", "doctor", "init", "diff", "commit", "log",    "branch",  "mcp", "reload",  "usage", "jobs", "find",          "paste", "think", "theme", "permissions", "sandbox", "model", "refresh", "new", "sessions", "resume",
+        "title", "tree",   "fork",   "copy", "undo", "redo",   "memory", "plugins", "pkg", "compact", "shake", "snap", "fast-compress", "clear", "plan",  "queue", "export",      "dump",    "quit",
     };
     for (dispatched) |cmd| {
         var found = false;

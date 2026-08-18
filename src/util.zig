@@ -35,6 +35,23 @@ pub fn getEnv(key: []const u8) ?[]const u8 {
     return null;
 }
 
+/// 入口层吞错的排障通道。PIZ_DEBUG 非空才打 stderr,默认静默。
+pub fn debugLog(comptime fmt: []const u8, args: anytype) void {
+    const flag = getEnv("PIZ_DEBUG") orelse return;
+    if (flag.len == 0) return;
+    std.debug.print("piz: " ++ fmt ++ "\n", args);
+}
+
+/// 入口层 `catch {}` 的统一落点:带位置和 error 名。
+pub fn debugCatch(comptime where: []const u8, err: anyerror) void {
+    debugLog("{s}: {s}", .{ where, @errorName(err) });
+}
+
+/// 无条件打 stderr。用于进程级失败(如 web 服务线程死掉)。
+pub fn warn(comptime fmt: []const u8, args: anytype) void {
+    std.debug.print("piz: " ++ fmt ++ "\n", args);
+}
+
 pub fn readFile(alloc: std.mem.Allocator, path: []const u8) ![]u8 {
     return std.Io.Dir.cwd().readFileAlloc(io, path, alloc, .limited(64 * 1024 * 1024));
 }
@@ -42,7 +59,7 @@ pub fn readFile(alloc: std.mem.Allocator, path: []const u8) ![]u8 {
 pub fn writeFile(path: []const u8, data: []const u8) !void {
     const dir = std.fs.path.dirname(path) orelse ".";
     if (dir.len > 0 and !std.mem.eql(u8, dir, ".")) {
-        std.Io.Dir.cwd().createDirPath(io, dir) catch {};
+        std.Io.Dir.cwd().createDirPath(io, dir) catch |err| debugCatch("writeFile.mkdir", err);
     }
     try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = data });
 }
@@ -134,6 +151,75 @@ pub fn execShortTimeout(alloc: std.mem.Allocator, argv: []const []const u8, time
     const term = child.wait(io) catch return error.WaitFailed;
     if (term != .exited or term.exited != 0) return error.CommandFailed;
     return out.toOwnedSlice();
+}
+
+fn execBounded(alloc: std.mem.Allocator, argv: []const []const u8, cap: usize) ![]u8 {
+    var child = std.process.spawn(io, .{
+        .argv = argv,
+        .stdin = .ignore,
+        .stdout = .pipe,
+        .stderr = .ignore,
+    }) catch return error.SpawnFailed;
+    var out = std.array_list.Managed(u8).init(alloc);
+    errdefer out.deinit();
+    if (child.stdout) |f| {
+        var rbuf: [4096]u8 = undefined;
+        var reader = f.reader(io, &rbuf);
+        var chunk: [8192]u8 = undefined;
+        while (out.items.len < cap) {
+            const n = reader.interface.readSliceShort(&chunk) catch break;
+            if (n == 0) break;
+            const take = @min(n, cap - out.items.len);
+            try out.appendSlice(chunk[0..take]);
+            if (take < n) break;
+        }
+        child.stdout = null;
+        f.close(io);
+    }
+    const term = child.wait(io) catch return error.WaitFailed;
+    if (term != .exited or term.exited != 0) {
+        out.deinit();
+        return error.CommandFailed;
+    }
+    return out.toOwnedSlice();
+}
+
+pub fn looksLikeImage(data: []const u8) bool {
+    if (data.len >= 8 and std.mem.eql(u8, data[0..8], "\x89PNG\r\n\x1a\n")) return true;
+    if (data.len >= 3 and data[0] == 0xff and data[1] == 0xd8 and data[2] == 0xff) return true;
+    if (data.len >= 6 and (std.mem.eql(u8, data[0..6], "GIF87a") or std.mem.eql(u8, data[0..6], "GIF89a"))) return true;
+    if (data.len >= 12 and std.mem.eql(u8, data[0..4], "RIFF") and std.mem.eql(u8, data[8..12], "WEBP")) return true;
+    return false;
+}
+
+/// 从系统剪贴板取图。wl-paste → xclip。没有图或没有工具则 null。
+pub fn clipboardImage(alloc: std.mem.Allocator) ?[]u8 {
+    const tries = [_][]const []const u8{
+        &.{ "wl-paste", "-t", "image/png" },
+        &.{ "wl-paste", "-t", "image/jpeg" },
+        &.{ "xclip", "-selection", "clipboard", "-t", "image/png", "-o" },
+        &.{ "xclip", "-selection", "clipboard", "-t", "image/jpeg", "-o" },
+    };
+    for (tries) |argv| {
+        const data = execBounded(alloc, argv, 8 * 1024 * 1024) catch continue;
+        if (looksLikeImage(data)) return data;
+        alloc.free(data);
+    }
+    return null;
+}
+
+/// 从系统剪贴板取文本。没有则 null。
+pub fn clipboardText(alloc: std.mem.Allocator) ?[]u8 {
+    const tries = [_][]const []const u8{
+        &.{ "wl-paste", "-n" },
+        &.{ "xclip", "-selection", "clipboard", "-o" },
+    };
+    for (tries) |argv| {
+        const data = execBounded(alloc, argv, 256 * 1024) catch continue;
+        if (data.len > 0) return data;
+        alloc.free(data);
+    }
+    return null;
 }
 
 /// piz 配置目录:$PIZ_DIR 或 ~/.piz。
@@ -534,6 +620,15 @@ test "clampUtf8 never splits a codepoint" {
     }
 }
 
+test "utf8Suffix keeps a valid tail" {
+    const t = std.testing;
+    try t.expectEqualStrings("cdef", utf8Suffix("abcdef", 4));
+    try t.expectEqualStrings("文", utf8Suffix("中文", 3));
+    try t.expectEqualStrings("中文", utf8Suffix("中文", 6));
+    try t.expectEqualStrings("x", utf8Suffix("😀x", 1));
+    try t.expect(std.unicode.utf8ValidateSlice(utf8Suffix("会话标题", 5)));
+}
+
 test "joinPath" {
     const t = std.testing;
     var arena = Arena.init(t.allocator);
@@ -550,9 +645,62 @@ test "estTokens" {
     try t.expectEqual(@as(usize, 1), estTokens("hi"));
 }
 
+/// 按 UTF-8 字符边界截到最多 `max` 字节。非法序列在此处截断,保证返回值可当 JSON 字符串。
+pub fn utf8Prefix(s: []const u8, max: usize) []const u8 {
+    const cap = @min(s.len, max);
+    var i: usize = 0;
+    while (i < cap) {
+        const n = std.unicode.utf8ByteSequenceLength(s[i]) catch break;
+        if (i + n > cap) break;
+        _ = std.unicode.utf8Decode(s[i..][0..n]) catch break;
+        i += n;
+    }
+    return s[0..i];
+}
+
+/// 按 UTF-8 字符边界取末尾最多 `max` 字节。
+pub fn utf8Suffix(s: []const u8, max: usize) []const u8 {
+    if (s.len <= max) return s;
+    var i = s.len - max;
+    while (i < s.len and s[i] & 0xC0 == 0x80) i += 1;
+    return s[i..];
+}
+
+fn asTextBytes(value: anytype) ?[]const u8 {
+    return switch (@typeInfo(@TypeOf(value))) {
+        .pointer => |p| blk: {
+            if (p.size == .slice and p.child == u8) break :blk value;
+            if (p.size == .one) {
+                switch (@typeInfo(p.child)) {
+                    .array => |a| if (a.child == u8) break :blk value[0..],
+                    else => {},
+                }
+            }
+            break :blk null;
+        },
+        else => null,
+    };
+}
+
 /// 将任意 JSON 可序列化值转成字符串。
+/// 文本非法 UTF-8 时先按字符边界截,避免 Stringify 退化成整数数组。
 pub fn jsonString(alloc: std.mem.Allocator, value: anytype) ![]u8 {
+    if (asTextBytes(value)) |bytes| {
+        if (!std.unicode.utf8ValidateSlice(bytes))
+            return std.json.Stringify.valueAlloc(alloc, utf8Prefix(bytes, bytes.len), .{});
+    }
     return std.json.Stringify.valueAlloc(alloc, value, .{});
+}
+
+test "jsonString keeps invalid utf-8 as a JSON string" {
+    const t = std.testing;
+    const zh = "你好世界";
+    const cut = zh[0..5];
+    try t.expect(!std.unicode.utf8ValidateSlice(cut));
+    const j = try jsonString(t.allocator, cut);
+    defer t.allocator.free(j);
+    try t.expect(j.len >= 1 and j[0] == '"');
+    try t.expect(std.mem.indexOfScalar(u8, j, '[') == null);
 }
 
 test "pkg install/list/remove" {
@@ -713,4 +861,17 @@ test "expandRefs embeds @./ files and leaves mentions alone" {
     try t.expectEqualStrings("mail me @someone now", r2);
     const r3 = try expandRefs(a, "see @./nope.txt end", root);
     try t.expectEqualStrings("see @./nope.txt end", r3);
+}
+
+test "debugCatch is a no-op without PIZ_DEBUG" {
+    try testInit();
+    debugCatch("unit", error.FileNotFound);
+}
+
+test "looksLikeImage recognizes png and jpeg magic" {
+    const t = std.testing;
+    try t.expect(looksLikeImage("\x89PNG\r\n\x1a\nrest"));
+    try t.expect(looksLikeImage("\xff\xd8\xff\xe0...."));
+    try t.expect(!looksLikeImage("not an image"));
+    try t.expect(!looksLikeImage(""));
 }

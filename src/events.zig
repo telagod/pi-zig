@@ -69,8 +69,8 @@ pub const Bus = struct {
             if (child.stdin) |f| {
                 var wbuf: [4096]u8 = undefined;
                 var w = f.writer(util.io, &wbuf);
-                w.interface.writeAll(payload) catch {};
-                w.flush() catch {};
+                w.interface.writeAll(payload) catch |err| util.debugCatch("event.stdin", err);
+                w.flush() catch |err| util.debugCatch("event.flush", err);
                 // 关完必须置空:回收线程 wait 时 childCleanupPosix 会再关一遍
                 // 同一个 fd,双 close → EBADF → Debug 构建 unreachable 崩溃。
                 f.close(util.io);

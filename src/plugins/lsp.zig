@@ -8,6 +8,35 @@ const toolsmod = @import("../tools.zig");
 const LSP_TIMEOUT_MS: i64 = 15_000;
 
 /// 按文件扩展名选语言服务器。argv[0] 不存在时由调用方给安装提示。
+const LSP_BINS = [_][]const u8{
+    "zls",
+    "rust-analyzer",
+    "pyright-langserver",
+    "gopls",
+    "clangd",
+    "typescript-language-server",
+};
+
+pub fn slashLsp(ctx: ?*anyopaque, args: []const u8) anyerror![]const u8 {
+    _ = args;
+    const self: *agentmod.Agent = @ptrCast(@alignCast(ctx orelse return error.NoAgent));
+    var aw = std.Io.Writer.Allocating.init(self.alloc);
+    errdefer aw.deinit();
+    try aw.writer.writeAll("lsp servers (PATH):\n");
+    inline for (LSP_BINS) |bin| {
+        const on = binOnPath(self.alloc, bin);
+        try aw.writer.print("  [{s}] {s}\n", .{ if (on) "on " else "off", bin });
+    }
+    try aw.writer.writeAll("mapped: .zig .rs .py .go .c/.cpp .ts/.js\n");
+    return aw.toOwnedSlice();
+}
+
+fn binOnPath(alloc: std.mem.Allocator, name: []const u8) bool {
+    const out = agentmod.util.execShort(alloc, &.{ "which", name }) catch return false;
+    defer alloc.free(out);
+    return std.mem.trim(u8, out, " \t\r\n").len > 0;
+}
+
 fn lspServerFor(path: []const u8) ?[]const []const u8 {
     const ext = std.fs.path.extension(path);
     if (std.mem.eql(u8, ext, ".zig")) return &.{"zls"};
@@ -410,7 +439,7 @@ pub fn toolLsp(ctx: ?*anyopaque, arena: std.mem.Allocator, args: []const u8) any
             .content = try std.fmt.allocPrint(arena, "error: language server '{s}' handshake failed: {s}", .{ argv[0], @errorName(err) }),
             .is_error = true,
         };
-    session.notify("initialized", "{}") catch {};
+    session.notify("initialized", "{}") catch |err| agentmod.util.debugCatch("lsp.initialized", err);
 
     // didOpen:把文件内容喂进去(服务器不必自己读盘,也支持未保存内容)
     var text_json = std.Io.Writer.Allocating.init(arena);
@@ -419,7 +448,7 @@ pub fn toolLsp(ctx: ?*anyopaque, arena: std.mem.Allocator, args: []const u8) any
     const open_params = try std.fmt.allocPrint(arena,
         \\{{"textDocument":{{"uri":"{s}","languageId":"{s}","version":1,"text":{s}}}}}
     , .{ file_uri, lspLanguageId(file), text_json.written() });
-    session.notify("textDocument/didOpen", open_params) catch {};
+    session.notify("textDocument/didOpen", open_params) catch |err| agentmod.util.debugCatch("lsp.didOpen", err);
 
     var aw = std.Io.Writer.Allocating.init(arena);
     defer aw.deinit();

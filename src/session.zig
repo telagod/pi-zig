@@ -9,6 +9,17 @@ const ai = @import("ai.zig");
 /// 磁盘上就永远是安全值。
 pub const MAX_TITLE_BYTES = 256;
 
+/// 从首条用户消息抽出侧栏标题。空、纯图、纯空白则无。
+pub fn deriveTitle(alloc: std.mem.Allocator, text: []const u8) ?[]const u8 {
+    var t = std.mem.trim(u8, text, " \t\r\n");
+    if (t.len == 0) return null;
+    if (std.mem.eql(u8, t, "(image)") or std.mem.eql(u8, t, "[image]")) return null;
+    if (std.mem.indexOfScalar(u8, t, '\n')) |nl| t = std.mem.trim(u8, t[0..nl], " \t\r");
+    if (t.len == 0) return null;
+    const cap: usize = 64;
+    return alloc.dupe(u8, util.clampUtf8(t, cap)) catch null;
+}
+
 /// ── web 会话持久化 ──
 /// 独立目录 <cfg>/sessions/web/<name>.jsonl;首行 meta {"model","auto"},后续每行一条消息。
 /// 文件名校验:仅 [a-zA-Z0-9_-],防路径穿越。
@@ -20,6 +31,78 @@ pub fn webNameOk(name: []const u8) bool {
         if (!ok) return false;
     }
     return true;
+}
+
+fn imageExt(mime: ?[]const u8) []const u8 {
+    const m = mime orelse "image/png";
+    if (std.mem.eql(u8, m, "image/jpeg") or std.mem.eql(u8, m, "image/jpg")) return "jpg";
+    if (std.mem.eql(u8, m, "image/webp")) return "webp";
+    return "png";
+}
+
+pub fn persistImageFile(alloc: std.mem.Allocator, b64: []const u8, mime: ?[]const u8) ?[]const u8 {
+    const cfg = util.configDir(alloc) catch return null;
+    const dir = util.joinPath(alloc, cfg, "artifacts") catch return null;
+    std.Io.Dir.cwd().createDirPath(util.io, dir) catch |err| util.debugCatch("session.img.mkdir", err);
+    var h: u64 = 14695981039346656037;
+    for (b64) |c| h = (h ^ @as(u64, c)) *% 1099511628211;
+    const name = std.fmt.allocPrint(alloc, "img-{x}.{s}", .{ h, imageExt(mime) }) catch return null;
+    const path = util.joinPath(alloc, dir, name) catch return null;
+    if (std.Io.Dir.cwd().statFile(util.io, path, .{})) |_| return name else |_| {}
+    const dec = std.base64.standard.Decoder;
+    const n = dec.calcSizeForSlice(b64) catch return null;
+    if (n == 0 or n > 8 * 1024 * 1024) return null;
+    const raw = alloc.alloc(u8, n) catch return null;
+    dec.decode(raw, b64) catch return null;
+    std.Io.Dir.cwd().writeFile(util.io, .{ .sub_path = path, .data = raw }) catch |err| {
+        util.debugCatch("session.img.write", err);
+        return null;
+    };
+    return name;
+}
+
+fn loadImageFile(alloc: std.mem.Allocator, name: []const u8) ?[]u8 {
+    if (name.len == 0 or std.mem.indexOfScalar(u8, name, '/') != null or std.mem.indexOfScalar(u8, name, '\\') != null) return null;
+    const cfg = util.configDir(alloc) catch return null;
+    const path = util.joinPath(alloc, cfg, "artifacts") catch return null;
+    const full = util.joinPath(alloc, path, name) catch return null;
+    const raw = std.Io.Dir.cwd().readFileAlloc(util.io, full, alloc, .limited(8 * 1024 * 1024)) catch return null;
+    const enc = std.base64.standard.Encoder;
+    const n = enc.calcSize(raw.len);
+    const out = alloc.alloc(u8, n) catch return null;
+    _ = enc.encode(out, raw);
+    return out;
+}
+
+fn writeImageFields(w: *std.Io.Writer, alloc: std.mem.Allocator, m: ai.Message) void {
+    const img = m.image orelse return;
+    if (img.len == 0) return;
+    const name = persistImageFile(alloc, img, m.image_mime) orelse return;
+    w.print(",\"image_file\":{s}", .{util.jsonString(alloc, name) catch "\"\""}) catch |err| util.debugCatch("session.img.file", err);
+    if (m.image_mime) |mime| {
+        if (mime.len > 0) w.print(",\"image_mime\":{s}", .{util.jsonString(alloc, mime) catch "\"\""}) catch |err| util.debugCatch("session.img.mime", err);
+    }
+    if (m.image_w > 0) w.print(",\"image_w\":{d}", .{m.image_w}) catch |err| util.debugCatch("session.img.w", err);
+    if (m.image_h > 0) w.print(",\"image_h\":{d}", .{m.image_h}) catch |err| util.debugCatch("session.img.h", err);
+}
+
+fn applyImageFields(alloc: std.mem.Allocator, v: std.json.Value, m: *ai.Message) void {
+    if (v != .object) return;
+    if (v.object.get("image_file")) |f| {
+        if (f == .string) {
+            if (loadImageFile(alloc, f.string)) |b64| m.image = b64;
+            m.image_file = alloc.dupe(u8, f.string) catch null;
+        }
+    }
+    if (v.object.get("image_mime")) |mm| {
+        if (mm == .string) m.image_mime = alloc.dupe(u8, mm.string) catch null;
+    }
+    if (v.object.get("image_w")) |w| {
+        if (w == .integer) m.image_w = @intCast(@max(w.integer, 0));
+    }
+    if (v.object.get("image_h")) |h| {
+        if (h == .integer) m.image_h = @intCast(@max(h.integer, 0));
+    }
 }
 
 /// 按项目(cwd)分桶的 web 会话目录:<cfg>/sessions/web/<cwd-slug>/。
@@ -53,7 +136,7 @@ pub fn migrateLegacyWeb(alloc: std.mem.Allocator, default_cwd: []const u8) void 
     const target = webDir(alloc, default_cwd) catch return;
     defer alloc.free(target);
     if (std.mem.eql(u8, legacy, target)) return;
-    std.Io.Dir.cwd().createDirPath(util.io, target) catch {};
+    std.Io.Dir.cwd().createDirPath(util.io, target) catch |err| util.debugCatch("session.mkdir", err);
     var d = std.Io.Dir.cwd().openDir(util.io, legacy, .{ .iterate = true }) catch return;
     defer d.close(util.io);
     var it = d.iterate();
@@ -68,7 +151,7 @@ pub fn migrateLegacyWeb(alloc: std.mem.Allocator, default_cwd: []const u8) void 
         if (std.Io.Dir.cwd().access(util.io, dst, .{})) |_| {
             continue;
         } else |_| {}
-        std.Io.Dir.rename(std.Io.Dir.cwd(), src, std.Io.Dir.cwd(), dst, util.io) catch {};
+        std.Io.Dir.rename(std.Io.Dir.cwd(), src, std.Io.Dir.cwd(), dst, util.io) catch |err| util.debugCatch("migrateLegacyWeb", err);
     }
 }
 
@@ -82,7 +165,7 @@ pub fn saveWebTs(alloc: std.mem.Allocator, cwd: []const u8, name: []const u8, mo
     if (!webNameOk(name)) return error.InvalidName;
     const dir = try webDir(alloc, cwd);
     defer alloc.free(dir);
-    std.Io.Dir.cwd().createDirPath(util.io, dir) catch {};
+    std.Io.Dir.cwd().createDirPath(util.io, dir) catch |err| util.debugCatch("session.mkdir", err);
     const fname = try std.fmt.allocPrint(alloc, "{s}.jsonl", .{name});
     defer alloc.free(fname);
     const path = try util.joinPath(alloc, dir, fname);
@@ -93,7 +176,7 @@ pub fn saveWebTs(alloc: std.mem.Allocator, cwd: []const u8, name: []const u8, mo
     // 权限显式 0600:会话里是完整对话内容,不该跟目录默认权限走。
     const tmp = try std.fmt.allocPrint(alloc, "{s}.tmp", .{path});
     defer alloc.free(tmp);
-    errdefer std.Io.Dir.cwd().deleteFile(util.io, tmp) catch {};
+    errdefer std.Io.Dir.cwd().deleteFile(util.io, tmp) catch |err| util.debugCatch("session.web.tmp", err);
     {
         const file = try std.Io.Dir.cwd().createFile(util.io, tmp, .{
             .truncate = true,
@@ -139,6 +222,7 @@ pub fn saveWebTs(alloc: std.mem.Allocator, cwd: []const u8, name: []const u8, mo
                     jwtr.print(",\"thinking_signature\":{s}", .{util.jsonString(alloc, s) catch "\"\""}) catch return error.WriteFailed;
             }
             if (m.thinking_redacted) jwtr.writeAll(",\"thinking_redacted\":true") catch return error.WriteFailed;
+            writeImageFields(jwtr, alloc, m);
             jwtr.writeAll("}\n") catch return error.WriteFailed;
             const line = jw.toOwnedSlice() catch return error.WriteFailed;
             defer alloc.free(line);
@@ -243,6 +327,7 @@ pub fn loadWeb(alloc: std.mem.Allocator, cwd: []const u8, name: []const u8) !?st
         if (v.object.get("thinking_redacted")) |r| {
             if (r == .bool) m.thinking_redacted = r.bool;
         }
+        applyImageFields(alloc, v, &m);
         list.append(m) catch continue;
     }
     return .{ .auto = auto, .title = title, .model = model, .updated = updated, .msgs = list.toOwnedSlice() catch return null };
@@ -255,14 +340,14 @@ pub fn archiveWeb(alloc: std.mem.Allocator, cwd: []const u8, name: []const u8) !
     defer alloc.free(dir);
     const arch = try util.joinPath(alloc, dir, "archive");
     defer alloc.free(arch);
-    std.Io.Dir.cwd().createDirPath(util.io, arch) catch {};
+    std.Io.Dir.cwd().createDirPath(util.io, arch) catch |err| util.debugCatch("session.archive", err);
     const fname = try std.fmt.allocPrint(alloc, "{s}.jsonl", .{name});
     defer alloc.free(fname);
     const src = try util.joinPath(alloc, dir, fname);
     defer alloc.free(src);
     const dst = try util.joinPath(alloc, arch, fname);
     defer alloc.free(dst);
-    std.Io.Dir.renameAbsolute(src, dst, util.io) catch {};
+    try std.Io.Dir.renameAbsolute(src, dst, util.io);
 }
 
 /// 恢复归档会话:移回 <dir>/<name>.jsonl。
@@ -278,7 +363,7 @@ pub fn restoreWeb(alloc: std.mem.Allocator, cwd: []const u8, name: []const u8) !
     defer alloc.free(src);
     const dst = try util.joinPath(alloc, dir, fname);
     defer alloc.free(dst);
-    std.Io.Dir.renameAbsolute(src, dst, util.io) catch {};
+    try std.Io.Dir.renameAbsolute(src, dst, util.io);
 }
 
 /// 删除 web 会话文件(归档或活动)。
@@ -290,12 +375,18 @@ pub fn deleteWeb(alloc: std.mem.Allocator, cwd: []const u8, name: []const u8) !v
     defer alloc.free(fname);
     const path = try util.joinPath(alloc, dir, fname);
     defer alloc.free(path);
-    std.Io.Dir.cwd().deleteFile(util.io, path) catch {};
+    var n: u8 = 0;
+    if (std.Io.Dir.cwd().deleteFile(util.io, path)) |_| {
+        n += 1;
+    } else |_| {}
     const arch = try util.joinPath(alloc, dir, "archive");
     defer alloc.free(arch);
     const apath = try util.joinPath(alloc, arch, fname);
     defer alloc.free(apath);
-    std.Io.Dir.cwd().deleteFile(util.io, apath) catch {};
+    if (std.Io.Dir.cwd().deleteFile(util.io, apath)) |_| {
+        n += 1;
+    } else |_| {}
+    if (n == 0) return error.FileNotFound;
 }
 
 /// 列出归档会话名。
@@ -370,7 +461,7 @@ pub const Session = struct {
         defer alloc.free(sess_dir);
         const sub = try util.joinPath(alloc, sess_dir, slug);
         defer alloc.free(sub);
-        std.Io.Dir.cwd().createDirPath(util.io, sub) catch {};
+        std.Io.Dir.cwd().createDirPath(util.io, sub) catch |err| util.debugCatch("session.mkdir", err);
         var ts: i128 = @divTrunc(std.Io.Clock.now(.real, util.io).nanoseconds, std.time.ns_per_ms);
         var path: []u8 = undefined;
         var n: usize = 0;
@@ -397,7 +488,7 @@ pub const Session = struct {
         } else return error.Overflow;
         var self = Session{ .alloc = alloc, .path = path, .cwd = try alloc.dupe(u8, cwd) };
         errdefer {
-            std.Io.Dir.cwd().deleteFile(util.io, self.path) catch {};
+            std.Io.Dir.cwd().deleteFile(util.io, self.path) catch |err| util.debugCatch("session.create.cleanup", err);
             self.deinit();
         }
         if (title) |t| self.title = try alloc.dupe(u8, t);
@@ -547,7 +638,7 @@ pub const Session = struct {
         const tmp = try std.fmt.allocPrint(self.alloc, "{s}.tmp", .{path});
         defer self.alloc.free(tmp);
         // 写失败或被打断:删掉临时文件走人,目标文件一个字节都没动过
-        errdefer std.Io.Dir.cwd().deleteFile(util.io, tmp) catch {};
+        errdefer std.Io.Dir.cwd().deleteFile(util.io, tmp) catch |err| util.debugCatch("session.write.tmp", err);
         {
             var f = try std.Io.Dir.cwd().createFile(util.io, tmp, .{
                 .truncate = true,
@@ -625,6 +716,7 @@ pub const Session = struct {
                 try ww.writer.print(",\"thinking_signature\":{s}", .{try util.jsonString(self.alloc, s)});
         }
         if (msg.thinking_redacted) try ww.writer.writeAll(",\"thinking_redacted\":true");
+        writeImageFields(&ww.writer, self.alloc, msg.*);
         try ww.writer.writeAll("}\n");
         const line = try ww.toOwnedSlice();
         defer self.alloc.free(line);
@@ -638,6 +730,58 @@ pub const Session = struct {
             base[0 .. base.len - ".jsonl".len]
         else
             base;
+    }
+
+    pub const Describe = struct {
+        headline: []u8,
+        hint: []u8,
+
+        pub fn deinit(self: Describe, alloc: std.mem.Allocator) void {
+            alloc.free(self.headline);
+            alloc.free(self.hint);
+        }
+    };
+
+    /// 列表/picker 用:标题优先,否则首条 user 预览,再否则 id。hint 为相对时间与轮数。
+    pub fn describe(self: *const Session, alloc: std.mem.Allocator, now_ns: i128) !Describe {
+        var preview_buf: [64]u8 = undefined;
+        var preview: ?[]const u8 = null;
+        var turns: usize = 0;
+        if (std.Io.Dir.cwd().readFileAlloc(util.io, self.path, alloc, .limited(256 * 1024))) |content| {
+            defer alloc.free(content);
+            var lines = std.mem.splitScalar(u8, content, '\n');
+            while (lines.next()) |line| {
+                if (line.len == 0) continue;
+                var parsed = std.json.parseFromSlice(std.json.Value, alloc, line, .{}) catch continue;
+                defer parsed.deinit();
+                if (parsed.value != .object) continue;
+                const role = if (parsed.value.object.get("role")) |r| (if (r == .string) r.string else "") else "";
+                if (!std.mem.eql(u8, role, "user")) continue;
+                turns += 1;
+                if (preview != null) continue;
+                const body = if (parsed.value.object.get("content")) |c| (if (c == .string) c.string else "") else "";
+                if (body.len == 0) continue;
+                preview = flattenPreview(body, &preview_buf);
+            }
+        } else |_| {}
+
+        const raw = if (self.title) |tt|
+            tt
+        else if (preview) |p|
+            p
+        else
+            self.sessionId();
+        const headline = try alloc.dupe(u8, util.clampUtf8(raw, 48));
+        errdefer alloc.free(headline);
+
+        var age_buf: [16]u8 = undefined;
+        const then_ns = if (std.Io.Dir.cwd().statFile(util.io, self.path, .{})) |st| st.mtime.nanoseconds else |_| @as(i128, 0);
+        const age = formatAge(&age_buf, now_ns, then_ns);
+        const hint = if (turns > 0)
+            try std.fmt.allocPrint(alloc, "{s} · {d}t", .{ age, turns })
+        else
+            try alloc.dupe(u8, age);
+        return .{ .headline = headline, .hint = hint };
     }
 
     /// 按 id(文件名去 .jsonl)寻找会话。
@@ -716,6 +860,7 @@ pub const Session = struct {
             if (v.object.get("thinking_redacted")) |r| {
                 if (r == .bool) msg.thinking_redacted = r.bool;
             }
+            applyImageFields(self.alloc, v, &msg);
             try out.append(msg);
         }
         return out.toOwnedSlice();
@@ -749,7 +894,7 @@ pub const Session = struct {
         const cfg_dir = try util.configDir(self.alloc);
         const slug = try util.cwdSlug(self.alloc, self.cwd);
         const sub = try util.joinPath(self.alloc, try util.joinPath(self.alloc, cfg_dir, "sessions"), slug);
-        std.Io.Dir.cwd().createDirPath(util.io, sub) catch {};
+        std.Io.Dir.cwd().createDirPath(util.io, sub) catch |err| util.debugCatch("session.mkdir", err);
         var buf: [64]u8 = undefined;
         const ts = @divTrunc(std.Io.Clock.now(.real, util.io).nanoseconds, std.time.ns_per_ms);
         const name = std.fmt.bufPrint(&buf, "{d}.jsonl", .{ts}) catch "session.jsonl";
@@ -809,6 +954,37 @@ pub const Session = struct {
         return new_sess;
     }
 };
+
+fn flattenPreview(src: []const u8, buf: []u8) []const u8 {
+    var o: usize = 0;
+    var space = false;
+    for (src) |c| {
+        const ws = c == ' ' or c == '\n' or c == '\r' or c == '\t';
+        if (ws) {
+            if (o > 0) space = true;
+            continue;
+        }
+        if (o >= buf.len) break;
+        if (space) {
+            if (o + 1 >= buf.len) break;
+            buf[o] = ' ';
+            o += 1;
+            space = false;
+        }
+        buf[o] = c;
+        o += 1;
+    }
+    return buf[0..o];
+}
+
+pub fn formatAge(buf: []u8, now_ns: i128, then_ns: i128) []const u8 {
+    if (then_ns <= 0 or now_ns <= then_ns) return "now";
+    const sec = @divTrunc(now_ns - then_ns, std.time.ns_per_s);
+    if (sec < 60) return "now";
+    if (sec < 3600) return std.fmt.bufPrint(buf, "{d}m", .{@divTrunc(sec, 60)}) catch "now";
+    if (sec < 86400) return std.fmt.bufPrint(buf, "{d}h", .{@divTrunc(sec, 3600)}) catch "now";
+    return std.fmt.bufPrint(buf, "{d}d", .{@divTrunc(sec, 86400)}) catch "now";
+}
 
 test "session roundtrip" {
     const t = std.testing;
@@ -946,6 +1122,47 @@ test "session title + list + setTitle" {
     // 上限内原样保留
     try s1.setTitle("正常标题");
     try t.expectEqualStrings("正常标题", (try Session.open(a, s1.path)).title.?);
+}
+
+test "session describe prefers title then first user preview" {
+    const t = std.testing;
+    try util.testInit();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = util.Arena.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cwd_abs = try std.process.currentPathAlloc(util.io, a);
+    const tmp_path = try std.fmt.allocPrint(a, "{s}/.zig-cache/tmp/{s}", .{ cwd_abs, tmp.sub_path });
+    try util.environ_map.?.put("PIZ_DIR", tmp_path);
+
+    var titled = try Session.freshTitle(a, "/tmp", "my title");
+    defer {
+        std.Io.Dir.cwd().deleteFile(util.io, titled.path) catch {};
+        titled.deinit();
+    }
+    try titled.saveMessage(&.{ .role = "user", .content = "ignored because titled" });
+    const now = std.Io.Clock.now(.real, util.io).nanoseconds;
+    const d0 = try titled.describe(a, now);
+    defer d0.deinit(a);
+    try t.expectEqualStrings("my title", d0.headline);
+    try t.expect(std.mem.indexOf(u8, d0.hint, "1t") != null);
+
+    var untitled = try Session.fresh(a, "/tmp");
+    defer {
+        std.Io.Dir.cwd().deleteFile(util.io, untitled.path) catch {};
+        untitled.deinit();
+    }
+    try untitled.saveMessage(&.{ .role = "user", .content = "fix footer mojibake\nand more" });
+    const d1 = try untitled.describe(a, now);
+    defer d1.deinit(a);
+    try t.expectEqualStrings("fix footer mojibake and more", d1.headline);
+    try t.expect(std.mem.indexOf(u8, d1.hint, "1t") != null);
+
+    var age_buf: [16]u8 = undefined;
+    try t.expectEqualStrings("now", formatAge(&age_buf, 100, 100));
+    try t.expectEqualStrings("5m", formatAge(&age_buf, 6 * 60 * std.time.ns_per_s, 1 * 60 * std.time.ns_per_s));
+    try t.expectEqualStrings("3h", formatAge(&age_buf, 4 * 3600 * std.time.ns_per_s, 1 * 3600 * std.time.ns_per_s));
 }
 
 test "session truncate" {
@@ -1196,4 +1413,60 @@ test "web session rewrite is atomic, 0600, and tolerates a corrupt line" {
     try std.Io.Dir.cwd().writeFile(util.io, .{ .sub_path = path, .data = cut });
     const after = (try loadWeb(a, proj, "s1")).?;
     try t.expectEqual(@as(usize, 3), after.msgs.len);
+}
+
+test "archiveWeb restoreWeb propagate missing-file errors" {
+    const t = std.testing;
+    try util.testInit();
+    var arena = util.Arena.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const cwd_abs = try std.process.currentPathAlloc(util.io, a);
+    const tmp_path = try std.fmt.allocPrint(a, "{s}/.zig-cache/tmp/{s}", .{ cwd_abs, tmp.sub_path });
+    try util.environ_map.?.put("PIZ_DIR", tmp_path);
+    const proj = "/tmp/webproj-arch";
+    try t.expectError(error.FileNotFound, archiveWeb(a, proj, "ghost"));
+    const msgs = [_]ai.Message{.{ .role = "user", .content = "x" }};
+    try saveWeb(a, proj, "s1", "m", true, "t", &msgs);
+    try archiveWeb(a, proj, "s1");
+    try t.expect((try loadWeb(a, proj, "s1")) == null);
+    try restoreWeb(a, proj, "s1");
+    const loaded = (try loadWeb(a, proj, "s1")).?;
+    try t.expectEqual(@as(usize, 1), loaded.msgs.len);
+}
+
+test "session image persist roundtrip" {
+    const t = std.testing;
+    try util.testInit();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = util.Arena.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cwd_abs = try std.process.currentPathAlloc(util.io, a);
+    const tmp_path = try std.fmt.allocPrint(a, "{s}/.zig-cache/tmp/{s}", .{ cwd_abs, tmp.sub_path });
+    try util.environ_map.?.put("PIZ_DIR", tmp_path);
+    const png_b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+    const name = persistImageFile(a, png_b64, "image/png") orelse return error.PersistFailed;
+    const got = loadImageFile(a, name) orelse return error.LoadFailed;
+    try t.expect(got.len > 0);
+    try t.expect(std.mem.startsWith(u8, name, "img-"));
+    try t.expect(loadImageFile(a, "../secret.png") == null);
+    try t.expect(loadImageFile(a, "bash-1.txt") == null);
+}
+
+test "deriveTitle takes first line and clamps" {
+    const t = std.testing;
+    var arena = util.Arena.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    try t.expect(deriveTitle(a, "") == null);
+    try t.expect(deriveTitle(a, "  (image)  ") == null);
+    const got = deriveTitle(a, "  fix the login bug\nmore") orelse return error.NoTitle;
+    try t.expectEqualStrings("fix the login bug", got);
+    const long = "x" ** 80;
+    const clipped = deriveTitle(a, long) orelse return error.NoTitle;
+    try t.expect(clipped.len <= 64);
 }

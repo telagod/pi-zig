@@ -3,6 +3,7 @@
 // 安装位置:用户级 ~/.piz/packages/<name>/ 或项目级 .piz/packages/<name>/。
 const std = @import("std");
 const util = @import("util.zig");
+const toolsmod = @import("tools.zig");
 
 pub const Scope = enum { user, project };
 
@@ -31,7 +32,7 @@ fn copyTree(alloc: std.mem.Allocator, src_dir: std.Io.Dir, sub: []const u8, dst_
         const child = try util.joinPath(alloc, sub, entry.name);
         defer alloc.free(child);
         if (entry.kind == .directory) {
-            std.Io.Dir.cwd().createDirPath(util.io, try util.joinPath(alloc, dst_abs, child)) catch {};
+            try std.Io.Dir.cwd().createDirPath(util.io, try util.joinPath(alloc, dst_abs, child));
             try copyTree(alloc, src_dir, child, dst_abs);
         } else if (entry.kind == .file) {
             try std.Io.Dir.copyFile(src_dir, child, std.Io.Dir.cwd(), try util.joinPath(alloc, dst_abs, child), util.io, .{ .make_path = true });
@@ -42,7 +43,7 @@ fn copyTree(alloc: std.mem.Allocator, src_dir: std.Io.Dir, sub: []const u8, dst_
 /// 递归删除目录树(0.16 std deleteTree 对部分目录静默失败,自实现可靠版)。
 fn removeTree(dir: std.Io.Dir, sub: []const u8) !void {
     var d = dir.openDir(util.io, sub, .{ .iterate = true }) catch {
-        dir.deleteFile(util.io, sub) catch {};
+        dir.deleteFile(util.io, sub) catch |err| util.debugCatch("pkg.rm.file", err);
         return;
     };
     var it = d.iterate();
@@ -50,11 +51,11 @@ fn removeTree(dir: std.Io.Dir, sub: []const u8) !void {
         if (entry.kind == .directory) {
             try removeTree(d, entry.name);
         } else {
-            d.deleteFile(util.io, entry.name) catch {};
+            d.deleteFile(util.io, entry.name) catch |err| util.debugCatch("pkg.rm.child", err);
         }
     }
     d.close(util.io);
-    dir.deleteDir(util.io, sub) catch {};
+    dir.deleteDir(util.io, sub) catch |err| util.debugCatch("pkg.rm.dir", err);
 }
 
 /// 校验源目录是否为合法包(资源目录、AGENTS.md 或 pkg.json web 声明)。
@@ -101,6 +102,91 @@ pub const DeclaredHook = struct {
 /// 这些命令会由 events.Bus 以 `bash -c` 执行,`startup` 钩子在下次启动时立刻跑。
 /// 装包因此等于授权本机命令执行 —— 装之前得让用户看见到底授权了什么。
 /// 解析失败/无声明都返回空切片(不是错误:大多数包没有钩子)。
+pub const DeclaredTool = struct {
+    name: []const u8,
+    description: []const u8,
+    command: []const u8,
+    schema: []const u8,
+};
+
+fn toolNameOk(name: []const u8) bool {
+    if (name.len == 0 or name.len > 64) return false;
+    if (!std.ascii.isAlphabetic(name[0])) return false;
+    for (name) |c| {
+        if (!std.ascii.isAlphanumeric(c) and c != '_' and c != '-') return false;
+    }
+    return true;
+}
+
+/// 读 pkg.json 的 `tools[]`。装包确认与运行时加载共用。
+pub fn declaredTools(alloc: std.mem.Allocator, pkg_dir: []const u8) ![]DeclaredTool {
+    const path = try util.joinPath(alloc, pkg_dir, "pkg.json");
+    defer alloc.free(path);
+    const raw = std.Io.Dir.cwd().readFileAlloc(util.io, path, alloc, .limited(256 * 1024)) catch return &.{};
+    defer alloc.free(raw);
+    const parsed = std.json.parseFromSlice(std.json.Value, alloc, raw, .{}) catch return &.{};
+    defer parsed.deinit();
+    const tools_v = parsed.value.object.get("tools") orelse return &.{};
+    if (tools_v != .array) return &.{};
+    var out = std.array_list.Managed(DeclaredTool).init(alloc);
+    for (tools_v.array.items) |item| {
+        if (item != .object) continue;
+        const name = if (item.object.get("name")) |v| (if (v == .string) v.string else "") else "";
+        const desc = if (item.object.get("description")) |v| (if (v == .string) v.string else "") else "";
+        const cmd = if (item.object.get("command")) |v| (if (v == .string) v.string else "") else "";
+        if (!toolNameOk(name) or cmd.len == 0) continue;
+        var schema: []const u8 = toolsmod.EMPTY_SCHEMA;
+        if (item.object.get("schema")) |sv| {
+            schema = stringifyJson(alloc, sv) catch toolsmod.EMPTY_SCHEMA;
+        }
+        try out.append(.{
+            .name = try alloc.dupe(u8, name),
+            .description = try alloc.dupe(u8, if (desc.len > 0) desc else name),
+            .command = try alloc.dupe(u8, cmd),
+            .schema = if (schema.ptr == toolsmod.EMPTY_SCHEMA.ptr) schema else schema,
+        });
+    }
+    return out.toOwnedSlice();
+}
+
+fn stringifyJson(alloc: std.mem.Allocator, v: std.json.Value) ![]const u8 {
+    var stw = std.Io.Writer.Allocating.init(alloc);
+    errdefer stw.deinit();
+    try std.json.Stringify.value(v, .{}, &stw.writer);
+    return stw.toOwnedSlice();
+}
+
+/// 扫用户级 + 项目级已装包,合成可调的 Tool 表。核心/插件同名的丢掉。
+pub fn loadPkgTools(alloc: std.mem.Allocator, project_cwd: []const u8) ![]toolsmod.Tool {
+    var out = std.array_list.Managed(toolsmod.Tool).init(alloc);
+    const scopes = [_]Scope{ .user, .project };
+    for (scopes) |scope| {
+        const infos = list(alloc, scope, project_cwd) catch continue;
+        for (infos) |info| {
+            const dts = declaredTools(alloc, info.path) catch continue;
+            for (dts) |dt| {
+                if (toolsmod.find(dt.name) != null) continue;
+                var dup = false;
+                for (out.items) |t| {
+                    if (std.mem.eql(u8, t.name, dt.name)) {
+                        dup = true;
+                        break;
+                    }
+                }
+                if (dup) continue;
+                try out.append(.{
+                    .name = dt.name,
+                    .desc = dt.description,
+                    .schema = dt.schema,
+                    .handler = toolsmod.pkgToolStub,
+                    .payload = dt.command,
+                });
+            }
+        }
+    }
+    return out.toOwnedSlice();
+}
+
 pub fn declaredHooks(alloc: std.mem.Allocator, pkg_dir: []const u8) ![]DeclaredHook {
     var out = std.array_list.Managed(DeclaredHook).init(alloc);
     const manifest = try util.joinPath(alloc, pkg_dir, "pkg.json");
@@ -357,6 +443,32 @@ pub fn list(alloc: std.mem.Allocator, scope: Scope, project_cwd: ?[]const u8) ![
     return out.toOwnedSlice();
 }
 
+fn writeInfoArray(w: *std.Io.Writer, alloc: std.mem.Allocator, items: []const Info) !void {
+    try w.writeByte('[');
+    for (items, 0..) |p, i| {
+        if (i > 0) try w.writeByte(',');
+        try w.print("{{\"name\":{s},\"skills\":{d},\"prompts\":{d},\"agents\":{s},\"web\":{s}}}", .{
+            try util.jsonString(alloc, p.name),
+            p.skills,
+            p.prompts,
+            if (p.has_agents) "true" else "false",
+            if (p.has_web) "true" else "false",
+        });
+    }
+    try w.writeByte(']');
+}
+
+/// Web /api/packages 用。
+pub fn writeListJson(alloc: std.mem.Allocator, w: *std.Io.Writer, project_cwd: ?[]const u8) !void {
+    const user = list(alloc, .user, project_cwd) catch &.{};
+    const proj = list(alloc, .project, project_cwd) catch &.{};
+    try w.writeAll("{\"user\":");
+    try writeInfoArray(w, alloc, user);
+    try w.writeAll(",\"project\":");
+    try writeInfoArray(w, alloc, proj);
+    try w.writeByte('}');
+}
+
 /// 移除包。
 pub fn remove(alloc: std.mem.Allocator, name: []const u8, scope: Scope, project_cwd: ?[]const u8) !void {
     const root = try rootDir(alloc, scope, project_cwd);
@@ -470,7 +582,7 @@ pub fn update(alloc: std.mem.Allocator, scope: Scope, project_cwd: ?[]const u8) 
     var ok: usize = 0;
     for (entries) |e| {
         // 先移除旧版,再按原 source 重装
-        remove(alloc, e.name, scope, project_cwd) catch {};
+        remove(alloc, e.name, scope, project_cwd) catch |err| util.debugCatch("pkg.update.remove", err);
         _ = install(alloc, e.source, scope, project_cwd) catch continue;
         ok += 1;
     }
@@ -636,4 +748,40 @@ test "declaredHooks surfaces exactly what the bus will run" {
         }
     }
     try t.expect(saw_startup);
+}
+
+test "declaredTools reads pkg.json tools" {
+    const t = std.testing;
+    try util.testInit();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = util.Arena.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cwd_abs = try std.process.currentPathAlloc(util.io, a);
+    const dir = try std.fmt.allocPrint(a, "{s}/.zig-cache/tmp/{s}", .{ cwd_abs, tmp.sub_path });
+    const manifest = try util.joinPath(a, dir, "pkg.json");
+    defer std.Io.Dir.cwd().deleteFile(util.io, manifest) catch {};
+    try std.Io.Dir.cwd().writeFile(util.io, .{
+        .sub_path = manifest,
+        .data = "{\"tools\":[{\"name\":\"pdf_extract\",\"description\":\"Extract PDF\",\"command\":\"pdftotext {path} -\",\"schema\":{\"type\":\"object\"}},{\"name\":\"1bad\",\"command\":\"echo\"},{\"name\":\"ok_tool\",\"command\":\"echo hi\"}]}",
+    });
+    const tools = try declaredTools(a, dir);
+    try t.expectEqual(@as(usize, 2), tools.len);
+    try t.expectEqualStrings("pdf_extract", tools[0].name);
+    try t.expectEqualStrings("pdftotext {path} -", tools[0].command);
+    try t.expectEqualStrings("ok_tool", tools[1].name);
+}
+
+test "writeListJson emits user and project arrays" {
+    const t = std.testing;
+    try util.testInit();
+    var arena = util.Arena.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var aw = std.Io.Writer.Allocating.init(a);
+    defer aw.deinit();
+    try writeListJson(a, &aw.writer, "/tmp/piz-no-such-project");
+    try t.expect(std.mem.indexOf(u8, aw.written(), "\"user\":") != null);
+    try t.expect(std.mem.indexOf(u8, aw.written(), "\"project\":") != null);
 }

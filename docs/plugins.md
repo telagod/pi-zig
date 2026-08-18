@@ -6,7 +6,7 @@ piz 的插件是**编译期注册的 Zig 函数表**，不是运行时加载的�
 
 这是有意的取舍：核心（`src/agent.zig`）只做主链路，凡是「有用但不该进核心」的能力都做成插件挂钩子。想改插件行为要改代码重编译 —— 换来的是没有插件加载器、没有沙箱、没有 ABI 兼容性负担。
 
-面向终端用户的运行时扩展点是 [Packages](packages.md) 的事件声明，那条路不需要重编译。
+面向终端用户的运行时扩展点是 [Packages](packages.md) 的事件声明和 `tools[]`，那条路不需要重编译。
 
 ## 目录
 
@@ -30,23 +30,27 @@ piz 的插件是**编译期注册的 Zig 函数表**，不是运行时加载的�
 | `compact-resilience` | `on_compact_failed` | 压缩失败时换备用模型重试 |
 | `command-canonicalization` | `on_tool_before` | 拦截危险 shell 命令 |
 | `artifact-store` | `on_tool_result` | 超大输出外置到文件 |
+| `usage-ledger` | `after_turn` | 每轮 token 追加到 `~/.piz/usage.jsonl` |
 
 ### 默认关闭
 
 | 插件 | 注册的工具 |
 |------|-----------|
 | `skills` | `skill`（**装了技能时自动开启**） |
+| `vision-input` | `read_image`（默认关，`read` 对图片已做同样的事） |
 | `lsp` | `lsp` |
 | `todo` | `todo_write` `todo_read` |
-| `task-delegation` | `task` `spawn_agent` `wait_agent` `read_agent` `send_agent` `list_agents` `close_agent` |
-| `web-search` | `web_search` `fetch_url` |
+| `task-delegation` | `task` `workflow` `spawn_agent` `wait_agent` `read_agent` `send_agent` `list_agents` `close_agent`；斜杠 `/agents` |
+| `web-search` | `web_search` `fetch_url`（`fetch_url` 拒内网 / metadata / localhost）；斜杠 `/web` |
 | `git-awareness` | `git_status` |
 | `context-budget` | `get_context_remaining` |
-| `elicitation` | `ask_user` |
+| `elicitation` | `ask_user`（成功后本轮立刻停，答复即问题正文） |
 
-`task` 阻塞等结果，其余 6 个是长驻 sub-agent 的生命周期管理（派出去、按需收、中途改向）。孩子默认不继承这组工具；要嵌套委派或收紧核心工具，用 `plugins` / `tools` 参数，见 [Tools](tools.md)。
+`task` 阻塞等独立结果；`workflow` 跑命名 DAG（后步用 `{id}` 引用前步）。其余 6 个是长驻 sub-agent 的生命周期管理（派出去、按需收、中途改向）。孩子默认不继承这组工具；要嵌套委派或收紧核心工具，用 `plugins` / `tools` 参数，见 [Tools](tools.md)。
 
 ### 开启方式
+
+会话里 `/plugins` 列出本会话启用集；`/plugins on <name>` / `/plugins off <name>` 立刻改本会话、写进 settings，下一轮生效。Web 斜杠命令同语义。
 
 ```bash
 piz --plugins                          # 列出全部插件与当前启用状态
@@ -64,6 +68,8 @@ piz --no-plugin tool-output-pruner     # 本次关闭（撤钩、撤工具、撤
 
 > 关掉的插件**钩子不跑、工具查不到、schema 不进请求**。不只是不出现在 tools 定义里。
 
+`piz --plugins` 在内置表之后列出当前工作区已装包声明的工具（`[pkg] name`）。包工具走 `command-canonicalization`，与 `bash` 同一套危险模式拦截。
+
 ## 钩子契约
 
 `Plugin` 结构（`src/plugins.zig`）的全部挂载点：
@@ -75,8 +81,9 @@ piz --no-plugin tool-output-pruner     # 本次关闭（撤钩、撤工具、撤
 | `on_compact_failed` | `fn (ctx) ?[]const u8` | 压缩失败。返回非 null 则用该模型名重试一次。 |
 | `on_tool_before` | `fn (chain: *BeforeChain) ?[]const u8` | 工具执行前 waterfall。须 `chain.next()` 才放行后续；不调即短路。返回非 null 则**跳过执行**，该字符串作为错误结果回模型。 |
 | `on_tool_result` | `fn (chain: *AfterChain) ?[]const u8` | 工具成功后 waterfall。须 `chain.next()` 才放行后续。返回非 null 则**替换**结果内容。 |
-| `on_user_message` | `fn (ctx, text) void` | 用户消息提交时。 |
-| `slash_commands` | `[]const SlashCommand` | 注册 `/name` 交互命令。 |
+| `on_user_message` | `fn (ctx, text) ?[]const u8` | 用户消息提交时。返回非 null 则替换进模型的文本（须挂 Agent.alloc）。多个插件同钩：声明序，第一个非 null 胜出。 |
+| `after_turn` | `fn (ctx) void` | 一轮结束（有答复、中止、空转止损之后）。串行。可记账、落盘、改会话元数据。 |
+| `slash_commands` | `[]const SlashCommand` | 注册 `/name`。TUI picker/`/help` 与 Web `/api/help`、`POST /api/slash` 同源分发。`todo`→`/todo`，`skills`→`/skills`，`context-budget`→`/context`，`git-awareness`→`/git`，`lsp`→`/lsp`，`web-search`→`/web`，`task-delegation`→`/agents`。 |
 | `tools` | `[]const Tool` | 注册工具，与核心工具一起暴露给模型。 |
 
 `ctx` 是 `*Agent` 的不透明指针，用 `@ptrCast(@alignCast(ctx.?))` 取回。
@@ -91,7 +98,7 @@ piz --no-plugin tool-output-pruner     # 本次关闭（撤钩、撤工具、撤
 
 - **prune**：同 path 再 read 立刻 supersede 旧结果（保护窗内也裁）；年龄裁优先动 suffix ≤ 8K 的廉价尾，不够才深裁。保护最近 16K，能省 ≥4K 才动手。skill 永不裁，最新一次 read 保留。消息数不再卡 8192。
 - **shake**（用量 >70% 或 `/shake`）：撕掉旧 tool 结果与大 fence/XML。硬线前再救援一次。`/shake images` 只丢图。WebUI 可用 `act=shake-images` 或 `name=images`。
-- **snap**（用量 >80% 或 `/snap`）：多带密图 + 原文摘；优先廉价尾护 cache；无 vision / CJK / 图 token 不过关则跳过。`/fast-compress` 看状态。
+- **snap**（用量 >80% 或 `/snap`）：8x13+CJK 按家塑形密图 + 原文摘；优先廉价尾护 cache；无 vision / 图 token 不过关则跳过。`/fast-compress` 看状态。
 - 被裁内容换成占位，不破坏轮结构
 
 比 omp 更狠的点：不永保全部 read；廉价尾不够省就深裁；snap 不拿汉字赌 OCR。
@@ -120,19 +127,23 @@ piz --no-plugin tool-output-pruner     # 本次关闭（撤钩、撤工具、撤
 sudo rm -rf /
 rm -rf / 
 rm -rf /*
+rm -rf ~
+rm -rf $HOME
 mkfs.
 :(){ :|:& };:
 > /dev/sd
 dd if=/dev/zero of=/dev/sd
+chmod -R 777 /
+curl|wget … | sh/bash
 ```
 
-命中时返回错误给模型，要求它换个安全写法或说明必要性。
+命中时返回错误给模型，要求它换个安全写法或说明必要性。`curl|wget | sha256sum` 这类不算。
 
-> **这是字面量黑名单，不是安全边界。** `rm -rf ~` 或 `rm -fr /` 都绕得过。它的定位是防手滑，不是防恶意。真正的隔离要靠容器或权限门（写文件、shell、出网、委派会问）。
+> **这是启发式黑名单，不是安全边界。** `rm -fr /` 仍绕得过。定位是防手滑，不是防恶意。真正的隔离：`/sandbox workspace`（bwrap，工作区外只读）或 `strict`（再断网），再加权限门（写文件、shell、出网、委派会问）。
 
 ### artifact-store
 
-工具输出超过 4KB 时写到 `<配置目录>/artifacts/`，模型拿到文件路径而非全文。需要细节时它自己用 `read` 按需取，配合 `offset`/`limit` 只读关心的部分。
+工具输出超过 4KB 时写到 `<配置目录>/artifacts/`，模型拿到文件路径而非全文。`bash` 超过 16KB 时自己边跑边落全文（不丢头），回执已带 `[Artifact stored:]`，本插件不再二次外置。需要细节时用 `read` 按需取。
 
 ### lsp
 

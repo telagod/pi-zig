@@ -57,18 +57,26 @@ piz web: http://127.0.0.1:5494/#token=0cbc72149b1492b0e5e8ddd11b95fb33  (Ctrl+C 
 | 功能 | 说明 |
 |------|------|
 | 流式对话 | SSE 推送文本与推理内容 |
+| 活动条 | 输入框上方显示在跑工具/后台 bash 的耗时与字节；`/jobs` 同表 |
+| 贴图 | Ctrl+V 或 `/paste` 从剪贴板附图 |
 | 工具卡片 | 可折叠，按工具类型分类渲染（终端输出走 ANSI 着色，`write`/`edit` 走 diff 着色） |
+| Workflow 轨道 | `workflow` 在对话里是一截节点轨，与 Thought / 工具摘要同级。回放与再跑同一 goal 写进同一截，不叠第二块。点节点展开该步报告 |
 | Diff 高亮 | 增行绿、删行红、hunk 头强调 |
 | 权限审批 | 默认全权。输入框旁 `yolo` 打开三档：yolo / ask / read-only。询问档下工具卡点允许/拒绝 |
 | 中断 | 生成中随时打断 |
 | 会话管理 | 列表、切换、fork、undo、compact、归档、恢复、删除 |
 | 会话搜索 | `Ctrl/⌘K` Spotlight，按标题与名字过滤 |
-| 斜杠命令 | 输入 `/` 弹出菜单：help/new/undo/compact/shake/snap/fork/title/model/think/status |
-| 设置 | 配色（浅/深/系统）、强调色、字号、完成通知与提示音 |
+| 斜杠命令 | 输入 `/` 弹出菜单：前缀优先、模糊次之、说明关键字；Tab 补全、Enter 执行。空框 `j` 任务、`u` 用量、`c` 复制、`s` 沙箱、`?` 快捷键卡 |
+| 文件引用 | 输入 `@` / `@./` 弹出工作区文件补全，目录 Enter 进入 |
+| 本页命令 | 行首 `!cmd` 跑并送模型，`!!cmd` 只跑不送；composer 上方有预览 |
+| 设置 | 外观、智能体（本会话模型/思考/授权、bash 沙箱、新会话默认）、通知、关于。`/theme light\|dark\|system` 同外观页 |
+| 沙箱药丸 | 输入栏旁 `sb off` / `workspace` / `strict`，点开即切 |
 | 上下文环 | 工具栏显示占用百分比，超过 85% 提示压缩 |
 | 草稿与历史 | 未发送草稿按会话落 localStorage；↑/↓ 翻输入历史 |
-| 模型切换 | 界面内切，per-session 生效 |
+| 模型切换 | 界面内切，per-session 生效；`/refresh` 拉各 provider 的 `/models` |
 | 多项目 | 注册多个工作区，各自独立会话池 |
+| 自动标题 | 未命名会话用首条用户消息的第一行作侧栏标题 |
+| 重新生成 | 助手气泡 ↻，或 `Ctrl+Shift+R`。`Ctrl+Shift+C` 复制最后一条回复 |
 | 前端插件 | 注入自定义 JS/CSS，见 [Web plugins](web-plugins.md) |
 
 会话池上限 4 个并发会话，每个会话独立的 Agent 实例、arena 与工作线程。
@@ -80,7 +88,13 @@ piz web: http://127.0.0.1:5494/#token=0cbc72149b1492b0e5e8ddd11b95fb33  (Ctrl+C 
 | 并发 TCP 连接 | 64 | 立刻关闭，客户端 connect 成功但读到 EOF |
 | 并发 SSE 流 | 16 | `503` + `{"error":"too many event streams"}` + `retry-after: 5` |
 | 请求头读超时 | 无 | 见下面的说明 |
-| 并发会话 | 4 | `/api/chat` 返回 `{"ok":false,"error":"session limit"}` |
+| 并发会话 | 4 | `/api/chat` 返回 `{"ok":false,"error":"rejected"}` |
+| 入队失败 | — | `/api/chat` 返回 `{"ok":false,"error":"queue failed"}`，页面 toast 并取消 running |
+| 切模型失败 | — | `/api/model` 失败 toast `switch model failed` |
+| 设置/斜杠失败 | — | think / 授权 / action / 会话列表失败均 toast |
+| 改标题失败 | — | `/api/title` 失败 toast `set title failed` |
+| 启动/沙箱失败 | — | `/api/state` `/api/config` 与沙箱切换失败均 toast |
+| `/think` | — | 等服务器回写后再显示实际档（含夹紧） |
 
 每个连接一个 OS 线程加 12KB 栈缓冲，所以连接数必须有上限——否则本机一个
 循环 `connect` 就能把线程耗光，agent 随之停摆。
@@ -113,6 +127,18 @@ root 设成 `Agent.cwd`，`bash` 则直接以它作为子进程的工作目录�
 - `?ws=<项目根绝对路径>` — 指定工作区，省略则用默认
 - `?session=<会话名>` — 指定会话，省略则用 `default`
 
+## 会话存什么
+
+一份真源，两处附件：
+
+| 位置 | 作用 |
+| --- | --- |
+| `~/.piz/sessions/web/<项目slug>/<名>.jsonl` | 事件日志：用户/助手/思考/工具全文 |
+| `~/.piz/artifacts/<ts>-<工具>.txt` | 超 4KB 的 bash 等输出外置，jsonl 里留指针 |
+| 工作区磁盘 | 文件本身，不另做快照 |
+
+刷新读 jsonl（最近 80 条、每条最多 16KB）。更早的对话点顶部「↑ 更早 N 条」走 `/api/history` 往前翻，滚动位置不跳。`/find <text>` 在当前页面对话里搜，F3 / Shift+F3 下一条/上一条。剪贴板贴图会压成 JPEG 随 `/api/chat` 发出，模型有 vision 才进消息；无 vision 会提示并丢图。图落 `~/.piz/artifacts/img-*`，续会话回放缩略图（`/api/image`）。长会话转录超过 200 轮会从顶上裁掉，可用「更早」拉回。点开带 `[Artifact stored: …]` 的卡片会再取 artifact。不要再搞第二份砍过的历史副本。
+
 ## HTTP 端点
 
 ### GET
@@ -120,11 +146,14 @@ root 设成 `Agent.cwd`，`bash` 则直接以它作为子进程的工作目录�
 | 路径 | 返回 |
 |------|------|
 | `/`、`/index.html` | 单页 HTML（编译期嵌入） |
-| `/api/state` | 指定会话的状态与历史 |
+| `/api/state` | 指定会话的状态与最近 80 条历史（带 `hist_start`/`hist_total`） |
+| `/api/history` | 按 `offset`/`limit` 取更早的消息（默认 80，上限 200） |
 | `/api/sessions` | 工作区内的会话列表（名字 + 消息数） |
 | `/api/models` | 可用模型列表 |
 | `/api/config` | 当前配置 |
 | `/api/workspaces` | 已注册工作区列表 |
+| `/api/files?q=` | 当前工作区目录列举（composer `@./` 补全；不跟 symlink、不越界；默认藏 gitignored / 跳过目录） |
+| `/api/artifact?name=` | 读 `~/.piz/artifacts/` 下的大段工具输出（仅 basename） |
 | `/api/plugins` | Web 插件清单 |
 | `/api/plugins/assets/<id>/<path>` | 插件静态资源 |
 | `/api/events` | SSE 事件流 |
@@ -137,6 +166,12 @@ root 设成 `Agent.cwd`，`bash` 则直接以它作为子进程的工作目录�
 | `/api/interrupt` | 中断当前轮 |
 | `/api/approve` | 权限决策 |
 | `/api/mode` | 读写授权档。body `{mode:"yolo"|"ask"|"read-only"}`，仍认旧的 `{auto:true}` |
+| `/api/config` | 可读 `sandboxMode` / `sandboxBackend`（`bwrap`\|`landlock`\|`none`）；POST `{setSandboxMode:"workspace"}` 写回 settings；POST `{refreshModels:true}` 拉 `/models` |
+| `/api/usage` | token 账本。`{lines,in,out,usd,tail}`，tail 最近 8 行；`usd` 按 `pricing.zig` 累加 |
+| `/api/packages` | 已装资源包。`{user,project}`，每项 `{name,skills,prompts,agents,web}`。设置页智能体栏也列。 |
+| `/api/help` | 斜杠 + 快捷键 + 当前会话插件斜杠，与 TUI `/help` 同源（`cmd_help.zig`）。`/plugins on|off` 后页面会重拉此表。 |
+| `POST /api/slash` | 分发插件斜杠。`{name,args}` → `{ok,text}` |
+| `/api/activity` | GET 在跑活动（含 `pid`）。POST `{kill:pid}` 只杀表内进程 |
 | `/api/model` | 读写当前模型 |
 | `/api/title` | 读写会话标题（写入裁到 256 字节，见 [Sessions](sessions.md)） |
 | `/api/action` | 会话动作：`fork` / `undo` / `compact` / `shake` / `snap` / `archive` / `restore` / `delete` |

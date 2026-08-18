@@ -188,19 +188,8 @@ fn handleRequest(state: *MockState, conn: *std.Io.net.Stream) !void {
         try buf.appendSlice(try sseEvent(alloc, "{\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":40000,\"completion_tokens\":100,\"prompt_cache_hit_tokens\":0}}"));
         try buf.appendSlice("data: [DONE]\n\n");
         resp = try buf.toOwnedSlice();
-    } else if (req_no == 6) {
-        // 第六轮:自动 compaction 的总结请求
-        if (std.mem.indexOf(u8, body, "Compress the conversation") != null) {
-            state.req6_was_compact.store(true, .release);
-        }
-        var buf = std.array_list.Managed(u8).init(alloc);
-        defer buf.deinit();
-        try buf.appendSlice(try sseEvent(alloc, "{\"choices\":[{\"delta\":{\"content\":\"summarized.\"},\"finish_reason\":null}]}"));
-        try buf.appendSlice(try sseEvent(alloc, "{\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}"));
-        try buf.appendSlice("data: [DONE]\n\n");
-        resp = try buf.toOwnedSlice();
-    } else if (req_no == 7) {
-        // 第七轮:compact 后的正常请求
+    } else if (req_no == 6 or req_no == 7) {
+        // 第六轮:密图 compact 后的正常请求(不再占用一轮 LLM 摘要)
         var buf = std.array_list.Managed(u8).init(alloc);
         defer buf.deinit();
         try buf.appendSlice(try sseEvent(alloc, "{\"choices\":[{\"delta\":{\"content\":\"COMPACT-OK\"},\"finish_reason\":null}]}"));
@@ -244,7 +233,7 @@ pub fn testMemoryPipeline() !void {
 
     try util.environ_map.?.put("PIZ_DIR", tmp_path);
 
-    // 手工 provider 指向 mock(记忆管线只用 compact,summary 来自硬线自动触发的模型压缩)
+    // 手工 provider 指向 mock(记忆管线走密图折页,/compact 不调模型)
     const url_buf = try std.fmt.allocPrint(a, "http://127.0.0.1:{d}/v1/chat/completions", .{MOCK_PORT2});
     var provs = [_]cfgmod.Provider{.{ .name = "mock", .api = .openai_completions, .base_url = url_buf }};
     var cfg = cfgmod.Config{ .arena = &arena };
@@ -268,7 +257,7 @@ pub fn testMemoryPipeline() !void {
     try t.expect(ready);
     defer state.stop.store(true, .release);
 
-    // 会话 A:塞大消息触发自动压缩(摘要 = mock 第 6 轮 "summarized.")。
+    // 会话 A:塞大消息触发自动压缩(密图秒压,不调模型)。
     // 压缩成功 → cross-session-memory 插件把摘要追加到 memories/<cwd-slug>.md。
     var agentA = try agentmod.Agent.initOpts(a, &cfg, "mock", "mock-model", "/tmp", .{});
     for (0..2) |_| {
@@ -278,19 +267,19 @@ pub fn testMemoryPipeline() !void {
         try agentA.messages.append(.{ .role = "user", .content = try std.fmt.allocPrint(a, "work item {d} {s}", .{ i, "w" ** (60 * 1024) }) });
     }
     _ = try agentA.send("continue");
-    try t.expect(state.req6_was_compact.load(.acquire));
     // 记忆文件已生成且含摘要
     const slug = try util.cwdSlug(a, "/tmp");
     const mem_name = try std.fmt.allocPrint(a, "{s}.md", .{slug});
     const mem_path = try std.fs.path.join(a, &.{ tmp_path, "memories", mem_name });
     const stored = try std.Io.Dir.cwd().readFileAlloc(util.io, mem_path, a, .limited(64 * 1024));
-    try t.expect(std.mem.indexOf(u8, stored, "summarized") != null);
+    try t.expect(std.mem.indexOf(u8, stored, "[Snapcompact]") != null);
 
     // 会话 B:同一 cwd 的新会话 → 启动注入;另一 cwd 不注入。
     var agentB = try agentmod.Agent.initOpts(a, &cfg, "mock", "mock-model", "/tmp", .{});
     pluginsmod.injectMemory(&agentB);
     try t.expect(std.mem.indexOf(u8, agentB.system_prompt, "## Cross-session memory") != null);
-    try t.expect(std.mem.indexOf(u8, agentB.system_prompt, "summarized") != null);
+    const probe = stored[0..@min(stored.len, 64)];
+    try t.expect(std.mem.indexOf(u8, agentB.system_prompt, probe) != null);
     // 幂等:二次注入不重复
     const sys_len = agentB.system_prompt.len;
     pluginsmod.injectMemory(&agentB);
@@ -384,7 +373,7 @@ pub fn testFullLoop() !void {
     // 自动 compaction:塞大消息触发 → 总结请求 → 后续正常
     var comp_agent = try agentmod.Agent.initOpts(a, &cfg, "mock", "mock-model", "/tmp", .{});
     // 迭代压缩场景:2 条 250KB 旧摘要 + 3 条 60KB 新 user(增量 180KB > 保留预算 102.4K 字符)
-    // → 增量部分可总结:cut 落在倒数第 2 条 user 之后 → 调模型压缩(只总结旧摘要+第 1 条 user)
+    // → 增量超过保留预算:折页旧段,近窗留下,不调模型
     for (0..2) |_| {
         try comp_agent.messages.append(.{ .role = "system", .content = "(Conversation compacted. Summary:)\n" ++ ("s" ** (250 * 1024)) });
     }
@@ -394,13 +383,12 @@ pub fn testFullLoop() !void {
     const comp_result = try comp_agent.send("continue");
     try t.expect(comp_result.error_msg == null);
     try t.expect(std.mem.indexOf(u8, comp_result.text, "COMPACT-OK") != null);
-    try t.expect(state.req6_was_compact.load(.acquire));
     // compact 后:summary 置前 + 保留最近消息(codex 式),随后模型回复
     try t.expect(comp_agent.messages.items.len >= 3);
     // summary 存在(可能被 trim 占位前插),最近消息保留
     var found_summary = false;
     for (comp_agent.messages.items) |m| {
-        if (std.mem.indexOf(u8, m.content, "summarized") != null) found_summary = true;
+        if (std.mem.indexOf(u8, m.content, "[Snapcompact]") != null or std.mem.indexOf(u8, m.content, "Conversation compacted") != null) found_summary = true;
     }
     try t.expect(found_summary);
     try t.expectEqualStrings("assistant", comp_agent.messages.items[comp_agent.messages.items.len - 1].role);
@@ -1366,7 +1354,7 @@ test "read_image compresses and attaches the image to the next request" {
     var cfg = cfgmod.Config{ .arena = &arena };
     cfg.providers = &provs;
     cfg.default_provider = "mock";
-    cfg.default_model = "mock-model";
+    cfg.default_model = "mock-vision";
 
     var state = MockState{ .alloc = std.heap.page_allocator, .port = MOCK_PORT3, .vision_mode = true };
     const thread = try std.Thread.spawn(.{}, mockServerMain, .{&state});
@@ -1384,7 +1372,7 @@ test "read_image compresses and attaches the image to the next request" {
     try t.expect(ready);
     defer state.stop.store(true, .release);
 
-    var agent = try agentmod.Agent.initOpts(a, &cfg, "mock", "mock-model", "/tmp", .{});
+    var agent = try agentmod.Agent.initOpts(a, &cfg, "mock", "mock-vision", "/tmp", .{});
     const result = try agent.send("look at /tmp/piz-img-e2e.png and describe it");
     try t.expect(std.mem.indexOf(u8, result.text, "IMG-OK") != null);
     // 第二轮请求体带 data URI 图片附件
@@ -1456,6 +1444,13 @@ test "mcp: parse tool name (first __ after prefix)" {
     try std.testing.expectEqualStrings("do_it", p.tool);
     try std.testing.expect(mcpmod.parseToolName("bash") == null);
     try std.testing.expect(mcpmod.parseToolName("mcp__only") == null);
+}
+
+test "mcp: formatStatus when none configured" {
+    const t = std.testing;
+    const out = try mcpmod.formatStatus(t.allocator);
+    defer t.allocator.free(out);
+    try t.expect(std.mem.indexOf(u8, out, "no mcp servers") != null);
 }
 
 test "mcp: script server roundtrip (stdout streaming + tool dispatch)" {

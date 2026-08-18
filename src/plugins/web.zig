@@ -29,6 +29,32 @@ fn urlEncode(arena: std.mem.Allocator, s: []const u8) ![]const u8 {
     return aw.toOwnedSlice();
 }
 
+/// `/web`：无参报端点；有参当 query 跑搜索。
+fn webStatus(arena: std.mem.Allocator) ![]const u8 {
+    const endpoint = agentmod.util.getEnv("PIZ_WEB_SEARCH_URL") orelse "";
+    if (endpoint.len == 0) {
+        return arena.dupe(u8, "web-search: PIZ_WEB_SEARCH_URL is unset.\nSet it to a SearXNG JSON endpoint (e.g. http://127.0.0.1:8080/search?q=).\nusage: /web <query>");
+    }
+    return std.fmt.allocPrint(arena, "web-search: endpoint {s}\nusage: /web <query>\nfetch_url blocks private/localhost/metadata.", .{endpoint});
+}
+
+pub fn slashWeb(ctx: ?*anyopaque, args: []const u8) anyerror![]const u8 {
+    const self: *agentmod.Agent = @ptrCast(@alignCast(ctx orelse return error.NoAgent));
+    var arena = agentmod.util.Arena.init(self.alloc);
+    defer arena.deinit();
+    const q = std.mem.trim(u8, args, " \t\r\n");
+    if (q.len == 0) {
+        const line = try webStatus(arena.allocator());
+        return self.alloc.dupe(u8, line);
+    }
+    var jw = std.Io.Writer.Allocating.init(arena.allocator());
+    try jw.writer.writeAll("{\"query\":");
+    try std.json.Stringify.value(q, .{}, &jw.writer);
+    try jw.writer.writeByte('}');
+    const r = try toolWebSearch(ctx, arena.allocator(), jw.written());
+    return self.alloc.dupe(u8, r.content);
+}
+
 pub fn toolWebSearch(ctx: ?*anyopaque, arena: std.mem.Allocator, args: []const u8) anyerror!toolsmod.Result {
     _ = ctx;
     const v = try std.json.parseFromSliceLeaky(std.json.Value, arena, args, .{});
@@ -90,6 +116,164 @@ fn shapeSearchResults(arena: std.mem.Allocator, raw: []const u8, query: []const 
 
 /// 没有这个工具,搜索就只是给了一串链接 —— 模型拿不到里面写了什么,
 /// 只能退回 bash+curl 然后在原始 HTML 里翻。
+fn urlHost(url: []const u8) ?[]const u8 {
+    const sep = std.mem.indexOf(u8, url, "://") orelse return null;
+    var rest = url[sep + 3 ..];
+    if (rest.len == 0) return null;
+    if (rest[0] == '[') {
+        const close = std.mem.indexOfScalar(u8, rest, ']') orelse return null;
+        return rest[1..close];
+    }
+    if (std.mem.indexOfScalar(u8, rest, '@')) |at| rest = rest[at + 1 ..];
+    var end: usize = 0;
+    while (end < rest.len) : (end += 1) {
+        switch (rest[end]) {
+            ':', '/', '?', '#' => break,
+            else => {},
+        }
+    }
+    if (end == 0) return null;
+    if (rest[end - 1] == '.') return rest[0 .. end - 1];
+    return rest[0..end];
+}
+
+fn parseHexU32(s: []const u8) ?u32 {
+    if (s.len == 0) return null;
+    var acc: u32 = 0;
+    for (s) |c| {
+        const d: u32 = switch (c) {
+            '0'...'9' => c - '0',
+            'a'...'f' => c - 'a' + 10,
+            'A'...'F' => c - 'A' + 10,
+            else => return null,
+        };
+        acc = acc *% 16 + d;
+    }
+    return acc;
+}
+
+fn parseOctet(s: []const u8, max: u32) ?u32 {
+    if (s.len == 0) return null;
+    var v: u32 = 0;
+    if (s.len > 2 and s[0] == '0' and (s[1] == 'x' or s[1] == 'X')) {
+        v = parseHexU32(s[2..]) orelse return null;
+    } else if (s.len > 1 and s[0] == '0') {
+        for (s) |c| {
+            if (c < '0' or c > '7') return null;
+            v = v *% 8 + (c - '0');
+        }
+    } else {
+        for (s) |c| {
+            if (c < '0' or c > '9') return null;
+            v = v *% 10 + (c - '0');
+        }
+    }
+    if (v > max) return null;
+    return v;
+}
+
+fn parseIpv4Loose(host: []const u8) ?u32 {
+    if (host.len == 0) return null;
+    for (host) |c| {
+        switch (c) {
+            '0'...'9', '.', 'x', 'X' => {},
+            else => return null,
+        }
+    }
+    var vals: [4]u32 = undefined;
+    var n: usize = 0;
+    var it = std.mem.splitScalar(u8, host, '.');
+    while (it.next()) |p| {
+        if (n >= 4) return null;
+        vals[n] = parseOctet(p, 0xffff_ffff) orelse return null;
+        n += 1;
+    }
+    return switch (n) {
+        1 => vals[0],
+        2 => if (vals[0] <= 255 and vals[1] <= 0xff_ffff) (vals[0] << 24) | vals[1] else null,
+        3 => if (vals[0] <= 255 and vals[1] <= 255 and vals[2] <= 0xffff) (vals[0] << 24) | (vals[1] << 16) | vals[2] else null,
+        4 => if (vals[0] <= 255 and vals[1] <= 255 and vals[2] <= 255 and vals[3] <= 255)
+            (vals[0] << 24) | (vals[1] << 16) | (vals[2] << 8) | vals[3]
+        else
+            null,
+        else => null,
+    };
+}
+
+fn ipv4Blocked(ip: u32) bool {
+    const a = ip >> 24;
+    const b = (ip >> 16) & 0xff;
+    if (a == 0 or a == 10 or a == 127) return true;
+    if (a == 169 and b == 254) return true;
+    if (a == 172 and b >= 16 and b <= 31) return true;
+    if (a == 192 and b == 168) return true;
+    if (a == 100 and b >= 64 and b <= 127) return true;
+    if (a == 198 and (b == 18 or b == 19)) return true;
+    if (a >= 224) return true;
+    return false;
+}
+
+fn ipv6Blocked(bytes: [16]u8) bool {
+    var zeros: usize = 0;
+    for (bytes[0..15]) |c| {
+        if (c == 0) zeros += 1;
+    }
+    if (zeros == 15 and (bytes[15] == 0 or bytes[15] == 1)) return true;
+    if (bytes[0] == 0xfe and (bytes[1] & 0xc0) == 0x80) return true;
+    if (bytes[0] & 0xfe == 0xfc) return true;
+    if (std.mem.eql(u8, bytes[0..12], &[_]u8{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff })) {
+        return ipv4Blocked(std.mem.readInt(u32, bytes[12..16], .big));
+    }
+    return false;
+}
+
+fn hostNameBlocked(host: []const u8) bool {
+    var buf: [256]u8 = undefined;
+    if (host.len == 0 or host.len >= buf.len) return true;
+    const lower = std.ascii.lowerString(&buf, host);
+    const names = [_][]const u8{
+        "localhost",                "localhost.localdomain",
+        "ip6-localhost",            "ip6-loopback",
+        "metadata.google.internal", "metadata.internal",
+        "host.docker.internal",     "gateway.docker.internal",
+        "kubernetes.default",       "kubernetes.default.svc",
+    };
+    for (names) |n| {
+        if (std.mem.eql(u8, lower, n)) return true;
+    }
+    if (std.mem.endsWith(u8, lower, ".localhost")) return true;
+    if (std.mem.endsWith(u8, lower, ".local")) return true;
+    if (std.mem.endsWith(u8, lower, ".internal")) return true;
+    return false;
+}
+
+fn hostBlocked(host: []const u8) bool {
+    if (hostNameBlocked(host)) return true;
+    if (parseIpv4Loose(host)) |ip| return ipv4Blocked(ip);
+    if (std.Io.net.IpAddress.parseIp6(host, 0)) |addr| {
+        return ipv6Blocked(addr.ip6.bytes);
+    } else |_| {}
+    return false;
+}
+
+fn resolveBlocked(alloc: std.mem.Allocator, host: []const u8) bool {
+    if (hostBlocked(host)) return true;
+    const out = util.execShortTimeout(alloc, &.{ "getent", "ahosts", host }, 3) catch return false;
+    var it = std.mem.splitScalar(u8, out, '\n');
+    while (it.next()) |line| {
+        const cut = std.mem.indexOfAny(u8, line, " \t") orelse line.len;
+        const ip = std.mem.trim(u8, line[0..cut], " \t");
+        if (ip.len == 0) continue;
+        if (hostBlocked(ip)) return true;
+    }
+    return false;
+}
+
+fn urlBlocked(alloc: std.mem.Allocator, url: []const u8) bool {
+    const host = urlHost(url) orelse return true;
+    return resolveBlocked(alloc, host);
+}
+
 pub fn toolFetchUrl(ctx: ?*anyopaque, arena: std.mem.Allocator, args: []const u8) anyerror!toolsmod.Result {
     _ = ctx;
     const v = try std.json.parseFromSliceLeaky(std.json.Value, arena, args, .{});
@@ -98,12 +282,16 @@ pub fn toolFetchUrl(ctx: ?*anyopaque, arena: std.mem.Allocator, args: []const u8
     if (!std.mem.startsWith(u8, url, "http://") and !std.mem.startsWith(u8, url, "https://")) {
         return .{ .content = "error: fetch_url only accepts http:// or https:// URLs", .is_error = true };
     }
+    if (urlBlocked(arena, url)) {
+        return .{ .content = "error: fetch_url blocked private or local address", .is_error = true };
+    }
     const act = activity.begin(.tool, "fetch_url", url, 30_000);
     defer act.release();
 
     const raw = agentmod.util.execShortTimeout(arena, &.{
-        "curl", "-sSL",                                      "--max-time", "25", "--max-filesize", "8000000",
-        "-H",   "user-agent: Mozilla/5.0 (compatible; piz)", url,
+        "curl",    "-sSL",                                      "--max-time",    "25",          "--max-filesize", "8000000",
+        "--proto", "=https,http",                               "--proto-redir", "=https,http", "--max-redirs",   "3",
+        "-H",      "user-agent: Mozilla/5.0 (compatible; piz)", url,
     }, 30) catch return .{ .content = "error: fetch failed (unreachable, timed out, or too large)", .is_error = true };
 
     const text = try htmlToText(arena, raw);
@@ -217,6 +405,14 @@ fn decodeEntity(html: []const u8, i: usize) ?EntityHit {
     return null;
 }
 
+test "webStatus mentions usage" {
+    const t = std.testing;
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    const line = try webStatus(arena.allocator());
+    try t.expect(std.mem.indexOf(u8, line, "usage: /web") != null);
+}
+
 test "htmlToText strips tags and decodes entities" {
     const t = std.testing;
     const a = t.allocator;
@@ -248,4 +444,27 @@ test "shapeSearchResults formats searx-like json" {
     try t.expect(std.mem.indexOf(u8, out, "Zig") != null);
     try t.expect(std.mem.indexOf(u8, out, "https://ziglang.org") != null);
     try t.expect(std.mem.indexOf(u8, out, "fetch_url") != null);
+}
+
+test "fetch_url blocks private and local addresses" {
+    const t = std.testing;
+    try t.expectEqualStrings("127.0.0.1", urlHost("http://evil.com@127.0.0.1/x").?);
+    try t.expectEqualStrings("::1", urlHost("https://[::1]:8080/").?);
+    try t.expectEqualStrings("example.com", urlHost("https://example.com./path").?);
+    try t.expect(hostBlocked("127.0.0.1"));
+    try t.expect(hostBlocked("localhost"));
+    try t.expect(hostBlocked("169.254.169.254"));
+    try t.expect(hostBlocked("10.1.2.3"));
+    try t.expect(hostBlocked("192.168.0.1"));
+    try t.expect(hostBlocked("172.16.0.1"));
+    try t.expect(hostBlocked("::1"));
+    try t.expect(hostBlocked("metadata.google.internal"));
+    try t.expect(hostBlocked("foo.localhost"));
+    try t.expect(!hostBlocked("ziglang.org"));
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const blocked = try toolFetchUrl(null, a, "{\"url\":\"http://127.0.0.1:5494/api/chat\"}");
+    try t.expect(blocked.is_error);
+    try t.expect(std.mem.indexOf(u8, blocked.content, "blocked") != null);
 }

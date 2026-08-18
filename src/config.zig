@@ -2,6 +2,11 @@
 // 目录:~/.piz(或 $PIZ_DIR)。刻意不与官方 pi 共用,见 util.configDir 注释。
 const std = @import("std");
 const util = @import("util.zig");
+const catalog = @import("catalog.zig");
+const sandboxmod = @import("sandbox.zig");
+const httpc = @import("httpc.zig");
+
+pub const SandboxMode = sandboxmod.Mode;
 
 pub const Api = enum { openai_completions, anthropic_messages, openai_responses };
 
@@ -9,6 +14,27 @@ pub const Api = enum { openai_completions, anthropic_messages, openai_responses 
 /// 后者会显示成 131k,就是状态栏上那个错数。
 pub const DEFAULT_CONTEXT_WINDOW: u32 = 128000;
 pub const DEFAULT_MAX_OUTPUT: u32 = 16384;
+
+/// auth.json / `piz login` 的 provider 名:字母数字、`-` `_`。
+/// pi 源码里可用 API key 直连的内置(openai-completions / anthropic-messages)。不含用户 models.json。
+pub fn isBuiltinProvider(name: []const u8) bool {
+    const names = [_][]const u8{
+        "deepseek",   "openai",      "anthropic", "xai",       "openrouter",
+        "groq",       "mistral",     "together",  "fireworks", "cerebras",
+        "moonshotai", "huggingface", "nvidia",    "zai",       "minimax",
+    };
+    for (names) |n| if (std.mem.eql(u8, name, n)) return true;
+    return false;
+}
+
+pub fn authProviderOk(name: []const u8) bool {
+    if (name.len == 0 or name.len > 32) return false;
+    for (name) |c| {
+        const ok = std.ascii.isAlphanumeric(c) or c == '-' or c == '_';
+        if (!ok) return false;
+    }
+    return true;
+}
 
 /// 行业思考等级。词表对齐 OpenAI `reasoning.effort` 与 pi `thinkingLevelMap`:
 /// `off | minimal | low | medium | high | xhigh | max`。
@@ -53,7 +79,7 @@ pub const ThinkLevel = enum {
 };
 
 /// 工具授权。对齐 Codex `/permissions` 能真正做到的三档
-/// (piz 没有 OS sandbox,所以没有 workspace-write 那一档):
+/// 授权档(问不问)。OS 隔离是另一档,见 SandboxMode / sandboxMode。
 /// yolo = 不询问(Codex Full Access / `--yolo`);
 /// ask = 危险工具先问;
 /// read_only = 危险工具直接拒,读类放行。
@@ -316,6 +342,115 @@ fn parseCompat(obj: std.json.ObjectMap) Compat {
     return c;
 }
 
+pub const Discovered = struct {
+    id: []const u8,
+    meta: ModelMeta,
+};
+
+/// 解析 OpenAI / OpenRouter `GET /models` 形: `{data:[{id,...}]}` 或 `{models:[...]}`。
+pub fn parseModelsList(alloc: std.mem.Allocator, raw: []const u8) ![]Discovered {
+    const parsed = std.json.parseFromSlice(std.json.Value, alloc, raw, .{}) catch return error.InvalidModelsJson;
+    defer parsed.deinit();
+    if (parsed.value != .object) return error.InvalidModelsJson;
+    const arr = if (parsed.value.object.get("data")) |d|
+        (if (d == .array) d.array.items else @as([]const std.json.Value, &.{}))
+    else if (parsed.value.object.get("models")) |d|
+        (if (d == .array) d.array.items else @as([]const std.json.Value, &.{}))
+    else
+        @as([]const std.json.Value, &.{});
+    var out = std.array_list.Managed(Discovered).init(alloc);
+    errdefer out.deinit();
+    for (arr) |item| {
+        if (item != .object) continue;
+        const idv = item.object.get("id") orelse continue;
+        if (idv != .string or idv.string.len == 0) continue;
+        const id = try alloc.dupe(u8, idv.string);
+        try out.append(.{ .id = id, .meta = parseModelMeta(item.object) });
+    }
+    return out.toOwnedSlice();
+}
+
+/// 把探测到的模型并入 provider(已有 id 只补 meta)。
+pub fn mergeDiscovered(p: *Provider, alloc: std.mem.Allocator, found: []const Discovered) !usize {
+    var added: usize = 0;
+    var ids = std.array_list.Managed([]const u8).init(alloc);
+    defer ids.deinit();
+    var metas = std.array_list.Managed(ModelMeta).init(alloc);
+    defer metas.deinit();
+    try ids.appendSlice(p.models);
+    const old_meta_n = @min(p.models.len, p.model_metas.len);
+    if (old_meta_n > 0) try metas.appendSlice(p.model_metas[0..old_meta_n]);
+    while (metas.items.len < ids.items.len) try metas.append(.{});
+    for (found) |d| {
+        var exists = false;
+        for (ids.items, 0..) |id, i| {
+            if (!std.mem.eql(u8, id, d.id)) continue;
+            exists = true;
+            if (i < metas.items.len) overlayMeta(&metas.items[i], d.meta);
+            break;
+        }
+        if (exists) continue;
+        try ids.append(try alloc.dupe(u8, d.id));
+        try metas.append(d.meta);
+        added += 1;
+    }
+    p.models = try ids.toOwnedSlice();
+    p.model_metas = try metas.toOwnedSlice();
+    return added;
+}
+
+pub fn modelsEndpoint(alloc: std.mem.Allocator, base: []const u8) ![]u8 {
+    const trimmed = std.mem.trimEnd(u8, base, "/");
+    if (std.mem.endsWith(u8, trimmed, "/models")) return alloc.dupe(u8, trimmed);
+    return std.fmt.allocPrint(alloc, "{s}/models", .{trimmed});
+}
+
+pub const RefreshModelsResult = struct {
+    ok: usize = 0,
+    fail: usize = 0,
+    added: usize = 0,
+};
+
+/// 对每个有 key 的 provider 打 GET /models,并入内存表。不落盘。
+pub fn refreshProviders(alloc: std.mem.Allocator, providers: []Provider) RefreshModelsResult {
+    var r = RefreshModelsResult{};
+    for (providers) |*p| {
+        const key = p.api_key orelse continue;
+        const url = modelsEndpoint(alloc, p.base_url) catch {
+            r.fail += 1;
+            continue;
+        };
+        var auth_buf: [256]u8 = undefined;
+        const auth = std.fmt.bufPrint(&auth_buf, "Bearer {s}", .{key}) catch {
+            r.fail += 1;
+            continue;
+        };
+        const headers = [_]httpc.Header{.{ .name = "Authorization", .value = auth }};
+        const body = httpc.getBytes(alloc, url, &headers) catch {
+            r.fail += 1;
+            continue;
+        };
+        const found = parseModelsList(alloc, body) catch {
+            r.fail += 1;
+            continue;
+        };
+        const n = mergeDiscovered(p, alloc, found) catch {
+            r.fail += 1;
+            continue;
+        };
+        r.added += n;
+        r.ok += 1;
+    }
+    return r;
+}
+
+fn overlayMeta(dst: *ModelMeta, src: ModelMeta) void {
+    if (src.context_window > 0) dst.context_window = src.context_window;
+    if (src.max_output > 0) dst.max_output = src.max_output;
+    if (src.vision != null) dst.vision = src.vision;
+    if (src.reasoning != null) dst.reasoning = src.reasoning;
+}
+
 /// 抄 pi `detectCompat`(openai-completions.ts)。只返回发送路径用到的三项。
 /// `deepseek-v4` 出现在 id 里也要回放 reasoning_content(pi #3668,OpenRouter 同病)。
 pub fn detectCompat(provider: *const Provider, model: []const u8) Compat {
@@ -442,25 +577,26 @@ fn modelBareId(model: []const u8) []const u8 {
 /// flash/pro 原文: contextWindow 1000000, maxTokens 384000,
 /// reasoning true, input ["text"]。
 pub fn catalogMeta(model: []const u8) ModelMeta {
+    var out: ModelMeta = .{};
+    if (catalog.lookupId(model)) |c| {
+        out.context_window = c.context_window;
+        out.max_output = c.max_output;
+        out.vision = c.vision;
+        out.reasoning = c.reasoning;
+    }
     const name = modelBareId(model);
     if (std.mem.eql(u8, name, "deepseek-v4-flash") or std.mem.eql(u8, name, "deepseek-v4-pro")) {
-        return .{
-            .context_window = 1_000_000,
-            .max_output = 384_000,
-            .vision = false,
-            .reasoning = true,
-        };
+        if (out.context_window == 0) out.context_window = 1_000_000;
+        if (out.max_output == 0) out.max_output = 384_000;
+        out.vision = false;
+        out.reasoning = true;
+        return out;
     }
-    // adaptive Claude:generate-models 给这些 id 标了 reasoning + forceAdaptiveThinking。
-    // 窗口仍走 models.json / provider,不在这里编数字。
-    if (isAnthropicAdaptiveThinkingModel(model)) {
-        return .{ .reasoning = true };
+    // adaptive Claude / GPT-5.2+ : 只补 reasoning,窗口走表或 models.json。
+    if (isAnthropicAdaptiveThinkingModel(model) or supportsOpenAiXhigh(model)) {
+        out.reasoning = true;
     }
-    // GPT-5.2+ 在 generate-models 里拿 xhigh(以及 5.6 的 max)。窗口不在这里编。
-    if (supportsOpenAiXhigh(model)) {
-        return .{ .reasoning = true };
-    }
-    return .{};
+    return out;
 }
 
 /// pi `generate-models.ts` `applyThinkingLevelMetadata`:
@@ -741,6 +877,8 @@ pub const Config = struct {
     default_think_level: ?ThinkLevel = null,
     /// settings.json 的 `approvalMode`。缺省 yolo。
     default_approval: ApprovalMode = .yolo,
+    /// settings.json 的 `sandboxMode`。缺省 off(无 bwrap 的机器也能跑)。
+    default_sandbox: SandboxMode = .off,
     /// settings.json 的 `thinkingBudgets`。未写用 pi 缺省。
     thinking_budgets: ThinkingBudgets = .{},
     /// settings.json 的 `plugins` 数组:要额外开启的可选插件名。
@@ -808,6 +946,18 @@ pub const Config = struct {
             },
             .{ .name = "openai", .api = .openai_completions, .base_url = "https://api.openai.com/v1", .models = &.{} },
             .{ .name = "anthropic", .api = .anthropic_messages, .base_url = "https://api.anthropic.com", .models = &.{} },
+            .{ .name = "xai", .api = .openai_completions, .base_url = "https://api.x.ai/v1", .models = &.{} },
+            .{ .name = "openrouter", .api = .openai_completions, .base_url = "https://openrouter.ai/api/v1", .models = &.{} },
+            .{ .name = "groq", .api = .openai_completions, .base_url = "https://api.groq.com/openai/v1", .models = &.{} },
+            .{ .name = "mistral", .api = .openai_completions, .base_url = "https://api.mistral.ai", .models = &.{} },
+            .{ .name = "together", .api = .openai_completions, .base_url = "https://api.together.ai/v1", .models = &.{} },
+            .{ .name = "fireworks", .api = .openai_completions, .base_url = "https://api.fireworks.ai/inference", .models = &.{} },
+            .{ .name = "cerebras", .api = .openai_completions, .base_url = "https://api.cerebras.ai/v1", .models = &.{} },
+            .{ .name = "moonshotai", .api = .openai_completions, .base_url = "https://api.moonshot.ai/v1", .models = &.{} },
+            .{ .name = "huggingface", .api = .openai_completions, .base_url = "https://router.huggingface.co/v1", .models = &.{} },
+            .{ .name = "nvidia", .api = .openai_completions, .base_url = "https://integrate.api.nvidia.com/v1", .models = &.{} },
+            .{ .name = "zai", .api = .openai_completions, .base_url = "https://api.z.ai/api/coding/paas/v4", .models = &.{} },
+            .{ .name = "minimax", .api = .anthropic_messages, .base_url = "https://api.minimax.io/anthropic", .models = &.{} },
         };
 
         // --- models.json 动态 provider ---
@@ -937,6 +1087,9 @@ pub const Config = struct {
                 }
                 if (getStr(root, "approvalMode")) |s| {
                     if (ApprovalMode.parse(s)) |m| self.default_approval = m;
+                }
+                if (getStr(root, "sandboxMode")) |s| {
+                    if (SandboxMode.parse(s)) |m| self.default_sandbox = m;
                 }
                 if (root.object.get("thinkingBudgets")) |raw| {
                     if (raw == .object) self.thinking_budgets = parseThinkingBudgets(raw.object);
@@ -1107,6 +1260,71 @@ pub const Config = struct {
         try std.Io.Dir.rename(std.Io.Dir.cwd(), tmp, std.Io.Dir.cwd(), path, util.io);
     }
 
+    /// 重读 settings.json 的会话档(主题/授权/沙箱/思考/插件名单)。
+    /// 不重载 models/auth,不重启 MCP。返回给人看的摘要。
+    pub fn reloadSettings(self: *Config) ![]u8 {
+        const alloc = self.allocator();
+        const cfg_dir = try util.configDir(alloc);
+        const settings_path = try util.joinPath(alloc, cfg_dir, "settings.json");
+        const content = std.Io.Dir.cwd().readFileAlloc(util.io, settings_path, alloc, .limited(2 * 1024 * 1024)) catch
+            return alloc.dupe(u8, "settings.json missing or unreadable");
+        defer alloc.free(content);
+        const root = self.jsonVal(content) catch
+            return alloc.dupe(u8, "settings.json has syntax errors");
+        if (root != .object) return alloc.dupe(u8, "settings.json is not an object");
+
+        self.default_provider = getStr(root, "defaultProvider");
+        self.default_model = getStr(root, "defaultModel");
+        if (getStr(root, "defaultThinkingLevel")) |s| {
+            self.default_think_level = ThinkLevel.parse(s);
+        }
+        if (getStr(root, "approvalMode")) |s| {
+            if (ApprovalMode.parse(s)) |m| self.default_approval = m;
+        }
+        if (getStr(root, "sandboxMode")) |s| {
+            if (SandboxMode.parse(s)) |m| self.default_sandbox = m;
+        }
+        if (root.object.get("thinkingBudgets")) |raw| {
+            if (raw == .object) self.thinking_budgets = parseThinkingBudgets(raw.object);
+        }
+        if (root.object.get("plugins")) |arr| {
+            if (arr == .array) {
+                var names = std.array_list.Managed([]const u8).init(alloc);
+                for (arr.array.items) |it| {
+                    if (it == .string and it.string.len > 0) {
+                        try names.append(try alloc.dupe(u8, it.string));
+                    }
+                }
+                self.enabled_plugins = try names.toOwnedSlice();
+            }
+        }
+        if (getStr(root, "theme")) |s| {
+            if (s.len > 0) self.theme = try alloc.dupe(u8, s);
+        }
+        if (root.object.get("disabled_plugins")) |arr| {
+            if (arr == .array) {
+                var names = std.array_list.Managed([]const u8).init(alloc);
+                for (arr.array.items) |it| {
+                    if (it == .string and it.string.len > 0) {
+                        try names.append(try alloc.dupe(u8, it.string));
+                    }
+                }
+                self.disabled_plugins = try names.toOwnedSlice();
+            }
+        }
+
+        var aw = std.Io.Writer.Allocating.init(alloc);
+        errdefer aw.deinit();
+        try aw.writer.print("theme {s}\n", .{self.theme});
+        try aw.writer.print("approval {s}\n", .{self.default_approval.label()});
+        try aw.writer.print("sandbox {s}\n", .{self.default_sandbox.label()});
+        if (self.default_think_level) |lv| {
+            try aw.writer.print("think {s}\n", .{lv.label()});
+        }
+        try aw.writer.writeAll("plugins/MCP need restart to apply\n");
+        return aw.toOwnedSlice();
+    }
+
     /// 写 settings.json(defaultProvider/defaultModel)。
     pub fn saveSettings(self: *Config, provider: ?[]const u8, model: ?[]const u8) !void {
         const alloc = self.allocator();
@@ -1169,6 +1387,85 @@ pub const Config = struct {
         try writeJsonFile(alloc, path, root);
     }
 
+    /// 写 settings.json 的 `sandboxMode`。
+    pub fn saveSandboxMode(self: *Config, mode: SandboxMode) !void {
+        const alloc = self.allocator();
+        const cfg_dir = try util.configDir(alloc);
+        defer alloc.free(cfg_dir);
+        const path = try util.joinPath(alloc, cfg_dir, "settings.json");
+        defer alloc.free(path);
+        var root = std.json.Value{ .object = .{} };
+        if (std.Io.Dir.cwd().readFileAlloc(util.io, path, alloc, .limited(2 * 1024 * 1024))) |content| {
+            defer alloc.free(content);
+            root = self.jsonVal(content) catch return error.ConfigUnparseable;
+            if (root != .object) return error.ConfigUnparseable;
+        } else |_| {}
+        try root.object.put(alloc, "sandboxMode", .{ .string = mode.label() });
+        self.default_sandbox = mode;
+        try writeJsonFile(alloc, path, root);
+    }
+
+    /// 开关一个可选插件,写入 plugins / disabled_plugins,不碰其它字段。
+    pub fn savePluginToggle(self: *Config, name: []const u8, on: bool, factory_on: bool) !void {
+        const alloc = self.allocator();
+        const cfg_dir = try util.configDir(alloc);
+        defer alloc.free(cfg_dir);
+        const path = try util.joinPath(alloc, cfg_dir, "settings.json");
+        defer alloc.free(path);
+        var root = std.json.Value{ .object = .{} };
+        if (std.Io.Dir.cwd().readFileAlloc(util.io, path, alloc, .limited(2 * 1024 * 1024))) |content| {
+            defer alloc.free(content);
+            root = self.jsonVal(content) catch return error.ConfigUnparseable;
+            if (root != .object) return error.ConfigUnparseable;
+        } else |_| {}
+        var extra = jsonStringList(alloc, root, "plugins");
+        var off = jsonStringList(alloc, root, "disabled_plugins");
+        extra = dropName(alloc, extra, name);
+        off = dropName(alloc, off, name);
+        if (on) {
+            if (!factory_on) extra = try appendName(alloc, extra, name);
+        } else if (factory_on) {
+            off = try appendName(alloc, off, name);
+        }
+        try putStringList(alloc, &root, "plugins", extra);
+        try putStringList(alloc, &root, "disabled_plugins", off);
+        try writeJsonFile(alloc, path, root);
+    }
+
+    fn jsonStringList(alloc: std.mem.Allocator, root: std.json.Value, key: []const u8) [][]const u8 {
+        const arr = if (root == .object) root.object.get(key) else null;
+        if (arr == null or arr.? != .array) return &.{};
+        var out = std.array_list.Managed([]const u8).init(alloc);
+        for (arr.?.array.items) |it| {
+            if (it == .string and it.string.len > 0) out.append(it.string) catch |err| util.debugCatch("cfg.list", err);
+        }
+        return out.toOwnedSlice() catch &.{};
+    }
+
+    fn dropName(alloc: std.mem.Allocator, names: [][]const u8, name: []const u8) [][]const u8 {
+        _ = alloc;
+        var n: usize = 0;
+        for (names) |it| {
+            if (std.mem.eql(u8, it, name)) continue;
+            names[n] = it;
+            n += 1;
+        }
+        return names[0..n];
+    }
+
+    fn appendName(alloc: std.mem.Allocator, names: [][]const u8, name: []const u8) ![][]const u8 {
+        const out = try alloc.alloc([]const u8, names.len + 1);
+        @memcpy(out[0..names.len], names);
+        out[names.len] = name;
+        return out;
+    }
+
+    fn putStringList(alloc: std.mem.Allocator, root: *std.json.Value, key: []const u8, names: []const []const u8) !void {
+        var arr = std.json.Array.init(alloc);
+        for (names) |n| try arr.append(.{ .string = n });
+        try root.object.put(alloc, key, .{ .array = arr });
+    }
+
     /// 写 settings.json 的 `theme`(dark|light|auto|自定义名)。
     pub fn saveTheme(self: *Config, name: []const u8) !void {
         const alloc = self.allocator();
@@ -1185,6 +1482,30 @@ pub const Config = struct {
         const duped = try alloc.dupe(u8, name);
         try root.object.put(alloc, "theme", .{ .string = duped });
         self.theme = duped;
+        try writeJsonFile(alloc, path, root);
+    }
+
+    /// 合并写入 ~/.piz/auth.json:{ "<provider>": { "type": "api_key", "key": "..." } }
+    pub fn saveAuth(self: *Config, provider: []const u8, key: []const u8) !void {
+        if (!authProviderOk(provider)) return error.BadProvider;
+        const trimmed = std.mem.trim(u8, key, " \t\r\n");
+        if (trimmed.len == 0) return error.EmptyKey;
+        const alloc = self.allocator();
+        const cfg_dir = try util.configDir(alloc);
+        std.Io.Dir.cwd().createDirPath(util.io, cfg_dir) catch |err| util.debugCatch("cfg.auth.mkdir", err);
+        const path = try util.joinPath(alloc, cfg_dir, "auth.json");
+
+        var root: std.json.Value = .{ .object = .{} };
+        if (std.Io.Dir.cwd().readFileAlloc(util.io, path, alloc, .limited(4 * 1024 * 1024))) |content| {
+            if (self.jsonVal(content)) |parsed| {
+                if (parsed == .object) root = parsed;
+            } else |_| {}
+        } else |_| {}
+
+        var entry: std.json.ObjectMap = .{};
+        try entry.put(alloc, "type", .{ .string = "api_key" });
+        try entry.put(alloc, "key", .{ .string = try alloc.dupe(u8, trimmed) });
+        try root.object.put(alloc, try alloc.dupe(u8, provider), .{ .object = entry });
         try writeJsonFile(alloc, path, root);
     }
 
@@ -1214,7 +1535,7 @@ pub const Config = struct {
             if (pv == .object) provs = pv.object;
         }
         for (providers) |p| {
-            if (std.mem.eql(u8, p.name, "deepseek") or std.mem.eql(u8, p.name, "openai") or std.mem.eql(u8, p.name, "anthropic")) continue;
+            if (isBuiltinProvider(p.name)) continue;
             // 保留原对象(若有);models 以 id 列表重建,其余字段保持
             var po: std.json.ObjectMap = .{};
             if (provs.get(p.name)) |existing| {
@@ -1291,6 +1612,30 @@ test "endpoint url building" {
     try t.expectEqualStrings("https://api.anthropic.com/v1/messages", try c.endpointUrl(&antr));
 }
 
+test "saveAuth merges keys into auth.json" {
+    const t = std.testing;
+    try util.testInit();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = util.Arena.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cwd_abs = try std.process.currentPathAlloc(util.io, a);
+    const tmp_path = try std.fmt.allocPrint(a, "{s}/.zig-cache/tmp/{s}", .{ cwd_abs, tmp.sub_path });
+    try util.environ_map.?.put("PIZ_DIR", tmp_path);
+    var cfg = Config{ .arena = &arena };
+    try cfg.saveAuth("deepseek", "sk-a");
+    try cfg.saveAuth("openai", "sk-b");
+    const raw = try std.Io.Dir.cwd().readFileAlloc(util.io, try util.joinPath(a, tmp_path, "auth.json"), a, .limited(64 * 1024));
+    try t.expect(std.mem.indexOf(u8, raw, "sk-a") != null);
+    try t.expect(std.mem.indexOf(u8, raw, "sk-b") != null);
+    try t.expect(std.mem.indexOf(u8, raw, "deepseek") != null);
+    try t.expectError(error.BadProvider, cfg.saveAuth("../x", "k"));
+    try t.expectError(error.EmptyKey, cfg.saveAuth("deepseek", "  "));
+    try t.expect(authProviderOk("deepseek"));
+    try t.expect(!authProviderOk(""));
+}
+
 test "auth key merges into builtin provider" {
     const t = std.testing;
     try util.testInit();
@@ -1315,6 +1660,30 @@ test "auth key merges into builtin provider" {
     // 未配置 provider 无 key
     const openai = try cfg.resolve("openai", null);
     try t.expect(openai.key == null);
+}
+
+test "reloadSettings picks up theme and approval" {
+    const t = std.testing;
+    try util.testInit();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = util.Arena.init(t.allocator);
+    const a = arena.allocator();
+    const cwd_abs = try std.process.currentPathAlloc(util.io, a);
+    const tmp_path = try std.fmt.allocPrint(a, "{s}/.zig-cache/tmp/{s}", .{ cwd_abs, tmp.sub_path });
+    try util.environ_map.?.put("PIZ_DIR", tmp_path);
+    try tmp.dir.writeFile(util.io, .{ .sub_path = "settings.json", .data = "{\"theme\":\"light\",\"approvalMode\":\"ask\",\"sandboxMode\":\"workspace\"}" });
+    var cfg = Config{ .arena = &arena };
+    defer cfg.deinit();
+    try cfg.load();
+    const out = try cfg.reloadSettings();
+    try t.expectEqualStrings("light", cfg.theme);
+    try t.expectEqual(ApprovalMode.ask, cfg.default_approval);
+    try t.expectEqual(SandboxMode.workspace, cfg.default_sandbox);
+    try t.expect(std.mem.indexOf(u8, out, "theme light") != null);
+    try t.expect(std.mem.indexOf(u8, out, "approval ask") != null);
+    try t.expect(std.mem.indexOf(u8, out, "sandbox workspace") != null);
+    try t.expect(std.mem.indexOf(u8, out, "need restart") != null);
 }
 
 test "a syntactically broken config is never overwritten" {
@@ -1515,6 +1884,49 @@ test "models.json parses provider contextWindow and model capabilities" {
     try t.expect(found);
 }
 
+test "parseModelsList reads OpenAI and OpenRouter /models" {
+    const t = std.testing;
+    const a = t.allocator;
+    const openai =
+        \\{"data":[{"id":"gpt-4o"},{"id":"o3-mini","context_window":200000}]}
+    ;
+    const found = try parseModelsList(a, openai);
+    defer {
+        for (found) |d| a.free(d.id);
+        a.free(found);
+    }
+    try t.expectEqual(@as(usize, 2), found.len);
+    try t.expectEqualStrings("gpt-4o", found[0].id);
+    try t.expectEqual(@as(u32, 200000), found[1].meta.context_window);
+
+    const orouter =
+        \\{"data":[{"id":"openai/gpt-4o","architecture":{"input_modalities":["text","image"]},"context_length":128000}]}
+    ;
+    const found2 = try parseModelsList(a, orouter);
+    defer {
+        for (found2) |d| a.free(d.id);
+        a.free(found2);
+    }
+    try t.expectEqualStrings("openai/gpt-4o", found2[0].id);
+    try t.expectEqual(@as(u32, 128000), found2[0].meta.context_window);
+    try t.expectEqual(true, found2[0].meta.vision.?);
+}
+
+test "modelsEndpoint joins /models once" {
+    const t = std.testing;
+    const a = t.allocator;
+    const joined = try modelsEndpoint(a, "https://api.x.com/v1");
+    defer a.free(joined);
+    try t.expectEqualStrings("https://api.x.com/v1/models", joined);
+    const already = try modelsEndpoint(a, "https://api.x.com/v1/models/");
+    defer a.free(already);
+    try t.expectEqualStrings("https://api.x.com/v1/models", already);
+    const empty = refreshProviders(a, &[_]Provider{});
+    try t.expectEqual(@as(usize, 0), empty.ok);
+    try t.expectEqual(@as(usize, 0), empty.fail);
+    try t.expectEqual(@as(usize, 0), empty.added);
+}
+
 test "catalogMeta knows DeepSeek V4 and parseModelMeta reads OpenRouter shape" {
     const t = std.testing;
     const v4 = catalogMeta("deepseek-v4-flash");
@@ -1523,8 +1935,7 @@ test "catalogMeta knows DeepSeek V4 and parseModelMeta reads OpenRouter shape" {
     try t.expectEqual(false, v4.vision.?);
     try t.expectEqual(true, v4.reasoning.?);
     try t.expectEqual(@as(u32, 1_000_000), catalogMeta("acme/deepseek-v4-pro").context_window);
-    try t.expectEqual(@as(u32, 0), catalogMeta("gpt-4o").context_window);
-    // pi generate-models.ts 的 deepseekV4Models 没有这两条
+    try t.expect(catalogMeta("gpt-4o").context_window > 0);
     try t.expectEqual(@as(u32, 0), catalogMeta("deepseek-chat").context_window);
     try t.expectEqual(@as(u32, 0), catalogMeta("deepseek-reasoner").context_window);
 
@@ -1664,6 +2075,14 @@ test "ApprovalMode parse matches Codex aliases" {
     try t.expectEqualStrings("yolo", ApprovalMode.yolo.uiLabel());
 }
 
+test "SandboxMode parse aliases" {
+    const t = std.testing;
+    try t.expect(SandboxMode.parse("workspace").? == .workspace);
+    try t.expect(SandboxMode.parse("strict").? == .strict);
+    try t.expect(SandboxMode.parse("off").? == .off);
+    try t.expectEqualStrings("workspace", SandboxMode.workspace.label());
+}
+
 test "settings.json defaultThinkingLevel loads" {
     const t = std.testing;
     try util.testInit();
@@ -1713,7 +2132,7 @@ test "OpenAI GPT thinkingLevelMap matches pi generate-models.ts for chat and res
     };
 
     try t.expectEqual(true, catalogMeta("gpt-5.4").reasoning.?);
-    try t.expectEqual(@as(u32, 0), catalogMeta("gpt-5.4").context_window);
+    try t.expect(catalogMeta("gpt-5.4").context_window > 0);
     try expectLevels(metaFor(&chat, "gpt-5.4"), &.{ .off, .minimal, .low, .medium, .high, .xhigh });
     try expectLevels(metaFor(&resp, "gpt-5.4"), &.{ .off, .minimal, .low, .medium, .high, .xhigh });
     try t.expectEqualStrings("xhigh", thinkEffort(metaFor(&chat, "gpt-5.4"), .xhigh).?);

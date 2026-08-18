@@ -196,9 +196,9 @@ pub fn runPrint(alloc: std.mem.Allocator, cfg: *cfgmod.Config, cwd: []const u8, 
     // 工具调用摘要(print 模式工具输出已在工具回调中显示到 stderr)
     var sbuf: [512]u8 = undefined;
     var stderr = std.Io.File.stderr().writer(util.io, &sbuf);
-    if (result.usage.input) |i| stderr.interface.print("\n[tokens in: {d}]", .{i}) catch {};
-    if (result.usage.output) |o| stderr.interface.print(" [out: {d}]", .{o}) catch {};
-    stderr.interface.print("\n", .{}) catch {};
+    if (result.usage.input) |i| stderr.interface.print("\n[tokens in: {d}]", .{i}) catch |err| util.debugCatch("print.tok.in", err);
+    if (result.usage.output) |o| stderr.interface.print(" [out: {d}]", .{o}) catch |err| util.debugCatch("print.tok.out", err);
+    stderr.interface.print("\n", .{}) catch |err| util.debugCatch("print.tok.nl", err);
     // 关掉还开着的长驻 subagent。不关就让它们随进程一起没 —— 它们可能正在
     // 写文件,截断出来的半个文件比没写更糟。
     pluginsmod.shutdownAgents();
@@ -225,7 +225,7 @@ var out_mutex: std.Io.Mutex = .init;
 fn writeLocked(file: std.Io.File, bytes: []const u8) void {
     out_mutex.lockUncancelable(util.io);
     defer out_mutex.unlock(util.io);
-    file.writeStreamingAll(util.io, bytes) catch {};
+    file.writeStreamingAll(util.io, bytes) catch |err| util.debugCatch("print.write", err);
 }
 
 fn printOnText(ctx: ?*anyopaque, text: []const u8) anyerror!void {
@@ -435,7 +435,7 @@ pub fn runAsync(alloc: std.mem.Allocator, cwd: []const u8, prompt: []const u8, o
     // 日志:<configDir>/logs/piz-<id>.log
     const cfg_dir = try util.configDir(alloc);
     const logs_dir = try util.joinPath(alloc, cfg_dir, "logs");
-    std.Io.Dir.cwd().createDirPath(util.io, logs_dir) catch {};
+    std.Io.Dir.cwd().createDirPath(util.io, logs_dir) catch |err| util.debugCatch("print.logs", err);
     const log_path = try std.fmt.allocPrint(alloc, "{s}/piz-{s}.log", .{ logs_dir, id });
     var logf = try std.Io.Dir.cwd().createFile(util.io, log_path, .{ .truncate = true, .permissions = @enumFromInt(0o600) });
     defer logf.close(util.io);

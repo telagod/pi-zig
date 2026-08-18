@@ -62,6 +62,9 @@ pub fn build(b: *std.Build) void {
         .name = "piz",
         .root_module = app_mod,
     });
+    // Release 剥离调试信息:46MB→20MB 全是 dwarf,strip 后个位数 MB。
+    // Debug 保留符号供 gdb / panic 栈回溯。
+    exe.root_module.strip = optimize != .Debug;
     b.installArtifact(exe);
 
     const run_cmd = b.addRunArtifact(exe);

@@ -56,8 +56,11 @@ pub const Plugin = struct {
     on_tool_before: ?*const fn (chain: *BeforeChain) ?[]const u8 = null,
     /// 工具结果回写前(waterfall):不调 chain.next() 即短路。返回非 null 则替换。
     on_tool_result: ?*const fn (chain: *AfterChain) ?[]const u8 = null,
-    /// 用户消息钩子(elicitation 续跑等)。
-    on_user_message: ?*const fn (ctx: ?*anyopaque, text: []const u8) void = null,
+    /// 用户消息提交时。返回非 null 则替换进模型的文本(须挂 Agent.alloc)。
+    /// 多个插件同钩:声明序,第一个非 null 胜出。
+    on_user_message: ?*const fn (ctx: ?*anyopaque, text: []const u8) ?[]const u8 = null,
+    /// 一轮结束(有答复、中止、空转止损之后)。串行,可写会话/记账。
+    after_turn: ?*const fn (ctx: ?*anyopaque) void = null,
     /// 斜杠命令(交互模式 /<name>)。
     slash_commands: []const SlashCommand = &.{},
     /// 插件注册的工具(与核心工具合并暴露给模型)。

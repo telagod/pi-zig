@@ -27,7 +27,7 @@ piz -n           # 新会话，不续载
 
 默认续载该目录最近一次会话，并把历史画进对话区。输入和状态钉在屏幕底，对话在上面软换行。对话区可以**拖选复制**（原生终端选区；没有开鼠标按键跟踪）。`PageUp` / `PageDown`、滚轮、`Ctrl+↑/↓` 翻历史。不用表情符号。`/copy` `/dump` 仍是剪贴板后备。
 
-开场不画会话卡。身份钉在输入框底下：模型加粗，`think` / `ctx` / `cache` 标签更淡、数字正常色，目录·会话 id 和 `? for shortcuts` 最淡。宽终端（大约 ≥100 列）全部挤在一行；80 列会拆成两行（上行指标，下行目录·会话和 hint），不右对齐留空白。完整栏（授权、上下文文件、用量）仍在 `/status`，按需才画进对话。输入是底栏框，不是壳上的 `>`。空框按 `?` 看快捷键。
+开场不画会话卡。身份钉在输入框底下：模型加粗，`think` / `ctx` / `cache` 标签更淡、数字正常色，目录·会话 id 和 `? for shortcuts` 最淡。宽终端（大约 ≥100 列）全部挤在一行；80 列会拆成两行（上行指标，下行目录·会话和 hint），不右对齐留空白。完整栏（授权、上下文文件、用量）仍在 `/status`，按需才画进对话。输入是底栏框，不是壳上的 `>`。空框按 `?` 看快捷键；`r` 重发上一轮。输入 `@./` 弹出工作区文件补全（Tab / Enter 填入，↑↓ 选择；默认不列 gitignored / 跳过目录）。
 
 对话是分块分层，靠左栏、缩进和字重区分，不是同一列淡灰。用户每行一条亮竖线 `▎`（加粗正文，没有 `┌/└` 空行）；思考退后两格、淡斜体（`Ctrl+T` 收成 `· thought` 一行）；助手正文同样缩进两格、正常色、没有竖线；工具再缩两格，一行写完 `▸` 名（加粗）+ 预览（淡）+ 状态，默认折叠，`Ctrl+O` 才在下面展开正文。块与块之间空一行；同轮兄弟工具中间不加空行。忙碌时输入框上方一行 `Working`，比对话更淡。
 
@@ -70,7 +70,7 @@ deepseek/v4-flash think max ctx 1.2k/128k 9% cache 62% ~/project/pi-zig · 17867
 
 `read` / `grep` / `find` / `ls` 只读工具三档都直接跑。`-x` / `--yolo` 显式全权（已是默认）。
 
-> **注意：** yolo 意味着模型可以未经确认执行任意 shell 命令。不熟悉的仓库或不可信内容请切 `/permissions ask`。
+> **注意：** yolo 意味着模型可以未经确认执行任意 shell 命令。不熟悉的仓库或不可信内容请切 `/permissions ask`，并开 `/sandbox workspace`（bwrap 或 Landlock）。
 
 ### 执行中你会看到什么
 
@@ -82,7 +82,7 @@ deepseek/v4-flash think max ctx 1.2k/128k 9% cache 62% ~/project/pi-zig · 17867
  └ agent  重构解析器，把递归下降改成 Pratt
 ```
 
-对话区里每个工具是助手下面的一行（`    ▸ bash  zig test  ok 1.2s 12ln`），默认不贴 stdout。`Ctrl+O` 在下面用 `│` / `└` 展开正文。Working 只回答「还在动、多久了、Esc 能停」。并行超过两路的活动仍在跑，只是不把输入框顶出屏幕。
+对话区里每个工具是助手下面的一行（`    ▸ bash  zig test  ok 1.2s 12ln`），默认不贴 stdout。`Ctrl+O` 在下面用 `│` / `└` 展开正文。`workflow` 例外：标题下直接铺节点轨（`○` 等待、`●` 在跑/完成），子 agent 进度写进对应节点，不另起 `[sub N]` 行。Working 只回答「还在动、多久了、Esc 能停」。并行超过两路的活动仍在跑，只是不把输入框顶出屏幕。
 
 执行中按 `Esc` 取消（长命令在 100ms 内停下，整个进程组一起收掉），按 `Ctrl+B` 转后台。空闲时 `Ctrl+C` 清空输入；输入为空再按一次（1 秒内）退出。退出后终端印 `resume: piz -s <id>`，下次用这条回来。
 
@@ -104,7 +104,7 @@ deepseek/v4-flash think max ctx 1.2k/128k 9% cache 62% ~/project/pi-zig · 17867
 | `!!command` | 执行 shell 命令，输出**不**发给模型（自己看） |
 | `/name args` | 未知斜杠命令会尝试当作 prompt 模板展开 |
 | `/` | 输入框一出现 `/` 就在上方弹出命令选择器（见下） |
-| `/permissions` `/model` `/think` | 无参数弹出选择器：↑↓ 或 j/k，Enter 确认，Esc 取消 |
+| `/permissions` `/sandbox` `/model` `/think` | 无参数弹出选择器：↑↓ 或 j/k，Enter 确认，Esc 取消 |
 
 `@` 引用只识别 `@/`、`@./`、`@../` 三种前缀，这是为了避免误伤邮箱地址和普通 `@` 符号。裸文件名（`@foo.txt`）不会展开，写 `@./foo.txt`。
 
@@ -117,35 +117,55 @@ deepseek/v4-flash think max ctx 1.2k/128k 9% cache 62% ~/project/pi-zig · 17867
 | 命令 | 作用 |
 |------|------|
 | `/help` | 列出全部命令 |
-| `/status` | 把会话卡画进对话（模型、目录、授权、上下文） |
+| `/status` | 把会话卡画进对话（模型、目录、授权、上下文、已开的可选插件） |
+| `/doctor` | 体检：配置文件、沙箱后端、联网搜索、git、AGENTS.md（CLI 亦可 `piz doctor`） |
+| `/init` | 工作区没有 AGENTS.md 时写脚手架，已有则不覆盖（`piz init` 同） |
+| `/diff` | git status + staged/unstaged diffstat（不需开启 git-awareness；`piz diff` 同）。空输入按 `g` 同样 |
+| `/commit [msg]` | 只提交已暂存；无说明则预览；不自动 `git add`（`piz commit` 同） |
+| `/log [n]` | `git log --oneline`，默认 20 条、最多 50（`piz log` 同）。空输入按 `l` 同样 |
+| `/branch` | 当前分支与最近本地分支，不切换（`piz branch` 同） |
+| `/mcp` | 列出已配置 MCP server 与工具（`piz mcp` 同） |
+| `/reload` | 重读 settings.json（主题/授权/沙箱/思考档；Web 当场套用外观；插件与 MCP 需重启；`piz reload` 同） |
+| `/usage` | 跨会话 token 账本（`~/.piz/usage.jsonl`，最近 8 轮，含估算 `$`）。空框按 `u` 同样 |
+| `/jobs` | 当前在跑与后台任务（bash `background`、HTTP、子 agent）。空框按 `j` 同样 |
+| `/jobs kill <pid>` | 只杀 activity 表里的进程。`/kill <pid>` 同义 |
+| `/find <text>` | 在对话块里搜，再敲一次跳下一条；命中反色。空输入时 `n`/`N` 下一条/上一条。裁掉的旧块仍可搜到（提示 `match in pruned history`）。Web 上 F3 / Shift+F3 同样跳，没命中会先拉更早历史 |
+| `/paste` | 从剪贴板附图（Ctrl+V 同样）。有 vision 才进消息，否则提示并丢图。图落 `~/.piz/artifacts/img-*`，续会话回放 |
 | `/think` | 弹出思考等级选择器（↑↓ Enter Esc）。只列出**这个模型**能选的档 |
 | `/think off\|minimal\|low\|medium\|high\|xhigh\|max` | 直接设定。该模型没有的档会夹到最近的可用档。`浅`/`中`/`深` 仍认，分别是 low / medium / max |
-| `/theme` | 弹出主题选择器（dark / light / auto） |
-| `/theme dark\|light\|auto\|name` | 直接设定。`auto` 看 `COLORFGBG`。自定义名读 `~/.piz/themes/{name}.json`。写回 `settings.json` 的 `theme`。`$PIZ_THEME` 覆盖 |
+| `/theme` | TUI 弹出主题选择器；Web 显示当前配色 |
+| `/theme dark\|light\|auto\|name` | TUI：`auto` 看 `COLORFGBG`，自定义名读 `~/.piz/themes/{name}.json`，写回 `settings.json`。Web：`light` / `dark` / `system`（`auto` 当 `system`），记 localStorage |
 | `/permissions` | 弹出授权选择器。对齐 Codex `/permissions` |
 | `/permissions yolo\|ask\|read-only` | 直接设定全权 / 询问 / 只读。写回 `settings.json` 的 `approvalMode`。`/approvals` 是别名 |
+| `/sandbox` | 弹出 bash OS 沙箱选择器。空输入时按 `s` 同样 |
+| `/sandbox off\|workspace\|strict` | `workspace`：工作区可写、其余只读；`strict` 再断网。优先 bwrap，否则 Landlock。两路都没有才报错。写回 `sandboxMode`。底栏 / 药丸显示 `workspace/bwrap` 或 `workspace/landlock` |
 | `/model` | 弹出模型选择器（有密钥的 provider × 模型） |
 | `/model <name>` | 会话内切换模型，`provider/model` 或按模型名匹配 provider |
+| `/refresh` | 对各 provider 打 `GET /models`，新 id 并入内存表（不落盘）。Web 同令 |
 | `/new` | 开新会话 |
 | `/clear` | 清空当前会话历史并重开 |
 | `/sessions` | 列出本目录全部会话（带编号与消息数） |
 | `/resume <n>` | 切到第 n 个会话（编号来自 `/sessions`） |
-| `/title <text>` | 设置会话标题；留空则清除 |
+| `/title <text>` | 设置会话标题；留空则清除。不设则用首条消息第一行 |
 | `/tree` | 打印当前会话的消息列表（带编号，供 `/fork` 用） |
 | `/fork <n>` | 从第 n 条消息分叉出新会话 |
 | `/undo` | 撤销最近一轮（删除最后一条 user 消息及其后全部） |
-| `/redo` | 重发上一次输入 |
-| `/compact` | 立即压缩上下文（调模型写摘要） |
+| `/redo` | 重发上一次输入。Web 上也可 `Ctrl+Shift+R`；`Ctrl+Shift+C` 复制最后回复 |
+| `/compact` | 立即压缩上下文（密图 + 摘录，不调模型） |
 | `/shake` | 机械裁掉旧 tool 结果与大 fence/XML，不调模型 |
 | `/shake images` | 只丢掉消息上的图片附件 |
 | `/snap` | 把大段 ASCII tool 输出打成密图并留原文摘（无 vision 则跳过） |
 | `/fast-compress` | 看快压状态：用量、下一层、vision、已裁计数 |
+| `/pkg` | 列出已装资源包（用户 + 项目） |
+| `/plugins` | 列出本会话插件 |
+| `/plugins on <name>` | 开启插件（下一轮生效，写入 settings） |
+| `/plugins off <name>` | 关闭插件 |
 | `/memory` | 查看跨会话记忆内容 |
 | `/memory set <text>` | 写入一条跨会话记忆 |
 | `/memory clear` | 清空跨会话记忆 |
 | `/plan <goal>` | 让模型为 `<goal>` 制定分步计划，写入 `PLAN.md` 后按计划执行 |
 | `/queue` | 清空待投递的输入队列 |
-| `/copy` | 复制**最后一条**回复到剪贴板（wl-copy → xclip） |
+| `/copy` | 复制**最后一条**回复到剪贴板（wl-copy → xclip）。空输入时按 `c` 同样 |
 | `/export` | 导出整段会话为 `piz-export.html` |
 | `/dump` | 复制**整段会话**为纯文本到剪贴板（无剪贴板工具则落 `/tmp/piz-dump.txt`） |
 | `/quit`、`/exit`、`/q` | 退出 |
@@ -238,6 +258,7 @@ piz web [选项]                 # Web UI
 | `-r`, `--read-only` | 启动时不暴露工具（含 `read`）。会话内只读用 `/permissions read-only` |
 | `-x`, `--execute`, `--yolo` | 全权（默认已是） |
 | `--ask` | 危险工具先问 |
+| `--sandbox off\|workspace\|strict` | 覆盖 `sandboxMode`（本进程，不写回配置除非再 `/sandbox`） |
 | `--plugin <N>` | 开启一个插件（可重复） |
 | `--no-plugin <N>` | 关闭一个插件（可重复，撤钩 / 工具 / schema） |
 | `--plugins` | 列出全部插件与当前启用状态后退出 |
@@ -309,6 +330,7 @@ piz web [--port N] [--no-open] [--token T | --no-token]
 | `Ctrl+L` | 清屏重绘 |
 | `Ctrl+T` | 折叠 / 展开本轮思考（不改等级；不是 Codex 的 transcript overlay） |
 | `Ctrl+O` | 折叠 / 展开工具输出（默认折叠成摘要；对齐 Claude Code 的 expand） |
+| `Ctrl+V` | 贴剪贴板图（没有图则贴文本） |
 | `PageUp` / `PageDown` | 向上 / 向下滚对话（半页） |
 | 拖选 | 原生选中对话区文字并复制（终端 Shift 不是必须的） |
 | 鼠标滚轮 | 向上 / 向下滚对话（alternate-scroll；也可用 PageUp / Ctrl+↑↓） |

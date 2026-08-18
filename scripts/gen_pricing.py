@@ -12,25 +12,54 @@ import glob
 import os
 import sys
 
-DEFAULT_DIR = os.path.expanduser(
-    "~/.local/share/mise/installs/node/24.17.0/lib/node_modules/"
-    "@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/"
-    "dist/providers/data"
-)
-OUT = os.path.join(os.path.dirname(__file__), "..", "src", "pricing.zig")
+CANDIDATE_DIRS = [
+    os.path.expanduser(
+        "~/.local/share/mise/installs/node/24.17.0/lib/node_modules/"
+        "@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/"
+        "dist/providers/data"
+    ),
+    "/home/telagod/project/oh-pi/node_modules/@earendil-works/pi-ai/dist/providers/data",
+    os.path.expanduser("~/.omp/plugins/node_modules/@oh-my-pi/pi-ai/dist/providers/data"),
+]
+SRC = os.path.join(os.path.dirname(__file__), "..", "src")
+OUT = os.path.join(SRC, "pricing.zig")
+CATALOG_OUT = os.path.join(SRC, "catalog.zig")
+
+
+def find_data_dir() -> str:
+    for d in CANDIDATE_DIRS:
+        if os.path.isdir(d):
+            return d
+    return CANDIDATE_DIRS[0]
+
+
+def zb(v: bool) -> str:
+    return "true" if v else "false"
 
 
 def main() -> None:
-    data_dir = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_DIR
+    data_dir = sys.argv[1] if len(sys.argv) > 1 else find_data_dir()
     entries: dict[str, dict] = {}
+    caps: dict[str, dict] = {}
+    caps_by_id: dict[str, dict] = {}
+    rates_by_id: dict[str, dict] = {}
     for path in sorted(glob.glob(os.path.join(data_dir, "*.json"))):
         data = json.load(open(path))
         for _api, models in data.items():
-            for _mid, m in models.items():
+            for mid, m in models.items():
+                key = f"{m.get('provider', os.path.splitext(os.path.basename(path))[0])}/{m.get('id', mid)}"
+                inputs = m.get("input") or []
+                cap = {
+                    "context_window": int(m.get("contextWindow") or 0),
+                    "max_output": int(m.get("maxTokens") or 0),
+                    "vision": "image" in inputs,
+                    "reasoning": bool(m.get("reasoning")),
+                }
+                caps[key] = cap
+                caps_by_id[m.get("id", mid)] = cap
                 cost = m.get("cost")
                 if not cost:
                     continue
-                key = f"{m['provider']}/{m['id']}"
                 ent = {
                     "input": cost.get("input", 0),
                     "output": cost.get("output", 0),
@@ -51,6 +80,7 @@ def main() -> None:
                     ent["t_cache_read"] = top.get("cacheRead", 0)
                     ent["t_cache_write"] = top.get("cacheWrite", 0)
                 entries[key] = ent  # 后写覆盖:同 key 跨 api 组去重
+                rates_by_id[m.get("id", mid)] = ent
 
     lines = [
         "// 代码生成,勿手改。源: pi-ai dist/providers/data/*.json",
@@ -87,9 +117,30 @@ def main() -> None:
     lines += [
         "});",
         "",
+        "pub const by_id = std.StaticStringMap(Rates).initComptime(.{",
+    ]
+    for mid, e in sorted(rates_by_id.items()):
+        lines.append(
+            '    .{{ "{id}", Rates{{ .input = {input}, .output = {output}, .cache_read = {cache_read}, .cache_write = {cache_write}, .tier_above = {tier_above}, .t_input = {t_input}, .t_output = {t_output}, .t_cache_read = {t_cache_read}, .t_cache_write = {t_cache_write} }} }},'.format(
+                id=mid.replace('\\', '\\\\').replace('"', '\\"'), **e
+            )
+        )
+    lines += [
+        "});",
+        "",
         "/// 查 \"provider/model_id\" 费率;无价目返回 null(footer 不显 $)。",
         "pub fn lookup(key: []const u8) ?Rates {",
         "    return table.get(key);",
+        "}",
+        "",
+        "/// provider/model, 裸 id, 或 id 去 provider 前缀。",
+        "pub fn lookupAny(provider: []const u8, model: []const u8) ?Rates {",
+        "    var buf: [256]u8 = undefined;",
+        "    const key = std.fmt.bufPrint(&buf, \"{s}/{s}\", .{ provider, model }) catch model;",
+        "    if (lookup(key)) |r| return r;",
+        "    if (lookup(model)) |r| return r;",
+        "    const bare = if (std.mem.lastIndexOfScalar(u8, model, '/')) |i| model[i + 1 ..] else model;",
+        "    return by_id.get(bare);",
         "}",
         "",
         "/// 单轮费用:usage 各项 × 费率 / 1e6。tier 以 input+cache 总量判定。",
@@ -121,6 +172,73 @@ def main() -> None:
     with open(out, "w") as f:
         f.write("\n".join(lines))
     print(f"{out}: {len(entries)} models, {sum(1 for e in entries.values() if e['tier_above'])} tiered")
+
+    clines = [
+        "// 代码生成,勿手改。源: pi-ai dist/providers/data/*.json",
+        "// 再生成: scripts/gen_pricing.py",
+        "",
+        "/// 内置能力表:窗口 / 最大输出 / 视觉 / 推理。",
+        "pub const Caps = struct {",
+        "    context_window: u32 = 0,",
+        "    max_output: u32 = 0,",
+        "    vision: bool = false,",
+        "    reasoning: bool = false,",
+        "};",
+        "",
+        "pub const table = std.StaticStringMap(Caps).initComptime(.{",
+    ]
+    for key, c in sorted(caps.items()):
+        clines.append(
+            '    .{{ "{key}", Caps{{ .context_window = {context_window}, .max_output = {max_output}, .vision = {vision}, .reasoning = {reasoning} }} }},'.format(
+                key=key.replace('\\', '\\\\').replace('"', '\\"'),
+                context_window=c["context_window"],
+                max_output=c["max_output"],
+                vision=zb(c["vision"]),
+                reasoning=zb(c["reasoning"]),
+            )
+        )
+    clines += [
+        "});",
+        "",
+        "pub const by_id = std.StaticStringMap(Caps).initComptime(.{",
+    ]
+    for mid, c in sorted(caps_by_id.items()):
+        clines.append(
+            '    .{{ "{id}", Caps{{ .context_window = {context_window}, .max_output = {max_output}, .vision = {vision}, .reasoning = {reasoning} }} }},'.format(
+                id=mid.replace('\\', '\\\\').replace('"', '\\"'),
+                context_window=c["context_window"],
+                max_output=c["max_output"],
+                vision=zb(c["vision"]),
+                reasoning=zb(c["reasoning"]),
+            )
+        )
+    clines += [
+        "});",
+        "",
+        "pub fn lookup(key: []const u8) ?Caps {",
+        "    return table.get(key);",
+        "}",
+        "",
+        "pub fn lookupId(model: []const u8) ?Caps {",
+        "    const bare = if (std.mem.lastIndexOfScalar(u8, model, '/')) |i| model[i + 1 ..] else model;",
+        "    if (table.get(model)) |c| return c;",
+        "    return by_id.get(bare);",
+        "}",
+        "",
+        "pub fn lookupAny(provider: []const u8, model: []const u8) ?Caps {",
+        "    var buf: [256]u8 = undefined;",
+        "    const key = std.fmt.bufPrint(&buf, \"{s}/{s}\", .{ provider, model }) catch model;",
+        "    if (table.get(key)) |c| return c;",
+        "    return lookupId(model);",
+        "}",
+        "",
+        "const std = @import(\"std\");",
+        "",
+    ]
+    cout = os.path.normpath(CATALOG_OUT)
+    with open(cout, "w") as f:
+        f.write("\n".join(clines))
+    print(f"{cout}: {len(caps)} caps, {len(caps_by_id)} ids")
 
 
 if __name__ == "__main__":

@@ -234,6 +234,7 @@ pub fn toolSpawnAgent(ctx: ?*anyopaque, arena: std.mem.Allocator, args: []const 
         .plugins = child_plugins,
         .tool_allow = owned_tools,
         .depth = self.depth + 1,
+        .think_level = self.think_level,
     }) catch |e| {
         ar.deinit();
         gpa.destroy(ar);
@@ -403,6 +404,14 @@ pub fn toolSendAgent(ctx: ?*anyopaque, arena: std.mem.Allocator, args: []const u
     }) };
 }
 
+pub fn slashAgents(ctx: ?*anyopaque, args: []const u8) anyerror![]const u8 {
+    const self: *agentmod.Agent = @ptrCast(@alignCast(ctx orelse return error.NoAgent));
+    var arena = agentmod.util.Arena.init(self.alloc);
+    defer arena.deinit();
+    const r = try toolListAgents(ctx, arena.allocator(), args);
+    return self.alloc.dupe(u8, r.content);
+}
+
 pub fn toolListAgents(ctx: ?*anyopaque, arena: std.mem.Allocator, args: []const u8) anyerror!toolsmod.Result {
     _ = ctx;
     _ = args;
@@ -424,4 +433,19 @@ pub fn toolCloseAgent(ctx: ?*anyopaque, arena: std.mem.Allocator, args: []const 
         .is_error = true,
     };
     return .{ .content = try std.fmt.allocPrint(arena, "closed sub-agent #{d} (was {s})", .{ id, prev.name() }) };
+}
+
+test "slashAgents lists empty registry" {
+    const t = std.testing;
+    try agentmod.util.testInit();
+    var arena = agentmod.util.Arena.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var cfg = agentmod.cfgmod.Config{ .arena = &arena };
+    var provs = [_]agentmod.cfgmod.Provider{.{ .name = "mock", .api = .openai_completions, .base_url = "http://127.0.0.1:1", .api_key = "k" }};
+    cfg.providers = &provs;
+    var agent = try agentmod.Agent.init(a, &cfg, "mock", "m", "/tmp");
+    const out = try slashAgents(@ptrCast(&agent), "");
+    defer agent.alloc.free(out);
+    try t.expect(std.mem.indexOf(u8, out, "no live sub-agents") != null);
 }

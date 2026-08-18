@@ -36,6 +36,7 @@ piz 用自己的配置目录 `~/.piz`。配置**文件格式**与 pi 兼容（`s
 ├── packages/              # 资源包
 ├── memories/              # 跨会话记忆（自动生成）
 ├── artifacts/             # 外置的大工具输出（自动生成）
+├── usage.jsonl            # 每轮 token 账本（usage-ledger 插件）
 └── sessions/              # 会话文件
 ```
 
@@ -59,6 +60,7 @@ piz 用自己的配置目录 `~/.piz`。配置**文件格式**与 pi 兼容（`s
 | `defaultModel` | 默认模型 |
 | `defaultThinkingLevel` | 默认思考等级（pi 同名字段）。`/think`、选择器与 `Alt+,/.` 会写回这里 |
 | `approvalMode` | 授权档：`yolo`（默认，不询问）/ `ask` / `read-only`。`/permissions` 与选择器会写回这里 |
+| `sandboxMode` | bash OS 隔离：`off`（默认）/ `workspace` / `strict`。`/sandbox` 与 `--sandbox` 会写回这里。优先 bubblewrap，否则 Landlock |
 | `thinkingBudgets` | 旧 Claude 预算思考每档 token。缺省 `minimal:1024` / `low:2048` / `medium:8192` / `high:16384`（pi `adjustMaxTokensForThinking`）。`xhigh`/`max` 夹到 `high` |
 | `plugins` | 要开启的可选插件名数组，见 [Plugins](plugins.md#开启方式) |
 | `disabled_plugins` | 要从出厂集关掉的插件名数组（撤钩 / 工具 / schema） |
@@ -244,7 +246,13 @@ Claude 兼容（`anthropic-messages`）的第三方端点同理，只是 `api` �
 
 只支持这两种协议形态。pi 支持三十多个 provider（Bedrock、Azure、Vertex、Gemini 原生 API、llama.cpp 等），piz 没有对应实现 —— 但只要目标服务提供 OpenAI 兼容端点，用 `models.json` 声明 `baseUrl` 就能接。
 
-**没有 OAuth 登录**。pi 的 `/login` 可以蹭 Claude Pro / ChatGPT Plus 订阅额度，piz 只支持 API key。唯一的例外是会尝试从 `~/.codex/config.toml` 读 `experimental_bearer_token`（当 auth.json 为空时的兜底）。
+鉴权入口：
+
+- `piz login [provider] [key]` / `/login`：写 API key 到 `~/.piz/auth.json`
+- Web Settings → Account：贴 key，或 **Sign in with OpenRouter**（官方 PKCE，换永久 key）
+- Claude Pro / ChatGPT Plus 订阅 OAuth 尚未接（pi 有，下一步）
+
+唯一的例外是会尝试从 `~/.codex/config.toml` 读 `experimental_bearer_token`（当 auth.json 为空时的兜底）。
 
 ## API key 解析顺序
 

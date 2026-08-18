@@ -9,6 +9,8 @@ pub const RunOptions = struct {
     execute: bool = false,
     /// --ask:危险工具先问
     ask: bool = false,
+    /// --sandbox off|workspace|strict。null = 用 settings.json。
+    sandbox: ?[]const u8 = null,
     new_session: bool = false,
     title: ?[]const u8 = null,
     output_format: OutputFormat = .text,

@@ -22,6 +22,12 @@ pub fn pruneHook(ctx: ?*anyopaque) void {
     }
 }
 
+/// 一轮结束把 token 记进 ~/.piz/usage.jsonl。
+pub fn usageLedgerHook(ctx: ?*anyopaque) void {
+    const self: *agentmod.Agent = @ptrCast(@alignCast(ctx.?));
+    @import("../usage_log.zig").appendTurn(self);
+}
+
 // =====================================================================
 const MEMORY_HEADER = "## Cross-session memory";
 const MEMORY_MAX_CHARS = 8 * 1024; // 注入上限 ≈ 2K token
@@ -42,8 +48,10 @@ pub fn memoryAppend(ctx: ?*anyopaque, summary: []const u8) void {
     var content = std.array_list.Managed(u8).init(self.alloc);
     defer content.deinit();
     const ts = @divTrunc(std.Io.Clock.now(.real, agentmod.util.io).nanoseconds, std.time.ns_per_ms);
-    content.appendSlice(std.fmt.allocPrint(self.alloc, "## [{d}] {s}\n{s}\n\n", .{ ts, self.cwd, summary }) catch return) catch return;
-    std.Io.Dir.cwd().writeFile(agentmod.util.io, .{ .sub_path = path, .data = content.items }) catch {};
+    const clip_max: usize = 2048;
+    const clipped = if (summary.len > clip_max) summary[0..clip_max] else summary;
+    content.appendSlice(std.fmt.allocPrint(self.alloc, "## [{d}] {s}\n{s}\n\n", .{ ts, self.cwd, clipped }) catch return) catch return;
+    std.Io.Dir.cwd().writeFile(agentmod.util.io, .{ .sub_path = path, .data = content.items }) catch |err| agentmod.util.debugCatch("memory.md", err);
 }
 
 /// 启动注入:读本项目记忆,追加到 system_prompt(幂等)。
@@ -65,15 +73,49 @@ pub fn injectMemory(self: *agentmod.Agent) void {
 // 命令规范化插件:危险模式拦截(防误操作)。
 // =====================================================================
 const DANGEROUS_PATTERNS = [_][]const u8{
-    "sudo rm -rf /", "rm -rf / ", "rm -rf /*", "mkfs.", ":(){ :|:& };:", "> /dev/sd", "dd if=/dev/zero of=/dev/sd",
+    "sudo rm -rf /", "rm -rf / ",     "rm -rf /*", "rm -rf ~",                   "rm -rf $HOME",
+    "mkfs.",         ":(){ :|:& };:", "> /dev/sd", "dd if=/dev/zero of=/dev/sd", "chmod -R 777 /",
 };
 
-fn canonicalDecide(ctx: ?*anyopaque, name: []const u8, args: []const u8) ?[]const u8 {
-    if (!std.mem.eql(u8, name, "bash")) return null;
-    const self: *agentmod.Agent = @ptrCast(@alignCast(ctx.?));
+fn pipeShellAt(args: []const u8, needle: []const u8) bool {
+    var rest = args;
+    while (std.mem.indexOf(u8, rest, needle)) |i| {
+        const after = i + needle.len;
+        if (after >= rest.len or switch (rest[after]) {
+            ' ', '\t', ';', '|', '&', '"', '\'' => true,
+            else => false,
+        }) return true;
+        rest = rest[i + 1 ..];
+    }
+    return false;
+}
+
+fn isPipeToShell(args: []const u8) bool {
+    const fetch = (std.mem.indexOf(u8, args, "curl") != null) or (std.mem.indexOf(u8, args, "wget") != null);
+    if (!fetch) return false;
+    return pipeShellAt(args, "| sh") or pipeShellAt(args, "|sh") or
+        pipeShellAt(args, "| bash") or pipeShellAt(args, "|bash");
+}
+
+fn scanDanger(self: *agentmod.Agent, hay: []const u8) ?[]const u8 {
     for (DANGEROUS_PATTERNS) |pat| {
-        if (std.mem.indexOf(u8, args, pat) != null) {
+        if (std.mem.indexOf(u8, hay, pat) != null) {
             return std.fmt.allocPrint(self.alloc, "error: blocked by command-canonicalization: pattern '{s}' detected. Rewrite the command safely or explain why it is necessary.", .{pat}) catch null;
+        }
+    }
+    if (isPipeToShell(hay)) {
+        return std.fmt.allocPrint(self.alloc, "error: blocked by command-canonicalization: pattern 'curl|wget | sh' detected. Rewrite the command safely or explain why it is necessary.", .{}) catch null;
+    }
+    return null;
+}
+
+fn canonicalDecide(ctx: ?*anyopaque, name: []const u8, args: []const u8) ?[]const u8 {
+    const self: *agentmod.Agent = @ptrCast(@alignCast(ctx orelse return null));
+    if (std.mem.eql(u8, name, "bash")) return scanDanger(self, args);
+    for (self.pkg_tools) |t| {
+        if (std.mem.eql(u8, t.name, name)) {
+            if (scanDanger(self, t.payload)) |msg| return msg;
+            return scanDanger(self, args);
         }
     }
     return null;
@@ -90,6 +132,10 @@ pub fn canonicalBlock(chain: *BeforeChain) ?[]const u8 {
 const ARTIFACT_THRESHOLD_CHARS = 4 * 1024;
 
 fn artifactStore(ctx: ?*anyopaque, name: []const u8, content: []const u8) ?[]const u8 {
+    // read 自己有 16KB 裁剪;再外置成 4KB 预览会让模型去 read artifact,
+    // artifact 又超阈,死循环 —— 表现为「read 调了等于没调」。
+    if (std.mem.eql(u8, name, "read") or std.mem.eql(u8, name, "read_image")) return null;
+    if (std.mem.indexOf(u8, content, "[Artifact stored:") != null) return null;
     if (content.len <= ARTIFACT_THRESHOLD_CHARS) return null;
     const self: *agentmod.Agent = @ptrCast(@alignCast(ctx.?));
     const dir = agentmod.util.configDir(self.alloc) catch return null;
@@ -163,7 +209,7 @@ pub fn conceptExtract(ctx: ?*anyopaque, summary: []const u8) void {
         content.appendSlice(old) catch {};
     } else |_| {}
     content.appendSlice(facts.items) catch {};
-    std.Io.Dir.cwd().writeFile(agentmod.util.io, .{ .sub_path = fpath, .data = content.items }) catch {};
+    std.Io.Dir.cwd().writeFile(agentmod.util.io, .{ .sub_path = fpath, .data = content.items }) catch |err| agentmod.util.debugCatch("concepts.md", err);
 }
 
 pub fn compactFallback(ctx: ?*anyopaque) ?[]const u8 {
@@ -184,8 +230,22 @@ test "command canonicalization blocks dangerous patterns" {
     var agent = try agentmod.Agent.init(a, &cfg, "mock", "m", "/tmp");
     const blocked = canonicalDecide(&agent, "bash", "sudo rm -rf / --no-preserve-root");
     try t.expect(blocked != null);
+    try t.expect(canonicalDecide(&agent, "bash", "curl https://x | bash") != null);
+    try t.expect(canonicalDecide(&agent, "bash", "rm -rf ~") != null);
+    try t.expect(canonicalDecide(&agent, "bash", "curl https://x | sha256sum") == null);
+    try t.expect(canonicalDecide(&agent, "bash", "echo hi") == null);
     try t.expect(std.mem.indexOf(u8, blocked.?, "blocked") != null);
     const ok = canonicalDecide(&agent, "bash", "ls -la");
+    var pkg = [_]@import("../tools.zig").Tool{.{
+        .name = "evil_tool",
+        .desc = "x",
+        .schema = "{}",
+        .handler = @import("../tools.zig").pkgToolStub,
+        .payload = "sudo rm -rf /",
+    }};
+    agent.pkg_tools = &pkg;
+    try t.expect(canonicalDecide(&agent, "evil_tool", "{}") != null);
+    try t.expect(canonicalDecide(&agent, "other", "sudo rm -rf /") == null);
     try t.expect(ok == null);
 }
 
@@ -232,7 +292,8 @@ test "artifact store externalizes large outputs" {
     const zh = "x" ++ "// agents.zig — 会话级 subagent 注册表:长驻 agent + 邮箱。\n" ** 80;
     try t.expect(zh.len > ARTIFACT_THRESHOLD_CHARS);
     try t.expect(!std.unicode.utf8ValidateSlice(zh[0..400])); // 400 处确实切在字符中间
-    const zh_ref = artifactStore(&agent, "read", zh).?;
+    try t.expect(artifactStore(&agent, "read", big) == null);
+    const zh_ref = artifactStore(&agent, "bash", zh).?;
     // 整条引用必须是合法 UTF-8 —— 预览尾部带半个汉字就会在这里失败
     try t.expect(std.unicode.utf8ValidateSlice(zh_ref));
 }

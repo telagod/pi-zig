@@ -54,13 +54,34 @@ graph TD
     app --> cmdp
     app --> cmdk
     cmdw --> webui
+    tui --> slash["tui_slash.zig — 斜杠排序 / 选择器"]
+    tui --> measure["tui_measure.zig — 列宽 / 截断"]
+    tui --> footer["tui_footer.zig — 底栏 / 状态卡"]
+    tui --> keys["tui_keys.zig — CSI / UTF-8"]
+    tui --> draw["tui_draw.zig — 截断 / 选择器 / 活动行"]
+    tui --> flow["tui_flow.zig — workflow 轨道"]
+    tui --> input["tui_input.zig — 键盘 / 鼠标 / 补全"]
+    tui --> types["tui_types.zig — Cell / ToolMeta"]
+    tui --> emit["tui_emit.zig — gutter / emitCell"]
     tui --> core
 
     core --> agent["agent.zig — 工具循环 / 压缩"]
     core --> compress["compress.zig — prune/shake/snap"]
     core --> ai["ai.zig — provider 协议 / SSE"]
-    core --> tools["tools.zig — 8 个核心工具"]
-    core --> plugins["plugins.zig — 15 个内置插件"]
+    ai --> markers["ai_markers.zig — 漏进正文的 tool-call 标记"]
+    ai --> astream["ai_stream.zig — SSE 解析 / 工具累积"]
+    ai --> aanthro["ai_anthropic.zig — Anthropic 请求体"]
+    core --> tools["tools.zig — 8 个核心工具 + 工作区"]
+    tools --> walk["tools_fs.zig — ignore / glob / 正则 / 遍历"]
+    tools --> tjson["tools_json.zig — 参数 JSON"]
+    tools --> tpath["tools_path.zig — 线程根目录 / 沙箱"]
+    tools --> tsearch["tools_search.zig — grep / find / ls"]
+    tools --> tread["tools_read.zig — read / image / 行号切片"]
+    tools --> twrite["tools_write.zig — write / dryRun"]
+    tools --> tskill["tools_skill.zig — skill / SKILL.md"]
+    ai --> aijson["ai_json.zig — provider JSON 字符串 / jstr"]
+    tools --> sandbox["sandbox.zig — bash bwrap 隔离"]
+    core --> plugins["plugins.zig — 16 个内置插件"]
     core --> agents["agents.zig — 长驻 sub-agent 注册表 + 邮箱"]
     core --> pool["pool.zig — 8 线程 worker 池"]
     core --> session["session.zig — JSONL 持久化"]
@@ -94,25 +115,49 @@ graph TD
 | `agent.zig` | 工具循环编排、消息组装、压缩、并行执行与写锁 |
 | `compress.zig` | 快压三件套：prune / shake / snap，无 LLM |
 | `ai.zig` | 两种 provider 协议的序列化与 SSE 流式解析 |
-| `tools.zig` | 核心工具实现、glob 匹配、最小正则引擎、目录遍历 |
+| `ai_markers.zig` | 漏进正文的 tool-call 标记清单 |
+| `ai_json.zig` | provider 请求体 JSON 字符串 / schema |
+| `ai_think.zig` | thinking / reasoning 请求字段 |
+| `ai_types.zig` | Message / Usage / Callbacks / Options |
+| `ai_openai.zig` | OpenAI Chat Completions / Responses 请求体 |
+| `ai_anthropic.zig` | Anthropic Messages 请求体（含 thinking / cache_control） |
+| `ai_stream.zig` | SSE 流式解析 + 非流式回退 + 工具调用累积（两协议共用） |
+| `tools.zig` | 核心工具实现、原子写盘、工作区边界 |
+| `tools_fs.zig` | ignore / glob / 最小正则 / collectFiles |
+| `tools_json.zig` | 工具参数 JSON（jstr / jint / jbool / parseArgs） |
+| `tools_path.zig` | 每线程 tool root、sandbox、resolvePath、diskRead |
+| `tools_search.zig` | grep / find / ls（不回引 tools.zig） |
+| `tools_bash.zig` | bash / 管道抽水 / 后台作业 / pkg 命令 |
+| `tools_edit.zig` | edit / multi_edit |
+| `tools_read.zig` | read / image attach / 行号切片 |
+| `tools_write.zig` | write / dryRun / createOnly |
+| `tools_skill.zig` | skill / SKILL.md 查找 |
+| `tools_files.zig` | 工作区文件列表（Web `/api/files` 与 TUI `@./` 补全） |
+| 插件斜杠 | `/skills` `/context` `/git` `/web` `/agents` `/todo` `/lsp`（开对应插件才进 `/help`） |
 | `plugins.zig` | 内置插件合同、出厂表、启用集、钩子分发 |
-| `plugins/` | 挂钩/web/todo/小件/agents/task/lsp 实现；`limits.zig` 为委托上限 |
+| `plugins/` | 挂钩/web/todo/小件/agents/task/workflow/lsp 实现；`limits.zig` 为委托上限 |
 | `seams.zig` | 编译期能力缝：fs / llm 默认 Provider，无加载器 |
 | `session.zig` | 会话文件读写、fork、截断、Web 会话管理 |
 | `config.zig` | 配置文件加载、provider 合并、key 解析 |
 | `httpc.zig` | `std.http.Client` 封装、SSE 解析、重试退避 |
 | `util.zig` | 路径拼接、进程执行、模板渲染、配置目录、技能索引 |
 | `activity.zig` | 在跑活动的无锁登记表：spinner／耗时／进度、取消世代、转后台 |
-| `pkgs.zig` | 包安装/移除/枚举、marketplace 解析 |
+| `pkgs.zig` | 包安装/移除/枚举、marketplace 解析、`tools[]` 声明 |
 | `events.zig` | 扫描包扩展声明、事件触发时 spawn 命令 |
 | `webui.zig` | HTTP 服务、路由、SSE、鉴权 |
 | `webplugins.zig` | 前端插件清单与资源服务 |
 | `main.zig` | argv 解析、交互态编排 |
+| `cmd_help.zig` | CLI `-h`、TUI `/help`、Web `/api/help` 同源清单 |
 | `cmd_web.zig` | Web 会话池、`piz web` 命令 |
 | `cmd_print.zig` | print/jsonl 输出、`runPrint`、`-a` 异步 |
 | `cmd_pkg.zig` | `piz pkg` 子命令 |
 | `runopts.zig` | 交互/print 共用的运行选项 |
-| `tui.zig` |  typed Cells + BottomPane：会话卡按当前宽度画、gutter 只在渲染时加、boxed composer、Working、页脚提示 |
+| `tui.zig` | typed Cells + BottomPane：会话卡按当前宽度画、gutter 只在渲染时加、boxed composer、Working、页脚提示 |
+| `tui_draw.zig` | 截断写入、斜杠/选择器、活动行 |
+| `tui_flow.zig` | workflow 轨道节点 / 渲染 |
+| `tui_input.zig` | 键鼠输入、斜杠与 @ 文件补全、粘贴 |
+| `tui_types.zig` | Cell / ToolMeta / CardFields |
+| `tui_emit.zig` | gutter / 行折算 / emitCell / composer 画行 |
 | `e2e.zig` | 端到端测试（内嵌 mock provider，仅网络边界打桩） |
 
 `webui.html` 是单页前端源码，通过 `@embedFile` 编译期嵌入二进制。
@@ -166,6 +211,7 @@ sequenceDiagram
 | skill 全文（`skill` 工具结果） | 入 tool 消息 |
 | 跨会话记忆注入 | `before_turn` 写进 messages，随后 `saveMessage` |
 | 快压占位 | 改写已有 tool 内容后落盘 |
+| `on_user_message` 改写 | 进 `user` 消息后落盘；原句若只在 TUI/Web 显示则不入模型 |
 
 `system` 角色可写入 JSONL，但重建请求历史时丢弃（`isModelVisibleRole`）。
 
@@ -176,8 +222,8 @@ sequenceDiagram
 1. **快压**（`compress.zig`，`tool-output-pruner` 的 `before_turn`）— 无 LLM。
    - **prune**：同 path 再 read 立刻 supersede 旧结果；年龄裁优先动 cache 廉价尾（suffix ≤ 8K），不够才深裁。保护最近 16K，能省 ≥4K 才动手。skill 永不裁，最新一次 read 保留。
    - **shake**（用量 >70% 或 `/shake`）：撕掉旧 tool 结果与大 fence/XML。硬线前（>85%）再跑一次 protect=0 救援，避免单轮过大切不动。`/shake images` 只丢图。
-   - **snap**（用量 >80% 或 `/snap`）：大段高 ASCII 打成多带密图并留 head/tail 摘。优先廉价尾（suffix ≤ 8K），无货才深打，少炸 prompt cache。无 vision / CJK / 图 token 不过关则跳过。tool 上的图在发请求时拆成 user 图块。`/fast-compress` 看用量与下一层。
-2. **压缩**（`agent.zig` 的 `compact`）— 总 token 超窗口 85% 时触发，调模型生成摘要，保留最近 20% 窗口预算。切点只落在 `user`/`assistant`，绝不切断 tool 结果对。增量式：只总结上次边界之后的内容。
+   - **snap**（用量 >80% 或 `/snap`）：大段输出打成 8x13+CJK 密图并留 head/tail 摘。Anthropic 用 `11on16`，OpenAI 系用 `8on22`。优先廉价尾（suffix ≤ 8K），无货才深打，少炸 prompt cache。无 vision / 图 token 不过关则跳过。tool 上的图在发请求时拆成 user 图块。`/fast-compress` 看用量与下一层。
+2. **压缩**（`agent.zig` 的 `compact`）— 总 token 超窗口 85% 时触发，密图 + 摘录替换被裁段（不调模型），保留最近 20% 窗口预算。切点只落在 `user`/`assistant`，绝不切断 tool 结果对。增量式：只总结上次边界之后的内容。
 3. **跨会话记忆**（`cross-session-memory` 插件，`on_compact`）— 复用压缩摘要落盘，下次同目录启动注入。零额外调用。
 
 压缩失败时 `compact-resilience` 换备用模型重试一次。
@@ -559,6 +605,8 @@ zig build test
 | `e2e.zig` | provider 请求真并发（并发峰值 >1）且响应互不串扰 |
 | `tools.zig` | 工具相对路径相对 Agent.cwd 解析，root 是 thread-local |
 | `tools.zig` | bash 在 Agent.cwd 里跑（相对路径与写文件都落在那儿）|
+| `sandbox.zig` | bash 可套 bwrap：`workspace` 工作区可写其余只读，`strict` 再断网；没装则 Landlock |
+| `usage_log.zig` | 每轮 token 追加 `~/.piz/usage.jsonl`；`/usage` 与 `GET /api/usage` |
 | `activity.zig` | 槽位满员时 `cancelled()`/`elapsedMs()` 仍有效（否则溢出的 subagent 无法 Ctrl+C）|
 | `tools.zig` | `appendCapped` 保尾且缓冲永不超过 2× 窗口（管道内存有界的全部依据）|
 | `tools.zig` | 截断提示里的 total 是真实流量，不是被裁后的缓冲长度 |

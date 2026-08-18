@@ -21,7 +21,8 @@
 
 | | |
 |---|---|
-| 工具 | 默认 8 个：`read` `write` `edit` `multi_edit` `grep` `find` `ls` `bash`。其余 `--plugin` 才开，都带 JSON Schema |
+| 工具 | 默认 8 个：`read` `write` `edit` `multi_edit` `grep` `find` `ls` `bash`。搜索认 `.gitignore`。`read` 带行号。写盘先 tmp 再 rename，且不得逃出工作区。其余 `--plugin` 才开 |
+| 扩展 | `pkg.json` 可声明工具与钩子。`piz --plugins` 列出 `[pkg]`。Web / TUI 可贴图，续会话从图文件回放 |
 | 子 agent | 8 线程 worker 池，闲着不占线程。顶层排队 32、嵌套 4。孩子默认不带 `task` / `spawn_agent` |
 | 缓存 | tools 写在 messages 前面，`prompt_cache_key` 用工作目录。快压优先动廉价尾 |
 | 依赖 | Zig 标准库 + vendored [stb](https://github.com/nothings/stb)（读图）。正则和 glob 是自己的 |
@@ -57,7 +58,7 @@ echo "总结这个文件" | piz -p
 piz web                   # 本地界面
 ```
 
-`-x` 自动执行（模型能跑任意 shell）。`-r` 只读：一个工具都不发，连 `read` 也没有，别拿它做调研。
+`-x` 自动执行（模型能跑任意 shell）。`-r` 只读：一个工具都不发，连 `read` 也没有，别拿它做调研。`--sandbox workspace` 把 bash 关进 bwrap（工作区外只读）。
 
 ```bash
 piz --plugins             # 看启用状态
@@ -89,7 +90,7 @@ piz --plugin lsp          # 本次开启
 
 会话文件格式不兼容，历史迁不过来。见 [Sessions](docs/sessions.md#会话格式与-pi-的差异)。
 
-piz 做了 pi 明确声明不做的事：权限门、`/plan`、todo、任务委托、LSP、本地 Web UI。没有 OAuth 蹭订阅，只认 API key。
+piz 做了 pi 明确声明不做的事：权限门、`/plan`、todo、任务委托、LSP、本地 Web UI。认 API key，也接 OpenRouter PKCE 与 Codex/xAI device-code。Claude Pro / ChatGPT Plus 订阅 OAuth 未接。
 
 ## 开发
 

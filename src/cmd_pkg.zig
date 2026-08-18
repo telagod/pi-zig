@@ -16,14 +16,23 @@ const pkgsmod = @import("core").pkgs;
 /// 拿不到 pkg.json,只能装完再问,拒绝时由调用方删掉包目录 —— 钩子要到下次启动
 /// 才跑,此刻撤销仍然来得及。
 fn confirmPkgHooks(alloc: std.mem.Allocator, pkg_dir: []const u8, prompt: []const u8, assume_yes: bool) bool {
-    const hooks = pkgsmod.declaredHooks(alloc, pkg_dir) catch return true;
-    if (hooks.len == 0) return true;
+    const hooks = pkgsmod.declaredHooks(alloc, pkg_dir) catch &.{};
+    const tools = pkgsmod.declaredTools(alloc, pkg_dir) catch &.{};
+    if (hooks.len == 0 and tools.len == 0) return true;
 
-    std.debug.print("\n这个包声明了 {d} 个生命周期钩子,会以 `bash -c` 执行:\n\n", .{hooks.len});
-    for (hooks) |h| {
-        std.debug.print("  [{s}] {s}\n", .{ h.event, h.command });
+    if (hooks.len > 0) {
+        std.debug.print("\n这个包声明了 {d} 个生命周期钩子,会以 `bash -c` 执行:\n\n", .{hooks.len});
+        for (hooks) |h| {
+            std.debug.print("  [{s}] {s}\n", .{ h.event, h.command });
+        }
+        std.debug.print("\n其中 startup 钩子会在下次启动 piz 时立刻运行。\n", .{});
     }
-    std.debug.print("\n其中 startup 钩子会在下次启动 piz 时立刻运行。\n", .{});
+    if (tools.len > 0) {
+        std.debug.print("\n这个包声明了 {d} 个工具,模型可调用,同样走 `bash -c`:\n\n", .{tools.len});
+        for (tools) |t| {
+            std.debug.print("  {s}  {s}\n", .{ t.name, t.command });
+        }
+    }
     if (assume_yes) {
         std.debug.print("(-y 已指定,继续)\n\n", .{});
         return true;

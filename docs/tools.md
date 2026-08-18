@@ -40,13 +40,13 @@ piz --plugin lsp               # 本次开启 lsp
 
 | 工具 | 作用 |
 |------|------|
-| `read` | 读文件，可选行区间 |
+| `read` | 读文件，每行带 1-based 行号，可选行区间。PNG/JPEG/GIF/WEBP/BMP 会解码给 vision 模型。路径若是 symlink，正文前标 `symlink PATH -> TARGET` |
 | `write` | 写文件，自动建父目录 |
 | `edit` | 精确替换文件内片段 |
 | `multi_edit` | 跨文件原子批量编辑 |
 | `grep` | 正则搜索文件内容 |
 | `find` | glob 匹配文件路径 |
-| `ls` | 列目录 |
+| `ls` | 列目录。默认不列 gitignored / 跳过目录；`all: true` 全列。符号链接标 `-> target` |
 | `bash` | 执行 shell 命令 |
 
 ## 可选工具
@@ -59,12 +59,14 @@ piz --plugin lsp               # 本次开启 lsp
 | `lsp` | `lsp` | 语言服务器代码智能 |
 | `todo_write` `todo_read` | `todo` | 结构化任务列表 |
 | `task` | `task-delegation` | 委托子 agent 会话 |
+| `workflow` | `task-delegation` | 命名 DAG 委派，后步引用 `{id}` |
 | `web_search` | `web-search` | 网页搜索（需自建 SearXNG 端点） |
 | `fetch_url` | `web-search` | 取网页正文，去标签（**不需要搜索端点**） |
 | `git_status` | `git-awareness` | git status 与 diff stat |
 | `read_image` | `vision-input` | 读图并附图给视觉模型（自动压缩/缩放） |
 | `get_context_remaining` | `context-budget` | 剩余上下文预算 |
-| `ask_user` | `elicitation` | 向用户提问 |
+| `ask_user` | `elicitation` | 向用户提问；成功后本轮立刻停，等下一条消息 |
+| 包声明名 | `pkg.json` `tools[]` | 用户包提供的 shell 工具，见 [Packages](packages.md) |
 
 另有 6 个默认启用的插件只挂钩子、不加工具（上下文预剪枝、跨会话记忆、危险命令拦截等），零 token 成本，见 [Plugins](plugins.md)。
 
@@ -80,9 +82,11 @@ piz --plugin lsp               # 本次开启 lsp
 |------|------|------|
 | `path` | 是 | 文件路径 |
 | `offset` | 否 | 起始行号，**1-based** |
-| `limit` | 否 | 最多返回多少行 |
+| `limit` | 否 | 最多返回多少行。配 `around` 时为窗口行数 |
+| `tail` | 否 | 最后 N 行（日志）。不可与 `offset`/`around` 同用 |
+| `around` | 否 | 以该 1-based 行为中心的窗口。缺省 41 行。不可与 `offset`/`tail` 同用 |
 
-不给 `offset`/`limit` 时返回全文。`offset` 越界返回明确错误（含实际行数），而不是空内容。文件读取上限 16MB，返回内容超过 16KB 时截断保**头部**。
+不给 `offset`/`limit`/`tail`/`around` 时返回全文。`offset` 越界返回明确错误（含实际行数），而不是空内容。文件读取上限 16MB，返回内容超过 16KB 时截断保**头尾各 8KB**（中间标 omitted 字节数）；要中间段用 `offset`/`limit`、`tail` 或 `around`。
 
 ### write
 
@@ -90,7 +94,15 @@ piz --plugin lsp               # 本次开启 lsp
 {"path": "src/new.zig", "content": "const std = @import(\"std\");\n"}
 ```
 
-父目录不存在会自动创建。返回内容带 unified diff 风格的 `+` 行块（供 Web UI 的 diff 卡渲染，最多 40 行）。
+| 参数 | 必需 | 说明 |
+|------|------|------|
+| `path` | 是 | 文件路径 |
+| `content` | 是 | 全文 |
+| `createOnly` | 否 | 已存在则拒绝覆盖 |
+| `dryRun` | 否 | 只预览，不落盘；`createOnly` 仍校验 |
+
+父目录不存在会自动创建。先写同目录临时文件再 rename，避免半截文件。返回内容带 unified diff 风格的 `+` 行块（供 Web UI 的 diff 卡渲染，最多 40 行）。
+路径必须落在当前工作区（Agent cwd）内；`../`、区外绝对路径、以及指向区外的 symlink 一律拒绝。读类工具不拦。
 
 ### edit
 
@@ -98,7 +110,8 @@ piz --plugin lsp               # 本次开启 lsp
 {"path": "src/main.zig", "edits": [{"oldText": "const x = 1;", "newText": "const x = 2;"}]}
 ```
 
-每个 `oldText` **必须在文件中恰好匹配一次**。0 次或多次都报错并且不写入 —— 这是防止误改的核心约束。多条 edit 按数组顺序依次应用。
+每个 `oldText` **默认必须恰好匹配一次**。0 次或多次都报错并且不写入。需要一次换完全部出现时，在该条 edit 上设 `replaceAll: true`。多条 edit 按数组顺序依次应用。顶层 `dryRun: true` 只校验并预览，不落盘。
+若 `oldText` 原样未命中，会再试去掉 `read` 的 `     N|` 行号前缀 —— 模型从 `read` 抄行时仍能改中。仍找不到则附上文件里最接近的几行（`nearest:`），便于改短或补上下文。
 
 匹配失败时错误信息会说明实际匹配了几次，据此加长 `oldText` 补足上下文。
 
@@ -111,7 +124,7 @@ piz --plugin lsp               # 本次开启 lsp
 ]}
 ```
 
-**原子语义**：先对所有文件做全量 dry-run 校验，任一 `oldText` 匹配失败则**一个字节都不写**，错误信息指明哪个文件哪条 edit 失败。全部通过后才逐个落盘。
+**原子语义**：先对所有文件做全量校验，任一 `oldText` 匹配失败则**一个字节都不写**，错误信息指明哪个文件哪条 edit 失败。全部通过后才逐个落盘。顶层 `dryRun: true` 只预览，不落盘。
 
 这是它相对多次单 `edit` 调用的核心价值：跨文件重命名之类的操作不会在中途失败时留下半改的工作树。
 
@@ -121,7 +134,9 @@ piz --plugin lsp               # 本次开启 lsp
 
 搜索工具全部纯 Zig 实现，不调用外部 `rg` / `fd` / `grep`。
 
-三个工具都跳过这些目录：`.git` `zig-out` `.zig-cache` `node_modules` `target` `dist` `__pycache__` `.venv` `venv` `.next` `vendor` `.mypy_cache` `.pytest_cache`
+三个工具都跳过这些目录：`.git` `zig-out` `.zig-cache` `node_modules` `target` `dist` `__pycache__` `.venv` `venv` `.next` `vendor` `.mypy_cache` `.pytest_cache` `.turbo` `.cache` `.direnv` `.gradle` `.pnpm-store` `Pods` `buck-out` `site-packages`。
+
+另外从搜索根向上走到 `.git`（或文件系统根），再叠每一层子目录的 `.gitignore` / `.ignore`。规则相对声明它的目录匹配（根上 `/build` 只挡根下 `build`，子目录 `/secret` 只挡该子目录）。后写的规则覆盖前者。`*` `?` `**`、行首 `/`、行尾 `/`、`!` 反选。注释与空行忽略。
 
 ### grep
 
@@ -138,8 +153,14 @@ piz --plugin lsp               # 本次开启 lsp
 | `literal` | 否 | 按字面量而非正则处理 |
 | `context` | 否 | 上下文行数，0-10 |
 | `limit` | 否 | 最大匹配数，缺省 200，上限 2000 |
+| `filesWithMatches` | 否 | 只列命中文件路径，像 `rg -l` |
+| `maxBytes` | 否 | 遍历目录时跳过更大的文件，缺省 1MB，上限 8MB。指定单个文件时不跳 |
+| `invert` | 否 | 保留未命中行（`rg -v`）。配合 `filesWithMatches` 则列出无命中文件（`rg -L`） |
+| `maxDepth` | 否 | 目录深度，缺省 32。`1` 只扫起点这一层 |
+| `count` | 否 | 每文件 `path:N` 命中数（`rg -c`），不回行内容 |
+| `exclude` | 否 | 跳过匹配此 glob 的路径（`rg -g '!pat'`） |
 
-输出格式 `path:line:content`，上下文行用 `path-line-content`（仿 GNU grep）。
+输出格式 `path:line:content`，上下文行用 `path-line-content`（仿 GNU grep）。`count` 时为 `path:N`。
 
 **正则支持范围**：
 
@@ -154,7 +175,7 @@ piz --plugin lsp               # 本次开启 lsp
 
 **不支持**：分组 `(...)`、选择 `|`、回溯引用、懒惰量词 `*?`。需要这些时用 `bash` 调系统 `rg`。
 
-非法 pattern 返回可操作的错误（提示改用 `literal: true`），不会崩。单行超过 4096 字节会跳过（防压缩产物和 base64 引起病态回溯）。二进制文件自动跳过（判据：前 8KB 含 NUL 字节，与 git 同策略）。
+非法 pattern 返回可操作的错误（提示改用 `literal: true`），不会崩。单行超过 4096 字节会跳过（防压缩产物和 base64 引起病态回溯）。二进制文件自动跳过（判据：前 8KB 含 NUL 字节，与 git 同策略）。遍历目录时默认跳过大于 1MB 的文件（`maxBytes`）。
 
 `glob` 同时对相对路径和 basename 做匹配，所以 `*.zig` 能命中 `src/deep/a.zig`。
 
@@ -169,6 +190,13 @@ piz --plugin lsp               # 本次开启 lsp
 | `pattern` | 是 | glob 模式 |
 | `path` | 否 | 起点，缺省 `.` |
 | `limit` | 否 | 最大结果数，缺省 200 |
+| `sort` | 否 | `mtime` 按修改时间新到旧 |
+| `ignoreCase` | 否 | glob 大小写不敏感，如 `*.ts` 命中 `Foo.TS` |
+| `type` | 否 | `file` / `dir` / `any`（缺省 any）。目录结果带尾 `/` |
+| `maxDepth` | 否 | 目录深度，缺省 32。`1` 只扫起点这一层 |
+| `exclude` | 否 | 跳过匹配此 glob 的路径 |
+
+列出文件 symlink 为 `path -> target`，不跟链。指向工作区外的目录 symlink 不遍历；`grep` 跳过这类链。
 
 **glob 语义**：
 
@@ -191,7 +219,7 @@ src/**/*.ts    匹配 src 下任意深度的 .ts
 {"path": "src", "limit": 50}
 ```
 
-目录优先、同类按名字典序。目录名带尾 `/`，文件带字节数。
+默认目录优先、同类按名字典序。`sort=mtime` 则按修改时间新到旧（不先按目录分组）。`type=file` / `type=dir` 只列该类。`exclude` 跳过匹配 glob 的名字。目录名带尾 `/`，文件带字节数。默认不列 gitignored 与跳过目录（`node_modules` / `.git` / `.zig-cache` 等），并在标题里写 `N hidden — pass all=true`。
 
 ## 执行工具
 
@@ -204,12 +232,24 @@ src/**/*.ts    匹配 src 下任意深度的 .ts
 | 参数 | 必需 | 说明 |
 |------|------|------|
 | `command` | 是 | shell 命令，走 `sh -c` |
-| `timeout` | 否 | 秒，缺省 30，范围 1-300 |
+| `timeout` | 否 | 秒，缺省 30，范围 1-300。`background` 时不杀进程 |
+| `background` | 否 | `true` 立刻返回，输出流到 `~/.piz/artifacts/` 日志。同时最多 8 个。`/jobs kill <pid>` 可停 |
+| `cwd` | 否 | 工作目录，必须在工作区内。缺省为 Agent 根。沙箱 `--chdir` 跟到这里 |
 
-stdout 与 stderr 合并返回。输出超过 16KB 时截断保**尾部** —— 构建和测试的关键信息通常在末尾，与 `read` 的保头部策略相反。
+stdout 与 stderr 合并返回。输出超过 16KB 时：全文边跑边落到 `~/.piz/artifacts/<ts>-bash-<tid>.txt`，交给模型的是尾部 16KB 加路径。构建/测试结论仍在末尾，全文可用 `read` 取回。
+
+**OS sandbox。** `settings.json` 的 `sandboxMode`、`/sandbox`、`--sandbox` 三档：
+
+| 档 | 效果 |
+|----|------|
+| `off` | 裸 `sh -c`（缺省，没装 bwrap 也能跑） |
+| `workspace` | bubblewrap：工作区可写，其余只读，可出网。`/tmp` 是 tmpfs，写不回宿主机 |
+| `strict` | 同上再 `--unshare-net` |
+
+优先 bubblewrap。没装 `bwrap` 但内核有 Landlock 时走 `piz sandbox-exec`：`/` 只读，工作区与 artifacts/`/tmp`/`/dev` 可写；`strict` 在 ABI≥4 时再断 TCP。两路都没有才报错，不偷偷裸跑。
 
 **执行中可见、可中断。** 命令跑着时活动行显示耗时、墙钟上限与已收字节（见 [使用](usage.md#交互模式)）。
-`Ctrl+C` 在 100ms 内停下它，`Ctrl+B` 转后台（去掉墙钟上限）。
+`Ctrl+C` 在 100ms 内停下它，`Ctrl+B` 转后台（去掉墙钟上限）。模型也可设 `background: true`：工具立刻返回 pid 与日志路径，进程不受超时/取消杀掉。
 
 **超时与取消都杀整个进程组。** 子进程用 `pgid=0` 起成新进程组的组长，收尾时先 `SIGTERM` 给 100ms
 善后再 `SIGKILL`。只杀直接子进程是不够的：`sh -c "make -j8"` 里真正吃 CPU 的是 make 派生的编译进程，
@@ -308,7 +348,7 @@ Apply them with the edit or multi_edit tool — lsp does not write files.
 
 `status` 取 `pending` | `in_progress` | `completed`，非法值会报错而不是静默当 pending。
 
-`todo_write` **全量替换**列表，每步之后要带完整列表重新调用。输出形如：
+`todo_write` 默认 **全量替换**。`mode: "merge"` 按 `id` 局部更新，新条目追加，不用每步重传整表。可选 `bind` 把条目挂到 `workflow` 节点。输出形如：
 
 ```
 [x] 扫描仓库结构
@@ -365,19 +405,42 @@ spawn 的进程一起收掉（子进程同样起成独立进程组）。
 | 工作目录 | 不继承就在错误的目录动手（web 模式各会话 cwd 不同） |
 | provider / model | 不继承会悄悄回退到配置里的默认模型 |
 | 只读模式 | 否则只读 agent 能借委托绕出写权限 |
+| 思考等级 | 不继承会被配置默认打回高档 |
 | 钩子类插件（快压、记忆等） | 零 token，关掉会退化 |
 
-**默认不继承** `task-delegation`。孩子不必每轮付 7 个委派工具的 schema，也不能默认再派。要嵌套委派时显式传 `plugins: ["task-delegation"]`（仍受深度闸门约束）。
+**默认不继承** `task-delegation`。孩子不必每轮付 8 个委派工具的 schema，也不能默认再派。要嵌套委派时显式传 `plugins: ["task-delegation"]`（仍受深度闸门约束）。
 
 `tools: ["read", "grep"]` 再收紧核心工具；只能列出你自己有的名字。省略则孩子看得到其插件集里的全部工具。
 
 **不继承**对话历史。子 agent 从零开始，所以每条 `description` 必须自带全部上下文 —— 只写「继续上面那个」子 agent 看不懂。
 
+### workflow
+
+```json
+{
+  "goal": "ship auth",
+  "nodes": [
+    {"id": "recon", "role": "scout", "task": "find auth entry points"},
+    {"id": "plan", "role": "planner", "task": "plan from {recon}", "needs": ["recon"]},
+    {"id": "impl", "role": "worker", "task": "implement {plan}", "needs": ["plan"]},
+    {"id": "review", "role": "reviewer", "task": "review {impl} against {plan}", "needs": ["impl", "plan"]}
+  ]
+}
+```
+
+命名 DAG，不是链式 `{previous}`，也不要 JS 脚本。`needs` 都完成后该节点才跑；同一波就绪的并行。后步用 `{id}` 拼接前步输出（每段最多 4KB）。
+
+角色：`scout` / `planner` / `reviewer` 默认只拿读向工具（父 agent 有的才给）；`worker` 继承父工具集。节点仍可显式传 `tools` / `plugins` / `read_only`。
+
+某节点失败，依赖它的后继直接 skip，不烧 token。`fail_fast: true` 则整波失败后其余也 skip。独立分支默认继续。
+
+子 agent 与 `task` 同一条进程内跑道：继承目录 / 模型 / 思考等级，默认去掉委派插件，深度 +1。
+
 ### 进程内执行
 
 子 agent 跑在本进程的 **8 线程 worker 池**里，不再每人一条 OS 线程，也不再默认 spawn 独立 piz 进程。两个收益：
 
-**中间过程可见。** 子 agent 的每次工具调用、每条引擎告知都通过 `on_subagent` 回调实时转发给父 agent，TUI 与 `-o text` 显示成 `[sub 3] ⚙ bash`，`-o jsonl` 输出 `{"type":"subagent","task":"3","kind":"tool_start","text":"bash"}`。子进程路径下委派是纯黑盒：父 agent `join()` 干等，只能在结束时拿到一坨文本。实测 3 路委派进程内给出 9 条事件，子进程 0 条。
+**中间过程可见。** 子 agent 的每次工具调用、每条引擎告知都通过 `on_subagent` 回调实时转发给父 agent。`workflow` 在 TUI / WebUI 是一截节点轨，事件写进对应节点；独立 `task` 仍显示成 `[sub 3] ⚙ bash`。`-o jsonl` 输出 `{"type":"subagent","task":"3","kind":"tool_start","text":"bash"}`。子进程路径下委派是纯黑盒：父 agent `join()` 干等，只能在结束时拿到一坨文本。实测 3 路委派进程内给出 9 条事件，子进程 0 条。
 
 **委派开销降一半。** 省掉进程启动、配置重读、连接池重建。实测（零延迟 mock，只剩 piz 自身开销）：
 
@@ -428,7 +491,7 @@ spawn 的进程一起收掉（子进程同样起成独立进程组）。
 
 `plugins` / `tools` 与 `task` 相同：默认去掉委派工具，可用白名单再收紧。长驻 agent 空闲时不占线程，32 个打开的槽位共享 8 个 worker。
 
-**两个读者，两条通道。** `read_agent` 只返回终态（`turn_done` / `failed` / `notice`），逐条工具调用被过滤掉 —— 那对父 agent 的决策没有价值，进上下文只是烧 token。进度仍然收着，走 `on_subagent` 回调显示给**人**看（TUI 与 `-o text` 的 `[sub 1] ⚙ bash`）。codex 也是这样分的：它的细粒度事件只进 UI 与 rollout，进父 agent 模型上下文的唯一东西是子 agent 终止时的一条摘要（`session_prefix.rs`，上限 1000 token）。
+**两个读者，两条通道。** `read_agent` 只返回终态（`turn_done` / `failed` / `notice`），逐条工具调用被过滤掉 —— 那对父 agent 的决策没有价值，进上下文只是烧 token。进度仍然收着，走 `on_subagent` 回调显示给**人**看（`workflow` 进节点轨，独立 `task` 仍是 `[sub 1] ⚙ bash`）。codex 也是这样分的：它的细粒度事件只进 UI 与 rollout，进父 agent 模型上下文的唯一东西是子 agent 终止时的一条摘要（`session_prefix.rs`，上限 1000 token）。
 
 **同时打开上限 32 个，跑完不等于释放** —— 完成的 agent 仍占槽位直到 `close_agent`。这是有意的：父 agent 可能还要 `send_agent` 让它继续，提前回收就丢了上下文。
 
@@ -461,6 +524,7 @@ SearXNG 的响应是几十 KB 的嵌套结构，让模型自己在里面翻纯�
 然后退回 `bash` + `curl` 在原始 HTML 里翻。不需要搜索端点也能单独用（喂 URL 就行）。
 
 **只接受 `http://` 和 `https://`。** 否则 `file://` 能读本地任意文件，其他协议能把 curl 当跳板。
+内网、回环、链路本地、云 metadata、`localhost` / `.internal` 一律拒绝；curl 跟随重定向也只许 http(s)，最多 3 跳。
 不执行 JavaScript，所以纯前端渲染的页面拿不到内容 —— 那种情况让模型找对应的 API 或原始文档。
 
 ### git_status
@@ -493,9 +557,8 @@ tool definitions), remaining ~129901. Auto-compaction triggers at 85%
 
 | 工具 | 保留 | 理由 |
 |------|------|------|
-| `read` | 头部 | 文件开头的 import 与声明信息量最高 |
-| `bash` | 尾部 | 构建/测试的结论在末尾 |
-| `grep` / `find` / `ls` | 头部 + 计数说明 | 达到 limit 时明确告知 |
+| `read` / `grep` / `find` / `ls` | 头尾各 8KB | 源文件要头、日志/列表要尾；中间标 omitted |
+| `bash` | 尾部 + 全文落盘 | 结论在末尾；超 16KB 时 `~/.piz/artifacts/` 留全文 |
 
 超大工具输出会被 `artifact-store` 插件外置到文件，模型拿到路径而非全文，见 [Plugins](plugins.md#artifact-store)。
 
@@ -529,7 +592,7 @@ tool definitions), remaining ~129901. Auto-compaction triggers at 85%
 
 ## read_image（图片输入）
 
-`vision-input` 插件的工具：读图、压缩、以 image block 附到消息上，让视觉模型直接看。
+`vision-input` 插件的工具：读图、压缩、以 image block 附到消息上。默认 `read` 对图片文件做同样的事，不必先开插件。
 
 ```
 read_image { "path": "screenshot.png" }
@@ -549,4 +612,4 @@ read_image { "path": "screenshot.png" }
 
 支持格式：PNG、JPEG、GIF、BMP、WebP（解码）；输出 PNG/JPEG。源图 ≤ 20MB。
 
-CLI 与 web 会话同用此管线；会话落盘时图片不写入历史文件（重载后不带图）。
+CLI 与 web 会话同用此管线。图落 `~/.piz/artifacts/img-*`，续会话会回放。无 vision 的模型只看到文字说明，不附图。

@@ -50,6 +50,8 @@ const Slot = struct {
     limit_ms: std.atomic.Value(i64) = .init(0),
     /// 已转后台:前台不再等待,活动仍在跑。
     detached: std.atomic.Value(bool) = .init(false),
+    /// 子进程 pid(bash 后台)。0 = 无。
+    pid: std.atomic.Value(i32) = .init(0),
     /// 登记时的 cancel 世代。世代被提升即表示这个活动该停。
     gen: std.atomic.Value(u32) = .init(0),
     name_len: std.atomic.Value(u8) = .init(0),
@@ -123,6 +125,17 @@ pub const Handle = struct {
         return slots[self.idx].detached.load(.acquire);
     }
 
+    pub fn setPid(self: Handle, pid: i32) void {
+        if (self.idx >= MAX_SLOTS) return;
+        slots[self.idx].pid.store(pid, .release);
+    }
+
+    /// 单槽转后台。模型要 `background:true` 时只卸这一条,不动别的工具。
+    pub fn detach(self: Handle) void {
+        if (self.idx >= MAX_SLOTS) return;
+        slots[self.idx].detached.store(true, .release);
+    }
+
     /// 墙钟耗时。同样不看槽位 —— 回给模型的耗时不能因为槽位满就变成 0,
     /// 那会让它以为委派出去的任务瞬间完成。
     pub fn elapsedMs(self: Handle) i64 {
@@ -162,6 +175,7 @@ pub fn begin(kind: Kind, name: []const u8, det: []const u8, limit_ms: i64) Handl
         s.attempt.store(0, .monotonic);
         s.limit_ms.store(limit_ms, .monotonic);
         s.detached.store(false, .monotonic);
+        s.pid.store(0, .monotonic);
         s.gen.store(g, .monotonic);
         // 内容齐了才对读端可见。两个标志而非一个:占位必须在写之前(否则两个
         // 线程抢同一槽),发布必须在写之后(否则渲染读到 start_ms=0,
@@ -215,6 +229,7 @@ pub const View = struct {
     attempt: u32,
     limit_ms: i64,
     detached: bool,
+    pid: i32 = 0,
 };
 
 /// 把当前活动快照到 `out`,返回填充数量。
@@ -239,10 +254,33 @@ pub fn snapshot(out: []View) usize {
             .attempt = s.attempt.load(.monotonic),
             .limit_ms = s.limit_ms.load(.monotonic),
             .detached = s.detached.load(.acquire),
+            .pid = s.pid.load(.acquire),
         };
         n += 1;
     }
     return n;
+}
+
+/// 活动表的 JSON 数组。name/detail 立刻拷进输出,不挂槽位指针。
+pub fn writeJson(alloc: std.mem.Allocator, w: *std.Io.Writer) !void {
+    var views: [MAX_SLOTS]View = undefined;
+    const n = snapshot(&views);
+    try w.writeAll("[");
+    for (views[0..n], 0..) |v, i| {
+        if (i > 0) try w.writeAll(",");
+        try w.print("{{\"kind\":\"{s}\",\"name\":{s},\"detail\":{s},\"ms\":{d},\"bytes\":{d},\"attempt\":{d},\"limit_ms\":{d},\"detached\":{s},\"pid\":{d}}}", .{
+            @tagName(v.kind),
+            util.jsonString(alloc, v.name) catch "\"\"",
+            util.jsonString(alloc, v.detail) catch "\"\"",
+            v.elapsed_ms,
+            v.bytes,
+            v.attempt,
+            v.limit_ms,
+            if (v.detached) "true" else "false",
+            v.pid,
+        });
+    }
+    try w.writeAll("]");
 }
 
 /// 测试与新会话用:清空全部槽位。
@@ -251,8 +289,18 @@ pub fn reset() void {
         s.active.store(false, .release);
         s.claimed.store(false, .release);
         s.detached.store(false, .monotonic);
+        s.pid.store(0, .monotonic);
     }
     cancel_gen.store(0, .release);
+}
+
+/// 该 pid 是否是当前登记的活动。只杀表内进程,避免 /jobs kill 误伤无关进程。
+pub fn hasPid(pid: i32) bool {
+    if (pid <= 0) return false;
+    for (&slots) |*s| {
+        if (s.active.load(.acquire) and s.pid.load(.acquire) == pid) return true;
+    }
+    return false;
 }
 
 /// 人读的耗时:短的给一位小数,长的给分秒。
@@ -389,8 +437,9 @@ test "detached activities survive cancel" {
     defer reset();
 
     const h = begin(.tool, "bash", "long build", 300_000);
-    try t.expectEqual(@as(usize, 1), detachAll());
+    h.detach();
     try t.expect(h.isDetached());
+    try t.expectEqual(@as(usize, 0), detachAll());
 
     // 转后台后不再被 Ctrl+C 计入,也不被取消
     try t.expectEqual(@as(usize, 0), cancelAll());
@@ -445,6 +494,26 @@ test "elapsed and bytes format for humans" {
     try t.expectEqualStrings("512B", formatBytes(&buf, 512));
     try t.expectEqualStrings("4.0KB", formatBytes(&buf, 4096));
     try t.expectEqualStrings("1.5MB", formatBytes(&buf, 1024 * 1024 * 3 / 2));
+}
+
+test "writeJson lists active jobs" {
+    const t = std.testing;
+    try util.testInit();
+    reset();
+    defer reset();
+    var arena = util.Arena.init(t.allocator);
+    defer arena.deinit();
+    const h = begin(.tool, "bash-bg", "echo hi", 0);
+    h.detach();
+    h.setPid(4242);
+    defer h.release();
+    var aw = std.Io.Writer.Allocating.init(arena.allocator());
+    try writeJson(arena.allocator(), &aw.writer);
+    try t.expect(std.mem.indexOf(u8, aw.written(), "\"name\":\"bash-bg\"") != null);
+    try t.expect(std.mem.indexOf(u8, aw.written(), "\"detached\":true") != null);
+    try t.expect(std.mem.indexOf(u8, aw.written(), "\"pid\":4242") != null);
+    try t.expect(hasPid(4242));
+    try t.expect(!hasPid(1));
 }
 
 test "concurrent begin never publishes a half-written slot" {

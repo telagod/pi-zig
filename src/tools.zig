@@ -1,60 +1,46 @@
-// tools.zig — pi 核心四工具:read / write / edit / bash。
+// tools.zig — 核心工具:read / write / edit / multi_edit / bash；grep/find/ls 见 tools_search.zig。
 const std = @import("std");
 const util = @import("util.zig");
-const activity = @import("activity.zig");
 const seams = @import("seams.zig");
 const cfgmod = @import("config.zig");
+const sandboxmod = @import("sandbox.zig");
+const tjson = @import("tools_json.zig");
+const tools_path = @import("tools_path.zig");
+const search = @import("tools_search.zig");
+const bash = @import("tools_bash.zig");
+const tedit = @import("tools_edit.zig");
+const tread = @import("tools_read.zig");
+const twrite = @import("tools_write.zig");
+const tskill = @import("tools_skill.zig");
 
 pub const MAX_TOOL_OUTPUT = 16 * 1024;
-
-/// 当前线程的工具根目录 —— 相对路径相对它解析,而不是相对进程 cwd。
-///
-/// 为什么是 thread-local:核心工具用的是无 ctx 的 `handler` 签名,拿不到 Agent。
-/// 而进程只有一个 cwd,web 模式的多 workspace 下两个会话的 Agent 各有自己的
-/// cwd —— 会话声明在 projB、`write out.txt` 落进 projA(进程 cwd)是实测复现
-/// 过的数据损坏。工具在 per-Agent 的线程上跑,thread-local 正好对上。
-///
-/// 空 = 用进程 cwd。CLI 模式下 Agent.cwd 就是进程 cwd,两者等价。
-threadlocal var tool_root: []const u8 = "";
-
-/// 分发工具前设置根目录(agent.zig 的 runToolSlot 调用)。
-pub fn setRoot(root: []const u8) void {
-    tool_root = root;
+pub const jstr = tjson.jstr;
+pub const jint = tjson.jint;
+pub const jbool = tjson.jbool;
+pub const parseArgs = tjson.parseArgs;
+pub const setRoot = tools_path.setRoot;
+pub const clearRoot = tools_path.clearRoot;
+pub const setSandbox = tools_path.setSandbox;
+pub const clearSandbox = tools_path.clearSandbox;
+pub const diskRead = tools_path.diskRead;
+pub const resolvePath = tools_path.resolvePath;
+pub const rootForSpawn = tools_path.rootForSpawn;
+pub const insideRoot = tools_path.insideRoot;
+pub const realInsideRoot = tools_path.realInsideRoot;
+pub const PipeState = bash.PipeState;
+pub const pumpPipes = bash.pumpPipes;
+pub const killGroup = bash.killGroup;
+pub const killTracked = bash.killTracked;
+pub fn runPkgCommand(arena: std.mem.Allocator, command: []const u8, args: []const u8) !Result {
+    const r = try bash.runPkgCommand(arena, command, args);
+    return .{ .content = r.content, .is_error = r.is_error };
+}
+pub fn pkgToolStub(arena: std.mem.Allocator, args: []const u8) !Result {
+    const r = try bash.pkgToolStub(arena, args);
+    return .{ .content = r.content, .is_error = r.is_error };
 }
 
-pub fn clearRoot() void {
-    tool_root = "";
-}
-
-fn diskRead(arena: std.mem.Allocator, path: []const u8, limit: usize) ![]u8 {
-    const f = seams.fs();
-    return f.readFile(f.ctx, arena, path, limit);
-}
-
-fn diskWrite(path: []const u8, data: []const u8) !void {
-    const f = seams.fs();
-    return f.writeFile(f.ctx, path, data);
-}
-
-fn diskMkdir(path: []const u8) void {
-    const f = seams.fs();
-    f.createDirPath(f.ctx, path) catch {};
-}
-
-/// 把工具参数里的路径解析成可直接用于 `Dir.cwd()` 的路径。
-///
-/// 绝对路径原样返回 —— agent 的工具本来就没有路径沙箱(绝对路径与 `../`
-/// 都不拦,CLI 模式亦然),这里不改变那个语义,只修「相对谁」。
-pub fn resolvePath(arena: std.mem.Allocator, path: []const u8) []const u8 {
-    if (tool_root.len == 0) return path;
-    if (std.fs.path.isAbsolute(path)) return path;
-    return std.fs.path.join(arena, &.{ tool_root, path }) catch path;
-}
-
-/// 子进程的工作目录:有根目录就用它,否则让子进程继承进程 cwd。
-pub fn rootForSpawn() ?[]const u8 {
-    return if (tool_root.len > 0) tool_root else null;
-}
+const diskWrite = tools_path.diskWrite;
 
 /// 工具产出的图片附件(如 read_image):数据、mime、像素尺寸、给模型看的说明。
 /// data 必须与会话同寿(工具 handler 负责 dupe 到 agent 的常驻 allocator),
@@ -75,459 +61,67 @@ pub const Result = struct {
     images: ?[]const ImageAttach = null,
 };
 
-fn jstr(v: std.json.Value, key: []const u8) ?[]const u8 {
-    if (v != .object) return null;
-    const val = v.object.get(key) orelse return null;
-    if (val != .string) return null;
-    return val.string;
+/// handler 抛错时的统一回执:把工具名和 error 名交给模型,不再一句 "tool crashed"。
+/// FileNotFound vs AccessDenied 自愈路径完全不同。格式化失败退回静态串。
+pub fn crashResult(arena: std.mem.Allocator, name: []const u8, err: anyerror) Result {
+    util.debugLog("tool {s} crashed: {s}", .{ name, @errorName(err) });
+    const content = std.fmt.allocPrint(arena, "tool crashed ({s}): {s}", .{ name, @errorName(err) }) catch "tool crashed: OutOfMemory";
+    return .{ .content = content, .is_error = true };
 }
 
-/// 取整数字段:接受 JSON integer,以及模型常误发的 float/字符串数字。
-fn jint(v: std.json.Value, key: []const u8) ?i64 {
-    if (v != .object) return null;
-    const val = v.object.get(key) orelse return null;
-    return switch (val) {
-        .integer => |i| i,
-        .float => |f| @intFromFloat(f),
-        .string => |s| std.fmt.parseInt(i64, s, 10) catch null,
-        else => null,
-    };
-}
-
-/// 取布尔字段:接受 JSON bool,以及模型常误发的 "true"/"false" 字符串。
-fn jbool(v: std.json.Value, key: []const u8) ?bool {
-    if (v != .object) return null;
-    const val = v.object.get(key) orelse return null;
-    return switch (val) {
-        .bool => |b| b,
-        .string => |s| if (std.mem.eql(u8, s, "true")) true else if (std.mem.eql(u8, s, "false")) false else null,
-        else => null,
-    };
-}
-
-fn parseArgs(arena: std.mem.Allocator, args: []const u8) !std.json.Value {
-    const root = std.json.parseFromSliceLeaky(std.json.Value, arena, args, .{}) catch return error.BadArgs;
-    return root;
-}
-
-/// read: {path, offset?, limit?} → 文件内容(offset/limit 给定时返回 1-based 行区间)
+/// read: {path, offset?, limit?, tail?, around?} → 文件内容(offset/limit/tail/around 给定时返回 1-based 行区间)
 fn toolRead(arena: std.mem.Allocator, args: []const u8) !Result {
-    const v = try parseArgs(arena, args);
-    const path = resolvePath(arena, jstr(v, "path") orelse return .{ .content = "error: missing 'path' argument", .is_error = true });
-    const content = diskRead(arena, path, 16 * 1024 * 1024) catch |err| {
-        return .{ .content = try std.fmt.allocPrint(arena, "error reading {s}: {s}", .{ path, @errorName(err) }), .is_error = true };
-    };
-    const offset = jint(v, "offset");
-    const limit = jint(v, "limit");
-    // 行区间切片:offset 1-based(缺省 1),limit 缺省到文件尾
-    if (offset != null or limit != null) {
-        const start_line: usize = if (offset) |o| (if (o < 1) 1 else @intCast(o)) else 1;
-        const max_lines: ?usize = if (limit) |l| (if (l < 1) 0 else @as(usize, @intCast(l))) else null;
-        var it = std.mem.splitScalar(u8, content, '\n');
-        var aw = std.Io.Writer.Allocating.init(arena);
-        defer aw.deinit();
-        var line_no: usize = 0;
-        var emitted: usize = 0;
-        var found = false;
-        while (it.next()) |line| {
-            line_no += 1;
-            if (line_no < start_line) continue;
-            if (max_lines) |m| {
-                if (emitted >= m) break;
-            }
-            found = true;
-            if (emitted > 0) try aw.writer.writeByte('\n');
-            try aw.writer.writeAll(line);
-            emitted += 1;
+    const r = try tread.toolRead(arena, args);
+    if (r.images) |imgs| {
+        const out = arena.alloc(ImageAttach, imgs.len) catch
+            return .{ .content = r.content, .is_error = r.is_error };
+        for (imgs, out) |src, *dst| {
+            dst.* = .{ .data = src.data, .mime = src.mime, .w = src.w, .h = src.h, .note = src.note };
         }
-        if (!found) return .{
-            .content = try std.fmt.allocPrint(arena, "error: offset {d} is past end of {s} ({d} lines)", .{ start_line, path, line_no }),
-            .is_error = true,
-        };
-        return capped(arena, aw.written(), path, content.len);
+        return .{ .content = r.content, .is_error = r.is_error, .images = out };
     }
-    return capped(arena, content, path, content.len);
+    return .{ .content = r.content, .is_error = r.is_error };
 }
 
-/// 工具输出上限裁剪(保头部,信息量最高)。插件工具亦复用。
+/// 工具输出上限裁剪(头尾各半)。源文件要头、日志要尾,只保一边会瞎。
+/// 插件工具亦复用。
 pub fn capped(arena: std.mem.Allocator, body: []const u8, path: []const u8, total: usize) !Result {
     if (body.len <= MAX_TOOL_OUTPUT) return .{ .content = try arena.dupe(u8, body) };
-    return .{ .content = try std.fmt.allocPrint(arena, "{s}\n...[{s} truncated at {d} bytes, total {d}]...", .{
-        body[0..MAX_TOOL_OUTPUT],
+    const keep = MAX_TOOL_OUTPUT / 2;
+    const head = util.utf8Prefix(body, keep);
+    const tail = util.utf8Suffix(body, keep);
+    const omitted = body.len -| (head.len + tail.len);
+    return .{ .content = try std.fmt.allocPrint(arena, "{s}\n...[{s} truncated at {d} bytes, omitted {d}, total {d}; use offset/limit]...\n{s}", .{
+        head,
         path,
         MAX_TOOL_OUTPUT,
+        omitted,
         total,
+        tail,
     }) };
 }
 
 /// write: {path, content} → 写文件
 fn toolWrite(arena: std.mem.Allocator, args: []const u8) !Result {
-    const v = try parseArgs(arena, args);
-    const path = resolvePath(arena, jstr(v, "path") orelse return .{ .content = "error: missing 'path' argument", .is_error = true });
-    const content = jstr(v, "content") orelse "";
-    if (std.fs.path.dirname(path)) |d| {
-        if (d.len > 0) diskMkdir(d);
-    }
-    diskWrite(path, content) catch |err| {
-        return .{ .content = try std.fmt.allocPrint(arena, "error writing {s}: {s}", .{ path, @errorName(err) }), .is_error = true };
-    };
-    // 输出带 diff 块(+ 行,限 40 行;web diff 卡渲染用)
-    var diff = std.array_list.Managed(u8).init(arena);
-    const head = try std.fmt.allocPrint(arena, "wrote {d} bytes to {s}\n--- {s}\n+++ {s}\n", .{ content.len, path, path, path });
-    try diff.appendSlice(head);
-    var n: usize = 0;
-    var lines = std.mem.splitScalar(u8, content, '\n');
-    while (lines.next()) |ln| : (n += 1) {
-        if (n >= 40) {
-            try diff.appendSlice("... (truncated)\n");
-            break;
-        }
-        try diff.appendSlice("+");
-        try diff.appendSlice(ln);
-        try diff.appendSlice("\n");
-    }
-    return .{ .content = try diff.toOwnedSlice() };
+    const r = try twrite.toolWrite(arena, args);
+    return .{ .content = r.content, .is_error = r.is_error };
 }
 
-/// edit: {path, edits: [{oldText, newText}]} → 精确替换,0/多匹配即报错
 fn toolEdit(arena: std.mem.Allocator, args: []const u8) !Result {
-    const v = try parseArgs(arena, args);
-    const path = resolvePath(arena, jstr(v, "path") orelse return .{ .content = "error: missing 'path' argument", .is_error = true });
-    const edits = v.object.get("edits") orelse return .{ .content = "error: missing 'edits' array", .is_error = true };
-    if (edits != .array or edits.array.items.len == 0) {
-        return .{ .content = "error: 'edits' must be a non-empty array", .is_error = true };
-    }
-    const orig = diskRead(arena, path, 64 * 1024 * 1024) catch |err| {
-        return .{ .content = try std.fmt.allocPrint(arena, "error reading {s}: {s}", .{ path, @errorName(err) }), .is_error = true };
-    };
-    var buf = std.array_list.Managed(u8).init(arena);
-    try buf.appendSlice(orig);
-    for (edits.array.items, 0..) |e, i| {
-        if (e != .object) return .{ .content = "error: edit entry must be an object", .is_error = true };
-        const old_text = jstr(e, "oldText") orelse return .{ .content = "error: edit missing oldText", .is_error = true };
-        const new_text = jstr(e, "newText") orelse "";
-        // 统计匹配次数
-        var count: usize = 0;
-        var idx: usize = 0;
-        while (std.mem.indexOfPos(u8, buf.items, idx, old_text)) |found| {
-            count += 1;
-            idx = found + old_text.len;
-        }
-        if (count == 0) {
-            return .{ .content = try std.fmt.allocPrint(arena, "error: edit {d}: oldText not found in {s}", .{ i + 1, path }), .is_error = true };
-        }
-        if (count > 1) {
-            return .{ .content = try std.fmt.allocPrint(arena, "error: edit {d}: oldText matches {d} times in {s}, must be unique", .{ i + 1, count, path }), .is_error = true };
-        }
-        const pos = std.mem.indexOf(u8, buf.items, old_text).?;
-        // 替换:原地挪动
-        if (new_text.len == old_text.len) {
-            @memcpy(buf.items[pos .. pos + new_text.len], new_text);
-        } else if (new_text.len > old_text.len) {
-            try buf.resize(buf.items.len + (new_text.len - old_text.len));
-            std.mem.copyBackwards(u8, buf.items[pos + new_text.len ..], buf.items[pos + old_text.len .. buf.items.len - (new_text.len - old_text.len)]);
-            @memcpy(buf.items[pos .. pos + new_text.len], new_text);
-        } else {
-            std.mem.copyForwards(u8, buf.items[pos + new_text.len ..], buf.items[pos + old_text.len ..]);
-            try buf.resize(buf.items.len - (old_text.len - new_text.len));
-            @memcpy(buf.items[pos .. pos + new_text.len], new_text);
-        }
-    }
-    diskWrite(path, buf.items) catch |err| {
-        return .{ .content = try std.fmt.allocPrint(arena, "error writing {s}: {s}", .{ path, @errorName(err) }), .is_error = true };
-    };
-    // 输出带 diff 块(-old/+new 行,限 40 行;web diff 卡渲染用)
-    var diff = std.array_list.Managed(u8).init(arena);
-    const head = try std.fmt.allocPrint(arena, "edited {s}: {d} replacements\n--- {s}\n+++ {s}\n", .{ path, edits.array.items.len, path, path });
-    try diff.appendSlice(head);
-    var n: usize = 0;
-    for (edits.array.items) |e| {
-        const old_text = jstr(e, "oldText") orelse "";
-        const new_text = jstr(e, "newText") orelse "";
-        var ol = std.mem.splitScalar(u8, old_text, '\n');
-        while (ol.next()) |ln| : (n += 1) {
-            if (n >= 40) break;
-            try diff.appendSlice("-");
-            try diff.appendSlice(ln);
-            try diff.appendSlice("\n");
-        }
-        var nl = std.mem.splitScalar(u8, new_text, '\n');
-        while (nl.next()) |ln| : (n += 1) {
-            if (n >= 40) break;
-            try diff.appendSlice("+");
-            try diff.appendSlice(ln);
-            try diff.appendSlice("\n");
-        }
-        if (n >= 40) {
-            try diff.appendSlice("... (truncated)\n");
-            break;
-        }
-    }
-    return .{ .content = try diff.toOwnedSlice() };
+    const r = try tedit.toolEdit(arena, args);
+    return .{ .content = r.content, .is_error = r.is_error };
 }
 
-fn setNonBlock(fd: std.posix.fd_t) void {
-    util.setNonBlock(fd);
-}
-
-/// 双管道抽水状态。`err_buf` 为 null 时 stderr 混入 `buf` 并加 `[stderr]` 前缀
-/// (bash 工具:用户要看到交错的输出);非 null 时分流
-/// (task 工具:stdout 是子 agent 的答复,stderr 是诊断,混一起没法区分)。
-pub const PipeState = struct {
-    buf: *std.array_list.Managed(u8),
-    err_buf: ?*std.array_list.Managed(u8) = null,
-    out_fd: std.posix.fd_t,
-    err_fd: std.posix.fd_t,
-    out_eof: bool = false,
-    err_eof: bool = false,
-    /// 缓冲保留的字节上限(只留尾部)。0 = 不限。
-    ///
-    /// 两个消费者最后都只取尾部(bash 见 toolBash 的截断、task 见 runTaskSlot),
-    /// 但原先是全量收完再截:一个吐 500MB 的子进程让父进程驻留 473MB(实测),
-    /// 最后只用 16KB。N 个并行 subagent 就是 N 倍。
-    keep_bytes: usize = 0,
-    /// 实际流过的总字节数(含已丢弃的)。截断提示要报真实总量。
-    total_out: usize = 0,
-    total_err: usize = 0,
-};
-
-/// 追加并把 list 压回 `keep` 字节以内(丢头留尾)。
-fn appendCapped(list: *std.array_list.Managed(u8), data: []const u8, keep: usize) !void {
-    try list.appendSlice(data);
-    if (keep == 0 or list.items.len <= keep) return;
-    // 留出余量再裁,避免每个 chunk 都触发一次 memmove:超过 2 倍才压回。
-    if (list.items.len < keep * 2) return;
-    const drop = list.items.len - keep;
-    std.mem.copyForwards(u8, list.items[0..keep], list.items[drop..]);
-    list.shrinkRetainingCapacity(keep);
-}
-
-fn drainPipe(state: *PipeState, fd: std.posix.fd_t, is_err: bool) !void {
-    var chunk: [8192]u8 = undefined;
-    while (true) {
-        const n = std.posix.read(fd, &chunk) catch |err| switch (err) {
-            error.WouldBlock => break,
-            else => return err,
-        };
-        if (n == 0) {
-            if (is_err) {
-                state.err_eof = true;
-            } else {
-                state.out_eof = true;
-            }
-            break;
-        }
-        if (is_err) {
-            state.total_err += n;
-            if (state.err_buf) |eb| {
-                try appendCapped(eb, chunk[0..n], state.keep_bytes);
-                continue;
-            }
-            try appendCapped(state.buf, "\x1b[2m[stderr]\x1b[0m ", state.keep_bytes);
-        } else {
-            state.total_out += n;
-        }
-        try appendCapped(state.buf, chunk[0..n], state.keep_bytes);
-        if (is_err) try appendCapped(state.buf, "\n", state.keep_bytes);
-    }
-}
-
-/// 抽干子进程的两个管道直到双 EOF 或超时。返回是否超时。
-/// 调用方负责 spawn、close、wait/kill —— 这里只管搬字节。
-///
-/// 用 poll 而非阻塞读:一个管道满/空不能拖住另一个,否则子进程写 stderr
-/// 写满管道缓冲后就阻塞,而我们还在等 stdout,双方僵死。
-///
-/// `act` 是活动登记句柄:每 100ms 的 poll 唤醒都上报已搬字节数并检查取消。
-/// 这是「用户看得到在干活」和「Ctrl+C 能打断长命令」两件事的落点 ——
-/// 没有它,一条 300 秒的命令期间界面是完全静止的,Ctrl+C 也要等到迭代边界才生效。
-/// 返回值区分不出超时与取消,调用方用 `act.cancelled()` 判断。
-pub fn pumpPipes(state: *PipeState, timeout_ms: i64, act: activity.Handle) !bool {
-    const fds = [_]std.posix.pollfd{
-        .{ .fd = state.out_fd, .events = std.posix.POLL.IN, .revents = 0 },
-        .{ .fd = state.err_fd, .events = std.posix.POLL.IN, .revents = 0 },
-    };
-    const start = std.Io.Clock.now(.awake, util.io).nanoseconds;
-    while (true) {
-        if (state.out_eof and state.err_eof) return false;
-        // 取消优先于超时:用户按了 Ctrl+C 就不该再等命令自己结束。
-        // 已转后台的活动不受取消影响 —— 那正是「转后台」的意思。
-        if (act.cancelled() and !act.isDetached()) return true;
-        act.progress(state.buf.items.len);
-        var pfds = fds;
-        const n = std.posix.poll(&pfds, 100) catch |err| switch (err) {
-            error.SystemResources => {
-                // 极少数平台 poll 不可用:退化为轮询
-                try drainPipe(state, state.out_fd, false);
-                try drainPipe(state, state.err_fd, true);
-                if (state.out_eof and state.err_eof) return false;
-                _ = std.Io.sleep(util.io, .{ .nanoseconds = 50 * std.time.ns_per_ms }, .awake) catch {};
-                continue;
-            },
-            else => return err,
-        };
-        if (n == 0) {
-            // 转后台的命令不再受墙钟上限约束:用户已经明确表示要让它跑完。
-            if (act.isDetached()) continue;
-            if (std.Io.Clock.now(.awake, util.io).nanoseconds - start > timeout_ms * std.time.ns_per_ms) return true;
-            continue;
-        }
-        for (&pfds) |*p| {
-            if (p.revents & (std.posix.POLL.IN | std.posix.POLL.HUP | std.posix.POLL.ERR) == 0) continue;
-            if (p.fd == state.out_fd) {
-                try drainPipe(state, state.out_fd, false);
-            } else if (p.fd == state.err_fd) {
-                try drainPipe(state, state.err_fd, true);
-            }
-        }
-    }
-}
-
-/// 杀掉以 `pid` 为组长的整个进程组。
-///
-/// 必要而非优化:`sh -c "make -j8"` 里真正吃 CPU 的是 make 派生的编译进程。
-/// 只 kill 直接子进程(sh)的话,那些孙子进程会被 init 收养后继续跑到底 ——
-/// 用户以为命令停了,机器却还在满载。先 TERM 给收拾的机会,再 KILL 兜底。
-pub fn killGroup(pid: std.posix.pid_t) void {
-    std.posix.kill(-pid, std.posix.SIG.TERM) catch {};
-    // 给 100ms 优雅退出(刷 stdout、删临时文件),然后强杀
-    _ = std.Io.sleep(util.io, .{ .nanoseconds = 100 * std.time.ns_per_ms }, .awake) catch {};
-    std.posix.kill(-pid, std.posix.SIG.KILL) catch {};
-}
-
-/// bash: {command, timeout?} → 执行 sh -c,合并输出,超时或取消时杀掉整个进程组。
-///
-/// 登记进 activity 表:执行期间 TUI 能显示 spinner、耗时与已收字节,
-/// Ctrl+C 也能在 100ms 内打断 —— 原先这两件事在命令跑完前都做不到。
 fn toolBash(arena: std.mem.Allocator, args: []const u8) !Result {
-    const v = try parseArgs(arena, args);
-    const command = jstr(v, "command") orelse return .{ .content = "error: missing 'command' argument", .is_error = true };
-    var timeout_ms: i64 = 30_000;
-    if (v.object.get("timeout")) |t| {
-        if (t == .integer) {
-            timeout_ms = @intCast(t.integer * 1000);
-        } else if (t == .float) {
-            timeout_ms = @intFromFloat(t.float * 1000);
-        }
-    }
-    timeout_ms = @max(@min(timeout_ms, 300_000), 1_000);
-
-    // pgid=0:子进程成为新进程组的组长。这样超时/取消时能 kill(-pgid) 收掉
-    // 整棵进程树 —— `sh -c "make -j8"` 派生的孙子进程原先会孤儿化,
-    // 继续吃 CPU 且没人回收。
-    // cwd 取工具根目录:命令里的相对路径必须相对**这个 Agent 的 cwd**。
-    // resolvePath 对 bash 无能为力(命令是任意 shell 文本,不是路径参数),
-    // 只能靠子进程自己的工作目录。null = 继承进程 cwd(CLI 模式即如此)。
-    var child = try std.process.spawn(util.io, .{
-        .argv = &.{ "sh", "-c", command },
-        .cwd = if (rootForSpawn()) |r| .{ .path = r } else .inherit,
-        .stdout = .pipe,
-        .stderr = .pipe,
-        .pgid = 0,
-    });
-    const child_pid = child.id;
-    const out_fd = child.stdout.?.handle;
-    const err_fd = child.stderr.?.handle;
-    // 非阻塞
-    setNonBlock(out_fd);
-    setNonBlock(err_fd);
-
-    const act = activity.begin(.tool, "bash", command, timeout_ms);
-    defer act.release();
-
-    var buf = std.array_list.Managed(u8).init(arena);
-    // err_buf 省略:bash 把 stderr 交错进同一个 buffer,用户要看到执行顺序
-    // keep_bytes:边读边丢头部,只留最后 MAX_TOOL_OUTPUT。留全量再截的话,
-    // 一条 `find /` 就让 piz 驻留几百 MB 去换 16KB 的结果。
-    var state = PipeState{ .buf = &buf, .out_fd = out_fd, .err_fd = err_fd, .keep_bytes = MAX_TOOL_OUTPUT };
-    defer {
-        if (child.stdout) |f| f.close(util.io);
-        if (child.stderr) |f| f.close(util.io);
-    }
-
-    const stopped = try pumpPipes(&state, timeout_ms, act);
-    const cancelled = stopped and act.cancelled();
-
-    var term: std.process.Child.Term = undefined;
-    if (stopped) {
-        // 先给整个进程组发信号收掉孙子进程,再 child.kill 收直接子进程。
-        if (child_pid) |pid| killGroup(pid);
-        // `Child.kill` 自己会 block 到终止并清理资源,之后 `child.id` 为 null ——
-        // 再调 `wait` 会撞 assert。所以这里直接构造 term(128+SIGKILL)。
-        child.kill(util.io);
-        term = .{ .exited = 137 };
-        if (cancelled) {
-            var eb: [24]u8 = undefined;
-            try buf.appendSlice(try std.fmt.allocPrint(arena, "\n[interrupted by user after {s}; process group killed. Partial output above is what ran.]", .{activity.formatElapsed(&eb, act.elapsedMs())}));
-        } else {
-            try buf.appendSlice(try std.fmt.allocPrint(arena, "\n[tool timed out after {d}s, process group killed. Partial output above is what ran — rerun with a larger `timeout` if it needs longer.]", .{@divTrunc(timeout_ms, 1000)}));
-        }
-    } else {
-        term = child.wait(util.io) catch blk: {
-            break :blk .{ .exited = 1 };
-        };
-    }
-
-    // 截断。总量取 state 累计的真实字节数 —— buf 已经被 drain 阶段裁过,
-    // 用它的长度会把「输出了 500MB」报成「输出了 32KB」。
-    const streamed = state.total_out + state.total_err;
-    var content: []u8 = undefined;
-    if (buf.items.len > MAX_TOOL_OUTPUT) {
-        content = try std.fmt.allocPrint(arena, "{s}\n...[output truncated at {d} bytes, total {d}]...", .{
-            buf.items[buf.items.len - MAX_TOOL_OUTPUT ..],
-            MAX_TOOL_OUTPUT,
-            streamed,
-        });
-    } else {
-        content = try arena.dupe(u8, buf.items);
-    }
-
-    const code: u8 = switch (term) {
-        .exited => |c| c,
-        .signal => |s| @intCast(128 + @intFromEnum(s)),
-        else => 1,
-    };
-    const exit_note = if (code == 0)
-        try std.fmt.allocPrint(arena, "\n[exit code 0]", .{})
-    else
-        try std.fmt.allocPrint(arena, "\n[exit code {d}]", .{code});
-    const full = try std.fmt.allocPrint(arena, "{s}{s}", .{ content, exit_note });
-    return .{ .content = full, .is_error = code != 0 };
+    const r = try bash.toolBash(arena, args);
+    return .{ .content = r.content, .is_error = r.is_error };
 }
 
-/// skill: {name} → 读 SKILL.md。搜索顺序与 `util.loadSkillsIndex` 必须一致:
-/// <configDir>/skills/,然后各资源包的 skills/。
-///
-/// 两处不一致就会出现「系统提示里列了这个技能,skill 工具却报 FileNotFound」——
-/// 实测装了资源包的技能全都加载不了,模型只能自己 read SKILL.md 兜底。
-/// 由 skills 插件注册(仅装了技能时才需要),故导出。
+/// skill: {name} → 读 SKILL.md。搜索顺序与 `util.loadSkillsIndex` 必须一致。
+/// 由 skills 插件注册,故导出。
 pub fn toolSkill(arena: std.mem.Allocator, args: []const u8) !Result {
-    const v = try parseArgs(arena, args);
-    const name = jstr(v, "name") orelse return .{ .content = "error: missing 'name' argument", .is_error = true };
-    // 防目录穿越:只允许字母数字-_
-    for (name) |c| {
-        if (!(std.ascii.isAlphanumeric(c) or c == '-' or c == '_')) {
-            return .{ .content = "error: invalid skill name", .is_error = true };
-        }
-    }
-    const cfg_dir = util.configDir(arena) catch return .{ .content = "error: no config dir", .is_error = true };
-    const first = try std.fmt.allocPrint(arena, "{s}/skills/{s}/SKILL.md", .{ cfg_dir, name });
-    if (diskRead(arena, first, 256 * 1024)) |content| {
-        return .{ .content = try std.fmt.allocPrint(arena, "# Skill {s}\n\n{s}", .{ name, content }) };
-    } else |_| {}
-    // 资源包(用户级 + 项目级)
-    if (util.pkgDirsForRuntime(arena)) |pkgs| {
-        for (pkgs) |pkg| {
-            const p = try std.fmt.allocPrint(arena, "{s}/skills/{s}/SKILL.md", .{ pkg, name });
-            if (diskRead(arena, p, 256 * 1024)) |content| {
-                return .{ .content = try std.fmt.allocPrint(arena, "# Skill {s}\n\n{s}", .{ name, content }) };
-            } else |_| {}
-        }
-    } else |_| {}
-    return .{
-        .content = try std.fmt.allocPrint(arena, "error: skill '{s}' not found in {s}/skills/ or any installed package", .{ name, cfg_dir }),
-        .is_error = true,
-    };
+    const r = try tskill.toolSkill(arena, args);
+    return .{ .content = r.content, .is_error = r.is_error };
 }
 
 pub const Tool = struct {
@@ -539,607 +133,111 @@ pub const Tool = struct {
     handler: *const fn (arena: std.mem.Allocator, args: []const u8) anyerror!Result,
     /// 插件工具:带宿主上下文(Agent 指针)的处理器。
     ctx_handler: ?*const fn (ctx: ?*anyopaque, arena: std.mem.Allocator, args: []const u8) anyerror!Result = null,
+    /// 非空:包声明的 shell 工具。runToolSlot 走 bash,`{key}` 从 args 替换。
+    payload: []const u8 = "",
 };
 
 /// 无参数工具的空 schema。
 pub const EMPTY_SCHEMA = "{\"type\":\"object\",\"properties\":{}}";
 
-// =====================================================================
-// 搜索基础设施:glob 匹配 + 最小正则引擎 + 目录遍历(零外部依赖,不 spawn rg/fd)
-// =====================================================================
-
-/// 搜索时始终跳过的目录(构建产物与 VCS 元数据,搜它们只会污染结果)。
-const SKIP_DIRS = [_][]const u8{
-    ".git",   "zig-out",     ".zig-cache",    "node_modules", "target",
-    "dist",   "__pycache__", ".venv",         "venv",         ".next",
-    "vendor", ".mypy_cache", ".pytest_cache",
-};
-
-fn isSkippedDir(name: []const u8) bool {
-    for (SKIP_DIRS) |s| {
-        if (std.mem.eql(u8, name, s)) return true;
-    }
-    return false;
-}
-
-/// glob 匹配(支持 `*` `?` `**`)。`*` 不跨 `/`,`**` 跨任意层级。
-/// 递归实现,pattern 与 name 都短,无回溯爆炸风险。
-pub fn globMatch(pattern: []const u8, name: []const u8) bool {
-    // `**/` 前缀:匹配任意层级(含零层)
-    if (std.mem.startsWith(u8, pattern, "**/")) {
-        const rest = pattern[3..];
-        if (globMatch(rest, name)) return true;
-        var i: usize = 0;
-        while (i < name.len) : (i += 1) {
-            if (name[i] == '/' and globMatch(rest, name[i + 1 ..])) return true;
-        }
-        return false;
-    }
-    if (pattern.len == 0) return name.len == 0;
-    switch (pattern[0]) {
-        '*' => {
-            // `**` 不带斜杠:退化为跨层级通配
-            const cross = pattern.len > 1 and pattern[1] == '*';
-            const rest = if (cross) pattern[2..] else pattern[1..];
-            if (globMatch(rest, name)) return true;
-            var i: usize = 0;
-            while (i < name.len) : (i += 1) {
-                if (!cross and name[i] == '/') break; // 单星不跨目录分隔
-                if (globMatch(rest, name[i + 1 ..])) return true;
-            }
-            return false;
-        },
-        '?' => {
-            if (name.len == 0 or name[0] == '/') return false;
-            return globMatch(pattern[1..], name[1..]);
-        },
-        else => {
-            if (name.len == 0 or name[0] != pattern[0]) return false;
-            return globMatch(pattern[1..], name[1..]);
-        },
-    }
-}
-
-/// 最小正则引擎。支持:字符类 `[abc]` `[a-z]` `[^x]`、`.`、`*` `+` `?`、
-/// 锚 `^` `$`、转义 `\.` `\d` `\w` `\s`(及大写取反)。
-/// 不支持:分组、选择 `|`、回溯引用、懒惰量词 —— 这些留给模型用 bash 调 rg。
-/// 设计取舍:单遍回溯匹配,单行长度设上限防指数爆炸。
-const Regex = struct {
-    pattern: []const u8,
-    ignore_case: bool,
-
-    /// 单行长度上限:超长行(压缩产物、base64)跳过,防病态回溯。
-    const MAX_LINE = 4096;
-
-    fn init(pattern: []const u8, ignore_case: bool) !Regex {
-        // 预校验:字符类必须闭合,转义不能悬空
-        var i: usize = 0;
-        while (i < pattern.len) : (i += 1) {
-            switch (pattern[i]) {
-                '\\' => {
-                    if (i + 1 >= pattern.len) return error.TrailingBackslash;
-                    i += 1;
-                },
-                '[' => {
-                    const close = findClassEnd(pattern, i) orelse return error.UnclosedCharClass;
-                    i = close;
-                },
-                else => {},
-            }
-        }
-        return .{ .pattern = pattern, .ignore_case = ignore_case };
-    }
-
-    /// 找字符类结束的 `]` 下标。首字符 `]` 视为字面量(POSIX 惯例)。
-    fn findClassEnd(p: []const u8, open: usize) ?usize {
-        var i = open + 1;
-        if (i < p.len and p[i] == '^') i += 1;
-        if (i < p.len and p[i] == ']') i += 1; // 首个 ] 是字面量
-        while (i < p.len) : (i += 1) {
-            if (p[i] == '\\') {
-                i += 1;
-                continue;
-            }
-            if (p[i] == ']') return i;
-        }
-        return null;
-    }
-
-    fn fold(self: Regex, c: u8) u8 {
-        return if (self.ignore_case) std.ascii.toLower(c) else c;
-    }
-
-    /// 转义类匹配:\d \w \s 及大写取反。
-    fn matchEscape(esc: u8, c: u8) bool {
-        return switch (esc) {
-            'd' => std.ascii.isDigit(c),
-            'D' => !std.ascii.isDigit(c),
-            'w' => std.ascii.isAlphanumeric(c) or c == '_',
-            'W' => !(std.ascii.isAlphanumeric(c) or c == '_'),
-            's' => std.ascii.isWhitespace(c),
-            'S' => !std.ascii.isWhitespace(c),
-            'n' => c == '\n',
-            't' => c == '\t',
-            'r' => c == '\r',
-            else => esc == c, // \. \* \[ 等:字面量
-        };
-    }
-
-    /// 字符类匹配。返回是否命中。
-    fn matchClass(self: Regex, p: []const u8, open: usize, close: usize, c: u8) bool {
-        var i = open + 1;
-        var negate = false;
-        if (i < close and p[i] == '^') {
-            negate = true;
-            i += 1;
-        }
-        const cf = self.fold(c);
-        var hit = false;
-        while (i < close) : (i += 1) {
-            if (p[i] == '\\' and i + 1 < close) {
-                if (matchEscape(p[i + 1], c)) hit = true;
-                i += 1;
-                continue;
-            }
-            // 区间 a-z(`-` 在末尾时是字面量)
-            if (i + 2 < close and p[i + 1] == '-') {
-                const lo = self.fold(p[i]);
-                const hi = self.fold(p[i + 2]);
-                if (cf >= lo and cf <= hi) hit = true;
-                i += 2;
-                continue;
-            }
-            if (self.fold(p[i]) == cf) hit = true;
-        }
-        return hit != negate;
-    }
-
-    /// 单元素长度(用于量词跳过):转义 2、字符类到 `]`、其余 1。
-    fn atomLen(self: Regex, p: []const u8, i: usize) usize {
-        _ = self;
-        if (p[i] == '\\') return 2;
-        if (p[i] == '[') {
-            if (findClassEnd(p, i)) |close| return close - i + 1;
-        }
-        return 1;
-    }
-
-    /// 单元素与单字符是否匹配。
-    fn atomMatches(self: Regex, p: []const u8, i: usize, c: u8) bool {
-        if (p[i] == '\\') return matchEscape(p[i + 1], c);
-        if (p[i] == '[') {
-            if (findClassEnd(p, i)) |close| return self.matchClass(p, i, close, c);
-            return false;
-        }
-        if (p[i] == '.') return c != '\n';
-        return self.fold(p[i]) == self.fold(c);
-    }
-
-    /// 从 text 任意位置起找匹配。返回是否命中。
-    fn search(self: Regex, text: []const u8) bool {
-        if (text.len > MAX_LINE) return false; // 超长行跳过
-        if (self.pattern.len > 0 and self.pattern[0] == '^') {
-            return self.matchHere(self.pattern[1..], text, 0);
-        }
-        var start: usize = 0;
-        while (start <= text.len) : (start += 1) {
-            if (self.matchHere(self.pattern, text, start)) return true;
-        }
-        return false;
-    }
-
-    /// 从 text[pos] 起匹配 p。回溯实现。
-    fn matchHere(self: Regex, p: []const u8, text: []const u8, pos: usize) bool {
-        if (p.len == 0) return true;
-        if (p.len == 1 and p[0] == '$') return pos == text.len;
-        const alen = self.atomLen(p, 0);
-        // 量词:紧跟单元素之后
-        if (p.len > alen) {
-            const q = p[alen];
-            if (q == '*' or q == '+' or q == '?') {
-                const rest = p[alen + 1 ..];
-                const min: usize = if (q == '+') 1 else 0;
-                const max: usize = if (q == '?') 1 else text.len - pos;
-                // 贪婪:先吃最多,再逐步回退
-                var n: usize = 0;
-                while (n < max and pos + n < text.len and self.atomMatches(p, 0, text[pos + n])) n += 1;
-                while (n + 1 > min) : (n -= 1) {
-                    if (self.matchHere(rest, text, pos + n)) return true;
-                    if (n == 0) break;
-                }
-                return min == 0 and self.matchHere(rest, text, pos);
-            }
-        }
-        if (pos >= text.len) return false;
-        if (!self.atomMatches(p, 0, text[pos])) return false;
-        return self.matchHere(p[alen..], text, pos + 1);
-    }
-};
-
-/// 二进制探测:前 8KB 含 NUL 即认为二进制(与 git 同策略)。
-fn looksBinary(data: []const u8) bool {
-    const head = data[0..@min(data.len, 8192)];
-    return std.mem.indexOfScalar(u8, head, 0) != null;
-}
-
-/// 递归收集文件相对路径到 out。跳过 SKIP_DIRS 与符号链接。
-/// rel 为相对 root 的前缀(顶层为 "")。depth 防御异常深的树。
-fn collectFiles(
-    alloc: std.mem.Allocator,
-    out: *std.array_list.Managed([]const u8),
-    root: []const u8,
-    rel: []const u8,
-    limit: usize,
-    depth: u8,
-) !void {
-    if (out.items.len >= limit or depth > 32) return;
-    const abs = if (rel.len == 0) root else try util.joinPath(alloc, root, rel);
-    var dir = std.Io.Dir.cwd().openDir(util.io, abs, .{ .iterate = true }) catch return;
-    defer dir.close(util.io);
-    var it = dir.iterate();
-    while (it.next(util.io) catch null) |entry| {
-        if (out.items.len >= limit) return;
-        if (entry.kind == .directory) {
-            if (isSkippedDir(entry.name)) continue;
-            const child = try util.joinPath(alloc, rel, entry.name);
-            try collectFiles(alloc, out, root, child, limit, depth + 1);
-        } else if (entry.kind == .file) {
-            try out.append(try util.joinPath(alloc, rel, entry.name));
-        }
-    }
-}
+const fs_walk = @import("tools_fs.zig");
+const loadIgnoreRules = fs_walk.loadIgnoreRules;
+const pathIgnored = fs_walk.pathIgnored;
+pub const globMatch = fs_walk.globMatch;
+const gitignoreMatch = fs_walk.gitignoreMatch;
+const IgnoreRule = fs_walk.IgnoreRule;
+const Regex = fs_walk.Regex;
+const collectFiles = fs_walk.collectFiles;
 
 /// grep: {pattern, path?, glob?, ignoreCase?, literal?, context?, limit?}
 /// 纯 Zig 实现:literal 走子串匹配,否则走最小正则引擎。
 fn toolGrep(arena: std.mem.Allocator, args: []const u8) !Result {
-    const v = try parseArgs(arena, args);
-    const pattern = jstr(v, "pattern") orelse return .{ .content = "error: missing 'pattern' argument", .is_error = true };
-    if (pattern.len == 0) return .{ .content = "error: 'pattern' must not be empty", .is_error = true };
-    const root = resolvePath(arena, jstr(v, "path") orelse ".");
-    const glob = jstr(v, "glob");
-    const ignore_case = jbool(v, "ignoreCase") orelse false;
-    const literal = jbool(v, "literal") orelse false;
-    const ctx_lines: usize = if (jint(v, "context")) |c| @intCast(@max(0, @min(c, 10))) else 0;
-    const limit: usize = if (jint(v, "limit")) |l| @intCast(@max(1, @min(l, 2000))) else 200;
-
-    var re: ?Regex = null;
-    if (!literal) {
-        re = Regex.init(pattern, ignore_case) catch |err| {
-            return .{
-                .content = try std.fmt.allocPrint(arena, "error: bad pattern '{s}': {s}. Supported: char classes, . * + ? ^ $, escapes \\d \\w \\s. Not supported: groups, alternation |. Use literal=true for plain text.", .{ pattern, @errorName(err) }),
-                .is_error = true,
-            };
-        };
-    }
-
-    // 候选文件:单文件直接用,目录则递归收集
-    var files = std.array_list.Managed([]const u8).init(arena);
-    const single = blk: {
-        var d = std.Io.Dir.cwd().openDir(util.io, root, .{}) catch break :blk true;
-        d.close(util.io);
-        break :blk false;
-    };
-    if (single) {
-        try files.append(root);
-    } else {
-        // 收集上限放宽,glob 过滤后才是真正的搜索集
-        try collectFiles(arena, &files, root, "", 20000, 0);
-    }
-
-    var aw = std.Io.Writer.Allocating.init(arena);
-    defer aw.deinit();
-    var hits: usize = 0;
-    var scanned: usize = 0;
-    var truncated = false;
-
-    for (files.items) |rel| {
-        if (hits >= limit) {
-            truncated = true;
-            break;
-        }
-        if (glob) |g| {
-            // glob 同时试全路径与 basename(模型常写 "*.zig" 期望匹配任意层级)
-            if (!globMatch(g, rel) and !globMatch(g, std.fs.path.basename(rel))) continue;
-        }
-        const full = if (single) rel else try util.joinPath(arena, root, rel);
-        const data = diskRead(arena, full, 8 * 1024 * 1024) catch continue;
-        if (looksBinary(data)) continue;
-        scanned += 1;
-
-        // 行切分后逐行匹配;context 需要回看,故先物化行数组
-        var lines = std.array_list.Managed([]const u8).init(arena);
-        var lit = std.mem.splitScalar(u8, data, '\n');
-        while (lit.next()) |ln| try lines.append(ln);
-
-        var last_printed: ?usize = null;
-        for (lines.items, 0..) |line, idx| {
-            if (hits >= limit) {
-                truncated = true;
-                break;
-            }
-            const matched = if (literal)
-                (if (ignore_case) asciiContainsIgnoreCase(line, pattern) else std.mem.indexOf(u8, line, pattern) != null)
-            else
-                re.?.search(line);
-            if (!matched) continue;
-
-            // 上下文前置行(用 `-` 分隔符,仿 GNU grep)
-            if (ctx_lines > 0) {
-                const from = if (idx >= ctx_lines) idx - ctx_lines else 0;
-                var c = from;
-                while (c < idx) : (c += 1) {
-                    if (last_printed) |lp| {
-                        if (c <= lp) continue;
-                    }
-                    try aw.writer.print("{s}-{d}-{s}\n", .{ full, c + 1, lines.items[c] });
-                    last_printed = c;
-                }
-            }
-            try aw.writer.print("{s}:{d}:{s}\n", .{ full, idx + 1, line });
-            last_printed = idx;
-            hits += 1;
-            // 上下文后置行
-            if (ctx_lines > 0) {
-                var c = idx + 1;
-                const to = @min(idx + ctx_lines, lines.items.len - 1);
-                while (c <= to) : (c += 1) {
-                    try aw.writer.print("{s}-{d}-{s}\n", .{ full, c + 1, lines.items[c] });
-                    last_printed = c;
-                }
-            }
-        }
-    }
-
-    if (hits == 0) {
-        return .{ .content = try std.fmt.allocPrint(arena, "no matches for '{s}' in {s} ({d} files scanned)", .{ pattern, root, scanned }) };
-    }
-    if (truncated) {
-        try aw.writer.print("...[stopped at {d} matches; narrow the pattern or raise limit]...\n", .{limit});
-    }
-    return capped(arena, aw.written(), "grep", aw.written().len);
-}
-
-fn asciiContainsIgnoreCase(haystack: []const u8, needle: []const u8) bool {
-    if (needle.len == 0 or needle.len > haystack.len) return needle.len == 0;
-    var i: usize = 0;
-    while (i + needle.len <= haystack.len) : (i += 1) {
-        if (std.ascii.eqlIgnoreCase(haystack[i .. i + needle.len], needle)) return true;
-    }
-    return false;
+    const r = try search.toolGrep(arena, args);
+    return .{ .content = r.content, .is_error = r.is_error };
 }
 
 /// find: {pattern, path?, limit?} — glob 匹配文件路径,递归。
 fn toolFind(arena: std.mem.Allocator, args: []const u8) !Result {
-    const v = try parseArgs(arena, args);
-    const pattern = jstr(v, "pattern") orelse return .{ .content = "error: missing 'pattern' argument", .is_error = true };
-    const root = resolvePath(arena, jstr(v, "path") orelse ".");
-    const limit: usize = if (jint(v, "limit")) |l| @intCast(@max(1, @min(l, 2000))) else 200;
-
-    var files = std.array_list.Managed([]const u8).init(arena);
-    try collectFiles(arena, &files, root, "", 20000, 0);
-
-    var aw = std.Io.Writer.Allocating.init(arena);
-    defer aw.deinit();
-    var n: usize = 0;
-    for (files.items) |rel| {
-        if (n >= limit) break;
-        // 同时试全路径与 basename:模型写 "*.zig" 通常想匹配任意层级
-        if (!globMatch(pattern, rel) and !globMatch(pattern, std.fs.path.basename(rel))) continue;
-        const full = try util.joinPath(arena, root, rel);
-        try aw.writer.print("{s}\n", .{full});
-        n += 1;
-    }
-    if (n == 0) {
-        return .{ .content = try std.fmt.allocPrint(arena, "no files matching '{s}' under {s}", .{ pattern, root }) };
-    }
-    if (n >= limit) try aw.writer.print("...[stopped at {d} results]...\n", .{limit});
-    return capped(arena, aw.written(), "find", aw.written().len);
+    const r = try search.toolFind(arena, args);
+    return .{ .content = r.content, .is_error = r.is_error };
 }
 
 /// ls: {path?, limit?} — 列目录条目,目录优先按名排序。
 fn toolLs(arena: std.mem.Allocator, args: []const u8) !Result {
-    const v = try parseArgs(arena, args);
-    const path = resolvePath(arena, jstr(v, "path") orelse ".");
-    const limit: usize = if (jint(v, "limit")) |l| @intCast(@max(1, @min(l, 2000))) else 200;
-
-    var dir = std.Io.Dir.cwd().openDir(util.io, path, .{ .iterate = true }) catch |err| {
-        return .{ .content = try std.fmt.allocPrint(arena, "error listing {s}: {s}", .{ path, @errorName(err) }), .is_error = true };
-    };
-    defer dir.close(util.io);
-
-    const Entry = struct { name: []const u8, is_dir: bool, size: u64 };
-    var entries = std.array_list.Managed(Entry).init(arena);
-    var it = dir.iterate();
-    while (it.next(util.io) catch null) |e| {
-        var size: u64 = 0;
-        if (e.kind == .file) {
-            const full = try util.joinPath(arena, path, e.name);
-            if (std.Io.Dir.cwd().statFile(util.io, full, .{})) |st| {
-                size = st.size;
-            } else |_| {}
-        }
-        try entries.append(.{
-            .name = try arena.dupe(u8, e.name),
-            .is_dir = e.kind == .directory,
-            .size = size,
-        });
-    }
-    // 目录优先,同类按名字典序
-    std.mem.sort(Entry, entries.items, {}, struct {
-        fn lt(_: void, a: Entry, b: Entry) bool {
-            if (a.is_dir != b.is_dir) return a.is_dir;
-            return std.mem.lessThan(u8, a.name, b.name);
-        }
-    }.lt);
-
-    var aw = std.Io.Writer.Allocating.init(arena);
-    defer aw.deinit();
-    try aw.writer.print("{s}/ ({d} entries)\n", .{ path, entries.items.len });
-    for (entries.items, 0..) |e, i| {
-        if (i >= limit) {
-            try aw.writer.print("...[stopped at {d} entries]...\n", .{limit});
-            break;
-        }
-        if (e.is_dir) {
-            try aw.writer.print("  {s}/\n", .{e.name});
-        } else {
-            try aw.writer.print("  {s}  {d}B\n", .{ e.name, e.size });
-        }
-    }
-    return capped(arena, aw.written(), "ls", aw.written().len);
+    const r = try search.toolLs(arena, args);
+    return .{ .content = r.content, .is_error = r.is_error };
 }
 
 /// multi_edit: {files: [{path, edits: [{oldText, newText}]}]}
 /// 跨文件批量编辑,**原子语义**:先全量 dry-run 校验,任一失败则一个字节都不写。
 /// 这是它相对多次单 edit 调用的核心价值 —— 避免改一半留下不一致的工作树。
 fn toolMultiEdit(arena: std.mem.Allocator, args: []const u8) !Result {
-    const v = try parseArgs(arena, args);
-    const files = v.object.get("files") orelse return .{ .content = "error: missing 'files' array", .is_error = true };
-    if (files != .array or files.array.items.len == 0) {
-        return .{ .content = "error: 'files' must be a non-empty array", .is_error = true };
-    }
-
-    // 阶段一:全量校验并算出每个文件的最终内容(只在内存里,不落盘)
-    // path 是模型给的原始路径(错误消息里要照样回显),disk_path 是解析后的
-    // 实际路径 —— 相对路径要相对这个 Agent 的 cwd,不是进程 cwd。
-    const Pending = struct { path: []const u8, disk_path: []const u8, content: []const u8, n_edits: usize };
-    var pending = std.array_list.Managed(Pending).init(arena);
-    for (files.array.items) |f| {
-        if (f != .object) return .{ .content = "error: files entry must be an object", .is_error = true };
-        const path = jstr(f, "path") orelse return .{ .content = "error: files entry missing 'path'", .is_error = true };
-        const disk_path = resolvePath(arena, path);
-        const edits = f.object.get("edits") orelse return .{
-            .content = try std.fmt.allocPrint(arena, "error: {s}: missing 'edits' array", .{path}),
-            .is_error = true,
-        };
-        if (edits != .array or edits.array.items.len == 0) return .{
-            .content = try std.fmt.allocPrint(arena, "error: {s}: 'edits' must be a non-empty array", .{path}),
-            .is_error = true,
-        };
-        const orig = diskRead(arena, disk_path, 64 * 1024 * 1024) catch |err| {
-            return .{
-                .content = try std.fmt.allocPrint(arena, "error reading {s}: {s} — nothing was written", .{ path, @errorName(err) }),
-                .is_error = true,
-            };
-        };
-        var buf = std.array_list.Managed(u8).init(arena);
-        try buf.appendSlice(orig);
-        for (edits.array.items, 0..) |e, ei| {
-            if (e != .object) return .{
-                .content = try std.fmt.allocPrint(arena, "error: {s} edit[{d}]: must be an object — nothing was written", .{ path, ei }),
-                .is_error = true,
-            };
-            const old_text = jstr(e, "oldText") orelse return .{
-                .content = try std.fmt.allocPrint(arena, "error: {s} edit[{d}]: missing oldText — nothing was written", .{ path, ei }),
-                .is_error = true,
-            };
-            const new_text = jstr(e, "newText") orelse "";
-            if (old_text.len == 0) return .{
-                .content = try std.fmt.allocPrint(arena, "error: {s} edit[{d}]: oldText must not be empty — nothing was written", .{ path, ei }),
-                .is_error = true,
-            };
-            // 唯一匹配校验(与 edit 工具同契约)
-            var count: usize = 0;
-            var idx: usize = 0;
-            while (std.mem.indexOfPos(u8, buf.items, idx, old_text)) |found| {
-                count += 1;
-                idx = found + old_text.len;
-            }
-            if (count != 1) return .{
-                .content = try std.fmt.allocPrint(arena, "error: {s} edit[{d}]: oldText matched {d} times, need exactly 1 — nothing was written", .{ path, ei, count }),
-                .is_error = true,
-            };
-            const at = std.mem.indexOf(u8, buf.items, old_text).?;
-            var next = std.array_list.Managed(u8).init(arena);
-            try next.appendSlice(buf.items[0..at]);
-            try next.appendSlice(new_text);
-            try next.appendSlice(buf.items[at + old_text.len ..]);
-            buf = next;
-        }
-        try pending.append(.{ .path = path, .disk_path = disk_path, .content = buf.items, .n_edits = edits.array.items.len });
-    }
-
-    // 阶段二:全部校验通过,逐个落盘
-    for (pending.items) |p| {
-        diskWrite(p.disk_path, p.content) catch |err| {
-            return .{
-                .content = try std.fmt.allocPrint(arena, "error writing {s}: {s} — earlier files in this batch were already written", .{ p.path, @errorName(err) }),
-                .is_error = true,
-            };
-        };
-    }
-
-    var aw = std.Io.Writer.Allocating.init(arena);
-    defer aw.deinit();
-    try aw.writer.print("edited {d} files:\n", .{pending.items.len});
-    for (pending.items) |p| {
-        try aw.writer.print("  {s}: {d} replacements\n", .{ p.path, p.n_edits });
-    }
-    return capped(arena, aw.written(), "multi_edit", aw.written().len);
+    const r = try tedit.toolMultiEdit(arena, args);
+    return .{ .content = r.content, .is_error = r.is_error };
 }
 
 pub const tools = [_]Tool{
     .{
         .name = "read",
-        .desc = "Read a file. Returns the full text, or a line-range slice when offset/limit are given.",
+        .desc = "Read a file. Each line is prefixed with its 1-based line number. Use offset/limit for a slice, tail for the last N lines (logs), or around for a window centered on a line. PNG/JPEG/GIF/WEBP/BMP are decoded and shown to vision models.",
         .schema =
-        \\{"type":"object","properties":{"path":{"type":"string","description":"File path to read."},"offset":{"type":"integer","description":"1-based line number to start from."},"limit":{"type":"integer","description":"Maximum number of lines to return."}},"required":["path"]}
+        \\{"type":"object","properties":{"path":{"type":"string","description":"File path to read."},"offset":{"type":"integer","description":"1-based line number to start from."},"limit":{"type":"integer","description":"Maximum number of lines to return. With around, this is the window size."},"tail":{"type":"integer","description":"Last N lines (do not combine with offset or around)."},"around":{"type":"integer","description":"1-based center line. Returns a window around it (default 41 lines). Do not combine with offset or tail."}},"required":["path"]}
         ,
         .handler = toolRead,
     },
     .{
         .name = "write",
-        .desc = "Write a file, creating parent directories. RULE: use this tool for all file writes — never mutate files through shell scripts or spawned processes.",
+        .desc = "Write a file inside the workspace, creating parent directories. Paths that escape via .. or an outside absolute path are rejected. Set createOnly to refuse overwriting an existing file. Set dryRun to preview without writing. RULE: use this tool for all file writes — never mutate files through shell scripts or spawned processes.",
         .schema =
-        \\{"type":"object","properties":{"path":{"type":"string","description":"File path to write."},"content":{"type":"string","description":"Full file contents."}},"required":["path","content"]}
+        \\{"type":"object","properties":{"path":{"type":"string","description":"File path to write."},"content":{"type":"string","description":"Full file contents."},"createOnly":{"type":"boolean","description":"Fail if the file already exists (default false)."},"dryRun":{"type":"boolean","description":"Preview without writing (default false)."}},"required":["path","content"]}
         ,
         .handler = toolWrite,
     },
     .{
         .name = "edit",
-        .desc = "Replace exact oldText with newText in a file. Each oldText must match exactly once. RULE: always mutate source files with this built-in tool — external scripting is for analysis/validation only, never for editing source.",
+        .desc = "Replace exact oldText with newText in a file. Each oldText must match exactly once unless replaceAll is true. Do not include read() line-number prefixes (they are stripped if present). Set dryRun to validate and preview without writing. RULE: always mutate source files with this built-in tool — external scripting is for analysis/validation only, never for editing source.",
         .schema =
-        \\{"type":"object","properties":{"path":{"type":"string","description":"File path to edit."},"edits":{"type":"array","description":"Edits applied in order.","items":{"type":"object","properties":{"oldText":{"type":"string","description":"Exact text to replace; must occur exactly once."},"newText":{"type":"string","description":"Replacement text."}},"required":["oldText","newText"]}}},"required":["path","edits"]}
+        \\{"type":"object","properties":{"path":{"type":"string","description":"File path to edit."},"edits":{"type":"array","description":"Edits applied in order.","items":{"type":"object","properties":{"oldText":{"type":"string","description":"Exact text to replace; must occur exactly once unless replaceAll."},"newText":{"type":"string","description":"Replacement text."},"replaceAll":{"type":"boolean","description":"Replace every occurrence (default false)."}},"required":["oldText","newText"]}},"dryRun":{"type":"boolean","description":"Validate and preview without writing (default false)."}},"required":["path","edits"]}
         ,
         .handler = toolEdit,
     },
     .{
         .name = "bash",
-        .desc = "Run a shell command. RULE: do not use shell to modify source files — use the built-in write/edit tools instead; bash is for inspection, builds, and tests.",
+        .desc = "Run a shell command. May run inside an OS sandbox (workspace: writes only in the working directory; strict: also no network). RULE: do not use shell to modify source files — use the built-in write/edit tools instead; bash is for inspection, builds, and tests.",
         .schema =
-        \\{"type":"object","properties":{"command":{"type":"string","description":"Shell command to run."},"timeout":{"type":"integer","description":"Timeout in seconds (default 30)."}},"required":["command"]}
+        \\{"type":"object","properties":{"command":{"type":"string","description":"Shell command to run."},"timeout":{"type":"integer","description":"Timeout in seconds (default 30)."},"background":{"type":"boolean","description":"Return immediately; stream output to an artifact log. Use for servers and long builds."},"cwd":{"type":"string","description":"Working directory inside the workspace (default: agent root)."}},"required":["command"]}
         ,
         .handler = toolBash,
     },
     .{
         .name = "grep",
-        .desc = "Search file contents by regex (or literal text). Prefer this over shelling out to grep/rg: it returns structured path:line:match output, skips build dirs and binaries, and caps result count.",
+        .desc = "Search file contents by regex (or literal text). Prefer this over shelling out to grep/rg: it returns structured path:line:match output, skips build dirs, binaries, and files over maxBytes (default 1MB). Set maxDepth to cap directory walk. Set exclude to skip a glob (rg -g '!pat'). Set filesWithMatches to list unique files only. Set invert to keep non-matching lines (rg -v); with filesWithMatches that lists files with no hits (rg -L). Set count for path:N totals (rg -c).",
         .schema =
-        \\{"type":"object","properties":{"pattern":{"type":"string","description":"Regex pattern. Supports char classes [a-z], . * + ? ^ $, escapes \\d \\w \\s. No groups or alternation."},"path":{"type":"string","description":"File or directory to search (default '.')."},"glob":{"type":"string","description":"Filter files by glob, e.g. '*.zig' or 'src/**/*.ts'."},"ignoreCase":{"type":"boolean","description":"Case-insensitive match."},"literal":{"type":"boolean","description":"Treat pattern as plain text instead of regex."},"context":{"type":"integer","description":"Context lines around each match (0-10)."},"limit":{"type":"integer","description":"Max matches to return (default 200)."}},"required":["pattern"]}
+        \\{"type":"object","properties":{"pattern":{"type":"string","description":"Regex pattern. Supports char classes [a-z], . * + ? ^ $, escapes \\d \\w \\s. No groups or alternation."},"path":{"type":"string","description":"File or directory to search (default '.')."},"glob":{"type":"string","description":"Filter files by glob, e.g. '*.zig' or 'src/**/*.ts'."},"ignoreCase":{"type":"boolean","description":"Case-insensitive match."},"literal":{"type":"boolean","description":"Treat pattern as plain text instead of regex."},"context":{"type":"integer","description":"Context lines around each match (0-10)."},"limit":{"type":"integer","description":"Max matches to return (default 200)."},"filesWithMatches":{"type":"boolean","description":"List unique file paths only, like rg -l."},"maxBytes":{"type":"integer","description":"Skip files larger than this when walking a tree (default 1048576). Single-file path is not skipped."},"invert":{"type":"boolean","description":"Keep non-matching lines (rg -v). With filesWithMatches, list files with no hits (rg -L)."},"maxDepth":{"type":"integer","description":"Directory walk depth (default 32, min 1). 1 = this folder only."},"count":{"type":"boolean","description":"Print path:N match counts (rg -c) instead of lines."},"exclude":{"type":"string","description":"Skip paths matching this glob (rg -g '!pat')."}},"required":["pattern"]}
         ,
         .handler = toolGrep,
     },
     .{
         .name = "find",
-        .desc = "Find files by glob pattern, recursively. Prefer this over shelling out to find/fd.",
+        .desc = "Find files or directories by glob pattern, recursively. Prefer this over shelling out to find/fd. Set type=dir to list folders. Set sort=mtime for newest first. Set ignoreCase to match Foo.TS with *.ts. Set maxDepth to cap how deep the walk goes. Set exclude to skip a glob.",
         .schema =
-        \\{"type":"object","properties":{"pattern":{"type":"string","description":"Glob pattern, e.g. '*.zig' or 'src/**/*.test.ts'. Matched against both the relative path and the basename."},"path":{"type":"string","description":"Directory to search from (default '.')."},"limit":{"type":"integer","description":"Max results (default 200)."}},"required":["pattern"]}
+        \\{"type":"object","properties":{"pattern":{"type":"string","description":"Glob pattern, e.g. '*.zig' or 'src/**/*.test.ts'. Matched against both the relative path and the basename."},"path":{"type":"string","description":"Directory to search from (default '.')."},"limit":{"type":"integer","description":"Max results (default 200)."},"sort":{"type":"string","description":"'mtime' = newest first. Default is walk order."},"ignoreCase":{"type":"boolean","description":"Case-insensitive glob (default false)."},"type":{"type":"string","description":"'file', 'dir', or 'any' (default any)."},"maxDepth":{"type":"integer","description":"Directory walk depth (default 32, min 1). 1 = this folder only."},"exclude":{"type":"string","description":"Skip paths matching this glob."}},"required":["pattern"]}
         ,
         .handler = toolFind,
     },
     .{
         .name = "ls",
-        .desc = "List directory entries; directories first, files with byte sizes.",
+        .desc = "List directory entries; directories first, files with byte sizes. Hidden and gitignored names are omitted unless all=true. Set sort=mtime for newest first. Set type=file or type=dir to filter. Set exclude to skip a glob.",
         .schema =
-        \\{"type":"object","properties":{"path":{"type":"string","description":"Directory to list (default '.')."},"limit":{"type":"integer","description":"Max entries (default 200)."}},"required":[]}
+        \\{"type":"object","properties":{"path":{"type":"string","description":"Directory to list (default '.')."},"limit":{"type":"integer","description":"Max entries (default 200)."},"all":{"type":"boolean","description":"Include gitignored and skipped dirs (default false)."},"sort":{"type":"string","description":"'mtime' = newest first. Default is dirs first, then name."},"type":{"type":"string","description":"'file', 'dir', or 'any' (default any)."},"exclude":{"type":"string","description":"Skip names matching this glob."}},"required":[]}
         ,
         .handler = toolLs,
     },
     .{
         .name = "multi_edit",
-        .desc = "Edit several files in one atomic batch. All edits are validated first; if any oldText fails to match exactly once, nothing is written. Use this for refactors that must not leave the tree half-changed.",
+        .desc = "Edit several files in one atomic batch. All edits are validated first; if any oldText fails to match exactly once (unless replaceAll), nothing is written. Set dryRun to validate and preview without writing. Use this for refactors that must not leave the tree half-changed.",
         .schema =
-        \\{"type":"object","properties":{"files":{"type":"array","description":"Files to edit.","items":{"type":"object","properties":{"path":{"type":"string","description":"File path."},"edits":{"type":"array","description":"Edits applied in order.","items":{"type":"object","properties":{"oldText":{"type":"string","description":"Exact text to replace; must occur exactly once."},"newText":{"type":"string","description":"Replacement text."}},"required":["oldText","newText"]}}},"required":["path","edits"]}}},"required":["files"]}
+        \\{"type":"object","properties":{"files":{"type":"array","description":"Files to edit.","items":{"type":"object","properties":{"path":{"type":"string","description":"File path."},"edits":{"type":"array","description":"Edits applied in order.","items":{"type":"object","properties":{"oldText":{"type":"string","description":"Exact text to replace; must occur exactly once unless replaceAll."},"newText":{"type":"string","description":"Replacement text."},"replaceAll":{"type":"boolean","description":"Replace every occurrence (default false)."}},"required":["oldText","newText"]}}},"required":["path","edits"]}},"dryRun":{"type":"boolean","description":"Validate and preview without writing (default false)."}},"required":["files"]}
         ,
         .handler = toolMultiEdit,
     },
@@ -1205,6 +303,11 @@ test "edit tool" {
     try t.expect(!r2.is_error);
     const content = try std.Io.Dir.cwd().readFileAlloc(util.io, "a.txt", a, .limited(1024));
     try t.expectEqualStrings("hello zig hello", content);
+    const dry = try toolEdit(a, "{\"path\":\"a.txt\",\"dryRun\":true,\"edits\":[{\"oldText\":\"zig\",\"newText\":\"dry\"}]}");
+    try t.expect(!dry.is_error);
+    try t.expect(std.mem.indexOf(u8, dry.content, "dry-run") != null);
+    const still = try std.Io.Dir.cwd().readFileAlloc(util.io, "a.txt", a, .limited(1024));
+    try t.expectEqualStrings("hello zig hello", still);
 
     // 不存在 → 错误
     const r3 = try toolEdit(a, "{\"path\":\"nope.txt\",\"edits\":[{\"oldText\":\"x\",\"newText\":\"y\"}]}");
@@ -1215,6 +318,24 @@ test "edit tool" {
     try t.expect(std.mem.indexOf(u8, r2.content, "+++ a.txt") != null);
     try t.expect(std.mem.indexOf(u8, r2.content, "-world") != null);
     try t.expect(std.mem.indexOf(u8, r2.content, "+zig") != null);
+
+    // replaceAll 换全部 hello
+    const r4 = try toolEdit(a, "{\"path\":\"a.txt\",\"edits\":[{\"oldText\":\"hello\",\"newText\":\"hi\",\"replaceAll\":true}]}");
+    try t.expect(!r4.is_error);
+    const all = try std.Io.Dir.cwd().readFileAlloc(util.io, "a.txt", a, .limited(1024));
+    try t.expectEqualStrings("hi zig hi", all);
+
+    // 模型从 read 抄了行号前缀,仍应命中
+    try std.Io.Dir.cwd().writeFile(util.io, .{ .sub_path = "a.txt", .data = "hello zig hello" });
+    const r5 = try toolEdit(a, "{\"path\":\"a.txt\",\"edits\":[{\"oldText\":\"     1|hello zig hello\",\"newText\":\"     1|ok\"}]}");
+    try t.expect(!r5.is_error);
+    const numbered = try std.Io.Dir.cwd().readFileAlloc(util.io, "a.txt", a, .limited(1024));
+    try t.expectEqualStrings("ok", numbered);
+
+    const miss = try toolEdit(a, "{\"path\":\"a.txt\",\"edits\":[{\"oldText\":\"ok but wrong\",\"newText\":\"x\"}]}");
+    try t.expect(miss.is_error);
+    try t.expect(std.mem.indexOf(u8, miss.content, "nearest:") != null);
+    try t.expect(std.mem.indexOf(u8, miss.content, "ok") != null);
 }
 
 test "globMatch semantics" {
@@ -1288,10 +409,12 @@ test "grep find ls tools over a real tree" {
     const dir = tmp.dir;
     try dir.createDirPath(util.io, "src");
     try dir.createDirPath(util.io, ".git");
+    try dir.createDirPath(util.io, ".turbo");
     try dir.writeFile(util.io, .{ .sub_path = "src/a.zig", .data = "const x = 1;\nfn hello() void {}\n" });
     try dir.writeFile(util.io, .{ .sub_path = "src/b.txt", .data = "hello there\n" });
     // .git 下的命中必须被跳过,否则搜索结果会被 VCS 元数据污染
     try dir.writeFile(util.io, .{ .sub_path = ".git/config", .data = "hello from git\n" });
+    try dir.writeFile(util.io, .{ .sub_path = ".turbo/hello.txt", .data = "hello from turbo\n" });
     // 二进制文件必须被跳过
     try dir.writeFile(util.io, .{ .sub_path = "bin.dat", .data = "hello\x00\x01binary" });
 
@@ -1309,9 +432,18 @@ test "grep find ls tools over a real tree" {
     try t.expect(std.mem.indexOf(u8, g.content, "src/a.zig:2:") != null);
     try t.expect(std.mem.indexOf(u8, g.content, "src/b.txt:1:") != null);
     try t.expect(std.mem.indexOf(u8, g.content, ".git") == null);
+    try t.expect(std.mem.indexOf(u8, g.content, ".turbo") == null);
     try t.expect(std.mem.indexOf(u8, g.content, "bin.dat") == null);
 
     // grep + glob 过滤
+    const gex = try toolGrep(a, "{\"pattern\":\"hello\",\"exclude\":\"*.zig\"}");
+    try t.expect(std.mem.indexOf(u8, gex.content, "a.zig") == null);
+    const cnt = try toolGrep(a, "{\"pattern\":\"hello\",\"glob\":\"*.zig\",\"count\":true}");
+    try t.expect(std.mem.indexOf(u8, cnt.content, ":1") != null);
+    try t.expect(std.mem.indexOf(u8, cnt.content, "fn hello") == null);
+    const inv = try toolGrep(a, "{\"pattern\":\"hello\",\"glob\":\"*.zig\",\"invert\":true}");
+    try t.expect(std.mem.indexOf(u8, inv.content, "const x") != null);
+    try t.expect(std.mem.indexOf(u8, inv.content, "hello") == null);
     const g2 = try toolGrep(a, "{\"pattern\":\"hello\",\"glob\":\"*.zig\"}");
     try t.expect(std.mem.indexOf(u8, g2.content, "src/a.zig") != null);
     try t.expect(std.mem.indexOf(u8, g2.content, "b.txt") == null);
@@ -1336,15 +468,223 @@ test "grep find ls tools over a real tree" {
     try t.expect(std.mem.indexOf(u8, f.content, "a.zig") != null);
     try t.expect(std.mem.indexOf(u8, f.content, "b.txt") == null);
 
+    const fd = try toolFind(a, "{\"pattern\":\"src\",\"type\":\"dir\"}");
+    try t.expect(!fd.is_error);
+    try t.expect(std.mem.indexOf(u8, fd.content, "src/") != null);
+    try t.expect(std.mem.indexOf(u8, fd.content, "a.zig") == null);
+    var only_files = std.array_list.Managed([]const u8).init(a);
+    try collectFiles(a, &only_files, ".", "", 20000, 0, loadIgnoreRules(a, "."), .files, 32);
+    for (only_files.items) |rel| try t.expect(!std.mem.endsWith(u8, rel, "/"));
+    const ff = try toolFind(a, "{\"pattern\":\"*\",\"type\":\"file\"}");
+    try t.expect(!ff.is_error);
+    try t.expect(std.mem.indexOf(u8, ff.content, "a.zig") != null);
+    var lit = std.mem.splitScalar(u8, ff.content, '\n');
+    while (lit.next()) |line| {
+        if (line.len == 0) continue;
+        try t.expect(!std.mem.endsWith(u8, line, "/"));
+    }
+    const shallow = try toolFind(a, "{\"pattern\":\"*.zig\",\"maxDepth\":1}");
+    try t.expect(std.mem.indexOf(u8, shallow.content, "a.zig") == null);
+    const deep = try toolFind(a, "{\"pattern\":\"*.zig\",\"maxDepth\":2}");
+    try t.expect(std.mem.indexOf(u8, deep.content, "a.zig") != null);
+    const nozig = try toolFind(a, "{\"pattern\":\"*\",\"exclude\":\"*.zig\"}");
+    try t.expect(std.mem.indexOf(u8, nozig.content, "a.zig") == null);
+    try t.expect(std.mem.indexOf(u8, nozig.content, "bin.dat") != null);
+
     // ls:目录优先,带大小
     const l = try toolLs(a, "{}");
     try t.expect(!l.is_error);
     try t.expect(std.mem.indexOf(u8, l.content, "src/") != null);
     try t.expect(std.mem.indexOf(u8, l.content, "bin.dat") != null);
+    const lex = try toolLs(a, "{\"exclude\":\"*.dat\"}");
+    try t.expect(std.mem.indexOf(u8, lex.content, "bin.dat") == null);
+    try t.expect(std.mem.indexOf(u8, lex.content, "src/") != null);
 
     // ls 不存在的目录 → 错误
     const l2 = try toolLs(a, "{\"path\":\"nope\"}");
     try t.expect(l2.is_error);
+    const ld = try toolLs(a, "{\"type\":\"dir\"}");
+    try t.expect(std.mem.indexOf(u8, ld.content, "src/") != null);
+    try t.expect(std.mem.indexOf(u8, ld.content, "bin.dat") == null);
+    const lf = try toolLs(a, "{\"type\":\"file\"}");
+    try t.expect(std.mem.indexOf(u8, lf.content, "src/\n") == null);
+    try t.expect(std.mem.indexOf(u8, lf.content, "bin.dat") != null);
+
+    const skip = try toolGrep(a, "{\"pattern\":\"hello\",\"maxBytes\":4}");
+    try t.expect(!skip.is_error);
+    try t.expect(std.mem.indexOf(u8, skip.content, "skipped") != null);
+}
+
+test "find sort=mtime returns newest first" {
+    const t = std.testing;
+    try util.testInit();
+    var tmp = t.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = util.Arena.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    try tmp.dir.writeFile(util.io, .{ .sub_path = "old.txt", .data = "a\n" });
+    try tmp.dir.writeFile(util.io, .{ .sub_path = "new.txt", .data = "b\n" });
+    try tmp.dir.writeFile(util.io, .{ .sub_path = "old.txt", .data = "a2\n" });
+    const cwd_abs = try std.process.currentPathAlloc(util.io, a);
+    const dir = try std.fmt.allocPrint(a, "{s}/.zig-cache/tmp/{s}", .{ cwd_abs, tmp.sub_path });
+    const r = try toolFind(a, try std.fmt.allocPrint(a, "{{\"pattern\":\"*.txt\",\"path\":\"{s}\",\"sort\":\"mtime\"}}", .{dir}));
+    try t.expect(!r.is_error);
+    const i_old = std.mem.indexOf(u8, r.content, "old.txt") orelse return error.MissingOld;
+    const i_new = std.mem.indexOf(u8, r.content, "new.txt") orelse return error.MissingNew;
+    try t.expect(i_old < i_new);
+}
+
+test "ls sort=mtime returns newest first" {
+    const t = std.testing;
+    try util.testInit();
+    var tmp = t.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = util.Arena.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    try tmp.dir.writeFile(util.io, .{ .sub_path = "old.txt", .data = "a\n" });
+    try tmp.dir.writeFile(util.io, .{ .sub_path = "new.txt", .data = "b\n" });
+    try tmp.dir.writeFile(util.io, .{ .sub_path = "old.txt", .data = "a2\n" });
+    const cwd_abs = try std.process.currentPathAlloc(util.io, a);
+    const dir = try std.fmt.allocPrint(a, "{s}/.zig-cache/tmp/{s}", .{ cwd_abs, tmp.sub_path });
+    const r = try toolLs(a, try std.fmt.allocPrint(a, "{{\"path\":\"{s}\",\"sort\":\"mtime\"}}", .{dir}));
+    try t.expect(!r.is_error);
+    const i_old = std.mem.indexOf(u8, r.content, "old.txt") orelse return error.MissingOld;
+    const i_new = std.mem.indexOf(u8, r.content, "new.txt") orelse return error.MissingNew;
+    try t.expect(i_old < i_new);
+}
+
+test "find ignoreCase matches mixed-case names" {
+    const t = std.testing;
+    try util.testInit();
+    var tmp = t.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = util.Arena.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    try tmp.dir.writeFile(util.io, .{ .sub_path = "Foo.TS", .data = "x\n" });
+    const cwd_abs = try std.process.currentPathAlloc(util.io, a);
+    const dir = try std.fmt.allocPrint(a, "{s}/.zig-cache/tmp/{s}", .{ cwd_abs, tmp.sub_path });
+    const sensitive = try toolFind(a, try std.fmt.allocPrint(a, "{{\"pattern\":\"*.ts\",\"path\":\"{s}\"}}", .{dir}));
+    try t.expect(std.mem.indexOf(u8, sensitive.content, "Foo.TS") == null);
+    const loose = try toolFind(a, try std.fmt.allocPrint(a, "{{\"pattern\":\"*.ts\",\"path\":\"{s}\",\"ignoreCase\":true}}", .{dir}));
+    try t.expect(std.mem.indexOf(u8, loose.content, "Foo.TS") != null);
+}
+
+test "gitignoreMatch and pathIgnored" {
+    const t = std.testing;
+    try t.expect(gitignoreMatch("*.log", "foo.log", false));
+    try t.expect(gitignoreMatch("*.log", "src/foo.log", false));
+    try t.expect(!gitignoreMatch("*.log", "foo.txt", false));
+    try t.expect(gitignoreMatch("/build", "build", true));
+    try t.expect(!gitignoreMatch("/build", "src/build", true));
+    try t.expect(gitignoreMatch("build/", "build", true));
+    try t.expect(!gitignoreMatch("build/", "build", false));
+    var arena = util.Arena.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const rules = [_]IgnoreRule{ .{ .pat = "*.log" }, .{ .pat = "!keep.log" } };
+    try t.expect(pathIgnored(a, &rules, "a.log", false));
+    try t.expect(!pathIgnored(a, &rules, "keep.log", false));
+    const nested = [_]IgnoreRule{.{ .pat = "/secret", .base = "src" }};
+    try t.expect(pathIgnored(a, &nested, "src/secret", false));
+    try t.expect(!pathIgnored(a, &nested, "other/secret", false));
+    const tmpd = [_]IgnoreRule{.{ .pat = "tmp/", .base = "src" }};
+    try t.expect(pathIgnored(a, &tmpd, "src/tmp", true));
+    try t.expect(!pathIgnored(a, &tmpd, "tmp", true));
+    const above = [_]IgnoreRule{.{ .pat = "/foo.log", .prefix = "src" }};
+    try t.expect(!pathIgnored(a, &above, "foo.log", false));
+}
+
+test "grep honors gitignore" {
+    const t = std.testing;
+    try util.testInit();
+    var tmp = t.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = util.Arena.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    try tmp.dir.writeFile(util.io, .{ .sub_path = ".gitignore", .data = "*.skip\n" });
+    try tmp.dir.writeFile(util.io, .{ .sub_path = "keep.txt", .data = "hello keep\n" });
+    try tmp.dir.writeFile(util.io, .{ .sub_path = "drop.skip", .data = "hello drop\n" });
+    const cwd_abs = try std.process.currentPathAlloc(util.io, a);
+    const dir = try std.fmt.allocPrint(a, "{s}/.zig-cache/tmp/{s}", .{ cwd_abs, tmp.sub_path });
+    const args = try std.fmt.allocPrint(a, "{{\"pattern\":\"hello\",\"path\":\"{s}\"}}", .{dir});
+    const r = try toolGrep(a, args);
+    try t.expect(std.mem.indexOf(u8, r.content, "keep") != null);
+    try t.expect(std.mem.indexOf(u8, r.content, "drop") == null);
+}
+
+test "grep filesWithMatches lists each file once" {
+    const t = std.testing;
+    try util.testInit();
+    var tmp = t.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = util.Arena.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    try tmp.dir.writeFile(util.io, .{ .sub_path = "a.txt", .data = "hello\nhello\n" });
+    try tmp.dir.writeFile(util.io, .{ .sub_path = "b.txt", .data = "hello\n" });
+    const cwd_abs = try std.process.currentPathAlloc(util.io, a);
+    const dir = try std.fmt.allocPrint(a, "{s}/.zig-cache/tmp/{s}", .{ cwd_abs, tmp.sub_path });
+    const args = try std.fmt.allocPrint(a, "{{\"pattern\":\"hello\",\"path\":\"{s}\",\"filesWithMatches\":true}}", .{dir});
+    const r = try toolGrep(a, args);
+    try t.expect(std.mem.indexOf(u8, r.content, "a.txt") != null);
+    try t.expect(std.mem.indexOf(u8, r.content, "b.txt") != null);
+    try t.expect(std.mem.indexOf(u8, r.content, ":1:") == null);
+}
+
+test "grep honors nested gitignore" {
+    const t = std.testing;
+    try util.testInit();
+    var tmp = t.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = util.Arena.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    try tmp.dir.createDirPath(util.io, "sub");
+    try tmp.dir.createDirPath(util.io, "other");
+    try tmp.dir.writeFile(util.io, .{ .sub_path = "sub/.gitignore", .data = "*.skip\n/secret\n" });
+    try tmp.dir.writeFile(util.io, .{ .sub_path = "keep.txt", .data = "hello keep\n" });
+    try tmp.dir.writeFile(util.io, .{ .sub_path = "sub/drop.skip", .data = "hello drop\n" });
+    try tmp.dir.writeFile(util.io, .{ .sub_path = "sub/ok.txt", .data = "hello ok\n" });
+    try tmp.dir.writeFile(util.io, .{ .sub_path = "sub/secret", .data = "hello secret\n" });
+    try tmp.dir.writeFile(util.io, .{ .sub_path = "other/secret", .data = "hello other\n" });
+    const cwd_abs = try std.process.currentPathAlloc(util.io, a);
+    const dir = try std.fmt.allocPrint(a, "{s}/.zig-cache/tmp/{s}", .{ cwd_abs, tmp.sub_path });
+    const args = try std.fmt.allocPrint(a, "{{\"pattern\":\"hello\",\"path\":\"{s}\"}}", .{dir});
+    const r = try toolGrep(a, args);
+    try t.expect(std.mem.indexOf(u8, r.content, "keep") != null);
+    try t.expect(std.mem.indexOf(u8, r.content, "ok") != null);
+    try t.expect(std.mem.indexOf(u8, r.content, "drop") == null);
+    try t.expect(std.mem.indexOf(u8, r.content, "hello secret") == null);
+    try t.expect(std.mem.indexOf(u8, r.content, "hello other") != null);
+}
+
+test "ls hides gitignored and skipped dirs" {
+    const t = std.testing;
+    try util.testInit();
+    var tmp = t.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = util.Arena.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    try tmp.dir.createDirPath(util.io, ".git");
+    try tmp.dir.createDirPath(util.io, "node_modules");
+    try tmp.dir.writeFile(util.io, .{ .sub_path = ".gitignore", .data = "*.skip\n" });
+    try tmp.dir.writeFile(util.io, .{ .sub_path = "keep.txt", .data = "k\n" });
+    try tmp.dir.writeFile(util.io, .{ .sub_path = "drop.skip", .data = "d\n" });
+    const cwd_abs = try std.process.currentPathAlloc(util.io, a);
+    const dir = try std.fmt.allocPrint(a, "{s}/.zig-cache/tmp/{s}", .{ cwd_abs, tmp.sub_path });
+    const hidden = try toolLs(a, try std.fmt.allocPrint(a, "{{\"path\":\"{s}\"}}", .{dir}));
+    try t.expect(std.mem.indexOf(u8, hidden.content, "keep.txt") != null);
+    try t.expect(std.mem.indexOf(u8, hidden.content, "drop.skip") == null);
+    try t.expect(std.mem.indexOf(u8, hidden.content, "node_modules") == null);
+    try t.expect(std.mem.indexOf(u8, hidden.content, "hidden") != null);
+    const shown = try toolLs(a, try std.fmt.allocPrint(a, "{{\"path\":\"{s}\",\"all\":true}}", .{dir}));
+    try t.expect(std.mem.indexOf(u8, shown.content, "drop.skip") != null);
+    try t.expect(std.mem.indexOf(u8, shown.content, "node_modules") != null);
 }
 
 test "multi_edit is atomic: failure leaves files untouched" {
@@ -1413,17 +753,82 @@ test "read offset and limit slice lines" {
     // offset 是 1-based
     const r1 = try toolRead(a, "{\"path\":\"n.txt\",\"offset\":2,\"limit\":2}");
     try t.expect(!r1.is_error);
-    try t.expectEqualStrings("l2\nl3", r1.content);
+    try t.expect(std.mem.indexOf(u8, r1.content, "     2|l2") != null);
+    try t.expect(std.mem.indexOf(u8, r1.content, "     3|l3") != null);
+    try t.expect(std.mem.indexOf(u8, r1.content, "     1|") == null);
     // 只给 limit → 从首行起
     const r2 = try toolRead(a, "{\"path\":\"n.txt\",\"limit\":1}");
-    try t.expectEqualStrings("l1", r2.content);
+    try t.expect(std.mem.indexOf(u8, r2.content, "     1|l1") != null);
+    try t.expect(std.mem.indexOf(u8, r2.content, "     2|") == null);
     // offset 越界 → 明确报错而非空内容
     const r3 = try toolRead(a, "{\"path\":\"n.txt\",\"offset\":99}");
     try t.expect(r3.is_error);
     try t.expect(std.mem.indexOf(u8, r3.content, "past end") != null);
     // 不给 offset/limit → 全文
     const r4 = try toolRead(a, "{\"path\":\"n.txt\"}");
-    try t.expectEqualStrings("l1\nl2\nl3\nl4\nl5\n", r4.content);
+    try t.expect(std.mem.indexOf(u8, r4.content, "     1|l1") != null);
+    try t.expect(std.mem.indexOf(u8, r4.content, "     5|l5") != null);
+    const r5 = try toolRead(a, "{\"path\":\"n.txt\",\"tail\":2}");
+    try t.expect(!r5.is_error);
+    try t.expect(std.mem.indexOf(u8, r5.content, "     4|l4") != null);
+    try t.expect(std.mem.indexOf(u8, r5.content, "     5|l5") != null);
+    try t.expect(std.mem.indexOf(u8, r5.content, "     3|") == null);
+    const r6 = try toolRead(a, "{\"path\":\"n.txt\",\"offset\":1,\"tail\":2}");
+    try t.expect(r6.is_error);
+    const r7 = try toolRead(a, "{\"path\":\"n.txt\",\"around\":3,\"limit\":3}");
+    try t.expect(!r7.is_error);
+    try t.expect(std.mem.indexOf(u8, r7.content, "     2|l2") != null);
+    try t.expect(std.mem.indexOf(u8, r7.content, "     3|l3") != null);
+    try t.expect(std.mem.indexOf(u8, r7.content, "     4|l4") != null);
+    try t.expect(std.mem.indexOf(u8, r7.content, "     1|") == null);
+    try t.expect(std.mem.indexOf(u8, r7.content, "     5|") == null);
+    const r8 = try toolRead(a, "{\"path\":\"n.txt\",\"around\":3,\"offset\":1}");
+    try t.expect(r8.is_error);
+}
+
+test "read decodes png and attaches image" {
+    const t = std.testing;
+    try util.testInit();
+    var tmp = t.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = util.Arena.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const png = [_]u8{
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d,
+        0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+        0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4, 0x89, 0x00, 0x00, 0x00,
+        0x0a, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0x00, 0x01, 0x00, 0x00,
+        0x05, 0x00, 0x01, 0x0d, 0x0a, 0x2d, 0xb4, 0x00, 0x00, 0x00, 0x00, 0x49,
+        0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+    };
+    try tmp.dir.writeFile(util.io, .{ .sub_path = "dot.png", .data = &png });
+    const dir = try std.fmt.allocPrint(a, "{s}/.zig-cache/tmp/{s}", .{ try std.process.currentPathAlloc(util.io, a), tmp.sub_path });
+    const path = try util.joinPath(a, dir, "dot.png");
+    const args = try std.fmt.allocPrint(a, "{{\"path\":\"{s}\"}}", .{path});
+    const r = try toolRead(a, args);
+    try t.expect(!r.is_error);
+    try t.expect(std.mem.indexOf(u8, r.content, "image ") != null);
+    try t.expect(r.images != null);
+    try t.expectEqual(@as(usize, 1), r.images.?.len);
+    try t.expect(r.images.?[0].data.len > 0);
+    try t.expect(r.images.?[0].w > 0);
+}
+
+test "diskWrite replaces file without leftover tmp" {
+    const t = std.testing;
+    try util.testInit();
+    var tmp = t.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = util.Arena.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const dir = try std.fmt.allocPrint(a, "{s}/.zig-cache/tmp/{s}", .{ try std.process.currentPathAlloc(util.io, a), tmp.sub_path });
+    const path = try util.joinPath(a, dir, "out.txt");
+    try diskWrite(path, "hello-atomic");
+    try diskWrite(path, "second");
+    const got = try std.Io.Dir.cwd().readFileAlloc(util.io, path, a, .limited(64));
+    try t.expectEqualStrings("second", got);
 }
 
 test "write tool emits diff block" {
@@ -1443,6 +848,16 @@ test "write tool emits diff block" {
     try t.expect(std.mem.indexOf(u8, r.content, "--- b.txt") != null);
     try t.expect(std.mem.indexOf(u8, r.content, "+x") != null);
     try t.expect(std.mem.indexOf(u8, r.content, "+y") != null);
+    const r2 = try toolWrite(a, "{\"path\":\"b.txt\",\"content\":\"z\",\"createOnly\":true}");
+    try t.expect(r2.is_error);
+    try t.expect(std.mem.indexOf(u8, r2.content, "already exists") != null);
+    const preview = try toolWrite(a, "{\"path\":\"dry.txt\",\"content\":\"preview\\n\",\"dryRun\":true}");
+    try t.expect(!preview.is_error);
+    try t.expect(std.mem.indexOf(u8, preview.content, "dry-run:") != null);
+    try t.expect(std.mem.indexOf(u8, preview.content, "+preview") != null);
+    if (std.Io.Dir.cwd().statFile(util.io, "dry.txt", .{})) |_| {
+        return error.DryRunWroteFile;
+    } else |_| {}
 }
 
 test "read truncates large files" {
@@ -1462,8 +877,11 @@ test "read truncates large files" {
     try tmp.dir.writeFile(util.io, .{ .sub_path = "big.txt", .data = "x" ** (20 * 1024) });
     const r = try toolRead(a, "{\"path\":\"big.txt\"}");
     try t.expect(!r.is_error);
-    try t.expect(r.content.len <= MAX_TOOL_OUTPUT + 128);
+    try t.expect(r.content.len <= MAX_TOOL_OUTPUT + 160);
     try t.expect(std.mem.indexOf(u8, r.content, "truncated at") != null);
+    try t.expect(std.mem.indexOf(u8, r.content, "     1|") != null);
+    try t.expect(r.content[r.content.len - 1] == 'x' or std.mem.endsWith(u8, r.content, "x\n"));
+    try t.expect(std.mem.indexOf(u8, r.content, "omitted") != null);
 }
 
 test "read/write tools" {
@@ -1486,7 +904,7 @@ test "read/write tools" {
     try t.expect(!rw.is_error);
     const rr = try toolRead(a, "{\"path\":\"sub/b.txt\"}");
     try t.expect(!rr.is_error);
-    try t.expectEqualStrings("data", rr.content);
+    try t.expect(std.mem.indexOf(u8, rr.content, "     1|data") != null);
 }
 
 test "bash tool" {
@@ -1506,18 +924,50 @@ test "bash tool" {
     try t.expect(std.mem.indexOf(u8, r2.content, "exit code 3") != null);
 }
 
+test "bash background returns immediately and writes a log" {
+    const t = std.testing;
+    try util.testInit();
+    var arena = util.Arena.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const t0 = std.Io.Clock.now(.awake, util.io).nanoseconds;
+    const r = try toolBash(a, "{\"command\":\"echo bg-ok\",\"background\":true}");
+    const dt = std.Io.Clock.now(.awake, util.io).nanoseconds - t0;
+    try t.expect(!r.is_error);
+    try t.expect(std.mem.indexOf(u8, r.content, "[background]") != null);
+    try t.expect(std.mem.indexOf(u8, r.content, "log: ") != null);
+    try t.expect(dt < 2 * std.time.ns_per_s);
+    const marker = "log: ";
+    const i = std.mem.indexOf(u8, r.content, marker).?;
+    const rest = r.content[i + marker.len ..];
+    const nl = std.mem.indexOfScalar(u8, rest, '\n') orelse rest.len;
+    const log_path = rest[0..nl];
+    var saw = false;
+    var n: u32 = 0;
+    while (n < 50) : (n += 1) {
+        if (std.Io.Dir.cwd().readFileAlloc(util.io, log_path, a, .limited(4096))) |body| {
+            if (std.mem.indexOf(u8, body, "bg-ok") != null) {
+                saw = true;
+                break;
+            }
+        } else |_| {}
+        _ = std.Io.sleep(util.io, .{ .nanoseconds = 20 * std.time.ns_per_ms }, .awake) catch {};
+    }
+    try t.expect(saw);
+}
+
 test "appendCapped keeps the tail and never grows past 2x the window" {
     const t = std.testing;
     var list = std.array_list.Managed(u8).init(t.allocator);
     defer list.deinit();
 
     // keep=0 表示不限
-    try appendCapped(&list, "abc", 0);
+    try bash.appendCapped(&list, "abc", 0);
     try t.expectEqualStrings("abc", list.items);
     list.clearRetainingCapacity();
 
     // 窗口内原样保留
-    try appendCapped(&list, "hello", 10);
+    try bash.appendCapped(&list, "hello", 10);
     try t.expectEqualStrings("hello", list.items);
 
     // 灌 1000 个 chunk,每个 64 字节 = 64KB 流量,窗口 100 字节。
@@ -1529,7 +979,7 @@ test "appendCapped keeps the tail and never grows past 2x the window" {
     while (i < 1000) : (i += 1) {
         var chunk: [64]u8 = undefined;
         @memset(&chunk, @intCast('a' + (i % 26)));
-        try appendCapped(&list, &chunk, 100);
+        try bash.appendCapped(&list, &chunk, 100);
         max_seen = @max(max_seen, list.items.len);
     }
     try t.expect(max_seen <= 200);
@@ -1559,6 +1009,14 @@ test "bash reports the true byte total after dropping the head" {
     while (end < r.content.len and r.content[end] >= '0' and r.content[end] <= '9') end += 1;
     const total = try std.fmt.parseInt(usize, r.content[pos + marker.len .. end], 10);
     try t.expect(total >= 5_000_000);
+    try t.expect(std.mem.indexOf(u8, r.content, "Artifact stored") != null);
+    const stored = "[Artifact stored: ";
+    const a0 = std.mem.indexOf(u8, r.content, stored).? + stored.len;
+    const a1 = std.mem.indexOfScalar(u8, r.content[a0..], ' ').? + a0;
+    const path = r.content[a0..a1];
+    const spilled = try std.Io.Dir.cwd().readFileAlloc(util.io, path, t.allocator, .limited(6 * 1024 * 1024));
+    defer t.allocator.free(spilled);
+    try t.expect(spilled.len >= 5_000_000);
 
     // 交给模型的内容本身仍然受限
     try t.expect(r.content.len < MAX_TOOL_OUTPUT * 2);
@@ -1625,9 +1083,11 @@ test "tool paths resolve against the agent root, not the process cwd" {
     try t.expectEqualStrings("/tmp/projB/sub/deep.txt", resolvePath(a, "sub/deep.txt"));
     try t.expectEqualStrings("/tmp/projB", rootForSpawn().?);
 
-    // 绝对路径不动 —— 工具本来就没有路径沙箱(绝对路径与 ../ 都不拦),
-    // 这里只修「相对谁」,不改变可访问范围
+    // 绝对路径不动;写类工具另走 insideRoot
     try t.expectEqualStrings("/etc/hosts", resolvePath(a, "/etc/hosts"));
+    try t.expect(insideRoot(a, "out.txt"));
+    try t.expect(!insideRoot(a, "/etc/hosts"));
+    try t.expect(!insideRoot(a, "../secret"));
 
     // root 是 thread-local:另一个线程看不到这里设的值,
     // 否则并行的两个 Agent 会互相串目录
@@ -1670,6 +1130,29 @@ test "bash runs in the agent root" {
     try t.expectEqualStrings("marker\n", back);
 }
 
+test "bash cwd stays inside the workspace" {
+    const t = std.testing;
+    try util.testInit();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = util.Arena.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cwd_abs = try std.process.currentPathAlloc(util.io, a);
+    const root = try std.fmt.allocPrint(a, "{s}/.zig-cache/tmp/{s}", .{ cwd_abs, tmp.sub_path[0..] });
+    try tmp.dir.createDirPath(util.io, "nested");
+    setRoot(root);
+    defer clearRoot();
+    const r = try toolBash(a, "{\"command\":\"pwd\",\"cwd\":\"nested\"}");
+    try t.expect(!r.is_error);
+    try t.expect(std.mem.indexOf(u8, r.content, "nested") != null);
+    const bad = try toolBash(a, "{\"command\":\"pwd\",\"cwd\":\"../..\"}");
+    try t.expect(bad.is_error);
+    try t.expect(std.mem.indexOf(u8, bad.content, "outside") != null);
+    const miss = try toolBash(a, "{\"command\":\"pwd\",\"cwd\":\"nope\"}");
+    try t.expect(miss.is_error);
+}
+
 test "needsConfirm allows read-class tools and gates writes" {
     const t = std.testing;
     try t.expect(!needsConfirm("read"));
@@ -1694,4 +1177,54 @@ test "toolGate yolo allows writes, read-only denies them" {
     try t.expectEqual(ToolGate.allow, toolGate(.ask, "ls"));
     try t.expectEqual(ToolGate.deny, toolGate(.read_only, "bash"));
     try t.expectEqual(ToolGate.allow, toolGate(.read_only, "read"));
+}
+
+test "crashResult surfaces error name and tool name" {
+    const t = std.testing;
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const r = crashResult(a, "read", error.FileNotFound);
+    try t.expect(r.is_error);
+    try t.expectEqualStrings("tool crashed (read): FileNotFound", r.content);
+    const r2 = crashResult(a, "write", error.AccessDenied);
+    try t.expectEqualStrings("tool crashed (write): AccessDenied", r2.content);
+}
+
+test "substBraceArgs quotes json fields" {
+    const t = std.testing;
+    var arena = util.Arena.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const out = try bash.substBraceArgs(a, "pdftotext {path} -", "{\"path\":\"/tmp/a.pdf\"}");
+    try t.expectEqualStrings("pdftotext '/tmp/a.pdf' -", out);
+    try t.expectError(error.MissingArg, bash.substBraceArgs(a, "echo {x}", "{}"));
+}
+
+test "workspace sandbox keeps writes in the workspace" {
+    const t = std.testing;
+    if (sandboxmod.findBwrap() == null) return error.SkipZigTest;
+    try util.testInit();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = util.Arena.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cwd_abs = try std.process.currentPathAlloc(util.io, a);
+    const root = try std.fmt.allocPrint(a, "{s}/.zig-cache/tmp/{s}", .{ cwd_abs, tmp.sub_path[0..] });
+    setRoot(root);
+    defer clearRoot();
+    setSandbox(.workspace);
+    defer clearSandbox();
+
+    const inside = try toolBash(a, "{\"command\":\"echo marker > from-sandbox.txt\"}");
+    try t.expect(!inside.is_error);
+    const back = try tmp.dir.readFileAlloc(util.io, "from-sandbox.txt", a, .limited(64));
+    try t.expectEqualStrings("marker\n", back);
+
+    const probe = "/tmp/piz-sandbox-probe-test";
+    std.Io.Dir.cwd().deleteFile(util.io, probe) catch {};
+    const leak = try toolBash(a, "{\"command\":\"echo leaked > /tmp/piz-sandbox-probe-test\"}");
+    try t.expect(!leak.is_error);
+    try t.expect(!util.fileExists(probe));
 }

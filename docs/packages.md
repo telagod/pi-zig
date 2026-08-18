@@ -126,6 +126,7 @@ my-package/
 | `dependencies` | 依赖的包名**数组** |
 | `web` | Web UI 前端插件入口，见 [Web plugins](web-plugins.md) |
 | `extensions` | 事件扩展声明 |
+| `tools` | 包声明的 shell 工具，模型可调用 |
 
 > **与 pi 的包不兼容。** pi 的 manifest 是 `package.json` 里的 `pi` 键，`dependencies` 是对象（npm 格式）；piz 用独立的 `pkg.json`，`dependencies` 是字符串数组。piz 也不支持 npm 源。
 >
@@ -134,6 +135,29 @@ my-package/
 ## 依赖
 
 `dependencies` 里列的包名必须已经装好，否则安装失败并回滚（已复制的文件会被删掉）。piz 不自动拉取依赖。
+
+## 包声明工具
+
+`pkg.json` 的 `tools[]` 把命令暴露给模型。装包时会列出来确认，与钩子同一套授权。`{key}` 从调用参数替换并单引号转义。
+
+```json
+{
+  "tools": [
+    {
+      "name": "pdf_extract",
+      "description": "Extract text from a PDF",
+      "command": "pdftotext {path} -",
+      "schema": {
+        "type": "object",
+        "properties": { "path": { "type": "string" } },
+        "required": ["path"]
+      }
+    }
+  ]
+}
+```
+
+名字须是 `[A-Za-z][A-Za-z0-9_-]*`，且不得覆盖核心/插件工具。超时 30 秒，输出走 bash 上限。
 
 ## 事件扩展
 

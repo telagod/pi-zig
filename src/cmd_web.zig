@@ -1,13 +1,21 @@
 // cmd_web.zig — Web 会话池与 piz web 命令。
 const std = @import("std");
 const util = @import("core").util;
+const pricing = @import("core").pricing;
 const cfgmod = @import("core").config;
+const sandboxmod = @import("core").sandbox;
 const agentmod = @import("core").agent;
 const sessionmod = @import("core").session;
 const pluginsmod = @import("core").plugins;
 const compress = @import("core").compress;
 const toolsmod = @import("core").tools;
+const mcpmod = @import("core").mcp;
 const webui_mod = @import("webui.zig");
+const cmd_help = @import("cmd_help.zig");
+const cmd_doctor = @import("cmd_doctor.zig");
+const cmd_init = @import("cmd_init.zig");
+const cmd_diff = @import("cmd_diff.zig");
+const cmd_commit = @import("cmd_commit.zig");
 
 pub fn runWebCmd(alloc: std.mem.Allocator, args: *std.process.Args.Iterator) void {
     var wopts = webui_mod.WebOptions{};
@@ -63,6 +71,7 @@ pub fn runWebCmd(alloc: std.mem.Allocator, args: *std.process.Args.Iterator) voi
         std.process.exit(1);
     };
     cfg.warnBroken();
+    pluginsmod.applyFromConfig(cfg.enabled_plugins, cfg.disabled_plugins);
     const abs_cwd = std.process.currentPathAlloc(util.io, arena.allocator()) catch "";
     wopts.project_cwd = abs_cwd;
     // HTTP 线程会并发分配 SessionPool/WebServer 的 allocator(每请求拼 JSON、
@@ -104,19 +113,24 @@ pub fn runWebCmd(alloc: std.mem.Allocator, args: *std.process.Args.Iterator) voi
     };
     // 迁移旧布局会话 + 注册默认项目
     sessionmod.migrateLegacyWeb(arena.allocator(), abs_cwd);
-    pool.workspaces.append(arena.allocator().dupe(u8, abs_cwd) catch "") catch {};
+    pool.workspaces.append(arena.allocator().dupe(u8, abs_cwd) catch "") catch |err| util.debugCatch("pool.ws", err);
     if (pool.getOrCreate("default", abs_cwd) == null) {
         std.debug.print("piz web: session init failed\n", .{});
         std.process.exit(1);
     }
     ws.state_hook = poolStateHook;
     ws.state_ctx = &pool;
+    ws.history_hook = poolHistoryHook;
+    ws.history_ctx = &pool;
     ws.sessions_hook = poolSessionsHook;
     ws.sessions_ctx = &pool;
     ws.chat_hook = poolChatHook;
     ws.chat_ctx = &pool;
     ws.interrupt_hook = poolInterruptHook;
     ws.interrupt_ctx = &pool;
+    ws.slash_hook = poolSlashHook;
+    ws.slash_ctx = &pool;
+    ws.slash_catalog_hook = poolSlashCatalogHook;
     ws.mode_hook = poolModeHook;
     ws.mode_ctx = &pool;
     ws.models_hook = poolModelsHook;
@@ -133,7 +147,9 @@ pub fn runWebCmd(alloc: std.mem.Allocator, args: *std.process.Args.Iterator) voi
     ws.workspaces_ctx = &pool;
     ws.ws_allowed_hook = poolWsAllowed;
     ws.ws_allowed_ctx = &pool;
-    ws.run() catch {};
+    ws.auth_save_hook = poolAuthSave;
+    ws.auth_save_ctx = &pool;
+    ws.run() catch |err| util.warn("web server stopped: {s}", .{@errorName(err)});
     webui_mod.ChatQueue.shutdown();
     for (pool.sessions.items) |ses| {
         ses.worker.join();
@@ -150,6 +166,8 @@ const WebSession = struct {
     hub: *webui_mod.EventHub,
     start_ns: i128,
     tokens_total: usize = 0,
+    cost_usd: f64 = 0,
+    snap_cost_u: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
     updated_ns: i128 = 0,
     worker: std.Thread,
     /// 0=yolo 1=ask 2=read_only。默认 yolo。
@@ -162,6 +180,8 @@ const WebSession = struct {
     snap_model: []const u8 = "",
     snap_msgs: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     snap_pct: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+    snap_used: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+    snap_window: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
 };
 
 fn sessionApproval(ses: *WebSession) cfgmod.ApprovalMode {
@@ -207,14 +227,14 @@ const SessionPool = struct {
         var restored_updated: i128 = 0;
         if (sessionmod.loadWeb(a, abs_cwd, name) catch null) |web_ses| {
             for (web_ses.msgs) |m| {
-                agent.messages.append(m) catch {};
+                agent.messages.append(m) catch |err| util.debugCatch("loadWeb.append", err);
             }
             restored_approval = if (web_ses.auto) .yolo else .ask;
             restored_updated = web_ses.updated;
             if (web_ses.title) |t| agent.title = t;
             if (web_ses.model) |m| {
                 if (self.cfg.findModel(m) != null) {
-                    agent.switchModel(m) catch {};
+                    agent.switchModel(m) catch |err| util.debugCatch("loadWeb.switchModel", err);
                 }
             }
         }
@@ -242,6 +262,7 @@ const SessionPool = struct {
             .on_turn_end = webOnTurnEnd,
             .on_abort = webOnAbort,
             .on_connect = webOnConnect,
+            .on_subagent = webOnSubagent,
         };
         rebuildSnap(ses);
         ses.worker = std.Thread.spawn(.{}, webWorker, .{ses}) catch return null;
@@ -269,35 +290,94 @@ const SessionPool = struct {
     }
 };
 
+fn addSessionCost(ses: *WebSession, u: @import("core").ai.Usage) void {
+    const add = u.cost orelse blk: {
+        const r = pricing.lookupAny(ses.agent.provider.name, ses.agent.model) orelse return;
+        break :blk pricing.turnCost(r, u.input orelse 0, u.output orelse 0, u.cache_read orelse 0, u.cache_write orelse 0);
+    };
+    ses.cost_usd += add;
+    const micro: u64 = @intFromFloat(@round(@max(ses.cost_usd, 0) * 1_000_000.0));
+    ses.snap_cost_u.store(micro, .release);
+}
+
+const ToolMeta = struct { name: []const u8, args: []const u8 };
+
+fn toolMetaFor(msgs: anytype, idx: usize, call_id: ?[]const u8) ToolMeta {
+    const id = call_id orelse return .{ .name = "tool", .args = "" };
+    var j = idx;
+    while (j > 0) {
+        j -= 1;
+        if (msgs[j].tool_calls) |tcs| {
+            for (tcs) |tc| {
+                if (std.mem.eql(u8, tc.id, id) and tc.name.len > 0) return .{ .name = tc.name, .args = tc.args };
+            }
+        }
+        if (std.mem.eql(u8, msgs[j].role, "user")) break;
+    }
+    return .{ .name = "tool", .args = "" };
+}
+
+const HIST_KEEP: usize = 80;
+const HIST_PAGE_MAX: usize = 200;
+
+fn jw(comptime where: []const u8, result: anyerror!void) void {
+    result catch |err| util.debugCatch(where, err);
+}
+
+fn writeHistoryRange(w: *std.Io.Writer, a: std.mem.Allocator, msgs: []const @import("core").ai.Message, start: usize, end: usize) void {
+    jw("hist.ob", w.writeAll("["));
+    var first = true;
+    var i = start;
+    while (i < end and i < msgs.len) : (i += 1) {
+        const m = &msgs[i];
+        const rsn = if (m.reasoning) |r| r else "";
+        if (m.content.len == 0 and rsn.len == 0 and std.mem.eql(u8, m.role, "assistant")) continue;
+        if (!first) jw("hist.comma", w.writeAll(","));
+        first = false;
+        const content = util.utf8Prefix(m.content, 16 * 1024);
+        jw("hist.row", w.print("{{\"role\":{s},\"content\":{s}", .{ util.jsonString(a, m.role) catch "\"\"", util.jsonString(a, content) catch "\"\"" }));
+        if (content.len < m.content.len) jw("hist.trunc", w.writeAll(",\"truncated\":true"));
+        if (rsn.len > 0) {
+            jw("hist.rsn", w.print(",\"reasoning\":{s}", .{util.jsonString(a, util.utf8Prefix(rsn, 8 * 1024)) catch "\"\""}));
+        }
+        if (std.mem.eql(u8, m.role, "tool")) {
+            const meta = toolMetaFor(msgs, i, m.tool_call_id);
+            jw("hist.tool", w.print(",\"name\":{s},\"args\":{s}", .{ util.jsonString(a, meta.name) catch "\"tool\"", util.jsonString(a, meta.args) catch "\"\"" }));
+        }
+        if (m.image != null or m.image_file != null) jw("hist.img", w.writeAll(",\"has_image\":true"));
+        if (m.image_file) |f| {
+            jw("hist.imgf", w.print(",\"image_file\":{s}", .{util.jsonString(a, f) catch "\"\""}));
+        } else if (m.image) |img| {
+            if (sessionmod.persistImageFile(a, img, m.image_mime)) |f| {
+                jw("hist.imgn", w.print(",\"image_file\":{s}", .{util.jsonString(a, f) catch "\"\""}));
+            }
+        }
+        jw("hist.close", w.writeAll("}"));
+    }
+    jw("hist.cb", w.writeAll("]"));
+}
+
 fn rebuildSnap(ses: *WebSession) void {
     const a = ses.agent.alloc;
     const ag = ses.agent;
     var stw = std.Io.Writer.Allocating.init(a);
     defer stw.deinit();
     const w = &stw.writer;
-    w.writeAll("[") catch {};
     const msgs = ag.messages.items;
-    const hist_start = if (msgs.len > 20) msgs.len - 20 else 0;
-    var first = true;
-    var i = hist_start;
-    while (i < msgs.len) : (i += 1) {
-        const m = &msgs[i];
-        if (m.content.len == 0 and std.mem.eql(u8, m.role, "assistant")) continue;
-        if (!first) w.writeAll(",") catch {};
-        first = false;
-        const content = if (m.content.len > 300) m.content[0..300] else m.content;
-        w.print("{{\"role\":{s},\"content\":{s}}}", .{ util.jsonString(a, m.role) catch "\"\"", util.jsonString(a, content) catch "\"\"" }) catch {};
-    }
-    w.writeAll("]") catch {};
+    // jsonl 是真源;snap 只是给页面的窗口,勿再砍成 300 字节让刷新像没存过。
+    const hist_start = if (msgs.len > HIST_KEEP) msgs.len - HIST_KEEP else 0;
+    writeHistoryRange(w, a, msgs, hist_start, msgs.len);
     const history = stw.toOwnedSlice() catch return;
     const model = a.dupe(u8, ag.model) catch return;
     const cw = ag.ctxWindow();
     const used = ag.estTokens();
-    const pct: u32 = @intCast(if (cw > 0) @min(used * 100 / cw, 10000) else 0);
+    const pct: u32 = @intCast(if (cw > 0) @min(used * 100 / cw, 100) else 0);
     ses.snap_mutex.lock(util.io) catch return;
     ses.snap_history = history;
     ses.snap_model = model;
     ses.snap_pct.store(pct, .release);
+    ses.snap_used.store(@intCast(@min(used, std.math.maxInt(u32))), .release);
+    ses.snap_window.store(@intCast(@min(cw, std.math.maxInt(u32))), .release);
     ses.snap_msgs.store(@intCast(@min(msgs.len, std.math.maxInt(u32))), .release);
     ses.snap_mutex.unlock(util.io);
 }
@@ -317,17 +397,17 @@ fn poolSessionsHook(ctx: ?*anyopaque, cwd: []const u8, alloc: std.mem.Allocator)
     var stw = std.Io.Writer.Allocating.init(alloc);
     defer stw.deinit();
     const w = &stw.writer;
-    w.print("[", .{}) catch {};
+    jw("sess.ob", w.print("[", .{}));
     var first = true;
     pool.mutex.lock(util.io) catch return "[]";
     for (pool.sessions.items) |ses| {
         if (!std.mem.eql(u8, ses.cwd, cwd2)) continue;
-        if (!first) w.print(",", .{}) catch {};
+        if (!first) jw("sess.comma", w.print(",", .{}));
         first = false;
         ses.snap_mutex.lock(util.io) catch return "[]";
         const snap_model = ses.snap_model;
         ses.snap_mutex.unlock(util.io);
-        w.print("{{\"name\":{s},\"msgs\":{d},\"pct\":{d},\"model\":{s},\"auto\":{s},\"title\":{s},\"ts\":{d}}}", .{
+        jw("sess.row", w.print("{{\"name\":{s},\"msgs\":{d},\"pct\":{d},\"model\":{s},\"auto\":{s},\"title\":{s},\"ts\":{d}}}", .{
             util.jsonString(alloc, ses.name) catch "\"\"",
             ses.snap_msgs.load(.acquire),
             ses.snap_pct.load(.acquire),
@@ -335,7 +415,7 @@ fn poolSessionsHook(ctx: ?*anyopaque, cwd: []const u8, alloc: std.mem.Allocator)
             if (sessionIsYolo(ses)) "true" else "false",
             util.jsonString(alloc, ses.agent.title orelse "") catch "\"\"",
             @divTrunc(ses.updated_ns, std.time.ns_per_ms),
-        }) catch {};
+        }));
     }
     pool.mutex.unlock(util.io);
     if (sessionmod.listWebNames(alloc, cwd2) catch null) |disk_names| {
@@ -382,28 +462,28 @@ fn poolSessionsHook(ctx: ?*anyopaque, cwd: []const u8, alloc: std.mem.Allocator)
                 while (lines.next()) |l| {
                     if (std.mem.trim(u8, l, " \t\r\n").len > 0) count += 1;
                 }
-                if (!first) w.print(",", .{}) catch {};
+                if (!first) jw("sess.dcomma", w.print(",", .{}));
                 first = false;
-                w.print("{{\"name\":{s},\"msgs\":{d},\"pct\":0,\"model\":{s},\"auto\":true,\"title\":{s},\"ts\":{d},\"disk\":true}}", .{
+                jw("sess.disk", w.print("{{\"name\":{s},\"msgs\":{d},\"pct\":0,\"model\":{s},\"auto\":true,\"title\":{s},\"ts\":{d},\"disk\":true}}", .{
                     util.jsonString(alloc, dname) catch "\"\"",
                     count,
                     util.jsonString(alloc, meta_model) catch "\"\"",
                     util.jsonString(alloc, meta_title) catch "\"\"",
                     meta_ts,
-                }) catch {};
+                }));
             } else |_| {}
         }
         if (sessionmod.listWebArchived(alloc, cwd2) catch null) |arch_names| {
             for (arch_names) |dname| {
-                if (!first) w.print(",", .{}) catch {};
+                if (!first) jw("sess.acomma", w.print(",", .{}));
                 first = false;
-                w.print("{{\"name\":{s},\"msgs\":0,\"pct\":0,\"model\":\"\",\"auto\":true,\"title\":\"\",\"ts\":0,\"archived\":true}}", .{
+                jw("sess.arch", w.print("{{\"name\":{s},\"msgs\":0,\"pct\":0,\"model\":\"\",\"auto\":true,\"title\":\"\",\"ts\":0,\"archived\":true}}", .{
                     util.jsonString(alloc, dname) catch "\"\"",
-                }) catch {};
+                }));
             }
         }
     }
-    w.print("]", .{}) catch {};
+    jw("sess.cb", w.print("]", .{}));
     return stw.toOwnedSlice() catch "[]";
 }
 
@@ -427,36 +507,88 @@ fn poolStateHook(ctx: ?*anyopaque, cwd: []const u8, session: []const u8, alloc: 
     var stw = std.Io.Writer.Allocating.init(alloc);
     defer stw.deinit();
     const w = &stw.writer;
-    w.print("{{\"model\":{s},\"auto\":{s},\"mode\":{s},\"title\":{s},\"think\":{s}", .{
+    jw("state.head", w.print("{{\"model\":{s},\"auto\":{s},\"mode\":{s},\"title\":{s},\"think\":{s},\"vision\":{s}", .{
         util.jsonString(alloc, snap_model) catch "\"\"",
         if (sessionIsYolo(ses)) "true" else "false",
         util.jsonString(alloc, sessionApproval(ses).label()) catch "\"yolo\"",
         util.jsonString(alloc, ses.agent.title orelse "") catch "\"\"",
         util.jsonString(alloc, ses.agent.think_level.label()) catch "\"\"",
-    }) catch {};
-    w.print(",\"pct\":{d},\"running\":{s},\"history\":{s}", .{
+        if (ses.agent.hasVision()) "true" else "false",
+    }));
+    const cost = @as(f64, @floatFromInt(ses.snap_cost_u.load(.acquire))) / 1_000_000.0;
+    const hist_total = ses.snap_msgs.load(.acquire);
+    const keep: u32 = HIST_KEEP;
+    const hist_start: u32 = if (hist_total > keep) hist_total - keep else 0;
+    jw("state.mid", w.print(",\"pct\":{d},\"used\":{d},\"window\":{d},\"cost\":{d:.6},\"running\":{s},\"history\":{s},\"hist_start\":{d},\"hist_total\":{d}", .{
         ses.snap_pct.load(.acquire),
+        ses.snap_used.load(.acquire),
+        ses.snap_window.load(.acquire),
+        cost,
         if (ses.agent.cur_stream_fd.load(.acquire) >= 0) "true" else "false",
         snap_history,
-    }) catch {};
+        hist_start,
+        hist_total,
+    }));
     const raw_base = std.fs.path.basename(cwd2);
     const base = if (raw_base.len > 0) raw_base else cwd2;
-    w.print(",\"ws\":{s}", .{util.jsonString(alloc, base) catch "\"\""}) catch {};
-    w.writeAll("}") catch {};
+    jw("state.ws", w.print(",\"ws\":{s}", .{util.jsonString(alloc, base) catch "\"\""}));
+    var br_buf: [128]u8 = undefined;
+    if (cmd_diff.currentBranchBuf(cwd2, &br_buf)) |br| {
+        jw("state.branch", w.print(",\"branch\":{s}", .{util.jsonString(alloc, br) catch "\"\""}));
+    }
+    if (cmd_diff.statusBrief(alloc, cwd2)) |st| {
+        if (st.ahead > 0) jw("state.ahead", w.print(",\"ahead\":{d}", .{st.ahead}));
+        if (st.behind > 0) jw("state.behind", w.print(",\"behind\":{d}", .{st.behind}));
+        if (st.changes > 0) jw("state.changes", w.print(",\"changes\":{d}", .{st.changes}));
+    }
+    jw("state.end", w.writeAll("}"));
     return stw.toOwnedSlice() catch "{}";
+}
+
+fn poolHistoryHook(ctx: ?*anyopaque, cwd: []const u8, session: []const u8, offset: usize, limit: usize, alloc: std.mem.Allocator) []const u8 {
+    const pool: *SessionPool = @ptrCast(@alignCast(ctx.?));
+    const cwd2 = if (cwd.len > 0) cwd else (if (pool.workspaces.items.len > 0) pool.workspaces.items[0] else "");
+    const cap = if (limit == 0 or limit > HIST_PAGE_MAX) HIST_KEEP else limit;
+    var arena = std.heap.ArenaAllocator.init(alloc);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const loaded = sessionmod.loadWeb(a, cwd2, session) catch return "{\"start\":0,\"total\":0,\"history\":[]}";
+    const pack = loaded orelse return "{\"start\":0,\"total\":0,\"history\":[]}";
+    const msgs = pack.msgs;
+    const start = @min(offset, msgs.len);
+    const end = @min(start + cap, msgs.len);
+    var stw = std.Io.Writer.Allocating.init(a);
+    stw.writer.print("{{\"start\":{d},\"total\":{d},\"history\":", .{ start, msgs.len }) catch return "{\"start\":0,\"total\":0,\"history\":[]}";
+    writeHistoryRange(&stw.writer, a, msgs, start, end);
+    jw("hist.wrap", stw.writer.writeAll("}"));
+    return alloc.dupe(u8, stw.written()) catch "{\"start\":0,\"total\":0,\"history\":[]}";
 }
 
 fn webWorker(ses: *WebSession) void {
     while (true) {
         const item = webui_mod.ChatQueue.dequeue(ses.qkey, &ses.stopping) orelse break;
-        ses.hub.push("{{\"type\":\"user_message\",\"session\":{s},\"text\":{s}}}", .{
+        const keep_img = item.image != null and ses.agent.hasVision();
+        const img_file = if (keep_img) sessionmod.persistImageFile(ses.agent.alloc, item.image.?, if (item.mime.len > 0) item.mime else null) else null;
+        // keep_img: 模型无 vision 则丢图并通知
+        if (item.image != null and !keep_img) {
+            ses.hub.push("{{\"type\":\"notice\",\"session\":{s},\"text\":\"image dropped: model has no vision\"}}", .{
+                util.jsonString(ses.agent.alloc, ses.name) catch "\"\"",
+            });
+        }
+        ses.hub.push("{{\"type\":\"user_message\",\"session\":{s},\"text\":{s},\"has_image\":{s},\"image_file\":{s}}}", .{
             util.jsonString(ses.agent.alloc, ses.name) catch "\"\"",
             util.jsonString(ses.agent.alloc, item.text) catch "\"\"",
+            if (keep_img) "true" else "false",
+            util.jsonString(ses.agent.alloc, img_file orelse "") catch "\"\"",
         });
         const text = ses.agent.alloc.dupe(u8, item.text) catch null;
+        const img = if (item.image) |im| ses.agent.alloc.dupe(u8, im) catch null else null;
+        const mime = if (item.mime.len > 0) ses.agent.alloc.dupe(u8, item.mime) catch "" else "";
         const a = std.heap.page_allocator;
         a.free(item.session);
         if (text != null) a.free(item.text);
+        if (item.image) |im| a.free(im);
+        if (item.mime.len > 0) a.free(item.mime);
         while (ses.busy.cmpxchgWeak(0, 1, .acq_rel, .acquire) != null) {
             if (ses.stopping.load(.acquire)) break;
             std.Io.sleep(util.io, .{ .nanoseconds = 100 * std.time.ns_per_ms }, .awake) catch {};
@@ -465,11 +597,24 @@ fn webWorker(ses: *WebSession) void {
         defer ses.busy.store(0, .release);
         ses.agent.aborted.store(false, .release);
         ses.updated_ns = std.Io.Clock.now(.real, util.io).nanoseconds;
-        const result = ses.agent.send(text orelse item.text) catch null;
+        const result = if (img) |im|
+            ses.agent.sendWithImage(text orelse item.text, im, mime) catch null
+        else
+            ses.agent.send(text orelse item.text) catch null;
         if (result) |r| {
             const u = r.usage;
             ses.tokens_total += (u.input orelse 0) + (u.output orelse 0) + (u.cache_read orelse 0);
             ses.agent.last_usage = u;
+            addSessionCost(ses, u);
+        }
+        if (ses.agent.title == null or ses.agent.title.?.len == 0) {
+            if (sessionmod.deriveTitle(ses.agent.alloc, text orelse item.text)) |t| {
+                ses.agent.title = t;
+                ses.hub.push("{{\"type\":\"title\",\"session\":{s},\"title\":{s}}}", .{
+                    util.jsonString(ses.agent.alloc, ses.name) catch "\"\"",
+                    util.jsonString(ses.agent.alloc, t) catch "\"\"",
+                });
+            }
         }
         sessionmod.saveWebTs(ses.agent.alloc, ses.cwd, ses.name, ses.agent.model, sessionIsYolo(ses), ses.agent.title, ses.agent.messages.items, ses.updated_ns) catch |err| {
             const msg = std.fmt.allocPrint(ses.agent.alloc, "会话保存失败({s}):本轮内容在重启后会丢失", .{@errorName(err)}) catch "session save failed";
@@ -487,6 +632,20 @@ fn webOnText(ctx: ?*anyopaque, text: []const u8) anyerror!void {
 fn webOnReasoning(ctx: ?*anyopaque, text: []const u8) anyerror!void {
     const s: *WebSession = @ptrCast(@alignCast(ctx.?));
     s.hub.push("{{\"type\":\"reasoning\",\"session\":{s},\"text\":{s}}}", .{ try util.jsonString(s.agent.alloc, s.name), try util.jsonString(s.agent.alloc, text) });
+}
+fn webOnSubagent(ctx: ?*anyopaque, idx: usize, kind: agentmod.SubagentEvent, text: []const u8) anyerror!void {
+    switch (kind) {
+        .text, .reasoning => return,
+        else => {},
+    }
+    const s: *WebSession = @ptrCast(@alignCast(ctx.?));
+    const clipped = util.clampUtf8(text, 200);
+    s.hub.push("{{\"type\":\"subagent\",\"session\":{s},\"idx\":{d},\"kind\":{s},\"text\":{s}}}", .{
+        try util.jsonString(s.agent.alloc, s.name),
+        idx,
+        try util.jsonString(s.agent.alloc, @tagName(kind)),
+        try util.jsonString(s.agent.alloc, clipped),
+    });
 }
 fn webOnToolStart(ctx: ?*anyopaque, name: []const u8, args: []const u8) anyerror!void {
     const s: *WebSession = @ptrCast(@alignCast(ctx.?));
@@ -516,7 +675,7 @@ fn webOnTurnEnd(ctx: ?*anyopaque) anyerror!void {
     s.agent.cur_stream_fd.store(-1, .release);
     const cw = s.agent.ctxWindow();
     const used = s.agent.estTokens();
-    const pct = if (cw > 0) used * 100 / cw else 0;
+    const pct = if (cw > 0) @min(used * 100 / cw, 100) else 0;
     var cache_pct: usize = 0;
     if (s.agent.last_usage.cache_read) |cr| {
         const tot = cr + (s.agent.last_usage.cache_write orelse 0) + (s.agent.last_usage.input orelse 0);
@@ -525,8 +684,12 @@ fn webOnTurnEnd(ctx: ?*anyopaque) anyerror!void {
     const now_ns = std.Io.Clock.now(.real, util.io).nanoseconds;
     const el = @max(1, @divTrunc(now_ns - s.start_ns, std.time.ns_per_s));
     const tps = s.tokens_total / @as(usize, @intCast(el));
-    s.hub.push("{{\"type\":\"status\",\"pct\":{d},\"model\":{s},\"cache\":{d},\"tps\":{d},\"think\":{s}}}", .{
+    const cost = @as(f64, @floatFromInt(s.snap_cost_u.load(.acquire))) / 1_000_000.0;
+    s.hub.push("{{\"type\":\"status\",\"pct\":{d},\"used\":{d},\"window\":{d},\"cost\":{d:.6},\"model\":{s},\"cache\":{d},\"tps\":{d},\"think\":{s}}}", .{
         pct,
+        used,
+        cw,
+        cost,
         try util.jsonString(s.agent.alloc, s.agent.model),
         cache_pct,
         tps,
@@ -549,6 +712,111 @@ fn poolInterruptHook(ctx: ?*anyopaque, cwd: []const u8, session: []const u8) voi
         }
     }
     pool.mutex.unlock(util.io);
+}
+
+fn poolSlashHook(ctx: ?*anyopaque, cwd: []const u8, session: []const u8, name: []const u8, args: []const u8, out: *std.Io.Writer) bool {
+    const pool: *SessionPool = @ptrCast(@alignCast(ctx orelse return false));
+    const cwd2 = if (cwd.len > 0) cwd else (if (pool.workspaces.items.len > 0) pool.workspaces.items[0] else "");
+    const ses = pool.getOrCreate(session, cwd2) orelse return false;
+    if (std.mem.eql(u8, name, "doctor")) {
+        const plugs = pluginsmod.enabledOptionalLine(ses.agent.alloc, ses.agent.plugins) catch "";
+        const sb = sandboxmod.describe(ses.agent.alloc, pool.cfg.default_sandbox) catch pool.cfg.default_sandbox.label();
+        const key = ses.agent.key orelse "";
+        const text = cmd_doctor.format(ses.agent.alloc, .{
+            .version = "0.1.0",
+            .cwd = if (cwd2.len > 0) cwd2 else ses.agent.cwd,
+            .provider = ses.agent.provider.name,
+            .model = ses.agent.model,
+            .has_key = key.len > 0,
+            .think = "",
+            .approval = pool.cfg.default_approval.label(),
+            .sandbox_mode = sb,
+            .plugins = plugs,
+        }) catch return false;
+        defer ses.agent.alloc.free(text);
+        out.writeAll(text) catch return false;
+        return true;
+    }
+    if (std.mem.eql(u8, name, "reload")) {
+        const text = pool.cfg.reloadSettings() catch return false;
+        setSessionApproval(ses, pool.cfg.default_approval);
+        if (pool.cfg.default_think_level) |lv| {
+            ses.agent.think_level = cfgmod.clampThinkLevel(ses.agent.modelMeta(), lv);
+        }
+        out.writeAll(text) catch return false;
+        return true;
+    }
+    if (std.mem.eql(u8, name, "mcp")) {
+        const text = mcpmod.formatStatus(ses.agent.alloc) catch return false;
+        defer ses.agent.alloc.free(text);
+        out.writeAll(text) catch return false;
+        return true;
+    }
+    if (std.mem.eql(u8, name, "branch")) {
+        const root = if (cwd2.len > 0) cwd2 else ses.agent.cwd;
+        const text = cmd_diff.formatBranch(ses.agent.alloc, root) catch return false;
+        defer ses.agent.alloc.free(text);
+        out.writeAll(text) catch return false;
+        return true;
+    }
+    if (std.mem.eql(u8, name, "log")) {
+        const root = if (cwd2.len > 0) cwd2 else ses.agent.cwd;
+        const text = cmd_diff.formatLog(ses.agent.alloc, root, cmd_diff.parseLogCount(args)) catch return false;
+        defer ses.agent.alloc.free(text);
+        out.writeAll(text) catch return false;
+        return true;
+    }
+    if (std.mem.eql(u8, name, "commit")) {
+        const root = if (cwd2.len > 0) cwd2 else ses.agent.cwd;
+        const text = cmd_commit.run(ses.agent.alloc, root, args) catch return false;
+        defer ses.agent.alloc.free(text);
+        out.writeAll(text) catch return false;
+        return true;
+    }
+    if (std.mem.eql(u8, name, "diff")) {
+        const root = if (cwd2.len > 0) cwd2 else ses.agent.cwd;
+        const text = cmd_diff.format(ses.agent.alloc, root) catch return false;
+        defer ses.agent.alloc.free(text);
+        out.writeAll(text) catch return false;
+        return true;
+    }
+    if (std.mem.eql(u8, name, "init")) {
+        const root = if (cwd2.len > 0) cwd2 else ses.agent.cwd;
+        const text = cmd_init.writeAgents(ses.agent.alloc, root) catch return false;
+        defer ses.agent.alloc.free(text);
+        out.writeAll(text) catch return false;
+        return true;
+    }
+    const res = pluginsmod.dispatchSlash(ses.agent.plugins, ses.agent, name, args) orelse return false;
+    const text = res catch return false;
+    defer ses.agent.alloc.free(text);
+    out.writeAll(text) catch return false;
+    return true;
+}
+
+fn poolSlashCatalogHook(ctx: ?*anyopaque, cwd: []const u8, session: []const u8, out: []cmd_help.HelpItem) usize {
+    const pool: *SessionPool = @ptrCast(@alignCast(ctx orelse return 0));
+    const cwd2 = if (cwd.len > 0) cwd else (if (pool.workspaces.items.len > 0) pool.workspaces.items[0] else "");
+    const ses = pool.getOrCreate(session, cwd2) orelse return 0;
+    var plug: [32]pluginsmod.SlashCommand = undefined;
+    const n = pluginsmod.collectSlash(ses.agent.plugins, &plug);
+    var i: usize = 0;
+    while (i < n and i < out.len) : (i += 1) {
+        out[i] = .{ .cmd = plug[i].name, .desc = plug[i].desc };
+    }
+    return i;
+}
+
+fn poolAuthSave(ctx: ?*anyopaque, provider: []const u8, key: []const u8) bool {
+    const pool: *SessionPool = @ptrCast(@alignCast(ctx orelse return false));
+    const cfg = pool.cfg;
+    cfg.saveAuth(provider, key) catch return false;
+    for (cfg.providers) |*p| {
+        if (std.mem.eql(u8, p.name, provider)) {
+            p.api_key = pool.alloc.dupe(u8, key) catch p.api_key;
+        }
+    }
+    return true;
 }
 
 fn poolConfigHook(ctx: ?*anyopaque, alloc: std.mem.Allocator, body: ?[]const u8) ?[]const u8 {
@@ -583,6 +851,44 @@ fn poolConfigHook(ctx: ?*anyopaque, alloc: std.mem.Allocator, body: ?[]const u8)
                 pool.mutex.unlock(util.io);
             }
         }
+        if (root.object.get("setAuth")) |v| {
+            if (v == .object) {
+                const name = if (v.object.get("name")) |n| (if (n == .string) n.string else "") else "";
+                const key = if (v.object.get("key")) |n| (if (n == .string) n.string else "") else "";
+                if (name.len == 0 or key.len == 0) return null;
+                cfg.saveAuth(name, key) catch return write_err;
+                for (cfg.providers) |*p| {
+                    if (std.mem.eql(u8, p.name, name)) {
+                        p.api_key = alloc.dupe(u8, key) catch p.api_key;
+                    }
+                }
+            }
+        }
+        if (root.object.get("setApprovalMode")) |v| {
+            if (v == .string) {
+                const mode = cfgmod.ApprovalMode.parse(v.string) orelse return null;
+                cfg.saveApprovalMode(mode) catch return write_err;
+            }
+        }
+        if (root.object.get("setSandboxMode")) |v| {
+            if (v == .string) {
+                const mode = cfgmod.SandboxMode.parse(v.string) orelse return null;
+                cfg.saveSandboxMode(mode) catch return write_err;
+            }
+        }
+        if (root.object.get("refreshModels")) |v| {
+            const want = switch (v) {
+                .bool => |flag| flag,
+                .string => |s| std.mem.eql(u8, s, "true"),
+                else => false,
+            };
+            if (want) {
+                pool.mutex.lock(util.io) catch {};
+                const r = cfgmod.refreshProviders(alloc, cfg.providers);
+                pool.mutex.unlock(util.io);
+                return std.fmt.allocPrint(alloc, "{{\"ok\":true,\"refreshed\":{d},\"added\":{d},\"fail\":{d}}}", .{ r.ok, r.added, r.fail }) catch "{\"ok\":true}";
+            }
+        }
         if (root.object.get("upsertProvider")) |v| {
             if (v == .object) {
                 const name = if (v.object.get("name")) |n| (if (n == .string) n.string else "") else "";
@@ -606,14 +912,14 @@ fn poolConfigHook(ctx: ?*anyopaque, alloc: std.mem.Allocator, body: ?[]const u8)
                     if (ms == .array) {
                         for (ms.array.items) |m| {
                             if (m == .string) {
-                                models.append(m.string) catch {};
-                                metas.append(.{}) catch {};
+                                models.append(m.string) catch |err| util.debugCatch("web.models", err);
+                                metas.append(.{}) catch |err| util.debugCatch("web.metas", err);
                             } else if (m == .object) {
                                 if (m.object.get("id")) |id| {
                                     if (id == .string) {
-                                        models.append(id.string) catch {};
+                                        models.append(id.string) catch |err| util.debugCatch("web.models.id", err);
                                         const meta = cfgmod.parseModelMeta(m.object);
-                                        metas.append(meta) catch {};
+                                        metas.append(meta) catch |err| util.debugCatch("web.metas.id", err);
                                         if (meta.context_window > 0) context_window = @max(context_window, meta.context_window);
                                     }
                                 }
@@ -666,11 +972,36 @@ fn poolConfigHook(ctx: ?*anyopaque, alloc: std.mem.Allocator, body: ?[]const u8)
                 cfg.saveModels(cfg.providers) catch return write_err;
             }
         }
+        if (root.object.get("setPlugin")) |v| {
+            if (v == .object) {
+                const name = if (v.object.get("name")) |n| (if (n == .string) n.string else "") else "";
+                const on = if (v.object.get("enabled")) |e| switch (e) {
+                    .bool => |on_flag| on_flag,
+                    else => true,
+                } else true;
+                if (name.len > 0) {
+                    cfg.savePluginToggle(name, on, pluginsmod.isFactoryOn(name)) catch return write_err;
+                    if (on) {
+                        _ = pluginsmod.enable(name);
+                    } else {
+                        _ = pluginsmod.disable(name);
+                    }
+                    pool.mutex.lockUncancelable(util.io);
+                    defer pool.mutex.unlock(util.io);
+                    for (pool.sessions.items) |ses| {
+                        ses.agent.plugins = if (on)
+                            pluginsmod.withEnabled(ses.agent.plugins, name)
+                        else
+                            pluginsmod.withoutEnabled(ses.agent.plugins, name);
+                    }
+                }
+            }
+        }
         if (root.object.get("deleteProvider")) |v| {
             if (v == .string) {
                 var keep = std.array_list.Managed(cfgmod.Provider).init(alloc);
                 for (cfg.providers) |p| {
-                    if (!std.mem.eql(u8, p.name, v.string)) keep.append(p) catch {};
+                    if (!std.mem.eql(u8, p.name, v.string)) keep.append(p) catch |err| util.debugCatch("web.keep", err);
                 }
                 if (keep.items.len != cfg.providers.len) {
                     cfg.providers = keep.toOwnedSlice() catch cfg.providers;
@@ -682,28 +1013,36 @@ fn poolConfigHook(ctx: ?*anyopaque, alloc: std.mem.Allocator, body: ?[]const u8)
     var stw = std.Io.Writer.Allocating.init(alloc);
     defer stw.deinit();
     const w = &stw.writer;
-    w.writeAll("{\"defaultProvider\":") catch {};
-    w.print("{s}", .{util.jsonString(alloc, cfg.default_provider orelse "") catch "\"\""}) catch {};
-    w.writeAll(",\"defaultModel\":") catch {};
-    w.print("{s}", .{util.jsonString(alloc, cfg.default_model orelse "") catch "\"\""}) catch {};
-    w.writeAll(",\"defaultThinkingLevel\":") catch {};
-    w.print("{s}", .{util.jsonString(alloc, if (cfg.default_think_level) |lv| lv.label() else "high") catch "\"\""}) catch {};
-    w.writeAll(",\"providers\":[") catch {};
+    jw("cfg.prov", w.writeAll("{\"defaultProvider\":"));
+    jw("cfg.provv", w.print("{s}", .{util.jsonString(alloc, cfg.default_provider orelse "") catch "\"\""}));
+    jw("cfg.model", w.writeAll(",\"defaultModel\":"));
+    jw("cfg.modelv", w.print("{s}", .{util.jsonString(alloc, cfg.default_model orelse "") catch "\"\""}));
+    jw("cfg.think", w.writeAll(",\"defaultThinkingLevel\":"));
+    jw("cfg.thinkv", w.print("{s}", .{util.jsonString(alloc, if (cfg.default_think_level) |lv| lv.label() else "high") catch "\"\""}));
+    jw("cfg.appr", w.writeAll(",\"approvalMode\":"));
+    jw("cfg.apprv", w.print("{s}", .{util.jsonString(alloc, cfg.default_approval.label()) catch "\"yolo\""}));
+    jw("cfg.sb", w.writeAll(",\"sandboxMode\":"));
+    jw("cfg.sbv", w.print("{s}", .{util.jsonString(alloc, cfg.default_sandbox.label()) catch "\"off\""}));
+    jw("cfg.sbb", w.writeAll(",\"sandboxBackend\":"));
+    jw("cfg.sbbv", w.print("{s}", .{util.jsonString(alloc, sandboxmod.backend().label()) catch "\"none\""}));
+    jw("cfg.plist", w.writeAll(",\"providers\":["));
     for (cfg.providers, 0..) |p, i| {
-        if (i > 0) w.writeAll(",") catch {};
-        w.print("{{\"name\":{s},\"baseUrl\":{s},\"api\":{s},\"hasKey\":{s},\"models\":[", .{
+        if (i > 0) jw("cfg.pcomma", w.writeAll(","));
+        jw("cfg.prow", w.print("{{\"name\":{s},\"baseUrl\":{s},\"api\":{s},\"hasKey\":{s},\"models\":[", .{
             util.jsonString(alloc, p.name) catch "\"\"",
             util.jsonString(alloc, p.base_url) catch "\"\"",
             util.jsonString(alloc, if (p.api == .anthropic_messages) "anthropic-messages" else "openai-completions") catch "\"\"",
             if (p.api_key != null) "true" else "false",
-        }) catch {};
+        }));
         for (p.models, 0..) |m, j| {
-            if (j > 0) w.writeAll(",") catch {};
-            w.print("{s}", .{util.jsonString(alloc, m) catch "\"\""}) catch {};
+            if (j > 0) jw("cfg.mcomma", w.writeAll(","));
+            jw("cfg.mid", w.print("{s}", .{util.jsonString(alloc, m) catch "\"\""}));
         }
-        w.writeAll("]}") catch {};
+        jw("cfg.pend", w.writeAll("]}"));
     }
-    w.writeAll("]}") catch {};
+    jw("cfg.plugins", w.writeAll("],\"plugins\":"));
+    pluginsmod.writeCatalog(w) catch |err| util.debugCatch("cfg.catalog", err);
+    jw("cfg.end", w.writeAll("}"));
     return stw.toOwnedSlice() catch null;
 }
 
@@ -736,26 +1075,26 @@ fn poolWorkspacesHook(ctx: ?*anyopaque, alloc: std.mem.Allocator, body: ?[]const
         pool.workspaces.append(pool.alloc.dupe(u8, p) catch {
             pool.mutex.unlock(util.io);
             return null;
-        }) catch {};
+        }) catch |err| util.debugCatch("ws.append", err);
         pool.mutex.unlock(util.io);
         std.debug.print("piz web: 已注册项目 {s}\n", .{p});
     }
     var stw = std.Io.Writer.Allocating.init(alloc);
     defer stw.deinit();
     const w = &stw.writer;
-    w.writeAll("[") catch {};
+    jw("ws.ob", w.writeAll("["));
     pool.mutex.lock(util.io) catch return "[]";
     for (pool.workspaces.items, 0..) |ws, i| {
-        if (i > 0) w.writeAll(",") catch {};
+        if (i > 0) jw("ws.comma", w.writeAll(","));
         const raw_base = std.fs.path.basename(ws);
         const base = if (raw_base.len > 0) raw_base else ws;
-        w.print("{{\"root\":{s},\"name\":{s}}}", .{
+        jw("ws.row", w.print("{{\"root\":{s},\"name\":{s}}}", .{
             util.jsonString(alloc, ws) catch "\"\"",
             util.jsonString(alloc, base) catch "\"\"",
-        }) catch {};
+        }));
     }
     pool.mutex.unlock(util.io);
-    w.writeAll("]") catch {};
+    jw("ws.cb", w.writeAll("]"));
     return stw.toOwnedSlice() catch "[]";
 }
 
@@ -764,14 +1103,14 @@ fn poolModelsHook(ctx: ?*anyopaque, alloc: std.mem.Allocator) []const u8 {
     var stw = std.Io.Writer.Allocating.init(alloc);
     defer stw.deinit();
     const w = &stw.writer;
-    w.writeAll("[") catch {};
+    jw("models.ob", w.writeAll("["));
     const models = pool.cfg.allModels(alloc);
     defer alloc.free(models);
     for (models, 0..) |m, i| {
-        if (i > 0) w.writeAll(",") catch {};
-        w.print("{s}", .{util.jsonString(alloc, m) catch "\"\""}) catch {};
+        if (i > 0) jw("models.comma", w.writeAll(","));
+        jw("models.id", w.print("{s}", .{util.jsonString(alloc, m) catch "\"\""}));
     }
-    w.writeAll("]") catch {};
+    jw("models.cb", w.writeAll("]"));
     return stw.toOwnedSlice() catch "[]";
 }
 
@@ -834,16 +1173,25 @@ fn poolActionHook(ctx: ?*anyopaque, cwd: []const u8, session: []const u8, act: [
     const cwd2 = if (cwd.len > 0) cwd else (if (pool.workspaces.items.len > 0) pool.workspaces.items[0] else "");
     if (std.mem.eql(u8, act, "archive")) {
         pool.detachAndDestroy(session, cwd2);
-        sessionmod.archiveWeb(alloc, cwd2, session) catch {};
+        sessionmod.archiveWeb(alloc, cwd2, session) catch |err| {
+            util.debugCatch("archiveWeb", err);
+            return "{\"ok\":false,\"act\":\"archive\"}";
+        };
         return "{\"ok\":true,\"act\":\"archive\"}";
     }
     if (std.mem.eql(u8, act, "restore")) {
-        sessionmod.restoreWeb(alloc, cwd2, session) catch {};
+        sessionmod.restoreWeb(alloc, cwd2, session) catch |err| {
+            util.debugCatch("restoreWeb", err);
+            return "{\"ok\":false,\"act\":\"restore\"}";
+        };
         return "{\"ok\":true,\"act\":\"restore\"}";
     }
     if (std.mem.eql(u8, act, "delete")) {
         pool.detachAndDestroy(session, cwd2);
-        sessionmod.deleteWeb(alloc, cwd2, session) catch {};
+        sessionmod.deleteWeb(alloc, cwd2, session) catch |err| {
+            util.debugCatch("deleteWeb", err);
+            return "{\"ok\":false,\"act\":\"delete\"}";
+        };
         return "{\"ok\":true,\"act\":\"delete\"}";
     }
     const ses = pool.getOrCreate(session, cwd2) orelse return null;
@@ -880,7 +1228,7 @@ fn poolActionHook(ctx: ?*anyopaque, cwd: []const u8, session: []const u8, act: [
         if (msgs.len == 0) return "{\"ok\":false,\"act\":\"undo\"}";
         ses.agent.messages.shrinkRetainingCapacity(msgs.len - cut);
         ses.updated_ns = std.Io.Clock.now(.real, util.io).nanoseconds;
-        sessionmod.saveWebTs(alloc, cwd2, session, ses.agent.model, sessionIsYolo(ses), ses.agent.title, ses.agent.messages.items, ses.updated_ns) catch {};
+        sessionmod.saveWebTs(alloc, cwd2, session, ses.agent.model, sessionIsYolo(ses), ses.agent.title, ses.agent.messages.items, ses.updated_ns) catch |err| util.debugCatch("saveWebTs", err);
         rebuildSnap(ses);
         return std.fmt.allocPrint(alloc, "{{\"ok\":true,\"act\":\"undo\",\"msgs\":{d}}}", .{msgs.len - cut}) catch null;
     }
@@ -954,9 +1302,9 @@ fn sessionExport(alloc: std.mem.Allocator, ses: *WebSession, act: []const u8) ?[
     defer ww.deinit();
     const w = &ww.writer;
     const html = std.mem.eql(u8, act, "export");
-    if (html) w.writeAll("<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>piz session</title></head><body>") catch {};
+    if (html) jw("export.html", w.writeAll("<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>piz session</title></head><body>"));
     if (std.mem.eql(u8, act, "tree")) {
-        w.print("{d} messages:\n", .{ses.agent.messages.items.len}) catch {};
+        jw("export.n", w.print("{d} messages:\n", .{ses.agent.messages.items.len}));
     }
     for (ses.agent.messages.items, 0..) |m, i| {
         if (std.mem.eql(u8, act, "tree")) {
@@ -967,15 +1315,15 @@ fn sessionExport(alloc: std.mem.Allocator, ses: *WebSession, act: []const u8) ?[
                 else => "-",
             } else "-";
             const head = m.content[0..@min(m.content.len, 50)];
-            w.print("{d}. {s} {s}\n", .{ i + 1, tag, head }) catch {};
+            jw("export.tree", w.print("{d}. {s} {s}\n", .{ i + 1, tag, head }));
         } else if (html) {
-            w.print("<p><b>{s}</b><br><pre>{s}</pre></p>\n", .{ m.role, htmlEsc(alloc, m.content) }) catch {};
+            jw("export.p", w.print("<p><b>{s}</b><br><pre>{s}</pre></p>\n", .{ m.role, htmlEsc(alloc, m.content) }));
         } else {
-            w.print("--- {s} ---\n{s}\n", .{ m.role, m.content }) catch {};
+            jw("export.md", w.print("--- {s} ---\n{s}\n", .{ m.role, m.content }));
         }
     }
-    if (html) w.writeAll("</body></html>\n") catch {};
-    if (std.mem.eql(u8, act, "tree")) w.writeAll("use /fork <n> to branch from a message") catch {};
+    if (html) jw("export.end", w.writeAll("</body></html>\n"));
+    if (std.mem.eql(u8, act, "tree")) jw("export.hint", w.writeAll("use /fork <n> to branch from a message"));
     return jsonOkText(alloc, act, ww.written());
 }
 
@@ -983,10 +1331,10 @@ fn htmlEsc(alloc: std.mem.Allocator, s: []const u8) []const u8 {
     var out = std.array_list.Managed(u8).init(alloc);
     for (s) |c| {
         switch (c) {
-            '&' => out.appendSlice("&amp;") catch {},
-            '<' => out.appendSlice("&lt;") catch {},
-            '>' => out.appendSlice("&gt;") catch {},
-            else => out.append(c) catch {},
+            '&' => out.appendSlice("&amp;") catch |err| util.debugCatch("htmlEsc.amp", err),
+            '<' => out.appendSlice("&lt;") catch |err| util.debugCatch("htmlEsc.lt", err),
+            '>' => out.appendSlice("&gt;") catch |err| util.debugCatch("htmlEsc.gt", err),
+            else => out.append(c) catch |err| util.debugCatch("htmlEsc.c", err),
         }
     }
     return out.toOwnedSlice() catch s;
@@ -996,7 +1344,7 @@ fn memoryAct(alloc: std.mem.Allocator, act: []const u8, name: ?[]const u8) ?[]co
     const mem_path = util.configDir(alloc) catch return "{\"ok\":false,\"act\":\"memory\",\"error\":\"no config dir\"}";
     const full = util.joinPath(alloc, mem_path, "memory.md") catch return "{\"ok\":false,\"act\":\"memory\"}";
     if (std.mem.eql(u8, act, "memory-clear")) {
-        std.Io.Dir.cwd().deleteFile(util.io, full) catch {};
+        std.Io.Dir.cwd().deleteFile(util.io, full) catch |err| util.debugCatch("memory.clear", err);
         return "{\"ok\":true,\"act\":\"memory-clear\"}";
     }
     if (std.mem.eql(u8, act, "memory-set")) {
@@ -1010,9 +1358,15 @@ fn memoryAct(alloc: std.mem.Allocator, act: []const u8, name: ?[]const u8) ?[]co
         defer f.close(util.io);
         var wbuf: [1024]u8 = undefined;
         var w = f.writer(util.io, &wbuf);
-        w.seekTo(f.length(util.io) catch 0) catch {};
-        w.interface.writeAll(mline) catch {};
-        w.flush() catch {};
+        w.seekTo(f.length(util.io) catch 0) catch |err| util.debugCatch("memory-set.seek", err);
+        w.interface.writeAll(mline) catch |err| {
+            util.debugCatch("memory-set.write", err);
+            return "{\"ok\":false,\"act\":\"memory-set\"}";
+        };
+        w.flush() catch |err| {
+            util.debugCatch("memory-set.flush", err);
+            return "{\"ok\":false,\"act\":\"memory-set\"}";
+        };
         return jsonOkText(alloc, act, text);
     }
     const content = std.Io.Dir.cwd().readFileAlloc(util.io, full, alloc, .limited(512 * 1024)) catch
@@ -1040,7 +1394,7 @@ fn poolModeHook(ctx: ?*anyopaque, cwd: []const u8, session: []const u8, mode: ?[
     return sessionApproval(ses).label();
 }
 
-fn poolChatHook(ctx: ?*anyopaque, cwd: []const u8, session: []const u8, text: []const u8) bool {
+fn poolChatHook(ctx: ?*anyopaque, cwd: []const u8, session: []const u8, text: []const u8, image: ?[]const u8, mime: []const u8) bool {
     const pool: *SessionPool = @ptrCast(@alignCast(ctx.?));
     const cwd2 = if (cwd.len > 0) cwd else (if (pool.workspaces.items.len > 0) pool.workspaces.items[0] else "");
     const ses = pool.getOrCreate(session, cwd2) orelse return false;
@@ -1052,7 +1406,7 @@ fn poolChatHook(ctx: ?*anyopaque, cwd: []const u8, session: []const u8, text: []
         });
     }
     if (prepared.skip) return true;
-    webui_mod.ChatQueue.enqueue(ses.qkey, prepared.send);
+    if (!webui_mod.ChatQueue.enqueueEx(ses.qkey, prepared.send, image, mime)) return false;
     if (ses.busy.load(.acquire) != 0) {
         ses.hub.push("{{\"type\":\"queued\",\"session\":{s},\"text\":{s},\"n\":{d}}}", .{
             util.jsonString(pool.alloc, ses.name) catch "\"\"",
@@ -1080,7 +1434,7 @@ fn prepareWebChat(alloc: std.mem.Allocator, cwd: []const u8, text: []const u8) P
             return .{ .send = text, .notice = "cannot build bash args", .skip = !send_to_llm };
         };
         const res: toolsmod.Result = if (toolsmod.find("bash")) |tb|
-            (tb.handler(alloc, json_args) catch .{ .content = "tool crashed", .is_error = true })
+            (tb.handler(alloc, json_args) catch |err| toolsmod.crashResult(alloc, "bash", err))
         else
             .{ .content = "no bash tool", .is_error = true };
         if (!send_to_llm) return .{ .send = text, .notice = res.content, .skip = true };
@@ -1149,4 +1503,25 @@ test "web undo/compact are rejected while the worker turn is running" {
     try t.expect(std.mem.indexOf(u8, q, "\"act\":\"queue\"") != null);
     const copy_empty = poolActionHook(&pool, "/tmp", "s1", "copy", null, 0) orelse return error.Fail;
     try t.expect(std.mem.indexOf(u8, copy_empty, "\"ok\":false") != null);
+}
+
+test "writeHistoryRange pages a slice" {
+    const t = std.testing;
+    const ai = @import("core").ai;
+    const msgs = [_]ai.Message{
+        .{ .role = "user", .content = "one" },
+        .{ .role = "assistant", .content = "two" },
+        .{ .role = "user", .content = "three" },
+        .{ .role = "assistant", .content = "four" },
+    };
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    var stw = std.Io.Writer.Allocating.init(t.allocator);
+    defer stw.deinit();
+    writeHistoryRange(&stw.writer, arena.allocator(), &msgs, 1, 3);
+    const out = stw.written();
+    try t.expect(std.mem.indexOf(u8, out, "two") != null);
+    try t.expect(std.mem.indexOf(u8, out, "three") != null);
+    try t.expect(std.mem.indexOf(u8, out, "one") == null);
+    try t.expect(std.mem.indexOf(u8, out, "four") == null);
 }

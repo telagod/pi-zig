@@ -85,6 +85,30 @@ fn stubHandler(_: std.mem.Allocator, _: []const u8) anyerror!toolsmod.Result {
     return .{ .content = "internal: dispatched through the mcp layer", .is_error = true };
 }
 
+/// `/mcp` 清单:每个 server 一行状态与工具名。
+pub fn formatStatus(alloc: std.mem.Allocator) ![]u8 {
+    if (!servers_inited or servers.items.len == 0)
+        return alloc.dupe(u8, "no mcp servers configured");
+    var aw = std.Io.Writer.Allocating.init(alloc);
+    errdefer aw.deinit();
+    for (servers.items) |srv| {
+        if (srv.alive) {
+            try aw.writer.print("[ok] {s}  {s}", .{ srv.cfg.name, srv.cfg.command });
+            if (srv.tools.items.len > 0) {
+                try aw.writer.writeAll("  tools:");
+                for (srv.tools.items, 0..) |t, i| {
+                    if (i > 0) try aw.writer.writeAll(",");
+                    try aw.writer.print(" {s}", .{t.name});
+                }
+            }
+            try aw.writer.writeByte('\n');
+        } else {
+            try aw.writer.print("[err] {s}  {s}\n", .{ srv.cfg.name, srv.error_msg });
+        }
+    }
+    return aw.toOwnedSlice();
+}
+
 /// 工具名是否 mcp 前缀。
 pub fn isMcpTool(name: []const u8) bool {
     return std.mem.startsWith(u8, name, "mcp__");
@@ -237,16 +261,26 @@ pub fn start(alloc: std.mem.Allocator, cfg: ServerConfig) !*Server {
     var aw = std.Io.Writer.Allocating.init(alloc);
     defer aw.deinit();
     try aw.writer.writeAll("{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}");
-    writeLine(srv.stdin.?, aw.written()) catch {};
+    writeLine(srv.stdin.?, aw.written()) catch |err| util.debugCatch("mcp.initialized", err);
 
-    // tools/list
-    const list_act = activity.begin(.tool, "mcp_tools_list", cfg.name, READ_TIMEOUT_MS);
-    defer list_act.release();
-    const list_resp = roundTrip(alloc, srv, "tools/list", null, list_act) catch |e| {
-        srv.error_msg = try std.fmt.allocPrint(alloc, "tools/list failed: {s}", .{@errorName(e)});
-        try servers.append(srv);
-        return srv;
-    };
+    // tools/list。initialize 刚过,有的服务器还没把 stdin 读干净,NoResponse 重试两次。
+    var list_resp: std.json.Value = undefined;
+    {
+        var attempt: u8 = 0;
+        while (true) : (attempt += 1) {
+            const list_act = activity.begin(.tool, "mcp_tools_list", cfg.name, READ_TIMEOUT_MS);
+            defer list_act.release();
+            if (roundTrip(alloc, srv, "tools/list", null, list_act)) |resp| {
+                list_resp = resp;
+                break;
+            } else |e| {
+                if (e == error.NoResponse and attempt < 2) continue;
+                srv.error_msg = try std.fmt.allocPrint(alloc, "tools/list failed: {s}", .{@errorName(e)});
+                try servers.append(srv);
+                return srv;
+            }
+        }
+    }
     srv.tools = std.array_list.Managed(Tool).init(alloc);
     if (list_resp.object.get("result")) |r| {
         if (r == .object) {
@@ -373,14 +407,20 @@ pub fn runScriptServerTest(t: anytype) !void {
         \\import sys, json
         \\for line in sys.stdin:
         \\    line = line.strip()
-        \\    if "initialize" in line:
-        \\        print(json.dumps({"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05","capabilities":{"tools":{}},"serverInfo":{"name":"t","version":"1"}}}), flush=True)
-        \\    elif "tools/list" in line:
-        \\        print(json.dumps({"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"echo","description":"Echo back","inputSchema":{"type":"object","properties":{"text":{"type":"string"}},"required":["text"]}}]}}), flush=True)
-        \\    elif "tools/call" in line:
-        \\        print(json.dumps({"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text","text":"ECHO-OUT"}]}}), flush=True)
-        \\    else:
-        \\        print("{}", flush=True)
+        \\    if not line:
+        \\        continue
+        \\    try:
+        \\        msg = json.loads(line)
+        \\    except Exception:
+        \\        continue
+        \\    mid = msg.get("id")
+        \\    method = msg.get("method") or ""
+        \\    if method == "initialize":
+        \\        print(json.dumps({"jsonrpc":"2.0","id":mid,"result":{"protocolVersion":"2024-11-05","capabilities":{"tools":{}},"serverInfo":{"name":"t","version":"1"}}}), flush=True)
+        \\    elif method == "tools/list":
+        \\        print(json.dumps({"jsonrpc":"2.0","id":mid,"result":{"tools":[{"name":"echo","description":"Echo back","inputSchema":{"type":"object","properties":{"text":{"type":"string"}},"required":["text"]}}]}}), flush=True)
+        \\    elif method == "tools/call":
+        \\        print(json.dumps({"jsonrpc":"2.0","id":mid,"result":{"content":[{"type":"text","text":"ECHO-OUT"}]}}), flush=True)
     ;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -395,6 +435,7 @@ pub fn runScriptServerTest(t: anytype) !void {
         servers_inited = false;
     }
     const srv = try start(a, .{ .name = "test", .command = "python3", .args = &.{ "-u", sh_path } });
+    if (!srv.alive) std.debug.print("mcp start failed: {s}\n", .{srv.error_msg});
     try t.expect(srv.alive);
     try t.expectEqual(@as(usize, 1), srv.tools.items.len);
     try t.expectEqualStrings("echo", srv.tools.items[0].name);

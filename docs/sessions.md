@@ -131,7 +131,7 @@ pi 有真正的会话树（可视化导航、任意节点跳转续写、分支�
 
 压缩失败（模型不可用）时，若 provider 配了多个模型，`compact-resilience` 插件会换第二个模型重试一次。
 
-手动触发：`/compact`（LLM 摘要）、`/shake`（机械裁，可 `/shake images`）、`/snap`（ASCII 密图 + 原文摘，无 vision 跳过）、`/fast-compress`（看快压状态）。
+手动触发：`/compact`（密图秒压，不调模型）、`/shake`（机械裁，可 `/shake images`）、`/snap`（8x13+CJK 密图 + 原文摘，无 vision 跳过）、`/fast-compress`（看快压状态）。
 
 > 压缩是增量的：只总结上次压缩边界之后的新增内容，不重复总结已压缩部分。
 

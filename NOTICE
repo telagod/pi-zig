@@ -35,3 +35,15 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+--------------------------------------------------------------------------------
+snapcompact fonts
+
+`src/font8x13.bin` is a bitmap extract of X.Org misc-fixed 8x13 (ISO10646),
+used under the X Consortium / MIT license that accompanies xfonts-base.
+
+`src/snapcjk.bin` is a 16×16 bitmap extract rasterized from Droid Sans Fallback,
+which is licensed under the Apache License, Version 2.0. You may obtain a copy
+of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0

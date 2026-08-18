@@ -10,7 +10,7 @@
 - pi 之长：**背景色带分语义**——user 整宽带、tool 盒随状态变色、footer 双行左右分列。
 - piz 之长：**缩进层级**——user 0 / assistant 2 / tool 4 / body 6，pi 全平无层级。
 - 新制：pi 之色 + piz 之层。色带随缩进起讫，不满屏铺，层级与语义兼得。
-- 现状缺口：piz 只用 8 色粗/暗/斜，**无背景色、无 256 色、无状态色**。
+- 色带已上（Theme 三级探测 + user/tool 状态 bg）。`/find` 命中块反色。
 
 ## 1. 逐元素对照
 
@@ -41,29 +41,33 @@
 | warning | `#ffff00`→ 柔化 `#d7af00` | 178 | ctx% ≥ 60% |
 | error | `#cc6666` | 167 | ctx% ≥ 85% |
 | accent | `#8abeb7` | 109 | 选中、picker |
-| muted | `#808080` | 244 | 次级文 |
-| dim | `#666666` | 242 | hint、预览 |
+| muted | `#8a8a8a` | 245 | preview、branch |
+| think | `#6e6e6e` | 242 | 思考正文（斜体） |
+| output | `#585858` | 240 | 工具输出 |
+| dim | `#4e4e4e` | 239 | cwd、hint（最淡） |
+
+字阶：粗=大（问句/工具名/标题），正体=正文，斜体=退后（思考/preview/引用）。终端改不了字号。
 
 dark / light / auto 已上。think 等级色（绿/青/紫）现状已对，不动。
 
 ## 3. ANSI mockup
 
 ```
-▎ 帮我看下这个 bug                                    ← bg 236 铺至屏缘,粗体
+▎ 帮我看下这个 bug                                    ← L0 问句:bg+粗+▎
 
-  某去查日志。                                        ← 缩进 2 正体,无带
+    ┆ 某先查日志                                      ← L2 思考:退后,dim italic
 
-    ▸ read  src/main.zig ●                            ← bg 22(ok) 铺至屏缘,● 绿
-    · (34 more lines, ctrl+o)                         ← dim,折叠尾行(pi 式)
+  根因在 parser,补一测。                               ← L1 正文:缩进 2,正体
 
-    ▸ bash  grep -r foo ●                             ← bg 52(err) 带,● 红
-    │ grep: foo: No such file                         ← 展开体照旧,缩进 6
+    ▸ read  src/main.zig ●                            ← L3 工具:▸ 名粗,preview dim
+    · (34 more lines, ctrl+o)                         ← 折叠尾行 dim
 
-  · thought                                           ← dim italic,不动
+    ▸ bash  grep -r foo ●                             ← err 带暗红
+      │ grep: foo: No such file                       ← L4 输出:│ dim;err 用 error ink
 
 ┌ composer 框 ┐
-~/project/pi-zig (main)                               ← footer 行 1:muted
-↑4.7k ↓44 R3.8k $0.009 1.7%/272k  (openai) model · med ← 行 2:左 stats 右模型
+  ~/project/pi-zig (main)                             ← footer 行 1:cwd dim,branch muted
+  ↑4.7k ↓44  ·  R3.8k $0.009  ·  ctx 1.7% 4.7k/272k    ← 行 2:flow / econ / ctx 分组
 ```
 
 色带只铺文字所在行之右缘补白，不起新行、不动间距（gapBetween 照旧）。

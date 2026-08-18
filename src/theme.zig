@@ -21,6 +21,8 @@ pub const Palette = struct {
     warn_fg: Rgb,
     muted_fg: Rgb,
     dim_fg: Rgb,
+    think_fg: Rgb,
+    output_fg: Rgb,
     md_heading: Rgb,
     md_link: Rgb,
     md_link_url: Rgb,
@@ -40,8 +42,10 @@ pub const Palette = struct {
         .ok_fg = hex(0xb5bd68),
         .err_fg = hex(0xcc6666),
         .warn_fg = hex(0xd7af00),
-        .muted_fg = hex(0x808080),
-        .dim_fg = hex(0x666666),
+        .muted_fg = hex(0x8a8a8a),
+        .dim_fg = hex(0x4e4e4e),
+        .think_fg = hex(0x6e6e6e),
+        .output_fg = hex(0x585858),
         .md_heading = hex(0xd7af00),
         .md_link = hex(0x5f87ff),
         .md_link_url = hex(0x666666),
@@ -62,8 +66,10 @@ pub const Palette = struct {
         .ok_fg = hex(0x588458),
         .err_fg = hex(0xaa5555),
         .warn_fg = hex(0x9a7326),
-        .muted_fg = hex(0x6c6c6c),
-        .dim_fg = hex(0x767676),
+        .muted_fg = hex(0x5a5a5a),
+        .dim_fg = hex(0x8a8a8a),
+        .think_fg = hex(0x6e6e6e),
+        .output_fg = hex(0x7a7a7a),
         .md_heading = hex(0x9a7326),
         .md_link = hex(0x547da7),
         .md_link_url = hex(0x767676),
@@ -97,6 +103,8 @@ pub const Theme = struct {
     fg_warn: []const u8 = "\x1b[38;5;178m",
     fg_muted: []const u8 = "\x1b[38;5;244m",
     fg_dim: []const u8 = "\x1b[38;5;242m",
+    fg_think: []const u8 = "\x1b[38;5;242m",
+    fg_output: []const u8 = "\x1b[38;5;240m",
     fg_md_heading: []const u8 = "\x1b[38;5;178m",
     fg_md_link: []const u8 = "\x1b[38;5;69m",
     fg_md_link_url: []const u8 = "\x1b[38;5;242m",
@@ -109,7 +117,7 @@ pub const Theme = struct {
     fg_md_list: []const u8 = "\x1b[38;5;107m",
 
     /// 自绘 ANSI 缓冲(自定义主题 / truecolor / light 时用)。
-    store: [20][32]u8 = [_][32]u8{[_]u8{0} ** 32} ** 20,
+    store: [22][32]u8 = [_][32]u8{[_]u8{0} ** 32} ** 22,
 
     pub fn detectMode() ColorMode {
         if (util.getEnv("NO_COLOR") != null) return .none;
@@ -189,7 +197,7 @@ pub const Theme = struct {
         return if (self.mode == .none) "\x1b[2m" else self.fg_muted;
     }
 
-    fn rebuild(self: *Theme) void {
+    pub fn rebuild(self: *Theme) void {
         if (self.mode == .none) {
             self.bg_user = "";
             self.bg_tool_run = "";
@@ -200,6 +208,8 @@ pub const Theme = struct {
             self.fg_warn = "\x1b[33m";
             self.fg_muted = "\x1b[2m";
             self.fg_dim = "\x1b[2m";
+            self.fg_think = "\x1b[2m";
+            self.fg_output = "\x1b[2m";
             self.fg_md_heading = "\x1b[1m";
             self.fg_md_link = "\x1b[4m";
             self.fg_md_link_url = "\x1b[2m";
@@ -221,6 +231,8 @@ pub const Theme = struct {
         self.fg_warn = self.put(6, false, self.pal.warn_fg);
         self.fg_muted = self.put(7, false, self.pal.muted_fg);
         self.fg_dim = self.put(8, false, self.pal.dim_fg);
+        self.fg_think = self.put(19, false, self.pal.think_fg);
+        self.fg_output = self.put(20, false, self.pal.output_fg);
         self.fg_md_heading = self.put(9, false, self.pal.md_heading);
         self.fg_md_link = self.put(10, false, self.pal.md_link);
         self.fg_md_link_url = self.put(11, false, self.pal.md_link_url);
@@ -319,6 +331,8 @@ pub fn applyJson(t: *Theme, src: []const u8) bool {
             if (std.mem.eql(u8, key, "warning")) pal.warn_fg = rgb;
             if (std.mem.eql(u8, key, "muted")) pal.muted_fg = rgb;
             if (std.mem.eql(u8, key, "dim")) pal.dim_fg = rgb;
+            if (std.mem.eql(u8, key, "thinkingText") or std.mem.eql(u8, key, "thinkFg")) pal.think_fg = rgb;
+            if (std.mem.eql(u8, key, "outputFg") or std.mem.eql(u8, key, "toolOutput")) pal.output_fg = rgb;
             if (std.mem.eql(u8, key, "mdHeading")) pal.md_heading = rgb;
             if (std.mem.eql(u8, key, "mdLink")) pal.md_link = rgb;
             if (std.mem.eql(u8, key, "mdLinkUrl")) pal.md_link_url = rgb;
@@ -400,4 +414,32 @@ test "resolve light rebuilds codes" {
     th.rebuild();
     try t.expect(std.mem.indexOf(u8, th.bgUser(), "232;232;232") != null);
     try t.expect(std.mem.indexOf(u8, th.bgTool(.ok), "232;240;232") != null);
+}
+
+test "luminance ladder keeps think and output distinct" {
+    const t = std.testing;
+    var dark = Theme{ .mode = .truecolor, .scheme = .dark, .pal = .dark };
+    dark.rebuild();
+    try t.expect(!std.mem.eql(u8, dark.fg_think, dark.fg_dim));
+    try t.expect(!std.mem.eql(u8, dark.fg_think, dark.fg_output));
+    try t.expect(!std.mem.eql(u8, dark.fg_output, dark.fg_muted));
+    var light = Theme{ .mode = .truecolor, .scheme = .light, .pal = .light };
+    light.rebuild();
+    try t.expect(!std.mem.eql(u8, light.fg_think, light.fg_output));
+}
+
+test "rebuild after copy keeps color slices inside store" {
+    const t = std.testing;
+    var dest = Theme{ .mode = .truecolor, .scheme = .dark, .pal = .dark };
+    dest.rebuild();
+    var copy = dest;
+    copy.rebuild();
+    const lo = @intFromPtr(&copy.store);
+    const hi = lo + @sizeOf(@TypeOf(copy.store));
+    try t.expect(copy.fg_dim.len > 0);
+    try t.expect(@intFromPtr(copy.fg_dim.ptr) >= lo);
+    try t.expect(@intFromPtr(copy.fg_dim.ptr) < hi);
+    try t.expect(@intFromPtr(copy.fg_muted.ptr) >= lo);
+    try t.expect(@intFromPtr(copy.fg_think.ptr) >= lo);
+    try t.expect(@intFromPtr(copy.fg_output.ptr) >= lo);
 }

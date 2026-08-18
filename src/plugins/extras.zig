@@ -56,9 +56,17 @@ pub fn toolGitStatus(ctx: ?*anyopaque, arena: std.mem.Allocator, args: []const u
     return .{ .content = try std.fmt.allocPrint(arena, "Git status:\n{s}{s}", .{ status, diffstat }) };
 }
 
+pub fn slashGit(ctx: ?*anyopaque, args: []const u8) anyerror![]const u8 {
+    const self: *agentmod.Agent = @ptrCast(@alignCast(ctx orelse return error.NoAgent));
+    var arena = agentmod.util.Arena.init(self.alloc);
+    defer arena.deinit();
+    const r = try toolGitStatus(ctx, arena.allocator(), args);
+    return self.alloc.dupe(u8, r.content);
+}
+
 // =====================================================================
 // elicitation 插件:ask_user 工具——信息不足时向用户提问。
-// 极简语义:工具结果强提示模型"已向用户提问,等待回复",模型输出问题后停下。
+// 工具回执后 agent 主循环立刻停轮(不再把问题送回模型),用户下一条消息才是答案。
 // =====================================================================
 pub fn toolAskUser(ctx: ?*anyopaque, arena: std.mem.Allocator, args: []const u8) anyerror!toolsmod.Result {
     const self: *agentmod.Agent = @ptrCast(@alignCast(ctx.?));

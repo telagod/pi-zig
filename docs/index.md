@@ -12,8 +12,13 @@ piz 是一个极简的终端编码 agent，用 Zig 重写自 [pi](https://pi.dev
 - **Zig 标准库 + vendored stb**（读图）；正则和 glob 是自己的
 - **内置 Web UI**（`piz web`），pi 没有
 - **LSP 代码智能**（`lsp` 工具），接真实语言服务器查定义/引用/重命名影响面
-- **交互式权限门**、`/plan`、结构化 todo 工具，这些是 pi 明确声明不做的
+- **交互式权限门**、**OS sandbox**（`/sandbox workspace|strict`，bwrap）、`/plan`、结构化 todo 工具，这些是 pi 明确声明不做的
 - 插件是**编译期**的 Zig 函数表，不是运行时加载的 TypeScript 模块
+- **包可声明工具**（`pkg.json` `tools[]`），装包确认后模型可调，不必重编译
+- **可贴图**（Web 剪贴板 / TUI `Ctrl+V`），续会话从图文件回放
+- **`read` 带行号**；图片文件直接给 vision。搜索认目录级 `.gitignore`
+- **`edit` 可 `replaceAll`**，并会剥掉从 `read` 抄来的行号。写盘不得逃出工作区
+- **`ls` 默认不列 gitignored**；`grep` 可 `filesWithMatches`；`fetch_url` 拒内网
 - **默认只暴露 8 个核心工具**，其余按需开启（`--plugin` 或 settings.json）
 
 ## 快速开始
@@ -36,7 +41,7 @@ export DEEPSEEK_API_KEY=sk-... # 或写入 ~/.piz/auth.json
 ## 扩展
 
 - [Plugins](plugins.md) — 内置插件清单、钩子契约、如何新增一个插件
-- [Packages](packages.md) — 资源包（skills / prompts / AGENTS.md）与事件扩展
+- [Packages](packages.md) — 资源包（skills / prompts / AGENTS.md）、事件扩展、包声明工具
 - [Web plugins](web-plugins.md) — 给 Web UI 注入前端 JS/CSS
 - [dsh 对照札](dsh-mapping.md) — DeepSeek Harness 插件哲学与本仓钩子对照（可摘 / 不可摘）
 
@@ -44,6 +49,7 @@ export DEEPSEEK_API_KEY=sk-... # 或写入 ~/.piz/auth.json
 
 - [Sessions](sessions.md) — 会话存储、分支、JSONL 格式
 - [Architecture](architecture.md) — 模块划分、构建目标、主链路时序、测试约定
+- [Code review](code-review.md) — 自查走读:强项、弱项、改进优先级
 
 ## 与 pi 的关系
 

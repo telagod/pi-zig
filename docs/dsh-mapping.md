@@ -35,7 +35,7 @@ dsh 选事件域是改动的第一个决定。本仓对应如下。
 | `on_tool_result` | 工具结果回写前 | `tools/post-execute` | 同上，无 `next()` |
 | `on_compact` | 压缩成功 | 近 `ctx.compaction` 之后的观察 | 无独立 compaction seam |
 | `on_compact_failed` | 压缩失败 | 近 `agent/request-error` 救援 | 返回备用模型名，不是通用错误链 |
-| `on_user_message` | 用户提交 | 近 inbox 观察 | 不能改写/拒绝 |
+| `on_user_message` | 用户提交 | 近 inbox 改写 | 可替换进模型的文本；不能拒绝整条。首个非 null 胜出 |
 
 多个插件同钩：声明序执行。工具前后是 waterfall；其余 `?T` 钩子仍首胜。
 

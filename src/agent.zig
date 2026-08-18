@@ -5,9 +5,12 @@ pub const ai = @import("ai.zig");
 pub const cfgmod = @import("config.zig");
 const toolsmod = @import("tools.zig");
 const pluginsmod = @import("plugins.zig");
+const pkgsmod = @import("pkgs.zig");
+const compress = @import("compress.zig");
 const seams = @import("seams.zig");
 const httpcmod = @import("httpc.zig");
 const imgxmod = @import("imgx.zig");
+const sessionmod = @import("session.zig");
 
 /// 消息列表的预分配容量。
 ///
@@ -27,7 +30,7 @@ fn newMsgList(alloc: std.mem.Allocator) !std.array_list.Managed(ai.Message) {
     try msgs.ensureTotalCapacity(MESSAGES_PRECAP);
     return msgs;
 }
-/// 极简核心:单档——总 token 超 85% 窗口 → compact(增量边界 + cut point)。
+/// 极简核心:单档——总 token 超 85% 窗口 → compact(密图秒压,增量边界 + cut point)。
 /// 增强能力(工具输出预剪枝等)由内置插件承担(plugins.zig)。
 pub const CTX_HARD_PERCENT = 85;
 /// compact 时保留的最近消息预算(窗口 20%)
@@ -52,20 +55,7 @@ const MAX_FAKE_CALL_RETRIES = 2;
 
 /// 模型把工具调用写成正文时用的标记。都是各家的特殊 token 漏成了字面文本,
 /// 正常回答里不会出现。`｜` 是 U+FF5C 全角竖线,不是 ASCII `|`。
-const TEXT_TOOL_CALL_MARKERS = [_][]const u8{
-    "<｜｜DSML｜｜", // deepseek
-    "<|DSML|>",
-    "<｜tool▁calls▁begin｜>", // deepseek 另一种
-    "<|tool_calls_begin|>",
-};
-
-/// 正文里是否含伪造的工具调用标记;返回命中的那个,便于诊断。
-pub fn textToolCallMarker(text: []const u8) ?[]const u8 {
-    for (TEXT_TOOL_CALL_MARKERS) |m| {
-        if (std.mem.indexOf(u8, text, m) != null) return m;
-    }
-    return null;
-}
+pub const textToolCallMarker = ai.textToolCallMarker;
 
 /// 同一工具拿到**完全相同的输出**多少次后判定为空转。
 ///
@@ -178,12 +168,16 @@ fn runToolSlot(slot: *ToolSlot) void {
     // web 模式多 workspace 下这是实际的数据损坏:会话声明在 projB,
     // `write out.txt` 落进 projA(实测复现过)。
     toolsmod.setRoot(self.cwd);
+    toolsmod.setSandbox(self.cfg.default_sandbox);
     seams.setFs(self.fs);
     defer toolsmod.clearRoot();
-    if (t.ctx_handler) |h| {
-        slot.result = h(@ptrCast(self), self.alloc, slot.call.args) catch .{ .content = "tool crashed", .is_error = true };
+    defer toolsmod.clearSandbox();
+    if (t.payload.len > 0) {
+        slot.result = toolsmod.runPkgCommand(self.alloc, t.payload, slot.call.args) catch |err| toolsmod.crashResult(self.alloc, slot.call.name, err);
+    } else if (t.ctx_handler) |h| {
+        slot.result = h(@ptrCast(self), self.alloc, slot.call.args) catch |err| toolsmod.crashResult(self.alloc, slot.call.name, err);
     } else {
-        slot.result = t.handler(self.alloc, slot.call.args) catch .{ .content = "tool crashed", .is_error = true };
+        slot.result = t.handler(self.alloc, slot.call.args) catch |err| toolsmod.crashResult(self.alloc, slot.call.name, err);
     }
 }
 
@@ -322,6 +316,14 @@ pub const AgentCallbacks = struct {
 /// 并说清它是**原始工具输出**而非模型的总结 —— 不能让用户误以为模型作过判断。
 ///
 /// 只在 result.text 为空时填补。模型自己说了话就用它的。
+fn askUserQuestion(alloc: std.mem.Allocator, args: []const u8) []const u8 {
+    const v = std.json.parseFromSliceLeaky(std.json.Value, alloc, args, .{}) catch return "";
+    if (v != .object) return "";
+    const qv = v.object.get("question") orelse return "";
+    if (qv != .string) return "";
+    return qv.string;
+}
+
 fn salvageText(
     alloc: std.mem.Allocator,
     result: *ai.RunResult,
@@ -336,7 +338,7 @@ fn salvageText(
         .{ tool_name, output },
     ) catch return;
     result.text = text;
-    if (cbs.on_text) |f| f(cbs.ctx, text) catch {};
+    if (cbs.on_text) |f| f(cbs.ctx, text) catch |err| util.debugCatch("on_text.salvage", err);
 }
 
 /// 测试入口:不带回调地跑 salvageText,只验它对 result.text 的取舍。
@@ -363,6 +365,11 @@ pub const Agent = struct {
     title: ?[]const u8 = null,
     /// 最近一轮请求的真实 usage(压缩决策依据;null = 无数据)
     last_usage: ai.Usage = .{},
+    est_snap: usize = 0,
+    est_scale_num: usize = 1,
+    est_scale_den: usize = 1,
+    pkg_tools: []toolsmod.Tool = &.{},
+    pkg_tools_loaded: bool = false,
     /// 成功压缩次数(状态栏 ⊞N)
     compacts: usize = 0,
     /// 只读模式:不暴露工具,工具调用一律拒绝。
@@ -412,6 +419,8 @@ pub const Agent = struct {
         depth: usize = 0,
         /// 子 agent 的工具白名单。空 = 不额外收紧。
         tool_allow: []const []const u8 = &.{},
+        /// 思考等级。null = 配置默认。子 agent 传父的 think_level,才不会被配置默认打回高档。
+        think_level: ?cfgmod.ThinkLevel = null,
     };
 
     pub fn initOpts(alloc: std.mem.Allocator, cfg: *cfgmod.Config, provider_name: ?[]const u8, model_name: ?[]const u8, cwd: []const u8, opts: InitOptions) !Agent {
@@ -420,7 +429,7 @@ pub const Agent = struct {
         const url = try cfg.endpointUrl(resolved.provider);
         const think0 = cfgmod.clampThinkLevel(
             cfgmod.metaFor(resolved.provider, resolved.model),
-            cfg.default_think_level orelse .high,
+            opts.think_level orelse (cfg.default_think_level orelse .high),
         );
         // 启用集:调用方给了就用它,否则拷进程默认集。之后只改这个副本 ——
         // 从前 initOpts 里的 enable("skills") 改的是全局,会污染别的 Agent。
@@ -432,10 +441,19 @@ pub const Agent = struct {
             \\You are piz, a minimal coding agent running in a terminal.
             \\You do the work directly with your tools: read, write, edit, bash.
             \\Be concise. Act, don't chat. When done, state what you did in one short line.
+            \\read() prefixes each line with a line number. Never copy those prefixes into edit oldText/newText.
             \\Working directory: {s}
             \\
             \\
         , .{cwd});
+        if (cfg.default_sandbox != .off) {
+            try spw.writer.print(
+                \\OS sandbox: bash is confined to this working directory{s}.
+                \\Writes outside it via the shell will fail. Use write/edit for source files.
+                \\
+                \\
+            , .{if (cfg.default_sandbox == .strict) " and has no network" else ""});
+        }
         if (opts.read_only) {
             // 光说 "no tools" 不够:紧随其后的 "Keep going" 会推着模型
             // 自己想办法,于是它开始用**文本格式**伪造工具调用
@@ -480,7 +498,8 @@ pub const Agent = struct {
                 \\Use task to farm out independent, self-contained pieces of work and run them
                 \\in parallel — separate files to survey, separate questions to answer.
                 \\Give each one everything it needs: it starts with no memory of this conversation.
-                \\Keep the plan and the final judgement yourself; delegate the legwork.
+                \\Use workflow when later steps need earlier output: name the nodes, set needs, cite {id}.
+                \\Roles: scout / planner / reviewer / worker. Keep the plan and the final judgement yourself; delegate the legwork.
                 \\
                 \\
             );
@@ -595,10 +614,32 @@ pub const Agent = struct {
     }
 
     /// 本 Agent 当前能调的工具。只读或白名单未列则没有。
+    fn ensurePkgTools(self: *Agent) void {
+        if (self.pkg_tools_loaded) return;
+        self.pkg_tools_loaded = true;
+        if (self.read_only) return;
+        self.pkg_tools = pkgsmod.loadPkgTools(self.alloc, self.cwd) catch &.{};
+    }
+
     pub fn lookupTool(self: *const Agent, name: []const u8) ?*const toolsmod.Tool {
         if (self.read_only) return null;
-        if (!pluginsmod.exposesTool(self.plugins, self.tool_allow, name)) return null;
-        return self.find_tool(self.plugins, name);
+        if (pluginsmod.exposesTool(self.plugins, self.tool_allow, name)) {
+            if (self.find_tool(self.plugins, name)) |t| return t;
+        }
+        if (self.tool_allow.len > 0) {
+            var ok = false;
+            for (self.tool_allow) |n| {
+                if (std.mem.eql(u8, n, name)) {
+                    ok = true;
+                    break;
+                }
+            }
+            if (!ok) return null;
+        }
+        for (self.pkg_tools) |*t| {
+            if (std.mem.eql(u8, t.name, name)) return t;
+        }
+        return null;
     }
 
     /// 切换模型(per-session;kimi /model 式):按模型名找 provider,更新 provider/model/key/url。
@@ -678,7 +719,7 @@ pub const Agent = struct {
         return @import("compress.zig").hasVision(self.provider, self.model);
     }
 
-    pub fn estTokens(self: *const Agent) usize {
+    fn estTokensUnscaled(self: *const Agent) usize {
         var n: usize = estTokensOf(self.system_prompt);
         for (self.messages.items) |m| {
             // +16:每条消息的角色/包装开销(role、分隔符、tool_call_id 等)
@@ -689,7 +730,26 @@ pub const Agent = struct {
         // 工具定义每轮都全量重发,是上下文的一部分 —— 实测默认工具集 1024 token。
         // 漏掉它压缩就会晚触发,预算查询也会虚报余量。只读模式不发工具。
         if (!self.read_only) n += pluginsmod.toolDefsTokensFiltered(self.plugins, self.tool_allow);
+        if (!self.read_only) {
+            for (self.pkg_tools) |t| n += estTokensOf(t.name) + estTokensOf(t.desc) + estTokensOf(t.schema) + 8;
+        }
         return n;
+    }
+
+    pub fn estTokens(self: *const Agent) usize {
+        const raw = self.estTokensUnscaled();
+        if (self.est_scale_den == 0) return raw;
+        return raw * self.est_scale_num / self.est_scale_den;
+    }
+
+    fn calibrateEst(self: *Agent, actual_in: u64) void {
+        if (self.est_snap == 0 or actual_in == 0) return;
+        var num: usize = std.math.cast(usize, actual_in) orelse return;
+        var den = self.est_snap;
+        if (num > den * 2) num = den * 2;
+        if (den > num * 2) den = @max(num * 2, 1);
+        self.est_scale_num = @max(num, 1);
+        self.est_scale_den = den;
     }
 
     /// 单段文本的 token 估算。按 UTF-8 序列长度分档计权。
@@ -698,14 +758,42 @@ pub const Agent = struct {
     }
 
     /// 追加用户消息并跑完一轮(含工具循环)。
+    fn emitTurnEnd(self: *Agent) !void {
+        pluginsmod.runAfterTurn(@ptrCast(self));
+        if (self.cbs.on_turn_end) |f| try f(self.cbs.ctx);
+    }
+
     pub fn send(self: *Agent, user_text: []const u8) !ai.RunResult {
-        try self.messages.append(.{ .role = "user", .content = user_text });
+        return self.sendWithImage(user_text, null, "");
+    }
+
+    pub fn sendWithImage(self: *Agent, user_text: []const u8, image: ?[]const u8, mime_hint: []const u8) !ai.RunResult {
+        const text0 = pluginsmod.runUserMessage(@ptrCast(self), user_text) orelse user_text;
+        const text = if (text0.len > 0) text0 else if (image != null) "(image)" else text0;
+        if (image) |raw| {
+            if (raw.len > 0 and self.hasVision()) {
+                const max_dim = imgxmod.maxDimForContext(@intCast(self.ctxWindow()), self.provider.api);
+                if (imgxmod.process(self.alloc, raw, .{ .max_dim = max_dim })) |out| {
+                    try self.messages.append(.{
+                        .role = "user",
+                        .content = text,
+                        .image = out.data,
+                        .image_mime = if (out.mime.len > 0) out.mime else mime_hint,
+                        .image_w = out.w,
+                        .image_h = out.h,
+                        .image_file = sessionmod.persistImageFile(self.alloc, out.data, if (out.mime.len > 0) out.mime else mime_hint),
+                    });
+                    return self.continueTurn();
+                } else |_| {}
+            }
+        }
+        try self.messages.append(.{ .role = "user", .content = text });
         return self.continueTurn();
     }
 
     /// 基于现有历史继续(用于会话续载后提问)。
     pub fn continueTurn(self: *Agent) !ai.RunResult {
-        // 极简核心:插件钩子(prune 等)→ 85% 硬线 → 模型压缩
+        // 极简核心:插件钩子(prune/shake/snap)→ 85% 硬线 → 密图折页
         pluginsmod.runBeforeTurn(@ptrCast(self));
         const w0 = self.ctxWindow();
         if (self.estTokens() > w0 * CTX_HARD_PERCENT / 100) {
@@ -724,7 +812,7 @@ pub const Agent = struct {
                     if (self.cbs.on_notice) |f| {
                         var nb: [220]u8 = undefined;
                         const msg = std.fmt.bufPrint(&nb, "auto-compaction failed ({s}) — context is over budget and the next request may be rejected; try /compact or /new", .{outcome[0..@min(outcome.len, 100)]}) catch "auto-compaction failed — context is over budget";
-                        f(self.cbs.ctx, msg) catch {};
+                        f(self.cbs.ctx, msg) catch |err| util.debugCatch("on_notice.compact", err);
                     }
                 }
             }
@@ -755,13 +843,28 @@ pub const Agent = struct {
             var all = std.array_list.Managed(ai.Message).init(self.alloc);
             defer all.deinit();
             try all.append(.{ .role = "system", .content = self.system_prompt });
-            const compress = @import("compress.zig");
             for (self.messages.items) |m| try compress.appendForRequest(&all, m);
 
             // 工具定义(核心 + 插件;带真 JSON Schema)
             var tool_defs = std.array_list.Managed(ai.ToolDef).init(self.alloc);
             defer tool_defs.deinit();
+            self.ensurePkgTools();
             if (!self.read_only) try pluginsmod.appendToolDefsFiltered(self.plugins, self.tool_allow, &tool_defs);
+            if (!self.read_only) {
+                for (self.pkg_tools) |t| {
+                    if (self.tool_allow.len > 0) {
+                        var ok = false;
+                        for (self.tool_allow) |n| {
+                            if (std.mem.eql(u8, n, t.name)) {
+                                ok = true;
+                                break;
+                            }
+                        }
+                        if (!ok) continue;
+                    }
+                    try tool_defs.append(.{ .name = t.name, .desc = t.desc, .schema = t.schema });
+                }
+            }
 
             const cbs = ai.Callbacks{
                 .ctx = self.cbs.ctx,
@@ -773,6 +876,7 @@ pub const Agent = struct {
                 .on_connect = self.cbs.on_connect,
             };
             // 可变:断流重连额度用尽时要就地填 error_msg 说明「上面这段不完整」
+            self.est_snap = self.estTokensUnscaled();
             var result = try self.llm_run(
                 self.alloc,
                 self.alloc,
@@ -796,15 +900,19 @@ pub const Agent = struct {
                     });
                 }
                 self.cur_stream_fd.store(-1, .release);
-                if (self.cbs.on_turn_end) |f| try f(self.cbs.ctx);
+                try self.emitTurnEnd();
                 return error.Aborted;
             }
             last_result = result;
             if (result.usage.input != null or result.usage.output != null or result.usage.cache_read != null) {
                 self.last_usage = result.usage; // 供下一轮/下次 continueTurn 决策
+                if (result.usage.input) |inp| self.calibrateEst(inp);
             }
             if (result.error_msg != null) {
                 return result;
+            }
+            if (result.tool_calls.len == 0 and result.text.len == 0) {
+                result.text = try self.alloc.dupe(u8, "(empty reply — try again or /model)");
             }
             // 记录 assistant 消息
             try self.messages.append(.{
@@ -828,7 +936,7 @@ pub const Agent = struct {
                     if (self.cbs.on_notice) |f| {
                         var nb: [128]u8 = undefined;
                         const msg = std.fmt.bufPrint(&nb, "connection dropped mid-reply ({s}) — resuming ({d}/{d})", .{ why, stream_retries, MAX_STREAM_RESUMES }) catch "connection dropped — resuming";
-                        f(self.cbs.ctx, msg) catch {};
+                        f(self.cbs.ctx, msg) catch |err| util.debugCatch("on_notice.resume", err);
                     }
                     try self.messages.append(.{
                         .role = "user",
@@ -838,7 +946,7 @@ pub const Agent = struct {
                 }
                 // 重连额度用尽:把已有内容交出去,并说明它不完整
                 result.error_msg = try std.fmt.allocPrint(self.alloc, "connection kept dropping mid-reply ({s}); the reply above is incomplete", .{why});
-                if (self.cbs.on_turn_end) |f| try f(self.cbs.ctx);
+                try self.emitTurnEnd();
                 return result;
             }
 
@@ -857,7 +965,7 @@ pub const Agent = struct {
                     if (self.cbs.on_notice) |f| {
                         var nb: [160]u8 = undefined;
                         const msg = std.fmt.bufPrint(&nb, "the model wrote a tool call as text instead of calling a tool — asking it to answer directly ({d}/{d})", .{ fake_call_retries, MAX_FAKE_CALL_RETRIES }) catch "the model faked a tool call as text — retrying";
-                        f(self.cbs.ctx, msg) catch {};
+                        f(self.cbs.ctx, msg) catch |err| util.debugCatch("on_notice.fake_call", err);
                     }
                     try self.messages.append(.{
                         .role = "user",
@@ -870,11 +978,11 @@ pub const Agent = struct {
                 }
                 // 额度用尽:标记清楚,不要把标记当答复交出去
                 result.error_msg = "the model kept writing tool calls as text instead of calling tools; the reply above is not usable";
-                if (self.cbs.on_turn_end) |f| try f(self.cbs.ctx);
+                try self.emitTurnEnd();
                 return result;
             }
             if (result.tool_calls.len == 0) {
-                if (self.cbs.on_turn_end) |f| try f(self.cbs.ctx);
+                try self.emitTurnEnd();
                 return result;
             }
 
@@ -898,7 +1006,7 @@ pub const Agent = struct {
                     if (self.cbs.on_notice) |f| {
                         var nb: [200]u8 = undefined;
                         const msg = std.fmt.bufPrint(&nb, "the model called {s} with identical arguments {d} times — telling it to use the result it already has", .{ result.tool_calls[0].name, repeat_rounds + 1 }) catch "the model kept repeating one tool call — nudging it to answer";
-                        f(self.cbs.ctx, msg) catch {};
+                        f(self.cbs.ctx, msg) catch |err| util.debugCatch("on_notice.repeat", err);
                     }
                     try self.messages.append(.{
                         .role = "user",
@@ -912,10 +1020,10 @@ pub const Agent = struct {
                 if (self.cbs.on_notice) |f| {
                     var nb: [220]u8 = undefined;
                     const msg = std.fmt.bufPrint(&nb, "stopped: the model kept repeating {s} even after being told to stop — the tool results above are correct, the model is not using them", .{result.tool_calls[0].name}) catch "stopped: the model would not stop repeating one tool call";
-                    f(self.cbs.ctx, msg) catch {};
+                    f(self.cbs.ctx, msg) catch |err| util.debugCatch("on_notice.repeat_stop", err);
                 }
                 salvageText(self.alloc, &result, last_good_tool, last_good_output, self.cbs);
-                if (self.cbs.on_turn_end) |f| try f(self.cbs.ctx);
+                try self.emitTurnEnd();
                 return result;
             }
 
@@ -932,7 +1040,7 @@ pub const Agent = struct {
             for (result.tool_calls, 0..) |tc, i| {
                 slots[i] = .{ .call = tc, .agent = self };
                 if (self.cbs.on_tool_start) |f| {
-                    _ = f(self.cbs.ctx, tc.name, tc.args) catch {};
+                    _ = f(self.cbs.ctx, tc.name, tc.args) catch |err| util.debugCatch("on_tool_start", err);
                 }
                 if (self.cbs.on_require_permission) |perm| {
                     const allowed = perm(self.cbs.ctx, tc.name, tc.args) catch true;
@@ -1011,7 +1119,7 @@ pub const Agent = struct {
                 }
                 if (self.cbs.on_tool_end) |f| {
                     // 全量 content 给回调(web diff 卡/JSONL 需要完整输出;各调用方自行截断)
-                    _ = f(self.cbs.ctx, slot.call.name, tres.is_error, tres.content) catch {};
+                    _ = f(self.cbs.ctx, slot.call.name, tres.is_error, tres.content) catch |err| util.debugCatch("on_tool_end", err);
                 }
                 try self.messages.append(.{
                     .role = "tool",
@@ -1022,6 +1130,7 @@ pub const Agent = struct {
                 // user/assistant 消息上;tool 消息是纯文本)。data 由工具 dupe
                 // 到会话 arena,这里只引指针,安全。
                 if (tres.images) |imgs| {
+                    if (!self.hasVision()) continue;
                     for (imgs) |im| {
                         try self.messages.append(.{
                             .role = "user",
@@ -1030,12 +1139,38 @@ pub const Agent = struct {
                             .image_mime = im.mime,
                             .image_w = im.w,
                             .image_h = im.h,
+                            .image_file = sessionmod.persistImageFile(self.alloc, im.data, im.mime),
                         });
                     }
                 }
             }
+            // ask_user 是真停:工具已回执,不再把问题送回模型让它「自行决定」。
+            // 用户下一条消息才是答案。
+            var asked_user = false;
+            var asked_q: []const u8 = "";
+            for (slots) |slot| {
+                if (!slot.result.is_error and std.mem.eql(u8, slot.call.name, "ask_user")) {
+                    asked_user = true;
+                    asked_q = askUserQuestion(self.alloc, slot.call.args);
+                    break;
+                }
+            }
+            if (asked_user) {
+                if (self.cbs.on_notice) |f| {
+                    f(self.cbs.ctx, "ask_user: waiting for your next message") catch |err| util.debugCatch("on_notice.ask_user", err);
+                }
+                if (result.text.len == 0) {
+                    result.text = if (asked_q.len > 0)
+                        try std.fmt.allocPrint(self.alloc, "{s}", .{asked_q})
+                    else
+                        try self.alloc.dupe(u8, "Waiting for your answer.");
+                }
+                try self.emitTurnEnd();
+                return result;
+            }
             // 工具批次结束后跑一次 before_turn 钩子(它会改 messages,不能在并行区跑)
             pluginsmod.runBeforeTurn(@ptrCast(self));
+            // 会话可在此落盘,但 after_turn 只在整轮结束时跑,免得用量记两遍。
             if (self.cbs.on_turn_end) |f| try f(self.cbs.ctx);
 
             // 输出空转:同一份成功输出被拿到第 MAX_SAME_OUTPUT 次。
@@ -1046,7 +1181,7 @@ pub const Agent = struct {
                 if (!nudged_once) {
                     nudged_once = true;
                     if (self.cbs.on_notice) |f| {
-                        f(self.cbs.ctx, "the same tool output came back 3 times — telling the model to answer from what it has") catch {};
+                        f(self.cbs.ctx, "the same tool output came back 3 times — telling the model to answer from what it has") catch |err| util.debugCatch("on_notice.same_output", err);
                     }
                     try self.messages.append(.{
                         .role = "user",
@@ -1055,10 +1190,10 @@ pub const Agent = struct {
                     continue;
                 }
                 if (self.cbs.on_notice) |f| {
-                    f(self.cbs.ctx, "stopped: the model kept re-running commands that return the same output — the results above are correct") catch {};
+                    f(self.cbs.ctx, "stopped: the model kept re-running commands that return the same output — the results above are correct") catch |err| util.debugCatch("on_notice.same_output_stop", err);
                 }
                 salvageText(self.alloc, &last_result, last_good_tool, last_good_output, self.cbs);
-                if (self.cbs.on_turn_end) |f| try f(self.cbs.ctx);
+                try self.emitTurnEnd();
                 return last_result;
             }
         }
@@ -1081,12 +1216,12 @@ pub const Agent = struct {
         return true;
     }
 
-    /// 压缩历史:让模型总结,以单条消息替换。
+    /// 压缩历史:密图 + 摘录替换被裁段,不调模型。
     pub fn compact(self: *Agent) ![]const u8 {
-        // omp cut point(先算,摘要请求只发将被替换的 [0..cut),保留区不总结——更快更省):
-        // - 边界语义:只总结上次压缩后的增量(boundary = 最后一个旧摘要之后)——迭代压缩"秒"
-        // - 增量 ≤ 保留预算(20% 窗口)则全保留,不调模型(无事可总结)
-        // - 切点只落在 user/assistant 消息上(绝不切 toolResult),旧摘要不计预算(新摘要替代之)
+        // 折页切点(不调模型):
+        // - 只折上次压缩后的增量(boundary = 最后一个旧摘要之后)
+        // - 增量 ≤ 保留预算(20% 窗口)则全保留
+        // - 切点只落在 user/assistant,不切断 tool 对
         const w = self.ctxWindow();
         // 保留预算按 token 算,不再是「token × 4 当字节」—— 后者对中文会把
         // 20% 的窗口预算缩成实际约 15%,压缩后保留的上下文比设计的少。
@@ -1119,43 +1254,8 @@ pub const Agent = struct {
         }
         if (!has_content) return "(Nothing new to summarize; recent context already kept.)";
 
-        // 摘要请求:system + previous summary + [0..cut) + 总结指令(保留区不进请求)
-        var all = std.array_list.Managed(ai.Message).init(self.alloc);
-        defer all.deinit();
-        try all.append(.{ .role = "system", .content = self.system_prompt });
-        for (self.messages.items[0..cut]) |m| {
-            if (std.mem.eql(u8, m.role, "system") and std.mem.startsWith(u8, m.content, "(Conversation compacted")) {
-                // previous summary 以用户上下文注入(omp 分级摘要思路)
-                try all.append(.{ .role = "user", .content = try std.fmt.allocPrint(self.alloc, "Previous summary of this conversation:\n{s}", .{m.content}) });
-            } else {
-                try all.append(m);
-            }
-        }
-        try all.append(.{
-            .role = "user",
-            .content = "Compress the conversation so far into a single concise summary. Preserve all decisions, file paths, commands, tool results, and unfinished work. Output only the summary.",
-        });
-
-        // 摘要请求超窗兜底(codex 式):估算超窗则从头删消息重试
-        var result = ai.RunResult{};
-        var attempt: usize = 0;
-        while (attempt < 5) : (attempt += 1) {
-            var req_tokens: usize = estTokensOf(self.system_prompt);
-            for (all.items) |m| req_tokens += estTokensOf(m.content) + 16;
-            if (req_tokens <= w) break; // 窗口内,直接发
-            if (all.items.len <= 3) break; // 删无可删
-            _ = all.orderedRemove(1); // 删最旧历史(保 system 与总结指令)
-        }
-        result = try self.llm_run(self.alloc, self.alloc, self.provider, self.key, self.url, self.model, all.items, &.{}, self.llmOpts(.{ .cache_key = self.cwd }));
-        if (result.error_msg != null) {
-            // compact 韧性:插件提供备用模型时重试一次
-            if (pluginsmod.compactFallbackModel(@ptrCast(self))) |fb| {
-                result = try self.llm_run(self.alloc, self.alloc, self.provider, self.key, self.url, fb, all.items, &.{}, self.llmOpts(.{ .cache_key = self.cwd }));
-            }
-        }
-        if (result.error_msg != null) return result.error_msg.?;
+        const fold = try compress.compactHistory(self.alloc, self.messages.items[0..cut], self.provider.api, self.hasVision());
         self.compacts += 1;
-        // 新历史:新 summary 置前 + [cut..end] 非旧摘要消息
         var keep = std.array_list.Managed(ai.Message).init(self.alloc);
         defer keep.deinit();
         for (self.messages.items[cut..]) |m| {
@@ -1165,12 +1265,22 @@ pub const Agent = struct {
         self.messages.clearRetainingCapacity();
         try self.messages.append(.{
             .role = "system",
-            .content = try std.fmt.allocPrint(self.alloc, "(Conversation compacted. Summary:)\n{s}", .{result.text}),
+            .content = try std.fmt.allocPrint(self.alloc, "(Conversation compacted. Summary:)\n{s}", .{fold.summary}),
         });
+        if (fold.image) |img| {
+            try self.messages.append(.{
+                .role = "user",
+                .content = "[Snapcompact frame]",
+                .image = img,
+                .image_mime = "image/png",
+                .image_w = fold.width,
+                .image_h = fold.height,
+                .image_file = sessionmod.persistImageFile(self.alloc, img, "image/png"),
+            });
+        }
         try self.messages.appendSlice(keep.items);
-        // 压缩成功 → 插件钩子(跨会话记忆复用摘要,零额外模型调用)
-        pluginsmod.runAfterCompact(@ptrCast(self), result.text);
-        return result.text;
+        pluginsmod.runAfterCompact(@ptrCast(self), fold.summary);
+        return fold.summary;
     }
 };
 
@@ -1255,6 +1365,21 @@ test "token estimate handles mixed and multibyte content" {
 
     // 空串为 0,不 panic
     try t.expectEqual(@as(usize, 0), Agent.estTokensOf(""));
+}
+
+test "calibrateEst clamps scale to 2x" {
+    const t = std.testing;
+    var agent: Agent = undefined;
+    agent.est_snap = 100;
+    agent.est_scale_num = 1;
+    agent.est_scale_den = 1;
+    agent.calibrateEst(400);
+    try t.expectEqual(@as(usize, 200), agent.est_scale_num);
+    try t.expectEqual(@as(usize, 100), agent.est_scale_den);
+    agent.est_snap = 100;
+    agent.calibrateEst(10);
+    try t.expectEqual(@as(usize, 10), agent.est_scale_num);
+    try t.expectEqual(@as(usize, 20), agent.est_scale_den);
     // 非法 UTF-8 不 panic(按单字节推进)
     try t.expect(Agent.estTokensOf("\xff\xfe\xfd") <= 3);
 }
@@ -1306,6 +1431,44 @@ test "compact is instant when nothing new to summarize" {
     const r = try agent.compact();
     try t.expect(std.mem.indexOf(u8, r, "Nothing new") != null);
     try t.expectEqual(@as(usize, 2), agent.messages.items.len); // 历史未动
+}
+
+test "compact is mechanical snap without llm" {
+    const t = std.testing;
+    try util.testInit();
+    var arena = util.Arena.init(t.allocator);
+    defer arena.deinit();
+    var cfg = cfgmod.Config{ .arena = &arena };
+    var provs = [_]cfgmod.Provider{.{ .name = "mock", .api = .openai_completions, .base_url = "http://127.0.0.1/v1" }};
+    cfg.providers = &provs;
+    var agent = try Agent.init(arena.allocator(), &cfg, "mock", "mock-model", "/tmp");
+    agent.llm_run = struct {
+        fn boom(
+            _: std.mem.Allocator,
+            _: std.mem.Allocator,
+            _: *const cfgmod.Provider,
+            _: ?[]const u8,
+            _: []const u8,
+            _: []const u8,
+            _: []const ai.Message,
+            _: []const ai.ToolDef,
+            _: ai.Options,
+        ) anyerror!ai.RunResult {
+            return error.UnexpectedLlm;
+        }
+    }.boom;
+    for (0..2) |_| {
+        try agent.messages.append(.{ .role = "system", .content = "(Conversation compacted. Summary:)\n" ++ ("s" ** (250 * 1024)) });
+    }
+    for (0..3) |i| {
+        try agent.messages.append(.{ .role = "user", .content = try std.fmt.allocPrint(arena.allocator(), "work item {d} {s}", .{ i, "w" ** (60 * 1024) }) });
+    }
+    const r = try agent.compact();
+    try t.expect(std.mem.indexOf(u8, r, "[Snapcompact]") != null);
+    try t.expect(std.mem.indexOf(u8, r, "INTENTS") != null);
+    try t.expect(std.mem.indexOf(u8, r, "s" ** 100) == null);
+    try t.expect(agent.messages.items.len >= 2);
+    try t.expect(std.mem.startsWith(u8, agent.messages.items[0].content, "(Conversation compacted"));
 }
 
 test "agent undo" {
@@ -1560,14 +1723,12 @@ test "concurrent writes to distinct files run in parallel and none is lost" {
     var cfg = cfgmod.Config{ .arena = &arena };
     var provs = [_]cfgmod.Provider{.{ .name = "mock", .api = .openai_completions, .base_url = "http://127.0.0.1:1", .api_key = "k" }};
     cfg.providers = &provs;
-    var agent = try Agent.init(a, &cfg, "mock", "m", "/tmp");
 
     var td = std.testing.tmpDir(.{});
     defer td.cleanup();
     const cwd_abs = try std.process.currentPathAlloc(util.io, a);
-    // 绝对路径:工具的相对路径现在相对 Agent.cwd 解析,而这个测试关心的是
-    // 并发写锁契约,不该被 cwd 语义牵连。
     const base = try std.fmt.allocPrint(a, "{s}/.zig-cache/tmp/{s}", .{ cwd_abs, td.sub_path[0..] });
+    var agent = try Agent.init(a, &cfg, "mock", "m", base);
 
     const N = 6;
     // 建 N 个文件,各写不同内容
@@ -1590,6 +1751,7 @@ test "concurrent writes to distinct files run in parallel and none is lost" {
 
     // 每个文件的内容都必须是自己那份 —— 丢写或串写都会在这里暴露
     for (0..N) |i| {
+        try t.expect(!slots[i].result.is_error);
         const p = try std.fmt.allocPrint(a, "{s}/f{d}.txt", .{ base, i });
         const want = try std.fmt.allocPrint(a, "C{d}", .{i});
         const got = try std.Io.Dir.cwd().readFileAlloc(util.io, p, a, .limited(64));
@@ -1606,13 +1768,13 @@ test "concurrent writes to the same file serialize without losing content" {
     var cfg = cfgmod.Config{ .arena = &arena };
     var provs = [_]cfgmod.Provider{.{ .name = "mock", .api = .openai_completions, .base_url = "http://127.0.0.1:1", .api_key = "k" }};
     cfg.providers = &provs;
-    var agent = try Agent.init(a, &cfg, "mock", "m", "/tmp");
 
     var td = std.testing.tmpDir(.{});
     defer td.cleanup();
-    // 绝对路径:工具的相对路径现在相对 Agent.cwd,而这个测试关心的是写锁契约
     const cwd_abs2 = try std.process.currentPathAlloc(util.io, a);
-    const p = try std.fmt.allocPrint(a, "{s}/.zig-cache/tmp/{s}/shared.txt", .{ cwd_abs2, td.sub_path[0..] });
+    const base2 = try std.fmt.allocPrint(a, "{s}/.zig-cache/tmp/{s}", .{ cwd_abs2, td.sub_path[0..] });
+    var agent = try Agent.init(a, &cfg, "mock", "m", base2);
+    const p = try std.fmt.allocPrint(a, "{s}/shared.txt", .{base2});
 
     // 4 个线程写同一文件:锁保证逐个完成,最终内容是其中某一个的完整内容,
     // 绝不能是两次写交错出的混合体。
@@ -1631,6 +1793,7 @@ test "concurrent writes to the same file serialize without losing content" {
     for (0..N) |i| ths[i] = try std.Thread.spawn(.{}, runToolSlot, .{&slots[i]});
     for (&ths) |th| th.join();
 
+    try t.expect(!slots[0].result.is_error);
     const got = try std.Io.Dir.cwd().readFileAlloc(util.io, p, a, .limited(64));
     // 必须完整等于某一个写入值(而非交错产物)
     var matched = false;
@@ -1639,4 +1802,105 @@ test "concurrent writes to the same file serialize without losing content" {
         if (std.mem.eql(u8, got, cand)) matched = true;
     }
     try t.expect(matched);
+}
+
+test "tool handler error surfaces the error name" {
+    const t = std.testing;
+    try util.testInit();
+    var arena = util.Arena.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var cfg = cfgmod.Config{ .arena = &arena };
+    var provs = [_]cfgmod.Provider{.{ .name = "mock", .api = .openai_completions, .base_url = "http://127.0.0.1:1", .api_key = "k" }};
+    cfg.providers = &provs;
+    var agent = try Agent.init(a, &cfg, "mock", "m", "/tmp");
+
+    const boom = struct {
+        fn handler(_: std.mem.Allocator, _: []const u8) anyerror!toolsmod.Result {
+            return error.FileNotFound;
+        }
+    }.handler;
+    const tool = toolsmod.Tool{ .name = "boom", .desc = "boom", .handler = boom };
+    var slot = ToolSlot{ .call = .{ .id = "1", .name = "boom", .args = "{}" }, .agent = &agent, .tool = &tool };
+    runToolSlot(&slot);
+    try t.expect(slot.result.is_error);
+    try t.expectEqualStrings("tool crashed (boom): FileNotFound", slot.result.content);
+
+    const boom_ctx = struct {
+        fn handler(_: ?*anyopaque, _: std.mem.Allocator, _: []const u8) anyerror!toolsmod.Result {
+            return error.AccessDenied;
+        }
+    }.handler;
+    const tool_ctx = toolsmod.Tool{ .name = "boom_ctx", .desc = "boom", .handler = boom, .ctx_handler = boom_ctx };
+    var slot_ctx = ToolSlot{ .call = .{ .id = "2", .name = "boom_ctx", .args = "{}" }, .agent = &agent, .tool = &tool_ctx };
+    runToolSlot(&slot_ctx);
+    try t.expect(slot_ctx.result.is_error);
+    try t.expectEqualStrings("tool crashed (boom_ctx): AccessDenied", slot_ctx.result.content);
+}
+
+test "ask_user stops the turn without another model call" {
+    const t = std.testing;
+    try util.testInit();
+    pluginsmod.resetEnabledForTest();
+    var arena = util.Arena.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var cfg = cfgmod.Config{ .arena = &arena };
+    var provs = [_]cfgmod.Provider{.{ .name = "mock", .api = .openai_completions, .base_url = "http://127.0.0.1:1", .api_key = "k" }};
+    cfg.providers = &provs;
+    var agent = try Agent.init(a, &cfg, "mock", "m", "/tmp");
+    agent.plugins = pluginsmod.withEnabled(agent.plugins, "elicitation");
+    const Hook = struct {
+        var calls: usize = 0;
+        var noticed: bool = false;
+        fn notice(_: ?*anyopaque, text: []const u8) anyerror!void {
+            if (std.mem.indexOf(u8, text, "ask_user") != null) noticed = true;
+        }
+        fn run(
+            alloc: std.mem.Allocator,
+            _: std.mem.Allocator,
+            _: *const cfgmod.Provider,
+            _: ?[]const u8,
+            _: []const u8,
+            _: []const u8,
+            _: []const ai.Message,
+            _: []const ai.ToolDef,
+            _: ai.Options,
+        ) anyerror!ai.RunResult {
+            calls += 1;
+            if (calls > 1) return .{ .text = "should-not-happen" };
+            const tcs = try alloc.alloc(ai.ToolCall, 1);
+            tcs[0] = .{ .id = "c1", .name = "ask_user", .args = "{\"question\":\"which port?\"}" };
+            return .{ .text = "", .tool_calls = tcs };
+        }
+    };
+    Hook.calls = 0;
+    Hook.noticed = false;
+    agent.cbs = .{ .on_notice = Hook.notice };
+    agent.llm_run = Hook.run;
+    const r = try agent.send("need a port");
+    try t.expectEqual(@as(usize, 1), Hook.calls);
+    try t.expect(Hook.noticed);
+    try t.expectEqualStrings("which port?", r.text);
+    try t.expect(agent.messages.items.len >= 3);
+    const last = agent.messages.items[agent.messages.items.len - 1];
+    try t.expectEqualStrings("tool", last.role);
+    try t.expect(std.mem.indexOf(u8, last.content, "which port?") != null);
+}
+
+test "initOpts uses provided think_level instead of config default" {
+    const t = std.testing;
+    try util.testInit();
+    var arena = util.Arena.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var cfg = cfgmod.Config{ .arena = &arena, .default_think_level = .high };
+    var models = [_][]const u8{"m"};
+    var metas = [_]cfgmod.ModelMeta{.{ .reasoning = true }};
+    var provs = [_]cfgmod.Provider{.{ .name = "mock", .api = .openai_completions, .base_url = "http://127.0.0.1:1", .api_key = "k", .models = &models, .model_metas = &metas }};
+    cfg.providers = &provs;
+    const child = try Agent.initOpts(a, &cfg, "mock", "m", "/tmp", .{ .think_level = .low });
+    try t.expect(child.think_level == .low);
+    const def = try Agent.initOpts(a, &cfg, "mock", "m", "/tmp", .{});
+    try t.expect(def.think_level == .high);
 }

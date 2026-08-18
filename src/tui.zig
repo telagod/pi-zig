@@ -9,14 +9,11 @@
 //      cwd. Model is never dropped; cwd is truncated, not omitted.
 //   B. Status card: on-demand via /status only — never cell 0 at startup.
 //   C. Turn blocks (paint-time, never baked into cell text):
-//        user      indent 0, bold, bar ▎ + semantic bg band to screen edge
-//                  (theme.userMessageBg, pi-aligned)
-//        thought   indent 2, dim italic (Ctrl+T → one `· thought` line)
-//        assistant indent 2, normal, no bar; siblings merge
-//        tools     indent 4, ▸ bold name + dim preview + status on one line;
-//                  title row bg by status (pending/ok/err, pi-aligned); folded
-//                  body head + dim `· (N more lines, ctrl+o)` tail
-//                  expanded body indent 6 │ / last └
+//        user      indent 0, bold, bar ▎ + bg — the request
+//        assistant indent 2, normal, no bar — the answer
+//        thought   indent 4, ┆ dim italic (Ctrl+T → `┆ thought`)
+//        tools     indent 4, ▸ bold name + dim preview + status bg
+//                  output indent 6 │ / └ dim; err output uses error ink
 //      One blank between top-level blocks; zero inside a tool group.
 //
 // A tool is one cell. Folded paint is one tight line; Ctrl+O expands the
@@ -43,6 +40,16 @@ const ANSI_ITALIC = "\x1b[3m";
 
 const theme_mod = @import("theme.zig");
 const markdown = @import("markdown.zig");
+const slash = @import("tui_slash.zig");
+const measure = @import("tui_measure.zig");
+const footer = @import("tui_footer.zig");
+const keys = @import("tui_keys.zig");
+const draw = @import("tui_draw.zig");
+const filesmod = @import("core").tools_files;
+const types = @import("tui_types.zig");
+const emit = @import("tui_emit.zig");
+const tui_flow = @import("tui_flow.zig");
+const tui_input = @import("tui_input.zig");
 pub const Theme = theme_mod.Theme;
 pub const ColorMode = theme_mod.ColorMode;
 
@@ -51,6 +58,10 @@ pub var theme: Theme = .{};
 
 pub fn applyTheme(name: []const u8) void {
     theme = Theme.resolve(name);
+    // resolve() 的色码切片指向临时 store;赋值后再 rebuild,钉到全局 store。
+    theme.rebuild();
+    footer.attachTheme(&theme);
+    emit.attachTheme(&theme);
 }
 
 /// Codex EnableAlternateScroll — wheel → arrows, drag-select stays native.
@@ -58,230 +69,55 @@ const ENTER_ALT_SCROLL = "\x1b[?1007h";
 const LEAVE_ALT_SCROLL = "\x1b[?1007l";
 
 /// Codex session header 内宽上限。见 history_cell.rs SESSION_HEADER_MAX_INNER_WIDTH。
-pub const CARD_MAX_INNER: usize = 56;
+pub const CARD_MAX_INNER = footer.CARD_MAX_INNER;
 
-pub const CellKind = enum {
-    session_header,
-    status_card,
-    user,
-    think,
-    assistant,
-    tool,
-    tool_end,
-    chrome,
-};
+pub const CellKind = types.CellKind;
+pub const ToolStatus = types.ToolStatus;
+pub const ToolMeta = types.ToolMeta;
 
-pub const ToolStatus = enum { running, ok, err };
+const FlowSt = tui_flow.FlowSt;
 
-/// Structured tool turn. Body is stored always; painted only when unfolded.
-pub const ToolMeta = struct {
-    name: []u8,
-    preview: []u8,
-    status: ToolStatus = .running,
-    bytes: usize = 0,
-    lines: usize = 0,
-    start_ms: i64 = 0,
-    elapsed_ms: i64 = 0,
-    folded: bool = true,
-    body: std.array_list.Managed(u8),
+const FlowNode = tui_flow.FlowNode;
 
-    fn deinit(self: *ToolMeta, alloc: std.mem.Allocator) void {
-        alloc.free(self.name);
-        alloc.free(self.preview);
-        self.body.deinit();
-    }
-};
+pub const Cell = types.Cell;
+pub const CardFields = types.CardFields;
 
-/// One transcript item. `text` never contains paint-time gutters or indent.
-pub const Cell = struct {
-    kind: CellKind,
-    text: std.array_list.Managed(u8),
-    color: []const u8 = "",
-    card: ?CardFields = null,
-    tool: ?ToolMeta = null,
-};
+const gapBetween = emit.gapBetween;
+const gutter = emit.gutter;
+const toolRowCount = emit.toolRowCount;
+const wrapRowCount = emit.wrapRowCount;
+const emitCell = emit.emitCell;
+const emitComposer = emit.emitComposer;
+const emitDocLines = emit.emitDocLines;
+const classifyThink = emit.classifyThink;
+const thinkColor = emit.thinkColor;
+pub const thinkLabel = emit.thinkLabel;
+const countContentLines = emit.countContentLines;
+const flowGoalPreview = emit.flowGoalPreview;
+const wrapCursor = emit.wrapCursor;
+const cellRowCount = emit.cellRowCount;
+const gutterInner = emit.gutterInner;
+const thinkRowCount = emit.thinkRowCount;
+const joinFit = measure.joinFit;
 
-pub const CardFields = struct {
-    version: []u8,
-    model: []u8,
-    think: []u8,
-    cwd: []u8,
-    session: []u8,
-    perms: []u8 = &.{},
-    context: []u8 = &.{},
-    usage: []u8 = &.{},
+const CsiKey = keys.CsiKey;
+const WheelDir = keys.WheelDir;
+const consumeSameCsi = keys.consumeSameCsi;
+const sgrWheel = keys.sgrWheel;
+const classifyCsi = keys.classifyCsi;
 
-    fn deinit(self: CardFields, alloc: std.mem.Allocator) void {
-        alloc.free(self.version);
-        alloc.free(self.model);
-        alloc.free(self.think);
-        alloc.free(self.cwd);
-        alloc.free(self.session);
-        alloc.free(self.perms);
-        alloc.free(self.context);
-        alloc.free(self.usage);
-    }
-};
-
-pub const SessionInfo = struct {
-    version: []const u8,
-    model: []const u8,
-    think: []const u8,
-    cwd: []const u8,
-    session: []const u8,
-};
-
-pub const StatusInfo = struct {
-    version: []const u8,
-    model: []const u8,
-    think: []const u8,
-    cwd: []const u8,
-    session: []const u8,
-    perms: []const u8,
-    context: []const u8,
-    usage: []const u8,
-};
+pub const SessionInfo = footer.SessionInfo;
+pub const StatusInfo = footer.StatusInfo;
 
 /// 选择器一行。label 是看见的,value 是确认后拼进斜杠命令的参数。
-pub const PickerItem = struct {
-    label: []const u8,
-    hint: []const u8 = "",
-    value: []const u8,
-};
-
-/// Slash catalog row. `cmd` is `/name` or `/name [args]`; ranking uses the name.
-pub const SlashItem = struct {
-    cmd: []const u8,
-    desc: []const u8,
-};
-
-pub const SlashRank = struct {
-    item: usize,
-    score: u32,
-    kind: u8, // 0 prefix, 1 fuzzy subsequence, 2 description keyword
-    hl_from: usize,
-    hl_len: usize,
-};
-
-/// Name token of a slash catalog row (`/model [m]` → `model`).
-pub fn slashName(cmd: []const u8) []const u8 {
-    var s = cmd;
-    if (s.len > 0 and s[0] == '/') s = s[1..];
-    if (std.mem.indexOfScalar(u8, s, ' ')) |i| return s[0..i];
-    return s;
-}
-
-/// Query for the composer slash picker. `null` = not in slash mode (no `/`,
-/// or already has arguments after a space).
-pub fn slashQuery(input: []const u8) ?[]const u8 {
-    if (input.len == 0 or input[0] != '/') return null;
-    const rest = input[1..];
-    if (std.mem.indexOfScalar(u8, rest, ' ') != null) return null;
-    return rest;
-}
-
-fn asciiLower(c: u8) u8 {
-    return if (c >= 'A' and c <= 'Z') c + 32 else c;
-}
-
-fn startsWithInsensitive(hay: []const u8, needle: []const u8) bool {
-    if (needle.len > hay.len) return false;
-    for (needle, 0..) |c, i| {
-        if (asciiLower(hay[i]) != asciiLower(c)) return false;
-    }
-    return true;
-}
-
-fn indexOfInsensitive(hay: []const u8, needle: []const u8) ?usize {
-    if (needle.len == 0) return 0;
-    if (needle.len > hay.len) return null;
-    var i: usize = 0;
-    while (i + needle.len <= hay.len) : (i += 1) {
-        if (startsWithInsensitive(hay[i..], needle)) return i;
-    }
-    return null;
-}
-
-fn fuzzySubseq(hay: []const u8, needle: []const u8) ?struct { from: usize, to: usize } {
-    if (needle.len == 0) return .{ .from = 0, .to = 0 };
-    var i: usize = 0;
-    var first: ?usize = null;
-    var last: usize = 0;
-    for (hay, 0..) |c, hi| {
-        if (i < needle.len and asciiLower(c) == asciiLower(needle[i])) {
-            if (first == null) first = hi;
-            last = hi + 1;
-            i += 1;
-        }
-    }
-    if (i != needle.len) return null;
-    return .{ .from = first.?, .to = last };
-}
-
-/// Rank slash commands: prefix match > fuzzy subsequence > description keyword.
-/// Empty query lists the catalog in table order. Writes into `out`, returns count.
-pub fn rankSlash(items: []const SlashItem, query: []const u8, out: []SlashRank) usize {
-    var n: usize = 0;
-    if (query.len == 0) {
-        for (items, 0..) |_, i| {
-            if (n >= out.len) break;
-            out[n] = .{ .item = i, .score = 0, .kind = 0, .hl_from = 0, .hl_len = 0 };
-            n += 1;
-        }
-        return n;
-    }
-    for (items, 0..) |it, i| {
-        if (n >= out.len) break;
-        const name = slashName(it.cmd);
-        if (startsWithInsensitive(name, query)) {
-            const exact: u32 = if (name.len == query.len) 1000 else 0;
-            out[n] = .{
-                .item = i,
-                .score = 2000 + exact - @as(u32, @intCast(@min(name.len, 500))),
-                .kind = 0,
-                .hl_from = 0,
-                .hl_len = query.len,
-            };
-            n += 1;
-            continue;
-        }
-        if (fuzzySubseq(name, query)) |span| {
-            out[n] = .{
-                .item = i,
-                .score = 1000 - @as(u32, @intCast(@min(span.to - span.from, 500))),
-                .kind = 1,
-                .hl_from = span.from,
-                .hl_len = span.to - span.from,
-            };
-            n += 1;
-            continue;
-        }
-        if (indexOfInsensitive(it.desc, query)) |at| {
-            out[n] = .{
-                .item = i,
-                .score = 100,
-                .kind = 2,
-                .hl_from = at,
-                .hl_len = query.len,
-            };
-            n += 1;
-        }
-    }
-    var a: usize = 0;
-    while (a + 1 < n) : (a += 1) {
-        var b = a + 1;
-        while (b < n) : (b += 1) {
-            const less = out[b].kind < out[a].kind or
-                (out[b].kind == out[a].kind and out[b].score > out[a].score);
-            if (less) {
-                const tmp = out[a];
-                out[a] = out[b];
-                out[b] = tmp;
-            }
-        }
-    }
-    return n;
-}
+pub const PickerItem = slash.PickerItem;
+pub const SlashItem = slash.SlashItem;
+pub const SlashRank = slash.SlashRank;
+pub const Picker = slash.Picker;
+pub const slashName = slash.slashName;
+pub const slashQuery = slash.slashQuery;
+pub const rankSlash = slash.rankSlash;
+const indexOfInsensitive = slash.indexOfInsensitive;
 
 fn slashDisplayRows(input: []const u8, items: []const SlashItem, height: usize) usize {
     const q = slashQuery(input) orelse return 0;
@@ -291,601 +127,22 @@ fn slashDisplayRows(input: []const u8, items: []const SlashItem, height: usize) 
     return @min(n, @max(1, height / 3));
 }
 
-/// `/permissions` `/model` `/think` 的键盘选择器。独占输入,不进 composer。
-pub const Picker = struct {
-    cmd: []u8,
-    title: []u8,
-    items: []Item,
-    sel: usize = 0,
-    scroll: usize = 0,
+pub const FooterState = footer.FooterState;
 
-    pub const Item = struct {
-        label: []u8,
-        hint: []u8,
-        value: []u8,
-    };
+pub const footerHint = footer.footerHint;
 
-    pub fn init(alloc: std.mem.Allocator, cmd: []const u8, title: []const u8, items: []const PickerItem, selected: usize) !Picker {
-        const owned = try alloc.alloc(Item, items.len);
-        errdefer alloc.free(owned);
-        var n: usize = 0;
-        errdefer {
-            var j: usize = 0;
-            while (j < n) : (j += 1) {
-                alloc.free(owned[j].label);
-                alloc.free(owned[j].hint);
-                alloc.free(owned[j].value);
-            }
-        }
-        for (items, 0..) |it, i| {
-            const label = try alloc.dupe(u8, it.label);
-            errdefer alloc.free(label);
-            const hint = try alloc.dupe(u8, it.hint);
-            errdefer alloc.free(hint);
-            const value = try alloc.dupe(u8, it.value);
-            errdefer alloc.free(value);
-            owned[i] = .{ .label = label, .hint = hint, .value = value };
-            n += 1;
-        }
-        const cmd_owned = try alloc.dupe(u8, cmd);
-        errdefer alloc.free(cmd_owned);
-        const title_owned = try alloc.dupe(u8, title);
-        errdefer alloc.free(title_owned);
-        return .{
-            .cmd = cmd_owned,
-            .title = title_owned,
-            .items = owned,
-            .sel = if (items.len == 0) 0 else @min(selected, items.len - 1),
-        };
-    }
-
-    pub fn deinit(self: *Picker, alloc: std.mem.Allocator) void {
-        for (self.items) |it| {
-            alloc.free(it.label);
-            alloc.free(it.hint);
-            alloc.free(it.value);
-        }
-        alloc.free(self.items);
-        alloc.free(self.cmd);
-        alloc.free(self.title);
-        self.* = undefined;
-    }
-
-    pub fn move(self: *Picker, delta: isize) void {
-        if (self.items.len == 0) return;
-        if (delta < 0) {
-            const d: usize = @intCast(-delta);
-            self.sel = if (self.sel >= d) self.sel - d else 0;
-        } else {
-            const d: usize = @intCast(delta);
-            self.sel = @min(self.items.len - 1, self.sel + d);
-        }
-    }
-
-    pub fn confirmLine(self: *const Picker, alloc: std.mem.Allocator) ![]u8 {
-        const value = if (self.items.len == 0) "" else self.items[self.sel].value;
-        return std.fmt.allocPrint(alloc, "/{s} {s}", .{ self.cmd, value });
-    }
-
-    /// 标题 + 可见选项行数。选项最多占屏幕三分之一。
-    pub fn displayRows(self: *const Picker, height: usize) usize {
-        if (self.items.len == 0) return 0;
-        return 1 + @min(self.items.len, itemCap(height));
-    }
-
-    pub fn window(self: *Picker, height: usize) struct { start: usize, count: usize } {
-        const n = self.items.len;
-        const cap = itemCap(height);
-        if (n <= cap) {
-            self.scroll = 0;
-            return .{ .start = 0, .count = n };
-        }
-        var start = self.scroll;
-        if (self.sel < start) start = self.sel;
-        if (self.sel >= start + cap) start = self.sel + 1 - cap;
-        self.scroll = start;
-        return .{ .start = start, .count = cap };
-    }
-
-    fn itemCap(height: usize) usize {
-        return @max(1, height / 3);
-    }
-};
-
-/// 页脚状态。Codex:瞬时指令盖过环境;空闲空框才出 `? for shortcuts`。
-pub const FooterState = struct {
-    perm: bool = false,
-    picker: bool = false,
-    slash: bool = false,
-    quit_armed: bool = false,
-    esc_armed: bool = false,
-    scrolled: bool = false,
-    shortcuts: bool = false,
-    has_draft: bool = false,
-    running: bool = false,
-};
-
-/// 底栏左侧提示。perm > picker > slash > quit > esc > shortcuts > scrolled > queue > idle。
-pub fn footerHint(s: FooterState) ?[]const u8 {
-    if (s.perm) return "y allow  n deny  a always  s skip";
-    if (s.picker) return "up/down select  enter confirm  esc cancel";
-    if (s.slash) return "up/down select  tab complete  enter run";
-    if (s.quit_armed) return "ctrl+c again to quit";
-    if (s.esc_armed) return "esc again to edit last";
-    if (s.shortcuts) return "? hide shortcuts";
-    if (s.scrolled) return "pgup/pgdn to scroll";
-    if (s.running and s.has_draft) return "tab to queue";
-    if (!s.has_draft) return "? for shortcuts";
-    return null;
-}
-
-/// Structured footer identity. Painted under the composer, not as a transcript card.
-/// `used`/`window` are occupancy (est. tokens in the live context / model window).
-/// `cache_read`/`prompt` are last-turn API usage — null means the provider did
-/// not report that field. Never invent a hit rate from missing numbers.
-pub const FooterIdent = struct {
-    model: []const u8 = "",
-    think: []const u8 = "",
-    cwd: []const u8 = "",
-    branch: []const u8 = "",
-    session: []const u8 = "",
-    /// 会话分项累计(pi 式 ↑↓ R W)
-    tok_in: u64 = 0,
-    tok_out: u64 = 0,
-    tok_cache_w: u64 = 0,
-    tok_cache_r: u64 = 0,
-    /// 会话累计费用;null 不显 $(pi:仅 cost>0 或订阅显)
-    cost: ?f64 = null,
-    /// 订阅制 provider(pi 式 (sub) 后缀)
-    subscription: bool = false,
-    used: usize = 0,
-    window: usize = 0,
-    cache_read: ?u64 = null,
-    prompt: ?u64 = null,
-    pct: usize = 0,
-    hot: bool = false,
-};
-
-pub const FooterRows = struct {
-    primary: []u8,
-    secondary: []u8,
-
-    pub fn deinit(self: FooterRows, alloc: std.mem.Allocator) void {
-        alloc.free(self.primary);
-        alloc.free(self.secondary);
-    }
-};
-
-/// pi 式双行阈值:宽 >= 50 恒双行(行1 cwd (branch),行2 stats/model)。
-/// 窄端退化单行挤排,由 formatFooterRows 内 fitSingle 处置。
-pub fn footerNeedsTwoRows(ident: FooterIdent, hint: ?[]const u8, width: usize) bool {
-    _ = ident;
-    _ = hint;
-    return width >= 50;
-}
-
-/// pi 式双行:行 1 `cwd (branch)` muted,hint 右端 dimmest;
-/// 行 2 左 stats(ctx% 随占用变色、R cache),右 `model · think`。
-fn formatFooterPi(alloc: std.mem.Allocator, ident: FooterIdent, hint: ?[]const u8, width: usize) !FooterRows {
-    const mu = theme.muted();
-    const place = if (ident.branch.len > 0)
-        try std.fmt.allocPrint(alloc, "{s}{s} ({s}){s}", .{ mu, ident.cwd, ident.branch, ANSI_RESET })
-    else
-        try std.fmt.allocPrint(alloc, "{s}{s}{s}", .{ mu, ident.cwd, ANSI_RESET });
-    defer alloc.free(place);
-    var row1: []u8 = undefined;
-    if (hint) |h| {
-        const hint_s = try std.fmt.allocPrint(alloc, "{s}{s}{s}", .{ ANSI_DIM, h, ANSI_RESET });
-        defer alloc.free(hint_s);
-        row1 = try layoutFooter(alloc, place, hint_s, width);
-    } else {
-        row1 = try alloc.dupe(u8, truncateToVisible(place, width));
-    }
-
-    var used_buf: [16]u8 = undefined;
-    var win_buf: [16]u8 = undefined;
-    const pct_ink = theme.fgCtx(ident.pct);
-    const pct_end: []const u8 = if (pct_ink.len > 0) ANSI_RESET else "";
-    var in_buf: [16]u8 = undefined;
-    var out_buf: [16]u8 = undefined;
-    var cr_buf: [16]u8 = undefined;
-    var cw_buf: [16]u8 = undefined;
-    // pi 式 stats:↑in ↓out [R cache] [W cache] + ctx 占用
-    var flow: ?[]u8 = null;
-    defer if (flow) |f| alloc.free(f);
-    if (ident.tok_in > 0 or ident.tok_out > 0) {
-        flow = try std.fmt.allocPrint(alloc, "↑{s} ↓{s}", .{ formatTok(&in_buf, ident.tok_in), formatTok(&out_buf, ident.tok_out) });
-    }
-    var cache: ?[]u8 = null;
-    defer if (cache) |c| alloc.free(c);
-    if (ident.tok_cache_r > 0 and ident.tok_cache_w > 0) {
-        cache = try std.fmt.allocPrint(alloc, " R{s} W{s}", .{ formatTok(&cr_buf, ident.tok_cache_r), formatTok(&cw_buf, ident.tok_cache_w) });
-    } else if (ident.tok_cache_r > 0) {
-        cache = try std.fmt.allocPrint(alloc, " R{s}", .{formatTok(&cr_buf, ident.tok_cache_r)});
-    } else if (ident.tok_cache_w > 0) {
-        cache = try std.fmt.allocPrint(alloc, " W{s}", .{formatTok(&cw_buf, ident.tok_cache_w)});
-    }
-    // CH% 命中率(末轮 cache_read/prompt,pi 式);$ 费用(toFixed(3) 式三位)
-    var ch: ?[]u8 = null;
-    defer if (ch) |c| alloc.free(c);
-    if (ident.cache_read) |cr| {
-        if (ident.prompt) |pr| {
-            if (cr > 0 and pr > 0) ch = try std.fmt.allocPrint(alloc, " CH{d}%", .{cr * 100 / pr});
-        }
-    }
-    var cost_s: ?[]u8 = null;
-    defer if (cost_s) |c| alloc.free(c);
-    // pi 式:cost>0 或订阅皆显 $;订阅缀 (sub)
-    if (ident.cost != null or ident.subscription) {
-        const sub_suffix: []const u8 = if (ident.subscription) " (sub)" else "";
-        cost_s = try std.fmt.allocPrint(alloc, " ${d:.3}{s}", .{ ident.cost orelse 0, sub_suffix });
-    }
-    const extra = flow != null or cache != null or ch != null or cost_s != null;
-    const stats = if (extra)
-        try std.fmt.allocPrint(alloc, "{s}{s}{s}{s}  {s}ctx {s}{s}{d}%{s} {s}/{s}", .{ flow orelse "", cache orelse "", ch orelse "", cost_s orelse "", ANSI_DIM, ANSI_RESET, pct_ink, ident.pct, pct_end, formatTok(&used_buf, ident.used), formatTok(&win_buf, ident.window) })
-    else
-        try std.fmt.allocPrint(alloc, "{s}ctx {s}{s}{d}%{s} {s}/{s}", .{ ANSI_DIM, ANSI_RESET, pct_ink, ident.pct, pct_end, formatTok(&used_buf, ident.used), formatTok(&win_buf, ident.window) });
-    defer alloc.free(stats);
-    const right = if (ident.think.len > 0)
-        try std.fmt.allocPrint(alloc, "{s}{s}{s}{s} · {s}", .{ ANSI_BOLD, ident.model, ANSI_RESET, ANSI_DIM, ident.think })
-    else
-        try std.fmt.allocPrint(alloc, "{s}{s}{s}", .{ ANSI_BOLD, ident.model, ANSI_RESET });
-    defer alloc.free(right);
-    const row2 = try layoutFooter(alloc, stats, right, width);
-    return .{ .primary = row1, .secondary = row2 };
-}
-
-/// Pack footer facts with single spaces. Prefer one row; split when
-/// `two_rows` is set *and* the full pack overflows (cwd · session on row 2).
-/// Collapse when forced onto one row: hint, think, cache label, ctx absolute,
-/// session; cwd last. Model is never dropped. Below ~40 cols, ellipsize cwd
-/// rather than omit it. Labels dim, numbers normal, model bold, hint dimmest.
-pub fn formatFooterRows(alloc: std.mem.Allocator, ident: FooterIdent, hint: ?[]const u8, width: usize, two_rows: bool) !FooterRows {
-    const hint_s = if (hint) |h|
-        try std.fmt.allocPrint(alloc, "{s}{s}{s}", .{ ANSI_DIM, h, ANSI_RESET })
-    else
-        try alloc.dupe(u8, "");
-    defer alloc.free(hint_s);
-    const model_s = if (ident.model.len == 0)
-        try alloc.dupe(u8, "")
-    else
-        try std.fmt.allocPrint(alloc, "{s}{s}{s}", .{ ANSI_BOLD, ident.model, ANSI_RESET });
-    defer alloc.free(model_s);
-    const think_s = if (ident.think.len == 0)
-        try alloc.dupe(u8, "")
-    else
-        try std.fmt.allocPrint(alloc, "{s}think {s}{s}", .{ ANSI_DIM, ANSI_RESET, ident.think });
-    defer alloc.free(think_s);
-    const ink: []const u8 = if (ident.hot) "\x1b[31m" else "";
-    const ink_end: []const u8 = if (ident.hot) ANSI_RESET else "";
-    var ctx_full_buf: [48]u8 = undefined;
-    var ctx_pct_buf: [48]u8 = undefined;
-    const ctx_full_raw = formatCtx(&ctx_full_buf, ident.used, ident.window, true);
-    const ctx_pct_raw = formatCtx(&ctx_pct_buf, ident.used, ident.window, false);
-    const ctx_full_nums = if (std.mem.startsWith(u8, ctx_full_raw, "ctx ")) ctx_full_raw[4..] else ctx_full_raw;
-    const ctx_pct_nums = if (std.mem.startsWith(u8, ctx_pct_raw, "ctx ")) ctx_pct_raw[4..] else ctx_pct_raw;
-    const ctx_full = try std.fmt.allocPrint(alloc, "{s}ctx {s}{s}{s}{s}", .{ ANSI_DIM, ANSI_RESET, ink, ctx_full_nums, ink_end });
-    defer alloc.free(ctx_full);
-    const ctx_pct = try std.fmt.allocPrint(alloc, "{s}ctx {s}{s}{s}{s}", .{ ANSI_DIM, ANSI_RESET, ink, ctx_pct_nums, ink_end });
-    defer alloc.free(ctx_pct);
-    var cache_full_buf: [32]u8 = undefined;
-    var cache_num_buf: [32]u8 = undefined;
-    const cache_full_raw = formatCache(&cache_full_buf, ident.cache_read, ident.prompt, true);
-    const cache_num_raw = formatCache(&cache_num_buf, ident.cache_read, ident.prompt, false);
-    const cache_full = try styleCacheToken(alloc, cache_full_raw);
-    defer alloc.free(cache_full);
-    const cache_num = try alloc.dupe(u8, cache_num_raw);
-    defer alloc.free(cache_num);
-    const place_full = try formatPlace(alloc, ident.cwd, ident.session);
-    defer alloc.free(place_full);
-    const place_cwd = try formatPlace(alloc, ident.cwd, "");
-    defer alloc.free(place_cwd);
-
-    const split = two_rows and footerNeedsTwoRows(ident, hint, width);
-    if (split) return formatFooterPi(alloc, ident, hint, width);
-    const primary = try fitSingle(alloc, model_s, think_s, ctx_full, ctx_pct, cache_full, cache_num, place_full, place_cwd, ident.cwd, hint_s, width);
-    return .{ .primary = primary, .secondary = try alloc.dupe(u8, "") };
-}
-
-fn styleCacheToken(alloc: std.mem.Allocator, raw: []const u8) ![]u8 {
-    if (std.mem.startsWith(u8, raw, "cached "))
-        return std.fmt.allocPrint(alloc, "{s}cached {s}{s}", .{ ANSI_DIM, ANSI_RESET, raw[7..] });
-    if (std.mem.startsWith(u8, raw, "cache "))
-        return std.fmt.allocPrint(alloc, "{s}cache {s}{s}", .{ ANSI_DIM, ANSI_RESET, raw[6..] });
-    return std.fmt.allocPrint(alloc, "{s}{s}{s}", .{ ANSI_DIM, raw, ANSI_RESET });
-}
-
-/// Compact token count for the footer (`1.2k`, `128k`, `1M`).
-pub fn formatTok(buf: *[16]u8, n: u64) []const u8 {
-    if (n >= 1_000_000) {
-        const m = n / 1_000_000;
-        const frac = (n % 1_000_000) / 100_000;
-        if (frac == 0) return std.fmt.bufPrint(buf, "{d}M", .{m}) catch "?";
-        return std.fmt.bufPrint(buf, "{d}.{d}M", .{ m, frac }) catch "?";
-    }
-    if (n >= 1000) {
-        const k = n / 1000;
-        const frac = (n % 1000) / 100;
-        if (frac == 0) return std.fmt.bufPrint(buf, "{d}k", .{k}) catch "?";
-        return std.fmt.bufPrint(buf, "{d}.{d}k", .{ k, frac }) catch "?";
-    }
-    return std.fmt.bufPrint(buf, "{d}", .{n}) catch "?";
-}
-
-/// Context occupancy. `window == 0` means the model window is unknown.
-pub fn formatCtx(buf: *[48]u8, used: usize, window: usize, with_abs: bool) []const u8 {
-    if (window == 0) return "ctx —";
-    const pct = used * 100 / window;
-    if (!with_abs) return std.fmt.bufPrint(buf, "ctx {d}%", .{pct}) catch "ctx —";
-    var ub: [16]u8 = undefined;
-    var wb: [16]u8 = undefined;
-    return std.fmt.bufPrint(buf, "ctx {s}/{s} {d}%", .{
-        formatTok(&ub, used),
-        formatTok(&wb, window),
-        pct,
-    }) catch "ctx —";
-}
-
-/// Last-turn cache. `cache_read == null` is unknown (`cache —`), not 0%.
-/// Hit rate is `cache_read / prompt` when both arrived from the API.
-pub fn formatCache(buf: *[32]u8, cache_read: ?u64, prompt: ?u64, labeled: bool) []const u8 {
-    if (cache_read) |cr| {
-        if (prompt) |p| {
-            if (p > 0) {
-                const pct = cr * 100 / p;
-                if (labeled) return std.fmt.bufPrint(buf, "cache {d}%", .{pct}) catch "cache —";
-                return std.fmt.bufPrint(buf, "{d}%", .{pct}) catch "—";
-            }
-        }
-        if (cr > 0) {
-            var tb: [16]u8 = undefined;
-            const t = formatTok(&tb, cr);
-            if (labeled) return std.fmt.bufPrint(buf, "cached {s}", .{t}) catch "cache —";
-            return std.fmt.bufPrint(buf, "{s}", .{t}) catch "—";
-        }
-        if (labeled) return "cache 0%";
-        return "0%";
-    }
-    if (labeled) return "cache —";
-    return "—";
-}
-
-fn formatPlace(alloc: std.mem.Allocator, cwd: []const u8, session: []const u8) ![]u8 {
-    if (cwd.len > 0 and session.len > 0)
-        return std.fmt.allocPrint(alloc, "{s}{s} · {s}{s}", .{ ANSI_DIM, cwd, session, ANSI_RESET });
-    if (session.len > 0)
-        return std.fmt.allocPrint(alloc, "{s}{s}{s}", .{ ANSI_DIM, session, ANSI_RESET });
-    if (cwd.len > 0)
-        return std.fmt.allocPrint(alloc, "{s}{s}{s}", .{ ANSI_DIM, cwd, ANSI_RESET });
-    return alloc.dupe(u8, "");
-}
-
-fn joinPacked(alloc: std.mem.Allocator, parts: []const []const u8) ![]u8 {
-    var buf: [12][]const u8 = undefined;
-    var n: usize = 0;
-    for (parts) |p| {
-        if (p.len == 0) continue;
-        if (n >= buf.len) break;
-        buf[n] = p;
-        n += 1;
-    }
-    return joinN(alloc, buf[0..n], " ");
-}
-
-fn fitPrimary(
-    alloc: std.mem.Allocator,
-    model_s: []const u8,
-    think_s: []const u8,
-    ctx_full: []const u8,
-    ctx_pct: []const u8,
-    cache_full: []const u8,
-    cache_num: []const u8,
-    width: usize,
-) ![]u8 {
-    const variants = [_][]const []const u8{
-        &.{ model_s, think_s, ctx_full, cache_full },
-        &.{ model_s, ctx_full, cache_full },
-        &.{ model_s, ctx_full, cache_num },
-        &.{ model_s, ctx_pct, cache_num },
-        &.{ model_s, ctx_pct },
-        &.{model_s},
-    };
-    for (variants) |parts| {
-        const joined = try joinPacked(alloc, parts);
-        if (visibleCols(joined) <= width) return joined;
-        alloc.free(joined);
-    }
-    return alloc.dupe(u8, truncateToVisible(model_s, width));
-}
-
-fn fitSecondary(alloc: std.mem.Allocator, cwd: []const u8, session: []const u8, hint: []const u8, width: usize) ![]u8 {
-    const place_full = try formatPlace(alloc, cwd, session);
-    defer alloc.free(place_full);
-    const place_cwd = try formatPlace(alloc, cwd, "");
-    defer alloc.free(place_cwd);
-    const variants = [_][]const []const u8{
-        &.{ place_full, hint },
-        &.{place_full},
-        &.{ place_cwd, hint },
-        &.{place_cwd},
-    };
-    for (variants) |parts| {
-        const joined = try joinPacked(alloc, parts);
-        if (visibleCols(joined) <= width) return joined;
-        alloc.free(joined);
-    }
-    if (cwd.len > 0 and width > 0) {
-        const short = try ellipsizeAlloc(alloc, cwd, width);
-        defer alloc.free(short);
-        return formatPlace(alloc, short, "");
-    }
-    if (hint.len > 0) return alloc.dupe(u8, truncateToVisible(hint, width));
-    return alloc.dupe(u8, "");
-}
-
-fn fitSingle(
-    alloc: std.mem.Allocator,
-    model_s: []const u8,
-    think_s: []const u8,
-    ctx_full: []const u8,
-    ctx_pct: []const u8,
-    cache_full: []const u8,
-    cache_num: []const u8,
-    place_full: []const u8,
-    place_cwd: []const u8,
-    cwd: []const u8,
-    hint: []const u8,
-    width: usize,
-) ![]u8 {
-    const variants = [_][]const []const u8{
-        &.{ model_s, think_s, ctx_full, cache_full, place_full, hint },
-        &.{ model_s, think_s, ctx_full, cache_full, place_full },
-        &.{ model_s, ctx_full, cache_full, place_full },
-        &.{ model_s, ctx_full, cache_num, place_full },
-        &.{ model_s, ctx_pct, cache_num, place_full },
-        &.{ model_s, ctx_pct, cache_num, place_cwd },
-        &.{ model_s, ctx_pct, place_cwd },
-        &.{ model_s, place_cwd },
-    };
-    for (variants) |parts| {
-        const joined = try joinPacked(alloc, parts);
-        if (visibleCols(joined) <= width) return joined;
-        alloc.free(joined);
-    }
-    if (cwd.len > 0) {
-        const model_cols = visibleCols(model_s);
-        const gap: usize = if (model_cols > 0) 1 else 0;
-        if (model_cols + gap < width) {
-            const short = try ellipsizeAlloc(alloc, cwd, width - model_cols - gap);
-            defer alloc.free(short);
-            const placed = try formatPlace(alloc, short, "");
-            defer alloc.free(placed);
-            const joined = try joinPacked(alloc, &.{ model_s, placed });
-            if (visibleCols(joined) <= width) return joined;
-            alloc.free(joined);
-        } else if (model_cols == 0) {
-            const short = try ellipsizeAlloc(alloc, cwd, width);
-            defer alloc.free(short);
-            return formatPlace(alloc, short, "");
-        }
-    }
-    return fitPrimary(alloc, model_s, think_s, ctx_full, ctx_pct, cache_full, cache_num, width);
-}
-
-/// 左提示 + 右上下文,宽不够先丢右边。
-pub fn layoutFooter(alloc: std.mem.Allocator, left: ?[]const u8, right: []const u8, width: usize) ![]u8 {
-    const l = left orelse "";
-    const lw = visibleCols(l);
-    const rw = visibleCols(right);
-    if (l.len == 0 and right.len == 0) return alloc.dupe(u8, "");
-    if (l.len == 0) {
-        if (rw >= width) return alloc.dupe(u8, truncateToVisible(right, width));
-        const pad = width - rw;
-        var out = try alloc.alloc(u8, pad + right.len);
-        @memset(out[0..pad], ' ');
-        @memcpy(out[pad..], right);
-        return out;
-    }
-    if (right.len == 0 or lw + 2 + rw > width) {
-        const cut = truncateToVisible(l, width);
-        return alloc.dupe(u8, cut);
-    }
-    const pad = width - lw - rw;
-    var out = try alloc.alloc(u8, l.len + pad + right.len);
-    @memcpy(out[0..l.len], l);
-    @memset(out[l.len .. l.len + pad], ' ');
-    @memcpy(out[l.len + pad ..], right);
-    return out;
-}
-
-pub fn cardInner(width: usize) usize {
-    if (width < 8) return 0;
-    return @min(CARD_MAX_INNER, width - 4);
-}
-
-/// Codex session / status 卡:内容按 inner 截断,外框跟内容走。
-pub fn formatCard(alloc: std.mem.Allocator, lines: []const []const u8, width: usize) ![]u8 {
-    const inner = cardInner(width);
-    if (inner == 0) {
-        var w = std.Io.Writer.Allocating.init(alloc);
-        errdefer w.deinit();
-        for (lines, 0..) |line, i| {
-            if (i > 0) try w.writer.writeByte('\n');
-            try w.writer.writeAll(line);
-        }
-        return w.toOwnedSlice();
-    }
-    var w = std.Io.Writer.Allocating.init(alloc);
-    errdefer w.deinit();
-    try writeCardEdge(&w.writer, "╭", "╮", inner);
-    for (lines) |line| {
-        try w.writer.writeAll(ANSI_DIM ++ "│ " ++ ANSI_RESET);
-        const cut = truncateToVisible(line, inner);
-        try w.writer.writeAll(cut);
-        var pad = inner - visibleCols(cut);
-        while (pad > 0) : (pad -= 1) try w.writer.writeByte(' ');
-        try w.writer.writeAll(ANSI_DIM ++ " │" ++ ANSI_RESET ++ "\n");
-    }
-    try writeCardEdge(&w.writer, "╰", "╯", inner);
-    const out = try w.toOwnedSlice();
-    if (out.len > 0 and out[out.len - 1] == '\n') {
-        const trimmed = try alloc.dupe(u8, out[0 .. out.len - 1]);
-        alloc.free(out);
-        return trimmed;
-    }
-    return out;
-}
-
-const CARD_HINT = ANSI_DIM ++ "/model  /status" ++ ANSI_RESET;
-
-pub fn formatSessionCard(alloc: std.mem.Allocator, info: SessionInfo, width: usize) ![]u8 {
-    const title = try std.fmt.allocPrint(alloc, "{s}>_ {s}{s}piz{s}  {s}(v{s}){s}", .{
-        ANSI_DIM, ANSI_RESET, ANSI_BOLD, ANSI_RESET, ANSI_DIM, info.version, ANSI_RESET,
-    });
-    defer alloc.free(title);
-    const model = try std.fmt.allocPrint(alloc, "{s}model:      {s}{s}{s}{s}  {s}{s}{s}", .{
-        ANSI_DIM, ANSI_RESET, ANSI_BOLD, info.model, ANSI_RESET, ANSI_DIM, info.think, ANSI_RESET,
-    });
-    defer alloc.free(model);
-    const dir = try std.fmt.allocPrint(alloc, "{s}directory:  {s}{s}", .{ ANSI_DIM, info.cwd, ANSI_RESET });
-    defer alloc.free(dir);
-    const session = try std.fmt.allocPrint(alloc, "{s}session:    {s}{s}", .{ ANSI_DIM, info.session, ANSI_RESET });
-    defer alloc.free(session);
-    const lines = [_][]const u8{ title, "", model, dir, session, CARD_HINT };
-    return formatCard(alloc, &lines, width);
-}
-
-pub fn formatStatusCard(alloc: std.mem.Allocator, info: StatusInfo, width: usize) ![]u8 {
-    const title = try std.fmt.allocPrint(alloc, "{s}>_ {s}{s}piz{s}  {s}(v{s}){s}", .{
-        ANSI_DIM, ANSI_RESET, ANSI_BOLD, ANSI_RESET, ANSI_DIM, info.version, ANSI_RESET,
-    });
-    defer alloc.free(title);
-    const model = try std.fmt.allocPrint(alloc, "{s}model:       {s}{s}{s}{s}  {s}{s}{s}", .{
-        ANSI_DIM, ANSI_RESET, ANSI_BOLD, info.model, ANSI_RESET, ANSI_DIM, info.think, ANSI_RESET,
-    });
-    defer alloc.free(model);
-    const dir = try std.fmt.allocPrint(alloc, "{s}directory:   {s}{s}", .{ ANSI_DIM, info.cwd, ANSI_RESET });
-    defer alloc.free(dir);
-    const session = try std.fmt.allocPrint(alloc, "{s}session:     {s}{s}", .{ ANSI_DIM, info.session, ANSI_RESET });
-    defer alloc.free(session);
-    const perms = try std.fmt.allocPrint(alloc, "{s}permissions: {s}{s}", .{ ANSI_DIM, info.perms, ANSI_RESET });
-    defer alloc.free(perms);
-    const ctx = try std.fmt.allocPrint(alloc, "{s}context:     {s}{s}", .{ ANSI_DIM, info.context, ANSI_RESET });
-    defer alloc.free(ctx);
-    const usage = try std.fmt.allocPrint(alloc, "{s}usage:       {s}{s}", .{ ANSI_DIM, info.usage, ANSI_RESET });
-    defer alloc.free(usage);
-    const lines = [_][]const u8{ title, "", model, dir, session, perms, ctx, usage, CARD_HINT };
-    return formatCard(alloc, &lines, width);
-}
-
-fn writeCardEdge(wr: *std.Io.Writer, left: []const u8, right: []const u8, inner: usize) !void {
-    try wr.writeAll(ANSI_DIM);
-    try wr.writeAll(left);
-    var i: usize = 0;
-    while (i < inner + 2) : (i += 1) try wr.writeAll("─");
-    try wr.writeAll(right);
-    try wr.writeAll(ANSI_RESET ++ "\n");
-}
+pub const FooterIdent = footer.FooterIdent;
+pub const FooterRows = footer.FooterRows;
+pub const footerNeedsTwoRows = footer.footerNeedsTwoRows;
+pub const formatFooterRows = footer.formatFooterRows;
+pub const formatTok = footer.formatTok;
+pub const formatCtx = footer.formatCtx;
+pub const formatCache = footer.formatCache;
+pub const layoutFooter = footer.layoutFooter;
+pub const cardInner = footer.cardInner;
+pub const formatCard = footer.formatCard;
+pub const formatSessionCard = footer.formatSessionCard;
+pub const formatStatusCard = footer.formatStatusCard;
 
 /// skip = 从对话顶裁掉的行数。off=0 钉住底。
 pub fn scrollSkip(off: usize, total: usize, view: usize) usize {
@@ -920,13 +177,14 @@ fn composerSkip(cursor_row: usize, view_rows: usize) usize {
     return if (cursor_row + 1 > view_rows) cursor_row + 1 - view_rows else 0;
 }
 
-fn composerTopRow(height: usize, bottom: BottomPane) usize {
-    return @max(@as(usize, 1), height -| (bottom.footer_rows + bottom.composer_rows) + 1);
+/// 文档流里 composer 顶行(1-based)。nvis=已画消息行,skip=0 时即屏上顶行。
+fn composerTopRow(nvis: usize, bottom: BottomPane) usize {
+    return nvis + bottom.working_rows + bottom.perm_rows + bottom.picker_rows + bottom.slash_rows + 1;
 }
 
-fn composerInputRow(height: usize, bottom: BottomPane, cursor_row: usize) usize {
+fn composerInputRow(top: usize, bottom: BottomPane, cursor_row: usize) usize {
+    if (top == 0) return 1;
     const skip = composerSkip(cursor_row, bottom.comp_inner);
-    const top = composerTopRow(height, bottom);
     const vis = cursor_row -| skip;
     return if (bottom.boxed) top + 1 + vis else top;
 }
@@ -988,8 +246,15 @@ pub const Tui = struct {
     footer_hot: bool = false,
     slash_items: []const SlashItem = &.{},
     slash_sel: usize = 0,
+    file_arena: *std.heap.ArenaAllocator = undefined,
+    file_items: []const filesmod.FileItem = &.{},
+    file_sel: usize = 0,
+    file_q_hash: u64 = 0,
     history_path: []u8,
     think_open: bool = true,
+    flow_nodes: std.ArrayListUnmanaged(FlowNode) = .empty,
+    flow_goal: []u8 = &.{},
+    flow_active: bool = false,
     think_live: bool = false,
     last_think_len: usize = 0,
     think_level: ai.ThinkLevel = .high,
@@ -999,10 +264,20 @@ pub const Tui = struct {
     esc_armed: bool = false,
     picker: ?Picker = null,
     scroll_off: usize = 0,
+    search_q: []u8 = &.{},
+    search_hit: ?usize = null,
+    /// 裁掉的细胞正文,供 /find 继续搜。
+    find_log: std.array_list.Managed([]u8),
+    pending_image: ?[]u8 = null,
+    pending_mime: []const u8 = "",
     last_pin: usize = 0,
+    /// 1-based 屏上行号,0=composer 滚出视口。
+    composer_screen_row: usize = 0,
     shortcuts_open: bool = false,
 
     pub fn init(alloc: std.mem.Allocator) !Tui {
+        footer.attachTheme(&theme);
+        emit.attachTheme(&theme);
         const in_fd = std.posix.STDIN_FILENO;
         const out_fd = std.posix.STDOUT_FILENO;
         const orig_tio = std.posix.tcgetattr(in_fd) catch std.posix.termios{
@@ -1032,9 +307,12 @@ pub const Tui = struct {
                 if (hist.items.len >= 2000) break;
             }
         } else |_| {} else {}
+        const file_arena = try alloc.create(std.heap.ArenaAllocator);
+        file_arena.* = std.heap.ArenaAllocator.init(alloc);
         return .{
             .alloc = alloc,
             .cells = std.array_list.Managed(Cell).init(alloc),
+            .find_log = std.array_list.Managed([]u8).init(alloc),
             .input = std.array_list.Managed(u8).init(alloc),
             .history = hist,
             .orig_tio = orig_tio,
@@ -1047,6 +325,7 @@ pub const Tui = struct {
             .footer_branch = std.array_list.Managed(u8).init(alloc),
             .footer_session = std.array_list.Managed(u8).init(alloc),
             .history_path = hist_path,
+            .file_arena = file_arena,
         };
     }
 
@@ -1064,7 +343,15 @@ pub const Tui = struct {
         self.footer_cwd.deinit();
         self.footer_branch.deinit();
         self.footer_session.deinit();
+        self.file_arena.deinit();
+        self.alloc.destroy(self.file_arena);
         self.alloc.free(self.history_path);
+        if (self.search_q.len > 0) self.alloc.free(self.search_q);
+        for (self.find_log.items) |s| self.alloc.free(s);
+        self.find_log.deinit();
+        if (self.pending_image) |img| self.alloc.free(img);
+        tui_flow.resetFlow(self);
+        self.flow_nodes.deinit(self.alloc);
     }
 
     fn freeCells(self: *Tui) void {
@@ -1182,11 +469,41 @@ pub const Tui = struct {
     }
 
     fn pushCell(self: *Tui, kind: CellKind) !*Cell {
+        self.pruneCells();
         try self.cells.append(.{
             .kind = kind,
             .text = std.array_list.Managed(u8).init(self.alloc),
         });
         return &self.cells.items[self.cells.items.len - 1];
+    }
+
+    /// 长会话封顶。保留开场会话卡,一次丢掉一截以免每条都搬。
+    fn pruneCells(self: *Tui) void {
+        const cap: usize = 400;
+        if (self.cells.items.len < cap) return;
+        const keep_header = self.cells.items.len > 0 and self.cells.items[0].kind == .session_header;
+        const start: usize = if (keep_header) 1 else 0;
+        const drop = @min(self.cells.items.len - start, (self.cells.items.len - cap) + 48);
+        if (drop == 0) return;
+        var i: usize = 0;
+        while (i < drop) : (i += 1) {
+            const txt = self.cells.items[start + i].text.items;
+            if (txt.len > 0) {
+                const keep: usize = 2000;
+                const slice = txt[0..@min(txt.len, keep)];
+                if (self.alloc.dupe(u8, slice)) |copy| {
+                    if (self.find_log.items.len >= 2000) {
+                        self.alloc.free(self.find_log.items[0]);
+                        _ = self.find_log.orderedRemove(0);
+                    }
+                    self.find_log.append(copy) catch self.alloc.free(copy);
+                } else |_| {}
+            }
+            deinitCell(&self.cells.items[start + i], self.alloc);
+        }
+        const remain = self.cells.items[start + drop ..];
+        std.mem.copyForwards(Cell, self.cells.items[start..][0..remain.len], remain);
+        self.cells.items.len = start + remain.len;
     }
 
     fn lastCell(self: *Tui, kind: CellKind) ?*Cell {
@@ -1316,13 +633,19 @@ pub const Tui = struct {
         tm.lines = countContentLines(body);
         const now = nowMs();
         if (tm.start_ms != 0) tm.elapsed_ms = @max(0, now - tm.start_ms);
+        if (std.mem.eql(u8, name, "workflow")) {
+            tui_flow.loadFlowFromOut(self, body);
+            self.flow_active = false;
+            tui_flow.paintFlowInto(self, tm);
+            return;
+        }
         tm.body.clearRetainingCapacity();
         try tm.body.appendSlice(body);
         tm.folded = true;
         self.dirty.store(true, .release);
     }
 
-    fn firstRunningTool(self: *Tui, name: []const u8) ?*Cell {
+    pub fn firstRunningTool(self: *Tui, name: []const u8) ?*Cell {
         for (self.cells.items) |*c| {
             if (c.kind != .tool) continue;
             if (c.tool) |*tm| {
@@ -1330,6 +653,14 @@ pub const Tui = struct {
             }
         }
         return null;
+    }
+
+    pub fn appendWorkflow(self: *Tui, args: []const u8) !void {
+        return tui_flow.appendWorkflow(self, args);
+    }
+
+    pub fn applyFlowEvent(self: *Tui, idx: usize, kind: []const u8, text: []const u8) bool {
+        return tui_flow.applyFlowEvent(self, idx, kind, text);
     }
 
     /// Ctrl+O: if any tool is folded, expand all; else fold all. Like Ctrl+T for think.
@@ -1367,6 +698,7 @@ pub const Tui = struct {
         errdefer fields.deinit(self.alloc);
         if (self.cells.items.len > 0 and self.cells.items[0].kind == .session_header) {
             if (self.cells.items[0].card) |old| old.deinit(self.alloc);
+            invalidatePaint(&self.cells.items[0], self.alloc);
             self.cells.items[0].card = fields;
         } else {
             try self.cells.insert(0, .{
@@ -1467,7 +799,12 @@ pub const Tui = struct {
             }
         }
         const picker_rows: usize = if (self.picker) |*p| p.displayRows(h) else 0;
+        tui_input.ensureAtFiles(self);
         const slash_rows: usize = if (self.picker == null) slashDisplayRows(self.input.items, self.slash_items, h) else 0;
+        const file_rows: usize = if (self.picker == null and filesmod.atQuery(self.input.items) != null)
+            if (self.file_items.len == 0) 1 else @min(self.file_items.len, @max(@as(usize, 1), h / 3))
+        else
+            0;
         const boxed = w >= 8;
         const input_inner = composerInnerWidth(boxed, w);
         const wrap_n = wrapRowCount(self.input.items, input_inner);
@@ -1498,16 +835,17 @@ pub const Tui = struct {
         const hint = footerHint(.{
             .perm = self.perm_prompt.load(.acquire) != null,
             .picker = self.picker != null,
-            .slash = self.picker == null and slashQuery(self.input.items) != null and self.slash_items.len > 0,
+            .slash = self.picker == null and (slashQuery(self.input.items) != null and self.slash_items.len > 0 or filesmod.atQuery(self.input.items) != null),
             .quit_armed = self.quit_arm_ns != 0,
             .esc_armed = self.esc_armed,
             .scrolled = self.scroll_off > 0,
             .shortcuts = self.shortcuts_open,
             .has_draft = self.input.items.len > 0,
             .running = streaming,
+            .image = self.pending_image != null,
         });
         var ident_rows: usize = if (footerNeedsTwoRows(ident, hint, w)) 2 else 1;
-        const fixed = perm_rows + picker_rows + slash_rows + help_rows;
+        const fixed = perm_rows + picker_rows + slash_rows + file_rows + help_rows;
         const composerOf = struct {
             fn go(is_boxed: bool, inner: usize) usize {
                 return if (is_boxed) 2 + inner else 1;
@@ -1530,7 +868,7 @@ pub const Tui = struct {
             .working_rows = working,
             .perm_rows = perm_rows,
             .picker_rows = picker_rows,
-            .slash_rows = slash_rows,
+            .slash_rows = slash_rows + file_rows,
             .composer_rows = composer_rows,
             .footer_rows = ident_rows + help_rows,
             .footer_ident_rows = ident_rows,
@@ -1538,6 +876,18 @@ pub const Tui = struct {
             .input_inner = input_inner,
             .comp_inner = comp_inner,
         };
+    }
+
+    fn ensurePainted(self: *Tui, width: usize) !void {
+        for (self.cells.items) |*c| {
+            if (c.card) |card| {
+                if (c.card_buf != null and c.card_w == width) continue;
+                if (c.card_buf) |old| self.alloc.free(old);
+                c.card_buf = try paintCard(self.alloc, c.kind, card, width);
+                c.card_w = width;
+                c.row_valid = false;
+            }
+        }
     }
 
     fn renderFrame(self: *Tui) !void {
@@ -1549,66 +899,65 @@ pub const Tui = struct {
         const nact = activity.snapshot(&views);
         const streaming = self.streaming.load(.acquire);
         const bottom = self.measureBottom(nact, streaming);
-        const reserved = bottom.height();
-        const scroll_h = if (h > reserved) h - reserved else 1;
+        const composer_block = bottom.height();
+        const scroll_h = if (h > 0) h else 1;
 
         self.mutex.lock(util.io) catch {};
         defer self.mutex.unlock(util.io);
 
-        var cards = std.array_list.Managed([]u8).init(self.alloc);
-        defer {
-            for (cards.items) |s| self.alloc.free(s);
-            cards.deinit();
-        }
-        for (self.cells.items) |c| {
-            if (c.card) |card| {
-                const painted = try paintCard(self.alloc, c.kind, card, w);
-                try cards.append(painted);
-            }
-        }
+        try self.ensurePainted(w);
 
         try fw.writer.writeAll("\x1b[?25l\x1b[H");
         var total_vis: usize = 0;
-        var card_i: usize = 0;
         var ci: usize = 0;
         while (ci < self.cells.items.len) : (ci += 1) {
             if (ci > 0 and gapBetween(self.cells.items[ci - 1].kind, self.cells.items[ci].kind)) total_vis += 1;
-            const painted = cardSlice(self.cells.items[ci], cards.items, &card_i);
-            total_vis += cellRowCount(self.alloc, self.cells.items[ci], painted, self.think_open, w);
+            const painted = paintedOf(self.cells.items[ci]);
+            total_vis += cellRowCountCached(self.alloc, &self.cells.items[ci], painted, self.think_open, w);
         }
-
+        total_vis += composer_block;
+        // composer+footer 跟消息同一份文档,整屏可滚。
         const pin = if (total_vis > scroll_h) total_vis - scroll_h else 0;
         if (self.scroll_off > pin) self.scroll_off = pin;
         self.last_pin = pin;
         var skip = pin - self.scroll_off;
         var emitted: usize = 0;
-        card_i = 0;
+        var cell_aw = std.Io.Writer.Allocating.init(self.alloc);
+        defer cell_aw.deinit();
         ci = 0;
         while (ci < self.cells.items.len) : (ci += 1) {
             if (ci > 0 and gapBetween(self.cells.items[ci - 1].kind, self.cells.items[ci].kind)) {
                 if (skip > 0) {
                     skip -= 1;
                 } else if (emitted < scroll_h) {
-                    try fw.writer.writeAll("\x1b[K\r\n");
+                    try cell_aw.writer.writeAll("\x1b[K\r\n");
                     emitted += 1;
                 }
             }
-            const painted = cardSlice(self.cells.items[ci], cards.items, &card_i);
+            const painted = paintedOf(self.cells.items[ci]);
             if (emitted >= scroll_h) continue;
-            const n = cellRowCount(self.alloc, self.cells.items[ci], painted, self.think_open, w);
+            const n = cellRowCountCached(self.alloc, &self.cells.items[ci], painted, self.think_open, w);
             if (skip >= n) {
                 skip -= n;
             } else {
-                emitted += try emitCell(self.alloc, &fw.writer, self.cells.items[ci], painted, self.think_open, w, skip, scroll_h - emitted);
+                emitted += try emitCell(self.alloc, &cell_aw.writer, &self.cells.items[ci], painted, self.think_open, w, skip, scroll_h - emitted);
                 skip = 0;
             }
         }
-        while (emitted < scroll_h) : (emitted += 1) {
-            try fw.writer.writeAll("\x1b[K\r\n");
-        }
+        const nvis_doc = total_vis - composer_block;
+        const prefix_rows = bottom.working_rows + bottom.perm_rows + bottom.picker_rows + bottom.slash_rows;
+        const composer_doc = nvis_doc + prefix_rows;
+        const doc_skip = pin - self.scroll_off;
+        self.composer_screen_row = if (composer_doc >= doc_skip) row_blk: {
+            const row = composer_doc - doc_skip + 1;
+            break :row_blk if (row > 0 and row <= scroll_h) row else 0;
+        } else 0;
+
+        var block_aw = std.Io.Writer.Allocating.init(self.alloc);
+        defer block_aw.deinit();
         if (bottom.working_rows > 0) {
             const frame_ms = @as(i64, @intCast(@divTrunc(std.Io.Clock.now(.awake, util.io).nanoseconds, std.time.ns_per_ms)));
-            try writeStatusIndicator(&fw.writer, views[0..nact], streaming, frame_ms, w, bottom.working_rows);
+            try writeStatusIndicator(&block_aw.writer, views[0..nact], streaming, frame_ms, w, bottom.working_rows);
         }
         if (self.perm_prompt.load(.acquire)) |pp| {
             var rest = pp.*;
@@ -1616,37 +965,40 @@ pub const Tui = struct {
                 const nl = std.mem.indexOfScalar(u8, rest, '\n');
                 const line = if (nl) |n| rest[0..n] else rest;
                 rest = if (nl) |n| rest[n + 1 ..] else &.{};
-                try writeTrunc(&fw.writer, line, w);
-                try fw.writer.writeAll(ANSI_RESET ++ "\x1b[K\r\n");
+                try writeTrunc(&block_aw.writer, line, w);
+                try block_aw.writer.writeAll(ANSI_RESET ++ "\x1b[K\r\n");
             }
         }
         if (self.picker) |*p| {
-            try writePicker(&fw.writer, p, h, w);
+            try writePicker(&block_aw.writer, p, h, w);
+        } else if (filesmod.atQuery(self.input.items) != null) {
+            try writeFilePicker(&block_aw.writer, self.file_items, &self.file_sel, h, w);
         } else if (slashQuery(self.input.items)) |q| {
-            try writeSlashPicker(&fw.writer, self.slash_items, q, &self.slash_sel, h, w);
+            try writeSlashPicker(&block_aw.writer, self.slash_items, q, &self.slash_sel, h, w);
         }
         const cur = wrapCursor(self.input.items, self.cursor, bottom.input_inner);
         const view_skip = composerSkip(cur.row, bottom.comp_inner);
         if (bottom.boxed) {
             const box_w = composerBoxWidth(w);
-            try writeBoxEdge(&fw.writer, "╭", "╮", box_w);
-            try emitComposer(&fw.writer, self.input.items, bottom.input_inner, bottom.comp_inner, view_skip);
-            try writeBoxEdge(&fw.writer, "╰", "╯", box_w);
+            try writeBoxEdge(&block_aw.writer, "╭", "╮", box_w);
+            try emitComposer(&block_aw.writer, self.input.items, bottom.input_inner, bottom.comp_inner, view_skip);
+            try writeBoxEdge(&block_aw.writer, "╰", "╯", box_w);
         } else {
-            try fw.writer.writeAll(ANSI_DIM ++ "› " ++ ANSI_RESET);
-            try writeTrunc(&fw.writer, self.input.items, bottom.input_inner);
-            try fw.writer.writeAll("\x1b[K\r\n");
+            try block_aw.writer.writeAll(ANSI_DIM ++ "› " ++ ANSI_RESET);
+            try writeTrunc(&block_aw.writer, self.input.items, bottom.input_inner);
+            try block_aw.writer.writeAll("\x1b[K\r\n");
         }
         const hint = footerHint(.{
             .perm = self.perm_prompt.load(.acquire) != null,
             .picker = self.picker != null,
-            .slash = self.picker == null and slashQuery(self.input.items) != null and self.slash_items.len > 0,
+            .slash = self.picker == null and (slashQuery(self.input.items) != null and self.slash_items.len > 0 or filesmod.atQuery(self.input.items) != null),
             .quit_armed = self.quit_arm_ns != 0,
             .esc_armed = self.esc_armed,
             .scrolled = self.scroll_off > 0,
             .shortcuts = self.shortcuts_open,
             .has_draft = self.input.items.len > 0,
             .running = streaming or nact > 0,
+            .image = self.pending_image != null,
         });
         const rows = try formatFooterRows(self.alloc, .{
             .model = self.footer_model.items,
@@ -1668,24 +1020,38 @@ pub const Tui = struct {
             .hot = self.footer_hot,
         }, hint, w, bottom.footer_ident_rows >= 2);
         defer rows.deinit(self.alloc);
-        try fw.writer.writeAll(rows.primary);
-        try fw.writer.writeAll(ANSI_RESET ++ "\x1b[K");
+        try block_aw.writer.writeAll(rows.primary);
+        try block_aw.writer.writeAll(ANSI_RESET ++ "\x1b[K\r\n");
         if (bottom.footer_ident_rows >= 2) {
-            try fw.writer.writeAll("\r\n");
-            try fw.writer.writeAll(rows.secondary);
-            try fw.writer.writeAll(ANSI_RESET ++ "\x1b[K");
+            try block_aw.writer.writeAll(rows.secondary);
+            try block_aw.writer.writeAll(ANSI_RESET ++ "\x1b[K\r\n");
         }
         if (self.shortcuts_open) {
-            try fw.writer.writeAll("\r\n" ++ ANSI_DIM);
-            try writeTrunc(&fw.writer, "enter send   tab queue   esc abort   ctrl+c quit", w);
-            try fw.writer.writeAll(ANSI_RESET ++ "\x1b[K\r\n" ++ ANSI_DIM);
-            try writeTrunc(&fw.writer, "ctrl+t think  ctrl+o tools  /model  /think  /help", w);
-            try fw.writer.writeAll(ANSI_RESET ++ "\x1b[K");
+            try block_aw.writer.writeAll(ANSI_DIM);
+            try writeTrunc(&block_aw.writer, "enter send   tab queue   esc abort   ctrl+c quit", w);
+            try block_aw.writer.writeAll(ANSI_RESET ++ "\x1b[K\r\n" ++ ANSI_DIM);
+            try writeTrunc(&block_aw.writer, "c copy  d doctor  g diff  l log  r redo  s sandbox  j jobs  u usage  ctrl+v paste  /help", w);
+            try block_aw.writer.writeAll(ANSI_RESET ++ "\x1b[K\r\n");
+        }
+        var out_e: usize = 0;
+        var cell_skip: usize = 0;
+        try emitDocLines(&fw.writer, cell_aw.written(), &cell_skip, &out_e, scroll_h);
+        try emitDocLines(&fw.writer, block_aw.written(), &skip, &out_e, scroll_h);
+        while (out_e < scroll_h) : (out_e += 1) {
+            if (out_e + 1 < scroll_h) {
+                try fw.writer.writeAll("\x1b[K\r\n");
+            } else {
+                try fw.writer.writeAll("\x1b[K");
+            }
         }
         try fw.writer.writeAll("\x1b[J");
-        const input_row = composerInputRow(h, bottom, cur.row);
-        const col = @max(@as(usize, 1), @min(w, (if (bottom.boxed) COMPOSER_FRAME else 3) + cur.col));
-        try fw.writer.print("\x1b[{d};{d}H\x1b[?25h", .{ input_row, col });
+        if (self.composer_screen_row == 0) {
+            try fw.writer.writeAll("\x1b[?25l");
+        } else {
+            const input_row = composerInputRow(self.composer_screen_row, bottom, cur.row);
+            const col = @max(@as(usize, 1), @min(w, (if (bottom.boxed) COMPOSER_FRAME else 3) + cur.col));
+            try fw.writer.print("\x1b[{d};{d}H\x1b[?25h", .{ input_row, col });
+        }
         try self.writeAll(try fw.toOwnedSlice());
     }
 
@@ -1697,6 +1063,14 @@ pub const Tui = struct {
         on_perm: ?*const fn (ctx: ?*anyopaque, key: u8) void = null,
         on_paint: ?*const fn (ctx: ?*anyopaque) void = null,
         on_think: ?*const fn (ctx: ?*anyopaque) void = null,
+        on_copy: ?*const fn (ctx: ?*anyopaque) void = null,
+        on_sandbox: ?*const fn (ctx: ?*anyopaque) void = null,
+        on_jobs: ?*const fn (ctx: ?*anyopaque) void = null,
+        on_usage: ?*const fn (ctx: ?*anyopaque) void = null,
+        on_redo: ?*const fn (ctx: ?*anyopaque) void = null,
+        on_doctor: ?*const fn (ctx: ?*anyopaque) void = null,
+        on_diff: ?*const fn (ctx: ?*anyopaque) void = null,
+        on_log: ?*const fn (ctx: ?*anyopaque) void = null,
         ctx: ?*anyopaque = null,
     };
 
@@ -1709,6 +1083,14 @@ pub const Tui = struct {
         const on_perm = h.on_perm;
         const on_paint = h.on_paint;
         const on_think = h.on_think;
+        const on_copy = h.on_copy;
+        const on_sandbox = h.on_sandbox;
+        const on_jobs = h.on_jobs;
+        const on_usage = h.on_usage;
+        const on_redo = h.on_redo;
+        const on_doctor = h.on_doctor;
+        const on_diff = h.on_diff;
+        const on_log = h.on_log;
         self.ctx = ctx;
         if (on_paint) |f| f(ctx);
         try self.renderFrame();
@@ -1752,6 +1134,30 @@ pub const Tui = struct {
                             .think => {
                                 if (on_think) |f| f(ctx);
                             },
+                            .copy => {
+                                if (on_copy) |f| f(ctx);
+                            },
+                            .sandbox => {
+                                if (on_sandbox) |f| f(ctx);
+                            },
+                            .jobs => {
+                                if (on_jobs) |f| f(ctx);
+                            },
+                            .usage => {
+                                if (on_usage) |f| f(ctx);
+                            },
+                            .redo => {
+                                if (on_redo) |f| f(ctx);
+                            },
+                            .doctor => {
+                                if (on_doctor) |f| f(ctx);
+                            },
+                            .diff => {
+                                if (on_diff) |f| f(ctx);
+                            },
+                            .log => {
+                                if (on_log) |f| f(ctx);
+                            },
                             .none => {},
                         }
                     }
@@ -1774,417 +1180,32 @@ pub const Tui = struct {
         }
     }
 
-    const Action = union(enum) { none, quit, abort, detach, submit: []const u8, think };
+    const Action = tui_input.Action;
 
-    fn disarmQuit(self: *Tui) void {
+    pub fn disarmQuit(self: *Tui) void {
         if (self.quit_arm_ns == 0) return;
         self.quit_arm_ns = 0;
         self.quit_arm_key = 0;
         self.dirty.store(true, .release);
     }
 
-    fn armOrQuit(self: *Tui, key: u8) Action {
-        const now = nowNs();
-        if (self.quit_arm_key == key and self.quit_arm_ns != 0 and now - self.quit_arm_ns < std.time.ns_per_s) {
-            self.disarmQuit();
-            return .quit;
-        }
-        self.quit_arm_key = key;
-        self.quit_arm_ns = now;
-        self.dirty.store(true, .release);
-        return .none;
+    pub fn pasteClipboard(self: *Tui) void {
+        tui_input.pasteClipboard(self);
     }
 
-    fn takeSubmit(self: *Tui) !Action {
-        if (self.input.items.len == 0) return .none;
-        const line = if (self.slashSubmitLine()) |picked|
-            picked
-        else
-            try self.alloc.dupe(u8, self.input.items);
-        self.input.clearRetainingCapacity();
-        self.cursor = 0;
-        self.hist_idx = null;
-        self.slash_sel = 0;
-        self.disarmQuit();
-        self.esc_armed = false;
-        self.shortcuts_open = false;
-        return .{ .submit = line };
+    pub fn hasPendingImage(self: *const Tui) bool {
+        return tui_input.hasPendingImage(self);
     }
 
-    fn slashSubmitLine(self: *Tui) ?[]u8 {
-        const q = slashQuery(self.input.items) orelse return null;
-        var ranks: [64]SlashRank = undefined;
-        const n = rankSlash(self.slash_items, q, &ranks);
-        if (n == 0) return null;
-        const sel = @min(self.slash_sel, n - 1);
-        const name = slashName(self.slash_items[ranks[sel].item].cmd);
-        return std.fmt.allocPrint(self.alloc, "/{s}", .{name}) catch null;
-    }
-
-    fn completeSlash(self: *Tui) !void {
-        const q = slashQuery(self.input.items) orelse return;
-        var ranks: [64]SlashRank = undefined;
-        const n = rankSlash(self.slash_items, q, &ranks);
-        if (n == 0) return;
-        const sel = @min(self.slash_sel, n - 1);
-        const name = slashName(self.slash_items[ranks[sel].item].cmd);
-        self.input.clearRetainingCapacity();
-        try self.input.append('/');
-        try self.input.appendSlice(name);
-        self.cursor = self.input.items.len;
-        self.dirty.store(true, .release);
-    }
-
-    fn moveSlash(self: *Tui, delta: isize) void {
-        const q = slashQuery(self.input.items) orelse return;
-        var ranks: [64]SlashRank = undefined;
-        const n = rankSlash(self.slash_items, q, &ranks);
-        if (n == 0) return;
-        if (delta < 0) {
-            const d: usize = @intCast(-delta);
-            self.slash_sel = if (self.slash_sel >= d) self.slash_sel - d else 0;
-        } else {
-            const d: usize = @intCast(delta);
-            self.slash_sel = @min(n - 1, self.slash_sel + d);
-        }
-        self.dirty.store(true, .release);
-    }
-
-    fn slashOpen(self: *const Tui) bool {
-        return self.picker == null and slashQuery(self.input.items) != null and self.slash_items.len > 0;
+    pub fn takePendingImage(self: *Tui) ?tui_input.PendingImage {
+        return tui_input.takePendingImage(self);
     }
 
     fn handleInput(self: *Tui, bytes: []const u8) !Action {
-        if (self.picker != null) return self.handlePickerInput(bytes);
-        var i: usize = 0;
-        while (i < bytes.len) {
-            const b = bytes[i];
-            const streaming = self.streaming.load(.acquire);
-
-            if (b == 0x1b) {
-                if (i + 1 < bytes.len and bytes[i + 1] == '[') {
-                    i += 2;
-                    var k = i;
-                    while (k < bytes.len and (bytes[k] < '@' or bytes[k] > '~')) k += 1;
-                    if (k >= bytes.len) break;
-                    self.disarmQuit();
-                    self.esc_armed = false;
-                    const params = bytes[i..k];
-                    const final = bytes[k];
-                    i = k + 1;
-                    if (self.applyMouseScroll(params, final, bytes, &i)) continue;
-                    switch (classifyCsi(params, final)) {
-                        .up => self.arrowOrWheel(.up, bytes, &i, params, final),
-                        .down => self.arrowOrWheel(.down, bytes, &i, params, final),
-                        .page_up => self.scrollBy(@intCast(self.pageRows())),
-                        .page_down => self.scrollBy(-@as(isize, @intCast(self.pageRows()))),
-                        .ctrl_up => self.scrollBy(3),
-                        .ctrl_down => self.scrollBy(-3),
-                        .shift_up => {
-                            self.cycleThink(true);
-                            return .think;
-                        },
-                        .shift_down => {
-                            self.cycleThink(false);
-                            return .think;
-                        },
-                        .right => {
-                            if (self.cursor < self.input.items.len) {
-                                self.cursor += utf8LenAt(self.input.items, self.cursor);
-                            }
-                            self.dirty.store(true, .release);
-                        },
-                        .left => {
-                            if (self.cursor > 0) self.cursor -= utf8PrevLen(self.input.items, self.cursor);
-                            self.dirty.store(true, .release);
-                        },
-                        .home => {
-                            self.cursor = 0;
-                            self.dirty.store(true, .release);
-                        },
-                        .end => {
-                            self.cursor = self.input.items.len;
-                            self.dirty.store(true, .release);
-                        },
-                        .delete => {
-                            deleteUtf8At(&self.input, self.cursor);
-                            self.dirty.store(true, .release);
-                        },
-                        .other => {},
-                    }
-                    continue;
-                }
-                if (i + 1 < bytes.len and bytes[i + 1] == ',') {
-                    self.disarmQuit();
-                    self.esc_armed = false;
-                    self.cycleThink(false);
-                    return .think;
-                }
-                if (i + 1 < bytes.len and bytes[i + 1] == '.') {
-                    self.disarmQuit();
-                    self.esc_armed = false;
-                    self.cycleThink(true);
-                    return .think;
-                }
-                if (streaming) return .abort;
-                if (self.input.items.len == 0) {
-                    if (self.esc_armed) {
-                        self.esc_armed = false;
-                        self.historyPrev();
-                    } else {
-                        self.esc_armed = true;
-                        self.dirty.store(true, .release);
-                    }
-                }
-                i += 1;
-                continue;
-            }
-
-            if (b == 0x03) {
-                if (self.input.items.len > 0) {
-                    self.input.clearRetainingCapacity();
-                    self.cursor = 0;
-                    self.disarmQuit();
-                    self.esc_armed = false;
-                    self.dirty.store(true, .release);
-                } else {
-                    return self.armOrQuit(0x03);
-                }
-                i += 1;
-                continue;
-            }
-            if (b == 0x04) {
-                if (self.input.items.len == 0) return self.armOrQuit(0x04);
-                i += 1;
-                continue;
-            }
-            if (streaming and b == 0x02) return .detach;
-            if (b == 0x14) {
-                self.toggleThink();
-                i += 1;
-                continue;
-            }
-            if (b == 0x0f) {
-                self.toggleTools();
-                i += 1;
-                continue;
-            }
-            if (b == 0x09) {
-                if (streaming) {
-                    const act = try self.takeSubmit();
-                    if (act != .none) return act;
-                } else if (self.slashOpen()) {
-                    try self.completeSlash();
-                }
-                i += 1;
-                continue;
-            }
-
-            self.disarmQuit();
-            self.esc_armed = false;
-            if (b != '?') self.shortcuts_open = false;
-
-            switch (b) {
-                '\n', '\r' => {
-                    const act = try self.takeSubmit();
-                    if (act != .none) return act;
-                },
-                0x02 => {
-                    if (self.cursor > 0) self.cursor -= utf8PrevLen(self.input.items, self.cursor);
-                    self.dirty.store(true, .release);
-                },
-                0x06 => {
-                    if (self.cursor < self.input.items.len) {
-                        self.cursor += utf8LenAt(self.input.items, self.cursor);
-                    }
-                    self.dirty.store(true, .release);
-                },
-                0x10 => if (self.slashOpen()) self.moveSlash(-1) else self.historyPrev(),
-                0x0e => if (self.slashOpen()) self.moveSlash(1) else self.historyNext(),
-                0x08, 0x7f => {
-                    deleteUtf8Before(&self.input, &self.cursor);
-                    self.dirty.store(true, .release);
-                },
-                0x01 => {
-                    self.cursor = 0;
-                    self.dirty.store(true, .release);
-                },
-                0x05 => {
-                    self.cursor = self.input.items.len;
-                    self.dirty.store(true, .release);
-                },
-                0x0b => {
-                    self.input.shrinkRetainingCapacity(self.cursor);
-                    self.dirty.store(true, .release);
-                },
-                0x15 => {
-                    self.input.clearRetainingCapacity();
-                    self.cursor = 0;
-                    self.dirty.store(true, .release);
-                },
-                0x17 => {
-                    while (self.cursor > 0 and self.input.items[self.cursor - 1] == ' ') {
-                        deleteUtf8Before(&self.input, &self.cursor);
-                    }
-                    while (self.cursor > 0 and self.input.items[self.cursor - 1] != ' ') {
-                        deleteUtf8Before(&self.input, &self.cursor);
-                    }
-                    self.dirty.store(true, .release);
-                },
-                0x0c => {
-                    self.clearScroll();
-                },
-                '?' => {
-                    if (self.input.items.len == 0 and !streaming) {
-                        self.shortcuts_open = !self.shortcuts_open;
-                        self.dirty.store(true, .release);
-                    } else {
-                        if (self.cursor >= self.input.items.len) {
-                            try self.input.append('?');
-                        } else {
-                            try self.input.insert(self.cursor, '?');
-                        }
-                        self.cursor += 1;
-                        self.shortcuts_open = false;
-                        self.dirty.store(true, .release);
-                    }
-                },
-                else => {
-                    if (b >= 0x20) {
-                        const word = std.unicode.utf8ByteSequenceLength(b) catch 1;
-                        const avail = @min(word, bytes.len - i);
-                        if (self.cursor >= self.input.items.len) {
-                            try self.input.appendSlice(bytes[i .. i + avail]);
-                        } else {
-                            var j: usize = 0;
-                            while (j < avail) : (j += 1) {
-                                try self.input.insert(self.cursor + j, bytes[i + j]);
-                            }
-                        }
-                        self.cursor += avail;
-                        i += avail;
-                        self.dirty.store(true, .release);
-                        continue;
-                    }
-                },
-            }
-            i += 1;
-        }
-        return .none;
+        return tui_input.handleInput(self, bytes);
     }
 
-    fn handlePickerInput(self: *Tui, bytes: []const u8) !Action {
-        var i: usize = 0;
-        while (i < bytes.len) {
-            const b = bytes[i];
-            if (b == 0x1b) {
-                if (i + 1 < bytes.len and bytes[i + 1] == '[') {
-                    i += 2;
-                    var k = i;
-                    while (k < bytes.len and (bytes[k] < '@' or bytes[k] > '~')) k += 1;
-                    if (k >= bytes.len) break;
-                    const params = bytes[i..k];
-                    const final = bytes[k];
-                    i = k + 1;
-                    if (self.applyMouseScroll(params, final, bytes, &i)) {
-                        self.dirty.store(true, .release);
-                        continue;
-                    }
-                    if (self.picker) |*p| {
-                        switch (classifyCsi(params, final)) {
-                            .up => {
-                                const extra = consumeSameCsi(bytes, &i, params, final);
-                                if (extra > 0) {
-                                    self.scrollBy(3 * @as(isize, @intCast(1 + extra)));
-                                } else p.move(-1);
-                            },
-                            .down => {
-                                const extra = consumeSameCsi(bytes, &i, params, final);
-                                if (extra > 0) {
-                                    self.scrollBy(-3 * @as(isize, @intCast(1 + extra)));
-                                } else p.move(1);
-                            },
-                            .page_up => self.scrollBy(@intCast(self.pageRows())),
-                            .page_down => self.scrollBy(-@as(isize, @intCast(self.pageRows()))),
-                            .ctrl_up => self.scrollBy(3),
-                            .ctrl_down => self.scrollBy(-3),
-                            else => {},
-                        }
-                    }
-                    self.dirty.store(true, .release);
-                    continue;
-                }
-                self.closePicker();
-                return .none;
-            }
-            if (b == 0x03 or b == 0x04) {
-                self.closePicker();
-                return .none;
-            }
-            switch (b) {
-                '\n', '\r' => return try self.confirmPicker(),
-                'k', 'K', 0x10 => if (self.picker) |*p| p.move(-1),
-                'j', 'J', 0x0e => if (self.picker) |*p| p.move(1),
-                '1'...'9' => {
-                    const n: usize = b - '1';
-                    if (self.picker) |*p| {
-                        if (n < p.items.len) p.sel = n;
-                    }
-                },
-                else => {},
-            }
-            self.dirty.store(true, .release);
-            i += 1;
-        }
-        return .none;
-    }
-
-    fn confirmPicker(self: *Tui) !Action {
-        const line = if (self.picker) |*p|
-            try p.confirmLine(self.alloc)
-        else
-            return .none;
-        self.closePicker();
-        return .{ .submit = line };
-    }
-
-    fn pageRows(self: *const Tui) usize {
-        return @max(1, self.height / 2);
-    }
-
-    /// 1007 alternate-scroll turns the wheel into CSI arrows. A burst in one
-    /// read is a wheel; a single arrow is input history (or picker move).
-    fn arrowOrWheel(self: *Tui, dir: WheelDir, bytes: []const u8, i: *usize, params: []const u8, final: u8) void {
-        const extra = consumeSameCsi(bytes, i, params, final);
-        if (extra > 0) {
-            const n: isize = @intCast(1 + extra);
-            self.scrollBy(if (dir == .up) 3 * n else -3 * n);
-            return;
-        }
-        if (self.slashOpen()) {
-            self.moveSlash(if (dir == .up) -1 else 1);
-            return;
-        }
-        if (dir == .up) self.historyPrev() else self.historyNext();
-    }
-
-    fn applyMouseScroll(self: *Tui, params: []const u8, final: u8, bytes: []const u8, i: *usize) bool {
-        if (sgrWheel(params)) |dir| {
-            self.scrollBy(if (dir == .up) 3 else -3);
-            return true;
-        }
-        if (params.len == 0 and final == 'M' and i.* + 3 <= bytes.len) {
-            const btn: u16 = bytes[i.*];
-            i.* += 3;
-            const base = (btn -% 32) & ~@as(u16, 0x1C);
-            if (base == 64) self.scrollBy(3);
-            if (base == 65) self.scrollBy(-3);
-            return true;
-        }
-        return false;
-    }
-
-    fn scrollBy(self: *Tui, delta: isize) void {
+    pub fn scrollBy(self: *Tui, delta: isize) void {
         if (delta < 0) {
             const d: usize = @intCast(-delta);
             self.scroll_off = if (self.scroll_off > d) self.scroll_off - d else 0;
@@ -2194,24 +1215,98 @@ pub const Tui = struct {
         self.dirty.store(true, .release);
     }
 
-    fn cycleThink(self: *Tui, up: bool) void {
+    fn estimateCellRows(cell: Cell, width: usize) usize {
+        if (cell.kind == .tool) {
+            if (cell.tool) |tm| return toolRowCount(tm, width);
+        }
+        return @max(1, wrapRowCount(cell.text.items, @max(width, 8) - 4));
+    }
+
+    fn cellMatches(cell: Cell, q: []const u8) bool {
+        if (indexOfInsensitive(cell.text.items, q) != null) return true;
+        if (cell.tool) |tm| {
+            if (indexOfInsensitive(tm.name, q) != null) return true;
+            if (indexOfInsensitive(tm.preview, q) != null) return true;
+            if (indexOfInsensitive(tm.body.items, q) != null) return true;
+        }
+        return false;
+    }
+
+    fn scrollToCell(self: *Tui, idx: usize) void {
+        var row: usize = 0;
+        var prev: CellKind = .chrome;
+        for (self.cells.items[0..idx]) |c| {
+            if (gapBetween(prev, c.kind)) row += 1;
+            row += estimateCellRows(c, self.width);
+            prev = c.kind;
+        }
+        if (idx < self.cells.items.len and gapBetween(prev, self.cells.items[idx].kind)) row += 1;
+        const pin = self.last_pin;
+        self.scroll_off = if (row >= pin) 0 else pin - row;
+        self.dirty.store(true, .release);
+    }
+
+    /// 在对话块里搜。同查询再调一次则下一条;绕回。
+    pub fn findNext(self: *Tui, query: []const u8, reverse: bool) !bool {
+        self.mutex.lock(util.io) catch {};
+        defer self.mutex.unlock(util.io);
+        const q = std.mem.trim(u8, query, " \t");
+        if (q.len == 0) return false;
+        if (self.search_q.len == 0 or !util.eqlIgnoreCase(self.search_q, q)) {
+            const d = try self.alloc.dupe(u8, q);
+            if (self.search_q.len > 0) self.alloc.free(self.search_q);
+            self.search_q = d;
+            self.search_hit = null;
+        }
+        const n = self.cells.items.len;
+        if (n == 0) return false;
+        const start: usize = self.search_hit orelse if (reverse) 0 else n - 1;
+        var i = start;
+        var stepped: usize = 0;
+        while (stepped < n) {
+            if (reverse) {
+                i = if (i == 0) n - 1 else i - 1;
+            } else {
+                i = if (i + 1 >= n) 0 else i + 1;
+            }
+            stepped += 1;
+            if (cellMatches(self.cells.items[i], self.search_q)) {
+                if (self.search_hit) |old| self.cells.items[old].hl = false;
+                self.cells.items[i].hl = true;
+                self.search_hit = i;
+                self.scrollToCell(i);
+                return true;
+            }
+        }
+        for (self.find_log.items) |s| {
+            if (indexOfInsensitive(s, self.search_q) != null) {
+                self.status.clearRetainingCapacity();
+                self.status.appendSlice("match in pruned history") catch |err| util.debugCatch("tui.find.status", err);
+                self.dirty.store(true, .release);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    pub fn cycleThink(self: *Tui, up: bool) void {
         self.think_level = cfgmod.cycleThinkLevel(self.think_meta, self.think_level, up);
         self.dirty.store(true, .release);
     }
 
-    fn historyPrev(self: *Tui) void {
+    pub fn historyPrev(self: *Tui) void {
         if (self.history.items.len == 0) return;
         const idx = self.hist_idx orelse self.history.items.len;
         if (idx == 0) return;
         const ni = idx - 1;
         self.hist_idx = ni;
         self.input.clearRetainingCapacity();
-        self.input.appendSlice(self.history.items[ni]) catch {};
+        self.input.appendSlice(self.history.items[ni]) catch |err| util.debugCatch("tui.hist.up", err);
         self.cursor = self.input.items.len;
         self.dirty.store(true, .release);
     }
 
-    fn historyNext(self: *Tui) void {
+    pub fn historyNext(self: *Tui) void {
         const idx = self.hist_idx orelse return;
         if (idx + 1 >= self.history.items.len) {
             self.hist_idx = null;
@@ -2220,7 +1315,7 @@ pub const Tui = struct {
         } else {
             self.hist_idx = idx + 1;
             self.input.clearRetainingCapacity();
-            self.input.appendSlice(self.history.items[idx + 1]) catch {};
+            self.input.appendSlice(self.history.items[idx + 1]) catch |err| util.debugCatch("tui.hist.down", err);
             self.cursor = self.input.items.len;
         }
         self.dirty.store(true, .release);
@@ -2244,12 +1339,22 @@ pub const Tui = struct {
     }
 };
 
-fn nowNs() i64 {
+pub fn nowNs() i64 {
     return @intCast(std.Io.Clock.now(.real, util.io).nanoseconds);
 }
 
 fn nowMs() i64 {
     return @intCast(@divTrunc(std.Io.Clock.now(.awake, util.io).nanoseconds, std.time.ns_per_ms));
+}
+
+fn invalidatePaint(cell: *Cell, alloc: std.mem.Allocator) void {
+    if (cell.card_buf) |buf| alloc.free(buf);
+    cell.card_buf = null;
+    cell.card_w = 0;
+    if (cell.md_buf) |buf| alloc.free(buf);
+    cell.md_buf = null;
+    cell.md_fp = 0;
+    cell.row_valid = false;
 }
 
 fn deinitCell(cell: *Cell, alloc: std.mem.Allocator) void {
@@ -2258,6 +1363,7 @@ fn deinitCell(cell: *Cell, alloc: std.mem.Allocator) void {
     cell.card = null;
     if (cell.tool) |*tm| tm.deinit(alloc);
     cell.tool = null;
+    invalidatePaint(cell, alloc);
 }
 
 fn dupeCard(
@@ -2320,777 +1426,29 @@ fn paintCard(alloc: std.mem.Allocator, kind: CellKind, card: CardFields, width: 
     };
 }
 
-fn cardSlice(cell: Cell, cards: []const []u8, card_i: *usize) []const u8 {
-    if (cell.card == null) return "";
-    if (card_i.* >= cards.len) return "";
-    const s = cards[card_i.*];
-    card_i.* += 1;
-    return s;
+fn paintedOf(cell: Cell) []const u8 {
+    return cell.card_buf orelse "";
 }
 
-const Layer = enum { none, user, think, assistant, tool, chrome };
-
-fn layerOf(kind: CellKind) Layer {
-    return switch (kind) {
-        .user => .user,
-        .think => .think,
-        .assistant => .assistant,
-        .tool, .tool_end => .tool,
-        .chrome, .session_header, .status_card => .chrome,
-    };
-}
-
-/// Codex rhythm: blank before/after user; blank between think ↔ text ↔ tool.
-/// Tool end hangs under its tool (no gap); sibling tools stay grouped.
-fn gapBetween(prev: CellKind, next: CellKind) bool {
-    if (next == .tool_end) return false;
-    if ((prev == .tool or prev == .tool_end) and next == .tool) return false;
-    if (next == .user or prev == .user) return true;
-    const a = layerOf(prev);
-    const b = layerOf(next);
-    return a != .none and b != .none and a != b;
-}
-
-fn gutter(kind: CellKind) struct { first: []const u8, rest: []const u8, pad: usize } {
-    return switch (kind) {
-        // User: full-height bar on every line. No ┌/└ rows.
-        .user => .{ .first = ANSI_BOLD ++ "▎ ", .rest = ANSI_BOLD ++ "▎ ", .pad = 2 },
-        // Assistant is an open block: indent only, no bar.
-        .assistant => .{ .first = "  ", .rest = "  ", .pad = 2 },
-        // Think recedes: same indent, dim italic. No extra label row when open.
-        .think => .{ .first = ANSI_DIM ++ ANSI_ITALIC ++ "  ", .rest = ANSI_DIM ++ ANSI_ITALIC ++ "  ", .pad = 2 },
-        // Tool title: indent 4 + ▸. Status rides on this line.
-        .tool => .{ .first = ANSI_DIM ++ "    ▸ " ++ ANSI_RESET, .rest = "      ", .pad = 6 },
-        .tool_end => .{ .first = ANSI_DIM ++ "      └ ", .rest = ANSI_DIM ++ "        ", .pad = 8 },
-        .session_header, .status_card, .chrome => .{ .first = "", .rest = "", .pad = 0 },
-    };
-}
-
-fn gutterInner(kind: CellKind, width: usize) usize {
-    const pad = gutter(kind).pad;
-    return if (width > pad) width - pad else 1;
-}
-
-fn countNewlines(s: []const u8) usize {
-    var n: usize = 0;
-    for (s) |c| {
-        if (c == '\n') n += 1;
-    }
+fn cellFingerprint(cell: Cell) usize {
+    var n = cell.text.items.len;
+    if (cell.tool) |tm| n += tm.body.items.len + tm.preview.len + @intFromBool(tm.folded);
+    if (cell.hl) n += 1;
     return n;
 }
 
-fn countContentLines(s: []const u8) usize {
-    if (s.len == 0) return 0;
-    var n: usize = 1;
-    for (s) |c| {
-        if (c == '\n') n += 1;
+fn cellRowCountCached(alloc: std.mem.Allocator, cell: *Cell, painted: []const u8, think_open: bool, width: usize) usize {
+    const fp = cellFingerprint(cell.*);
+    if (cell.row_valid and cell.row_w == width and cell.row_think == think_open and cell.row_fp == fp) {
+        return cell.row_n;
     }
-    if (s[s.len - 1] == '\n') n -= 1;
+    const n = cellRowCount(alloc, cell, painted, think_open, width);
+    cell.row_n = n;
+    cell.row_w = width;
+    cell.row_think = think_open;
+    cell.row_fp = fp;
+    cell.row_valid = true;
     return n;
-}
-
-fn bodyView(s: []const u8) []const u8 {
-    if (s.len > 0 and s[s.len - 1] == '\n') return s[0 .. s.len - 1];
-    return s;
-}
-
-fn toolElapsedMs(meta: ToolMeta, now_ms: i64) i64 {
-    if (meta.status == .running) {
-        if (meta.start_ms == 0) return 0;
-        return @max(0, now_ms - meta.start_ms);
-    }
-    return meta.elapsed_ms;
-}
-
-fn formatToolStatus(buf: []u8, meta: ToolMeta, now_ms: i64) []const u8 {
-    const outcome: []const u8 = switch (meta.status) {
-        .running => "running",
-        .ok => "ok",
-        .err => "err",
-    };
-    var eb: [24]u8 = undefined;
-    const et = activity.formatElapsed(&eb, toolElapsedMs(meta, now_ms));
-    const ink = theme.fgStatus(paintStatus(meta.status));
-    const ink_end: []const u8 = if (ink.len > 0) ANSI_RESET else "";
-    if (meta.status == .running) {
-        return std.fmt.bufPrint(buf, "{s} {s}", .{ outcome, et }) catch outcome;
-    }
-    return std.fmt.bufPrint(buf, "{s}{s}{s} {s} {d}ln", .{ ink, outcome, ink_end, et, meta.lines }) catch outcome;
-}
-
-fn toolTitle(meta: ToolMeta, buf: []u8, now_ms: i64) []const u8 {
-    var sb: [64]u8 = undefined;
-    const status = formatToolStatus(&sb, meta, now_ms);
-    if (meta.preview.len == 0) {
-        return std.fmt.bufPrint(buf, "{s}{s}{s}  {s}", .{
-            ANSI_BOLD, meta.name, ANSI_RESET, status,
-        }) catch meta.name;
-    }
-    return std.fmt.bufPrint(buf, "{s}{s}{s}  {s}{s}{s}  {s}", .{
-        ANSI_BOLD, meta.name, ANSI_RESET, ANSI_DIM, meta.preview, ANSI_RESET, status,
-    }) catch meta.name;
-}
-
-const TOOL_HEAD_PREFIX = ANSI_DIM ++ "    ▸ " ++ ANSI_RESET;
-const TOOL_HEAD_REST = "      ";
-const TOOL_BODY_FIRST = ANSI_DIM ++ "      │ ";
-const TOOL_BODY_LAST = ANSI_DIM ++ "      └ ";
-const TOOL_BODY_REST = ANSI_DIM ++ "        ";
-const TOOL_BODY_PAD: usize = 8;
-
-fn toolBodyInner(width: usize) usize {
-    return if (width > TOOL_BODY_PAD) width - TOOL_BODY_PAD else 1;
-}
-
-fn toolRowCount(meta: ToolMeta, width: usize) usize {
-    var tb: [512]u8 = undefined;
-    const title = toolTitle(meta, &tb, nowMs());
-    var rows = wrapRowCount(title, gutterInner(.tool, width));
-    if (meta.folded) {
-        // 折叠尾行 `· (N more lines, ctrl+o)`
-        const view = bodyView(meta.body.items);
-        if (view.len > 0 and countContentLines(view) > 2) rows += 1;
-        return rows;
-    }
-    {
-        const view = bodyView(meta.body.items);
-        if (view.len > 0) {
-            const inner = toolBodyInner(width);
-            var it = std.mem.splitScalar(u8, view, '\n');
-            while (it.next()) |part| {
-                rows += wrapRowCount(part, inner);
-            }
-        }
-    }
-    return rows;
-}
-
-const Styled = struct {
-    owned: ?[]u8 = null,
-    text: []const u8,
-    fn deinit(self: Styled, alloc: std.mem.Allocator) void {
-        if (self.owned) |o| alloc.free(o);
-    }
-};
-
-fn paintStatus(s: ToolStatus) theme_mod.PaintStatus {
-    return switch (s) {
-        .running => .running,
-        .ok => .ok,
-        .err => .err,
-    };
-}
-
-fn styleMd(alloc: std.mem.Allocator, kind: CellKind, text: []const u8) Styled {
-    if (kind != .user and kind != .assistant) return .{ .text = text };
-    if (text.len == 0 or theme.mode == .none) return .{ .text = text };
-    const painted = markdown.render(alloc, &theme, text) catch return .{ .text = text };
-    return .{ .owned = painted, .text = painted };
-}
-
-fn userRowCount(text: []const u8, width: usize) usize {
-    const inner = gutterInner(.user, width);
-    if (text.len == 0) return 1;
-    var rows: usize = 0;
-    var it = std.mem.splitScalar(u8, text, '\n');
-    while (it.next()) |part| {
-        rows += wrapRowCount(part, inner);
-    }
-    return if (rows == 0) 1 else rows;
-}
-
-fn emitFrameLine(wr: *std.Io.Writer, line: []const u8, skipped: *usize, emitted: *usize, limit: usize) !void {
-    if (emitted.* >= limit) return;
-    if (skipped.* > 0) {
-        skipped.* -= 1;
-        return;
-    }
-    try wr.writeAll(line);
-    try wr.writeAll(ANSI_RESET ++ "\x1b[K\r\n");
-    emitted.* += 1;
-}
-
-fn emitPrefixed(
-    wr: *std.Io.Writer,
-    first: []const u8,
-    rest: []const u8,
-    text: []const u8,
-    inner: usize,
-    skipped: *usize,
-    emitted: *usize,
-    limit: usize,
-    band: []const u8,
-) !void {
-    if (emitted.* >= limit) return;
-    const n = wrapRowCount(text, inner);
-    if (skipped.* >= n) {
-        skipped.* -= n;
-        return;
-    }
-    const local = skipped.*;
-    skipped.* = 0;
-    emitted.* += try emitWrappedGutter(wr, first, rest, text, inner, local, limit - emitted.*, band);
-}
-
-fn emitTool(wr: *std.Io.Writer, meta: ToolMeta, width: usize, skip: usize, limit: usize) !usize {
-    if (limit == 0) return 0;
-    var skipped = skip;
-    var emitted: usize = 0;
-    var tb: [512]u8 = undefined;
-    const title = toolTitle(meta, &tb, nowMs());
-    try emitPrefixed(wr, TOOL_HEAD_PREFIX, TOOL_HEAD_REST, title, gutterInner(.tool, width), &skipped, &emitted, limit, theme.bgTool(paintStatus(meta.status)));
-    if (meta.folded) {
-        // pi 式折叠尾行:体有未尽之行则缀 `· (N more lines, ctrl+o)`
-        const view = bodyView(meta.body.items);
-        if (view.len > 0) {
-            const n = countContentLines(view);
-            if (n > 2) {
-                var tail_buf: [48]u8 = undefined;
-                const tail = std.fmt.bufPrint(&tail_buf, ANSI_DIM ++ "· ({d} more lines, ctrl+o)" ++ ANSI_RESET, .{n - 2}) catch "· (more, ctrl+o)";
-                try emitPrefixed(wr, "    ", "    ", tail, width -| 4, &skipped, &emitted, limit, theme.bgTool(paintStatus(meta.status)));
-            }
-        }
-        return emitted;
-    }
-    {
-        const view = bodyView(meta.body.items);
-        if (view.len > 0) {
-            const inner = toolBodyInner(width);
-            const nlines = countContentLines(view);
-            var it = std.mem.splitScalar(u8, view, '\n');
-            var i: usize = 0;
-            while (it.next()) |part| {
-                i += 1;
-                const first = if (i == nlines) TOOL_BODY_LAST else TOOL_BODY_FIRST;
-                try emitPrefixed(wr, first, TOOL_BODY_REST, part, inner, &skipped, &emitted, limit, "");
-            }
-        }
-    }
-    return emitted;
-}
-
-fn emitUser(wr: *std.Io.Writer, text: []const u8, width: usize, skip: usize, limit: usize) !usize {
-    if (limit == 0) return 0;
-    var skipped = skip;
-    var emitted: usize = 0;
-    const g = gutter(.user);
-    const inner = gutterInner(.user, width);
-    // bg + bold 一并作 band:Markdown 中途 RESET 后 writeReband 复披,行内强调后仍粗
-    var band_buf: [48]u8 = undefined;
-    const bg = theme.bgUser();
-    const band = blk: {
-        if (bg.len == 0 or bg.len + ANSI_BOLD.len > band_buf.len) break :blk bg;
-        @memcpy(band_buf[0..bg.len], bg);
-        @memcpy(band_buf[bg.len..][0..ANSI_BOLD.len], ANSI_BOLD);
-        break :blk band_buf[0 .. bg.len + ANSI_BOLD.len];
-    };
-    if (text.len == 0) {
-        try emitPrefixed(wr, g.first, g.rest, "", inner, &skipped, &emitted, limit, band);
-        return emitted;
-    }
-    var it = std.mem.splitScalar(u8, text, '\n');
-    while (it.next()) |part| {
-        try emitPrefixed(wr, g.first, g.rest, part, inner, &skipped, &emitted, limit, band);
-    }
-    return emitted;
-}
-
-fn cellRowCount(alloc: std.mem.Allocator, cell: Cell, painted: []const u8, think_open: bool, width: usize) usize {
-    if (cell.kind == .session_header or cell.kind == .status_card) {
-        if (painted.len == 0) return 0;
-        return countNewlines(painted) + 1;
-    }
-    const md = styleMd(alloc, cell.kind, cell.text.items);
-    defer md.deinit(alloc);
-    if (cell.kind == .user) return userRowCount(md.text, width);
-    if (cell.kind == .think) return thinkRowCount(cell.text.items, think_open, width);
-    if (cell.kind == .tool) {
-        if (cell.tool) |meta| return toolRowCount(meta, width);
-    }
-    const inner = gutterInner(cell.kind, width);
-    if (md.text.len == 0) return 1;
-    var rows: usize = 0;
-    var it = std.mem.splitScalar(u8, md.text, '\n');
-    while (it.next()) |part| {
-        rows += wrapRowCount(part, inner);
-    }
-    return if (rows == 0) 1 else rows;
-}
-
-fn emitCell(alloc: std.mem.Allocator, wr: *std.Io.Writer, cell: Cell, painted: []const u8, think_open: bool, width: usize, skip: usize, limit: usize) !usize {
-    if (limit == 0) return 0;
-    if (cell.kind == .session_header or cell.kind == .status_card) {
-        return emitPainted(wr, painted, width, skip, limit);
-    }
-    const md = styleMd(alloc, cell.kind, cell.text.items);
-    defer md.deinit(alloc);
-    if (cell.kind == .user) {
-        return emitUser(wr, md.text, width, skip, limit);
-    }
-    if (cell.kind == .think) {
-        return emitThink(wr, cell.text.items, think_open, width, skip, limit);
-    }
-    if (cell.kind == .tool) {
-        if (cell.tool) |meta| return emitTool(wr, meta, width, skip, limit);
-    }
-    const g = gutter(cell.kind);
-    const inner = gutterInner(cell.kind, width);
-    if (cell.kind == .chrome) {
-        const color = if (cell.color.len > 0) cell.color else ANSI_DIM;
-        return emitChrome(wr, color, cell.text.items, inner, skip, limit);
-    }
-    if (md.text.len == 0) {
-        if (skip > 0) return 0;
-        try wr.writeAll(g.first);
-        try wr.writeAll(ANSI_RESET ++ "\x1b[K\r\n");
-        return 1;
-    }
-    var emitted: usize = 0;
-    var skipped: usize = 0;
-    var it = std.mem.splitScalar(u8, md.text, '\n');
-    var first = true;
-    while (it.next()) |part| {
-        const n = wrapRowCount(part, inner);
-        if (skipped + n <= skip) {
-            skipped += n;
-            first = false;
-            continue;
-        }
-        const local = if (skipped < skip) skip - skipped else 0;
-        skipped += n;
-        const first_g = if (first) g.first else g.rest;
-        emitted += try emitWrappedGutter(wr, first_g, g.rest, part, inner, local, limit - emitted, "");
-        first = false;
-        if (emitted >= limit) return emitted;
-    }
-    return emitted;
-}
-
-fn emitPainted(wr: *std.Io.Writer, painted: []const u8, width: usize, skip: usize, limit: usize) !usize {
-    var emitted: usize = 0;
-    var skipped: usize = 0;
-    var it = std.mem.splitScalar(u8, painted, '\n');
-    while (it.next()) |line| {
-        if (skipped < skip) {
-            skipped += 1;
-            continue;
-        }
-        try writeTrunc(wr, line, width);
-        try wr.writeAll(ANSI_RESET ++ "\x1b[K\r\n");
-        emitted += 1;
-        if (emitted == limit) return emitted;
-    }
-    return emitted;
-}
-
-fn emitChrome(wr: *std.Io.Writer, color: []const u8, text: []const u8, width: usize, skip: usize, limit: usize) !usize {
-    var emitted: usize = 0;
-    var skipped: usize = 0;
-    var it = std.mem.splitScalar(u8, text, '\n');
-    while (it.next()) |part| {
-        const n = wrapRowCount(part, width);
-        if (skipped + n <= skip) {
-            skipped += n;
-            continue;
-        }
-        const local = if (skipped < skip) skip - skipped else 0;
-        skipped += n;
-        const prefix = if (color.len > 0) color else "";
-        emitted += try emitWrappedGutter(wr, prefix, prefix, part, width, local, limit - emitted, "");
-        if (emitted >= limit) return emitted;
-    }
-    return emitted;
-}
-
-fn skipAnsi(s: []const u8, i: usize) usize {
-    if (i >= s.len or s[i] != 0x1b) return i;
-    if (i + 1 < s.len and s[i + 1] == '[') {
-        var k = i + 2;
-        while (k < s.len and !(s[k] >= '@' and s[k] <= '~')) k += 1;
-        return if (k < s.len) k + 1 else s.len;
-    }
-    return i + 1;
-}
-
-/// East Asian Wide / Fullwidth + common emoji. Box drawing, `▎`, `▸`, `›`
-/// stay 1 column so gutters and the composer frame do not steal wrap width.
-fn isWideCp(cp: u21) bool {
-    return switch (cp) {
-        0x1100...0x115F => true,
-        0x2329...0x232A => true,
-        0x2E80...0x303E => true,
-        0x3040...0xA4CF => true,
-        0xAC00...0xD7A3 => true,
-        0xF900...0xFAFF => true,
-        0xFE10...0xFE19 => true,
-        0xFE30...0xFE6F => true,
-        0xFF00...0xFF60 => true,
-        0xFFE0...0xFFE6 => true,
-        0x1F300...0x1F64F => true,
-        0x1F900...0x1F9FF => true,
-        0x20000...0x3FFFD => true,
-        else => false,
-    };
-}
-
-fn charCols(s: []const u8, i: usize) struct { n: usize, cols: usize } {
-    const n = std.unicode.utf8ByteSequenceLength(s[i]) catch 1;
-    const take = @min(n, s.len - i);
-    if (take < n) return .{ .n = take, .cols = 1 };
-    const cp = std.unicode.utf8Decode(s[i .. i + take]) catch return .{ .n = take, .cols = 1 };
-    return .{ .n = take, .cols = if (isWideCp(cp)) 2 else 1 };
-}
-fn visibleCols(s: []const u8) usize {
-    var cols: usize = 0;
-    var i: usize = 0;
-    while (i < s.len) {
-        const next = skipAnsi(s, i);
-        if (next != i) {
-            i = next;
-            continue;
-        }
-        const ch = charCols(s, i);
-        cols += ch.cols;
-        i += ch.n;
-    }
-    return cols;
-}
-
-fn truncateToVisible(s: []const u8, max_cols: usize) []const u8 {
-    var cols: usize = 0;
-    var i: usize = 0;
-    var last: usize = 0;
-    while (i < s.len) {
-        const next = skipAnsi(s, i);
-        if (next != i) {
-            i = next;
-            last = i;
-            continue;
-        }
-        const ch = charCols(s, i);
-        if (cols + ch.cols > max_cols) return s[0..last];
-        cols += ch.cols;
-        i += ch.n;
-        last = i;
-    }
-    return s;
-}
-
-fn ellipsizeAlloc(alloc: std.mem.Allocator, s: []const u8, max_cols: usize) ![]u8 {
-    if (max_cols == 0) return alloc.dupe(u8, "");
-    if (visibleCols(s) <= max_cols) return alloc.dupe(u8, s);
-    if (max_cols == 1) return alloc.dupe(u8, "…");
-    const cut = truncateToVisible(s, max_cols - 1);
-    return std.fmt.allocPrint(alloc, "{s}…", .{cut});
-}
-
-/// 从右往左丢掉段,直到拼起来不超过 width。只剩一段仍超宽就截断。
-pub fn joinFit(alloc: std.mem.Allocator, parts: []const []const u8, sep: []const u8, width: usize) ![]u8 {
-    var n = parts.len;
-    while (n > 0) {
-        const joined = try joinN(alloc, parts[0..n], sep);
-        const cols = visibleCols(joined);
-        if (cols <= width or n == 1) {
-            if (cols > width) {
-                const cut = truncateToVisible(joined, width);
-                const out = try alloc.dupe(u8, cut);
-                alloc.free(joined);
-                return out;
-            }
-            return joined;
-        }
-        alloc.free(joined);
-        n -= 1;
-    }
-    return try alloc.dupe(u8, "");
-}
-
-fn joinN(alloc: std.mem.Allocator, parts: []const []const u8, sep: []const u8) ![]u8 {
-    var w = std.Io.Writer.Allocating.init(alloc);
-    errdefer w.deinit();
-    for (parts, 0..) |p, i| {
-        if (i > 0) try w.writer.writeAll(sep);
-        try w.writer.writeAll(p);
-    }
-    return w.toOwnedSlice();
-}
-
-fn wrapRowCount(line: []const u8, width: usize) usize {
-    const w = @max(width, 1);
-    var rows: usize = 1;
-    var cols: usize = 0;
-    var i: usize = 0;
-    while (i < line.len) {
-        const next = skipAnsi(line, i);
-        if (next != i) {
-            i = next;
-            continue;
-        }
-        const ch = charCols(line, i);
-        if (cols > 0 and cols + ch.cols > w) {
-            rows += 1;
-            cols = 0;
-        }
-        cols += ch.cols;
-        i += ch.n;
-    }
-    return rows;
-}
-
-/// 写 s,每遇 \x1b[0m 复披 band —— 内部 reset 会剥 bg,须重披。
-fn writeReband(wr: *std.Io.Writer, s: []const u8, band: []const u8) !void {
-    var off: usize = 0;
-    while (std.mem.indexOfPos(u8, s, off, ANSI_RESET)) |idx| {
-        try wr.writeAll(s[off .. idx + ANSI_RESET.len]);
-        try wr.writeAll(band);
-        off = idx + ANSI_RESET.len;
-    }
-    try wr.writeAll(s[off..]);
-}
-
-/// band 非空时:行首披 bg,内容复披,补白至行满再 reset —— 色带达屏缘。
-fn emitWrappedGutter(wr: *std.Io.Writer, first: []const u8, rest: []const u8, line: []const u8, width: usize, skip: usize, limit: usize, band: []const u8) !usize {
-    if (limit == 0) return 0;
-    const w = @max(width, 1);
-    var emitted: usize = 0;
-    var skipped: usize = 0;
-    var cols: usize = 0;
-    var row_from: usize = 0;
-    var row: usize = 0;
-    var i: usize = 0;
-    while (i < line.len) {
-        const next = skipAnsi(line, i);
-        if (next != i) {
-            i = next;
-            continue;
-        }
-        const ch = charCols(line, i);
-        if (cols > 0 and cols + ch.cols > w) {
-            if (skipped < skip) {
-                skipped += 1;
-            } else {
-                if (band.len > 0) try wr.writeAll(band);
-                try wr.writeAll(if (row == 0) first else rest);
-                if (band.len > 0) {
-                    try writeReband(wr, line[row_from..i], band);
-                    var p: usize = cols;
-                    while (p < w) : (p += 1) try wr.writeByte(' ');
-                } else {
-                    try wr.writeAll(line[row_from..i]);
-                }
-                try wr.writeAll(ANSI_RESET ++ "\x1b[K\r\n");
-                emitted += 1;
-                if (emitted == limit) return emitted;
-            }
-            row += 1;
-            row_from = i;
-            cols = 0;
-        }
-        cols += ch.cols;
-        i += ch.n;
-    }
-    if (skipped < skip) return emitted;
-    if (band.len > 0) try wr.writeAll(band);
-    try wr.writeAll(if (row == 0) first else rest);
-    if (band.len > 0) {
-        try writeReband(wr, line[row_from..line.len], band);
-        var p: usize = cols;
-        while (p < w) : (p += 1) try wr.writeByte(' ');
-    } else {
-        try wr.writeAll(line[row_from..line.len]);
-    }
-    try wr.writeAll(ANSI_RESET ++ "\x1b[K\r\n");
-    return emitted + 1;
-}
-
-const CsiKey = enum { up, down, left, right, home, end, delete, page_up, page_down, shift_up, shift_down, ctrl_up, ctrl_down, other };
-
-fn csiMod(params: []const u8) []const u8 {
-    if (std.mem.lastIndexOfScalar(u8, params, ';')) |i| return params[i + 1 ..];
-    return params;
-}
-
-fn csiShift(params: []const u8) bool {
-    return std.mem.eql(u8, csiMod(params), "2");
-}
-
-fn csiCtrl(params: []const u8) bool {
-    return std.mem.eql(u8, csiMod(params), "5");
-}
-
-const WheelDir = enum { up, down };
-
-fn consumeSameCsi(bytes: []const u8, i: *usize, params: []const u8, final: u8) usize {
-    var n: usize = 0;
-    while (i.* + 2 <= bytes.len and bytes[i.*] == 0x1b and bytes[i.* + 1] == '[') {
-        var k = i.* + 2;
-        while (k < bytes.len and (bytes[k] < '@' or bytes[k] > '~')) k += 1;
-        if (k >= bytes.len) break;
-        if (bytes[k] != final or !std.mem.eql(u8, bytes[i.* + 2 .. k], params)) break;
-        i.* = k + 1;
-        n += 1;
-    }
-    return n;
-}
-
-fn sgrWheel(params: []const u8) ?WheelDir {
-    if (params.len < 2 or params[0] != '<') return null;
-    const rest = params[1..];
-    const semi = std.mem.indexOfScalar(u8, rest, ';') orelse rest.len;
-    const btn = std.fmt.parseInt(u16, rest[0..semi], 10) catch return null;
-    return switch (btn & ~@as(u16, 0x1C)) {
-        64 => .up,
-        65 => .down,
-        else => null,
-    };
-}
-
-fn classifyCsi(params: []const u8, final: u8) CsiKey {
-    const shift = csiShift(params);
-    const ctrl = csiCtrl(params);
-    return switch (final) {
-        'A' => if (shift) .shift_up else if (ctrl) .ctrl_up else .up,
-        'B' => if (shift) .shift_down else if (ctrl) .ctrl_down else .down,
-        'C' => .right,
-        'D' => .left,
-        'H' => .home,
-        'F' => .end,
-        '~' => blk: {
-            if (std.mem.eql(u8, params, "3") or std.mem.startsWith(u8, params, "3;")) break :blk .delete;
-            if (std.mem.eql(u8, params, "5") or std.mem.startsWith(u8, params, "5;")) break :blk .page_up;
-            if (std.mem.eql(u8, params, "6") or std.mem.startsWith(u8, params, "6;")) break :blk .page_down;
-            break :blk .other;
-        },
-        else => .other,
-    };
-}
-
-pub const ThinkLevel = ai.ThinkLevel;
-
-pub fn classifyThink(n: usize) ThinkLevel {
-    if (n == 0) return .off;
-    if (n < 400) return .low;
-    if (n < 1500) return .medium;
-    if (n < 4000) return .high;
-    return .max;
-}
-
-pub fn thinkColor(level: ThinkLevel) []const u8 {
-    return switch (level) {
-        .off => ANSI_DIM,
-        .minimal => "\x1b[32m",
-        .low => "\x1b[32m",
-        .medium => "\x1b[36m",
-        .high => "\x1b[36m",
-        .xhigh => "\x1b[35m",
-        .max => "\x1b[35m",
-    };
-}
-
-pub fn thinkLabel(level: ThinkLevel) []const u8 {
-    return level.label();
-}
-
-fn thinkRowCount(buf: []const u8, open: bool, width: usize) usize {
-    if (buf.len == 0) return 0;
-    if (!open) return 1;
-    var rows: usize = 0;
-    const inner = gutterInner(.think, width);
-    var it = std.mem.splitScalar(u8, buf, '\n');
-    while (it.next()) |p| {
-        rows += wrapRowCount(p, inner);
-    }
-    return if (rows == 0) 1 else rows;
-}
-
-fn emitThink(wr: *std.Io.Writer, buf: []const u8, open: bool, width: usize, skip: usize, limit: usize) !usize {
-    if (buf.len == 0 or limit == 0) return 0;
-    var skipped = skip;
-    var emitted: usize = 0;
-    if (!open) {
-        try emitFrameLine(wr, ANSI_DIM ++ ANSI_ITALIC ++ "  · thought" ++ ANSI_RESET, &skipped, &emitted, limit);
-        return emitted;
-    }
-    const g = gutter(.think);
-    const inner = gutterInner(.think, width);
-    var it = std.mem.splitScalar(u8, buf, '\n');
-    while (it.next()) |p| {
-        try emitPrefixed(wr, g.first, g.rest, p, inner, &skipped, &emitted, limit, "");
-        if (emitted >= limit) return emitted;
-    }
-    return emitted;
-}
-
-fn wrapCursor(s: []const u8, cursor: usize, width: usize) struct { row: usize, col: usize } {
-    const w = @max(width, 1);
-    const end = @min(cursor, s.len);
-    var row: usize = 0;
-    var cols: usize = 0;
-    var i: usize = 0;
-    while (i < end) {
-        const next = skipAnsi(s, i);
-        if (next != i) {
-            i = next;
-            continue;
-        }
-        const ch = charCols(s, i);
-        if (cols > 0 and cols + ch.cols > w) {
-            row += 1;
-            cols = 0;
-        }
-        cols += ch.cols;
-        i += ch.n;
-    }
-    return .{ .row = row, .col = cols };
-}
-
-fn writeComposerRow(wr: *std.Io.Writer, prefix: []const u8, slice: []const u8, pad_n: usize) !void {
-    try wr.writeAll(prefix);
-    try wr.writeAll(slice);
-    var pad = pad_n;
-    while (pad > 0) : (pad -= 1) try wr.writeByte(' ');
-    try wr.writeAll(ANSI_DIM ++ "│" ++ ANSI_RESET ++ "\x1b[K\r\n");
-}
-
-fn emitComposer(wr: *std.Io.Writer, input: []const u8, inner: usize, rows: usize, skip: usize) !void {
-    if (rows == 0) return;
-    var emitted: usize = 0;
-    var row_i: usize = 0;
-    var cols: usize = 0;
-    var row_from: usize = 0;
-    var i: usize = 0;
-    const first = ANSI_DIM ++ "│ › " ++ ANSI_RESET;
-    const rest = ANSI_DIM ++ "│   " ++ ANSI_RESET;
-    while (i < input.len) {
-        const next = skipAnsi(input, i);
-        if (next != i) {
-            i = next;
-            continue;
-        }
-        const ch = charCols(input, i);
-        if (cols > 0 and cols + ch.cols > inner) {
-            if (row_i >= skip) {
-                try writeComposerRow(wr, if (row_i == 0) first else rest, input[row_from..i], if (inner > cols) inner - cols else 0);
-                emitted += 1;
-                if (emitted == rows) return;
-            }
-            row_i += 1;
-            row_from = i;
-            cols = 0;
-        }
-        cols += ch.cols;
-        i += ch.n;
-    }
-    if (emitted < rows) {
-        if (row_i >= skip) {
-            try writeComposerRow(wr, if (row_i == 0) first else rest, input[row_from..input.len], if (inner > cols) inner - cols else 0);
-            emitted += 1;
-        }
-        row_i += 1;
-    }
-    while (emitted < rows) : (emitted += 1) {
-        try writeComposerRow(wr, rest, "", inner);
-    }
 }
 
 fn paintComposerBox(alloc: std.mem.Allocator, input: []const u8, cols: usize, inner_rows: usize, skip: usize) ![]u8 {
@@ -3104,251 +1462,22 @@ fn paintComposerBox(alloc: std.mem.Allocator, input: []const u8, cols: usize, in
     return aw.toOwnedSlice();
 }
 
-fn writeHighlighted(wr: *std.Io.Writer, text: []const u8, hl_from: usize, hl_len: usize, width: usize) !void {
-    if (hl_len == 0 or hl_from >= text.len) {
-        try writeTrunc(wr, text, width);
-        return;
-    }
-    const to = @min(text.len, hl_from + hl_len);
-    if (hl_from > 0) try writeTrunc(wr, text[0..hl_from], width);
-    const used = visibleCols(text[0..hl_from]);
-    if (used >= width) return;
-    try wr.writeAll("\x1b[4m");
-    try writeTrunc(wr, text[hl_from..to], width - used);
-    try wr.writeAll("\x1b[24m");
-    const used2 = used + visibleCols(text[hl_from..to]);
-    if (used2 < width and to < text.len) {
-        try writeTrunc(wr, text[to..], width - used2);
-    }
-}
+const writeHighlighted = draw.writeHighlighted;
+const writeSlashPicker = draw.writeSlashPicker;
+const writeFilePicker = draw.writeFilePicker;
+const writePicker = draw.writePicker;
+const writeStatusIndicator = draw.writeStatusIndicator;
+const writeBoxEdge = draw.writeBoxEdge;
+const writeTrunc = draw.writeTrunc;
+const skipAnsi = measure.skipAnsi;
+const charCols = measure.charCols;
+const visibleCols = measure.visibleCols;
+pub const writeActivityLine = draw.writeActivityLine;
 
-fn writeSlashPicker(wr: *std.Io.Writer, items: []const SlashItem, query: []const u8, sel: *usize, height: usize, width: usize) !void {
-    var ranks: [64]SlashRank = undefined;
-    const n = rankSlash(items, query, &ranks);
-    if (n == 0) return;
-    if (sel.* >= n) sel.* = n - 1;
-    const cap = @min(n, @max(1, height / 3));
-    const start: usize = if (sel.* < cap) 0 else sel.* + 1 - cap;
-    var pi: usize = start;
-    while (pi < start + cap) : (pi += 1) {
-        const rank = ranks[pi];
-        const it = items[rank.item];
-        const name = slashName(it.cmd);
-        const selected = pi == sel.*;
-        if (selected) {
-            try wr.writeAll(ANSI_DIM ++ "› " ++ ANSI_RESET ++ ANSI_REV ++ ANSI_BOLD);
-        } else {
-            try wr.writeAll("  " ++ ANSI_BOLD);
-        }
-        try wr.writeAll("/");
-        var used: usize = 3;
-        if (rank.kind != 2) {
-            try writeHighlighted(wr, name, rank.hl_from, rank.hl_len, if (width > used) width - used else 0);
-        } else {
-            try writeTrunc(wr, name, if (width > used) width - used else 0);
-        }
-        used += 1 + visibleCols(name);
-        try wr.writeAll(ANSI_RESET);
-        if (it.desc.len > 0 and used + 2 < width) {
-            try wr.writeAll(if (selected) ANSI_REV ++ ANSI_DIM ++ " " else ANSI_DIM ++ " ");
-            used += 1;
-            if (rank.kind == 2) {
-                try writeHighlighted(wr, it.desc, rank.hl_from, rank.hl_len, width - used);
-            } else {
-                try writeTrunc(wr, it.desc, width - used);
-            }
-        }
-        try wr.writeAll(ANSI_RESET ++ "\x1b[K\r\n");
-    }
-}
-
-fn writePicker(wr: *std.Io.Writer, p: *Picker, height: usize, width: usize) !void {
-    const win = p.window(height);
-    try wr.writeAll(ANSI_DIM);
-    try writeTrunc(wr, p.title, width);
-    try wr.writeAll(ANSI_RESET ++ "\x1b[K\r\n");
-    var pi: usize = win.start;
-    while (pi < win.start + win.count) : (pi += 1) {
-        const it = p.items[pi];
-        const selected = pi == p.sel;
-        if (selected) {
-            try wr.writeAll(ANSI_DIM ++ "› " ++ ANSI_RESET ++ ANSI_REV);
-        } else {
-            try wr.writeAll(ANSI_DIM ++ "  ");
-        }
-        var used: usize = 2;
-        try writeTrunc(wr, it.label, if (width > used) width - used else 0);
-        used += visibleCols(it.label);
-        if (it.hint.len > 0 and used + 3 < width) {
-            try wr.writeAll("  ");
-            used += 2;
-            try writeTrunc(wr, it.hint, width - used);
-        }
-        try wr.writeAll(ANSI_RESET ++ "\x1b[K\r\n");
-    }
-}
-
-fn writeStatusIndicator(wr: *std.Io.Writer, views: []const activity.View, streaming: bool, frame_ms: i64, width: usize, max_rows: usize) !void {
-    _ = streaming;
-    if (max_rows == 0) return;
-    var elapsed: i64 = 0;
-    for (views) |v| {
-        if (!v.detached and v.elapsed_ms > elapsed) elapsed = v.elapsed_ms;
-    }
-    var eb: [24]u8 = undefined;
-    const el = activity.formatElapsed(&eb, elapsed);
-    try wr.writeAll(ANSI_DIM);
-    try wr.writeAll(activity.spinnerFrame(frame_ms));
-    try wr.writeAll(ANSI_RESET ++ " Working " ++ ANSI_DIM ++ "(");
-    try wr.writeAll(el);
-    try wr.writeAll(" • esc to interrupt)" ++ ANSI_RESET ++ "\x1b[K\r\n");
-    if (max_rows == 1) return;
-    const cap = @min(views.len, @min(@as(usize, 2), max_rows - 1));
-    var i: usize = 0;
-    while (i < cap) : (i += 1) {
-        const v = views[i];
-        try wr.writeAll(ANSI_DIM ++ " └ " ++ ANSI_RESET);
-        var used: usize = 3;
-        try writeTrunc(wr, v.name, if (width > used) width - used else 0);
-        used += visibleCols(v.name);
-        if (v.detail.len > 0 and used + 3 < width) {
-            try wr.writeAll(ANSI_DIM ++ "  ");
-            used += 2;
-            try writeTrunc(wr, v.detail, width - used);
-        }
-        try wr.writeAll(ANSI_RESET ++ "\x1b[K\r\n");
-    }
-}
-
-fn writeBoxEdge(wr: *std.Io.Writer, left: []const u8, right: []const u8, width: usize) !void {
-    try wr.writeAll(ANSI_DIM);
-    try wr.writeAll(left);
-    const dashes = if (width > 2) width - 2 else 0;
-    var i: usize = 0;
-    while (i < dashes) : (i += 1) try wr.writeAll("─");
-    try wr.writeAll(right);
-    try wr.writeAll(ANSI_RESET ++ "\x1b[K\r\n");
-}
-
-fn writeTrunc(wr: *std.Io.Writer, s: []const u8, width: usize) !void {
-    var cols: usize = 0;
-    var i: usize = 0;
-    while (i < s.len and cols < width) {
-        const next = skipAnsi(s, i);
-        if (next != i) {
-            try wr.writeAll(s[i..next]);
-            i = next;
-            continue;
-        }
-        const ch = charCols(s, i);
-        if (cols + ch.cols > width) break;
-        try wr.writeAll(s[i .. i + ch.n]);
-        cols += ch.cols;
-        i += ch.n;
-    }
-}
-
-pub fn writeActivityLine(wr: *std.Io.Writer, v: activity.View, frame_ms: i64, width: usize) !void {
-    var used: usize = 0;
-    if (v.detached) {
-        try wr.writeAll(ANSI_DIM ++ "~" ++ ANSI_RESET ++ " ");
-    } else {
-        try wr.writeAll(ANSI_DIM);
-        try wr.writeAll(activity.spinnerFrame(frame_ms));
-        try wr.writeAll(ANSI_RESET ++ " ");
-    }
-    used += 2;
-
-    const label: []const u8 = switch (v.kind) {
-        .tool => v.name,
-        .http => "model",
-        .subagent => "agent",
-    };
-    try wr.writeAll(label);
-    used += label.len;
-
-    var eb: [24]u8 = undefined;
-    const el = activity.formatElapsed(&eb, v.elapsed_ms);
-    try wr.writeAll(" " ++ ANSI_DIM);
-    try wr.writeAll(el);
-    used += 1 + el.len;
-    if (v.limit_ms > 0 and !v.detached) {
-        var lb: [24]u8 = undefined;
-        const lim = activity.formatLimit(&lb, v.limit_ms);
-        try wr.writeAll("/");
-        try wr.writeAll(lim);
-        used += 1 + lim.len;
-    }
-    try wr.writeAll(ANSI_RESET);
-
-    if (v.bytes > 0) {
-        var bb: [24]u8 = undefined;
-        const bs = activity.formatBytes(&bb, v.bytes);
-        try wr.writeAll("  " ++ ANSI_DIM);
-        try wr.writeAll(bs);
-        try wr.writeAll(ANSI_RESET);
-        used += 2 + bs.len;
-    }
-
-    if (v.attempt > 1) {
-        var ab: [24]u8 = undefined;
-        const as = std.fmt.bufPrint(&ab, "  retry {d}", .{v.attempt - 1}) catch "";
-        try wr.writeAll(ANSI_DIM);
-        try wr.writeAll(as);
-        try wr.writeAll(ANSI_RESET);
-        used += as.len;
-    }
-
-    if (v.detached) {
-        try wr.writeAll(ANSI_DIM ++ "  [bg]" ++ ANSI_RESET);
-        used += 6;
-    }
-
-    if (v.detail.len > 0 and used + 3 < width) {
-        const room = width - used - 3;
-        try wr.writeAll("  " ++ ANSI_DIM);
-        const cut = activity.truncateToCols(v.detail, room);
-        try wr.writeAll(v.detail[0..cut]);
-        if (cut < v.detail.len) try wr.writeAll("…");
-        try wr.writeAll(ANSI_RESET);
-    }
-}
-
-fn deleteUtf8Before(buf: *std.array_list.Managed(u8), cursor: *usize) void {
-    if (cursor.* == 0 or cursor.* > buf.items.len) return;
-    const w = utf8PrevLen(buf.items, cursor.*);
-    const start = cursor.* - w;
-    var k: usize = 0;
-    while (k < w) : (k += 1) {
-        _ = buf.orderedRemove(start);
-    }
-    cursor.* = start;
-}
-
-fn deleteUtf8At(buf: *std.array_list.Managed(u8), cursor: usize) void {
-    if (cursor >= buf.items.len) return;
-    const w = utf8LenAt(buf.items, cursor);
-    var k: usize = 0;
-    while (k < w) : (k += 1) {
-        _ = buf.orderedRemove(cursor);
-    }
-}
-
-fn utf8PrevLen(s: []const u8, pos: usize) usize {
-    var i = pos;
-    while (i > 0) {
-        i -= 1;
-        if (s[i] & 0xC0 != 0x80) {
-            return pos - i;
-        }
-    }
-    return 1;
-}
-
-fn utf8LenAt(s: []const u8, pos: usize) usize {
-    if (pos >= s.len) return 1;
-    return std.unicode.utf8ByteSequenceLength(s[pos]) catch 1;
-}
+const deleteUtf8Before = keys.deleteUtf8Before;
+const deleteUtf8At = keys.deleteUtf8At;
+const utf8PrevLen = keys.utf8PrevLen;
+const utf8LenAt = keys.utf8LenAt;
 
 fn stripForTest(alloc: std.mem.Allocator, s: []const u8) ![]u8 {
     var out = std.array_list.Managed(u8).init(alloc);
@@ -3424,7 +1553,9 @@ test "gutters are unique and not baked into cells" {
     try t.expect(std.mem.indexOf(u8, gutter(.tool).first, "┌") == null);
     try t.expect(gutter(.tool).pad > gutter(.assistant).pad);
     try t.expect(std.mem.indexOf(u8, gutter(.think).first, ANSI_ITALIC) != null);
-    try t.expect(std.mem.indexOf(u8, gutter(.think).first, ANSI_DIM) != null);
+    try t.expect(std.mem.indexOf(u8, gutter(.think).first, ANSI_DIM) == null);
+    try t.expect(std.mem.indexOf(u8, gutter(.think).first, "┆") != null);
+    try t.expectEqual(@as(usize, 6), gutter(.think).pad);
     try t.expect(std.mem.indexOf(u8, gutter(.tool_end).first, "└ ") != null);
     try t.expectEqual(@as(usize, 2), gutter(.user).pad);
     try t.expectEqual(@as(usize, 2), gutter(.assistant).pad);
@@ -3495,54 +1626,45 @@ test "painted roles differ by layer" {
     try t.expect(std.mem.indexOf(u8, plain, "┌ user") == null);
     try t.expect(std.mem.indexOf(u8, plain, "▎ hello") != null);
     try t.expect(std.mem.indexOf(u8, plain, "▎ world") == null);
-    try t.expect(std.mem.indexOf(u8, plain, "  thought") == null);
-    try t.expect(std.mem.indexOf(u8, plain, "  hmm") != null);
+    try t.expect(std.mem.indexOf(u8, plain, "thought") == null);
+    try t.expect(std.mem.indexOf(u8, plain, "┆ hmm") != null);
     try t.expect(std.mem.indexOf(u8, plain, "  world") != null);
     try t.expect(std.mem.indexOf(u8, plain, "    ▸ bash  ls") != null);
     try t.expect(std.mem.indexOf(u8, plain, "ok") != null);
-    try t.expect(std.mem.indexOf(u8, plain, "▎ hello\n\n  hmm") != null);
-    try t.expect(std.mem.indexOf(u8, plain, "  hmm\n\n  world") != null);
+    try t.expect(std.mem.indexOf(u8, plain, "▎ hello\n\n    ┆ hmm") != null);
+    try t.expect(std.mem.indexOf(u8, plain, "    ┆ hmm\n\n  world") != null);
     try t.expect(std.mem.indexOf(u8, plain, "  world\n\n    ▸ bash  ls") != null);
     try t.expect(std.mem.indexOf(u8, plain, "notice") != null);
 
     try t.expectEqual(@as(usize, 0), lineIndent(plain, "hello").?);
-    try t.expectEqual(@as(usize, 2), lineIndent(plain, "hmm").?);
+    try t.expectEqual(@as(usize, 4), lineIndent(plain, "hmm").?);
     try t.expectEqual(@as(usize, 2), lineIndent(plain, "world").?);
     try t.expectEqual(@as(usize, 4), lineIndent(plain, "bash").?);
+    try t.expect(lineIndent(plain, "hmm").? > lineIndent(plain, "world").?);
     try t.expect(lineIndent(plain, "bash").? > lineIndent(plain, "world").?);
 
     try t.expect(std.mem.indexOf(u8, gutter(.user).first, ANSI_ITALIC) == null);
     try t.expect(std.mem.indexOf(u8, gutter(.user).first, ANSI_BOLD) != null);
     try t.expect(std.mem.indexOf(u8, gutter(.think).first, ANSI_ITALIC) != null);
-    try t.expect(std.mem.indexOf(u8, gutter(.think).first, ANSI_DIM) != null);
+    try t.expect(std.mem.indexOf(u8, gutter(.think).first, ANSI_DIM) == null);
     try t.expect(std.mem.indexOf(u8, out, ANSI_ITALIC) != null);
     try t.expect(std.mem.indexOf(u8, out, ANSI_BOLD ++ "▎ ") != null);
     try t.expect(std.mem.indexOf(u8, out, ANSI_BOLD ++ "bash") != null);
-    try t.expect(std.mem.indexOf(u8, out, ANSI_DIM ++ "ls") != null);
-    try t.expect(std.mem.indexOf(u8, out, ANSI_DIM ++ ANSI_ITALIC) != null);
+    try t.expect(std.mem.indexOf(u8, out, ANSI_DIM ++ ANSI_ITALIC ++ "ls") != null);
+    try t.expect(std.mem.indexOf(u8, out, ANSI_ITALIC) != null);
 }
 
 fn paintCellsForTest(alloc: std.mem.Allocator, ui: *Tui, width: usize) ![]u8 {
-    var cards = std.array_list.Managed([]u8).init(alloc);
-    defer {
-        for (cards.items) |s| alloc.free(s);
-        cards.deinit();
-    }
-    for (ui.cells.items) |c| {
-        if (c.card) |card| {
-            try cards.append(try paintCard(alloc, c.kind, card, width));
-        }
-    }
+    try ui.ensurePainted(width);
     var fw = std.Io.Writer.Allocating.init(alloc);
     errdefer fw.deinit();
-    var card_i: usize = 0;
     var ci: usize = 0;
     while (ci < ui.cells.items.len) : (ci += 1) {
         if (ci > 0 and gapBetween(ui.cells.items[ci - 1].kind, ui.cells.items[ci].kind)) {
             try fw.writer.writeAll("\x1b[K\r\n");
         }
-        const painted = cardSlice(ui.cells.items[ci], cards.items, &card_i);
-        _ = try emitCell(alloc, &fw.writer, ui.cells.items[ci], painted, true, width, 0, 64);
+        const painted = paintedOf(ui.cells.items[ci]);
+        _ = try emitCell(alloc, &fw.writer, &ui.cells.items[ci], painted, true, width, 0, 64);
     }
     return fw.toOwnedSlice();
 }
@@ -3944,7 +2066,7 @@ test "session card renders at paint width" {
     try t.expect(idle.composer_rows >= 3);
     try t.expect(idle.footer_rows >= 1);
     try t.expect(idle.height() < 24);
-    try t.expectEqual(composerTopRow(24, idle) + idle.composer_rows, 24 -| idle.footer_rows + 1);
+    try t.expectEqual(@as(usize, 1), composerTopRow(0, idle));
     try t.expectEqual(@as(usize, 0), idle.working_rows);
     ui.toggleTools();
     const still = ui.measureBottom(2, true);
@@ -4247,17 +2369,15 @@ test "measureBottom keeps a 3-row composer above the footer" {
         try t.expect(idle.composer_rows >= 3);
         try t.expect(idle.boxed);
         try t.expect(idle.height() <= 24);
-        const top = composerTopRow(24, idle);
-        const footer_top = 24 -| idle.footer_rows + 1;
-        try t.expectEqual(top + idle.composer_rows, footer_top);
+        const top = composerTopRow(0, idle);
+        try t.expectEqual(@as(usize, 1), top);
         try t.expect(idle.footer_rows >= 1);
 
         const busy = ui.measureBottom(5, true);
         try t.expect(busy.composer_rows >= 3);
         try t.expect(busy.height() <= 24);
-        const busy_top = composerTopRow(24, busy);
-        const busy_footer = 24 -| busy.footer_rows + 1;
-        try t.expectEqual(busy_top + busy.composer_rows, busy_footer);
+        const busy_top = composerTopRow(0, busy);
+        try t.expectEqual(@as(usize, 1 + busy.working_rows), busy_top);
     }
 }
 
@@ -4299,8 +2419,8 @@ test "composer box closes and cursor stays on the inner row" {
         });
         const idle = ui.measureBottom(0, false);
         const cur = wrapCursor(ui.input.items, ui.cursor, idle.input_inner);
-        const row = composerInputRow(24, idle, cur.row);
-        const top = composerTopRow(24, idle);
+        const top = composerTopRow(0, idle);
+        const row = composerInputRow(top, idle, cur.row);
         try t.expect(row >= top + 1);
         try t.expect(row <= top + idle.comp_inner);
         try t.expect(row < top + idle.composer_rows);
@@ -4309,8 +2429,8 @@ test "composer box closes and cursor stays on the inner row" {
         ui.cursor = ui.input.items.len;
         const grown = ui.measureBottom(0, false);
         const cur2 = wrapCursor(ui.input.items, ui.cursor, grown.input_inner);
-        const row2 = composerInputRow(24, grown, cur2.row);
-        const top2 = composerTopRow(24, grown);
+        const top2 = composerTopRow(0, grown);
+        const row2 = composerInputRow(top2, grown, cur2.row);
         try t.expect(grown.composer_rows >= 3);
         try t.expect(row2 >= top2 + 1);
         try t.expect(row2 <= top2 + grown.comp_inner);
@@ -4342,9 +2462,10 @@ test "user and tool rows carry semantic bg bands; folded tail" {
     defer t.allocator.free(out2);
     try t.expect(std.mem.indexOf(u8, out2, theme.bgTool(.err)) != null);
     // 无色系:无色带、无补白,行为如旧
-    const saved = theme;
-    defer theme = saved;
-    theme = .{ .mode = .none };
+    const saved_mode = theme.mode;
+    defer theme.mode = saved_mode;
+    theme.mode = .none;
+    emit.attachTheme(&theme);
     const out3 = try paintCellsForTest(t.allocator, &ui2, 80);
     defer t.allocator.free(out3);
     try t.expect(std.mem.indexOf(u8, out3, "\x1b[48;") == null);
@@ -4404,4 +2525,94 @@ test "example theme json loads and paint keeps code color" {
     const plain = try stripForTest(t.allocator, out);
     defer t.allocator.free(plain);
     try t.expect(std.mem.indexOf(u8, plain, "• item xyz") != null);
+}
+
+test "workflow rail updates in place and swallows sub events" {
+    const t = std.testing;
+    var ui = try Tui.init(t.allocator);
+    defer ui.deinit();
+    try ui.appendWorkflow("{\"goal\":\"Review pending changes\",\"nodes\":[{\"id\":\"changes\",\"role\":\"scout\"},{\"id\":\"tests\",\"role\":\"worker\"},{\"id\":\"review\",\"role\":\"reviewer\"}]}");
+    try t.expect(ui.applyFlowEvent(1, "notice", "changes"));
+    try t.expect(ui.applyFlowEvent(1, "tool_start", "git status"));
+    try t.expect(ui.applyFlowEvent(1, "finished", ""));
+    try t.expect(ui.applyFlowEvent(2, "notice", "tests"));
+    try t.expect(ui.applyFlowEvent(2, "tool_start", "bash"));
+    const live = try paintCellsForTest(t.allocator, &ui, 80);
+    defer t.allocator.free(live);
+    try t.expect(std.mem.indexOf(u8, live, "Review pending changes") != null);
+    try t.expect(std.mem.indexOf(u8, live, "changes") != null);
+    try t.expect(std.mem.indexOf(u8, live, "tests") != null);
+    try t.expect(std.mem.indexOf(u8, live, "review") != null);
+    try t.expect(std.mem.indexOf(u8, live, "bash") != null);
+    try t.expect(std.mem.indexOf(u8, live, "[sub ") == null);
+    try t.expect(std.mem.indexOf(u8, live, "│") == null);
+    try ui.appendToolEnd("workflow", false, "Workflow \"Review pending changes\" — 3/3 ok [1s]\n\n=== changes (scout) ok ===\ndiff\n\n=== tests (worker) ok ===\npass\n\n=== review (reviewer) ok ===\nlgtm\n");
+    const done = try paintCellsForTest(t.allocator, &ui, 80);
+    defer t.allocator.free(done);
+    try t.expect(std.mem.indexOf(u8, done, "3/3") != null);
+    try t.expect(std.mem.indexOf(u8, done, "lgtm") == null);
+    try t.expect(!ui.applyFlowEvent(3, "notice", "review"));
+}
+
+test "findNext jumps between matching cells" {
+    const t = std.testing;
+    var ui = try Tui.init(t.allocator);
+    defer ui.deinit();
+    try ui.appendUser("alpha one");
+    try ui.appendUser("beta two");
+    try ui.appendUser("alpha three");
+    try t.expect(try ui.findNext("alpha", false));
+    try t.expectEqual(@as(usize, 0), ui.search_hit.?);
+    try t.expect(ui.cells.items[0].hl);
+    try t.expect(try ui.findNext("alpha", false));
+    try t.expectEqual(@as(usize, 2), ui.search_hit.?);
+    try t.expect(!ui.cells.items[0].hl);
+    try t.expect(ui.cells.items[2].hl);
+    try t.expect(try ui.findNext("alpha", false));
+    try t.expectEqual(@as(usize, 0), ui.search_hit.?);
+    try t.expect(!try ui.findNext("zzz", false));
+}
+
+test "n repeats last find when composer empty" {
+    const t = std.testing;
+    var ui = try Tui.init(t.allocator);
+    defer ui.deinit();
+    try ui.appendUser("alpha one");
+    try ui.appendUser("beta two");
+    try ui.appendUser("alpha three");
+    try t.expect(try ui.findNext("alpha", false));
+    try t.expectEqual(@as(usize, 0), ui.search_hit.?);
+    _ = try ui.handleInput("n");
+    try t.expectEqual(@as(usize, 2), ui.search_hit.?);
+    _ = try ui.handleInput("n");
+    try t.expectEqual(@as(usize, 0), ui.search_hit.?);
+}
+
+test "cellRowCountCached reuses count at same width" {
+    const t = std.testing;
+    var ui = try Tui.init(t.allocator);
+    defer ui.deinit();
+    try ui.appendUser("hello cache");
+    const a = cellRowCountCached(t.allocator, &ui.cells.items[0], "", false, 80);
+    try t.expect(ui.cells.items[0].row_valid);
+    const b = cellRowCountCached(t.allocator, &ui.cells.items[0], "", false, 80);
+    try t.expectEqual(a, b);
+    _ = cellRowCountCached(t.allocator, &ui.cells.items[0], "", false, 40);
+    try t.expectEqual(@as(usize, 40), ui.cells.items[0].row_w);
+}
+
+test "tui prunes old cells and keeps session header" {
+    const t = std.testing;
+    var ui = try Tui.init(t.allocator);
+    defer ui.deinit();
+    try ui.setSessionHeader(.{ .version = "0", .model = "m", .think = "high", .cwd = "/tmp", .session = "sess" });
+    var i: usize = 0;
+    while (i < 460) : (i += 1) try ui.appendUser("x");
+    try t.expect(ui.cells.items.len <= 400);
+    try t.expect(ui.cells.items.len > 0);
+    try t.expectEqual(CellKind.session_header, ui.cells.items[0].kind);
+    try t.expect(!ui.hasPendingImage());
+    try t.expect(ui.find_log.items.len > 0);
+    const hit = try ui.findNext("x", false);
+    try t.expect(hit);
 }

@@ -12,6 +12,7 @@ const web = @import("plugins/web.zig");
 const todo = @import("plugins/todo.zig");
 const agentsplug = @import("plugins/agents.zig");
 const taskmod = @import("plugins/task.zig");
+const workflowmod = @import("plugins/workflow.zig");
 const lspmod = @import("plugins/lsp.zig");
 const childbind = @import("plugins/childbind.zig");
 
@@ -87,6 +88,25 @@ fn toolContextRemaining(ctx: ?*anyopaque, arena: std.mem.Allocator, args: []cons
     ) };
 }
 
+fn slashContext(ctx: ?*anyopaque, args: []const u8) anyerror![]const u8 {
+    const self: *agentmod.Agent = @ptrCast(@alignCast(ctx orelse return error.NoAgent));
+    var arena = agentmod.util.Arena.init(self.alloc);
+    defer arena.deinit();
+    const r = try toolContextRemaining(ctx, arena.allocator(), args);
+    return self.alloc.dupe(u8, r.content);
+}
+
+fn slashSkills(ctx: ?*anyopaque, args: []const u8) anyerror![]const u8 {
+    _ = args;
+    const self: *agentmod.Agent = @ptrCast(@alignCast(ctx orelse return error.NoAgent));
+    const idx = agentmod.util.loadSkillsIndex(self.alloc) catch return self.alloc.dupe(u8, "no skills");
+    if (idx.len == 0) {
+        self.alloc.free(idx);
+        return self.alloc.dupe(u8, "no skills");
+    }
+    return idx;
+}
+
 // 实现按域分居 src/plugins/。
 
 /// 内置插件表。
@@ -118,7 +138,9 @@ pub const builtin_plugins = [_]Plugin{
     } },
 
     // ---- 默认关闭:按需开启的场景化工具 ----
-    .{ .name = "skills", .enabled_by_default = false, .tools = &.{
+    .{ .name = "skills", .enabled_by_default = false, .slash_commands = &.{
+        .{ .name = "skills", .desc = "list available skills", .handler = slashSkills },
+    }, .tools = &.{
         .{
             .name = "skill",
             .desc = "Load a skill's SKILL.md content by name. Skill names are listed in the system prompt.",
@@ -128,7 +150,9 @@ pub const builtin_plugins = [_]Plugin{
             .handler = toolsmod.toolSkill,
         },
     } },
-    .{ .name = "context-budget", .enabled_by_default = false, .tools = &.{
+    .{ .name = "context-budget", .enabled_by_default = false, .slash_commands = &.{
+        .{ .name = "context", .desc = "context budget remaining", .handler = slashContext },
+    }, .tools = &.{
         .{
             .name = "get_context_remaining",
             .desc = "Report remaining context budget in tokens.",
@@ -137,7 +161,9 @@ pub const builtin_plugins = [_]Plugin{
             .ctx_handler = toolContextRemaining,
         },
     } },
-    .{ .name = "git-awareness", .enabled_by_default = false, .tools = &.{
+    .{ .name = "git-awareness", .enabled_by_default = false, .slash_commands = &.{
+        .{ .name = "git", .desc = "git status + diffstat", .handler = extras.slashGit },
+    }, .tools = &.{
         .{
             .name = "git_status",
             .desc = "Show git status and diff stat for the working tree.",
@@ -146,7 +172,9 @@ pub const builtin_plugins = [_]Plugin{
             .ctx_handler = extras.toolGitStatus,
         },
     } },
-    .{ .name = "web-search", .enabled_by_default = false, .tools = &.{
+    .{ .name = "web-search", .enabled_by_default = false, .slash_commands = &.{
+        .{ .name = "web", .desc = "web search status or /web <query>", .handler = web.slashWeb },
+    }, .tools = &.{
         .{
             .name = "web_search",
             .desc = "Search the web when local information is insufficient or possibly out of date. Returns a ranked list of titles, URLs and snippets; follow up with fetch_url to read a result in full. Requires PIZ_WEB_SEARCH_URL.",
@@ -177,7 +205,9 @@ pub const builtin_plugins = [_]Plugin{
             .ctx_handler = extras.toolAskUser,
         },
     } },
-    .{ .name = "task-delegation", .enabled_by_default = false, .tools = &.{
+    .{ .name = "task-delegation", .enabled_by_default = false, .slash_commands = &.{
+        .{ .name = "agents", .desc = "list live sub-agents", .handler = agentsplug.slashAgents },
+    }, .tools = &.{
         .{
             .name = "task",
             .desc = "Delegate self-contained work to sub-agents and wait for all of them to finish. Sub-agents inherit this session's directory and model but start with no conversation history, so each description must be complete on its own. They do not inherit task/spawn_agent unless you pass plugins:[\"task-delegation\"]. Pass tools:[\"read\",\"grep\"] to give a child only those tools. Pass 'tasks' to queue up to 32 (8 run at once). Use this when you just want the answers; use spawn_agent instead when you want to keep working while they run, or may need to redirect them.",
@@ -186,6 +216,15 @@ pub const builtin_plugins = [_]Plugin{
             ,
             .handler = toolCtxStub,
             .ctx_handler = taskmod.toolTask,
+        },
+        .{
+            .name = "workflow",
+            .desc = "Run a DAG of named sub-agents. Independent nodes run together; a node starts when every id in needs has finished. Later tasks splice earlier output with {id}. Roles scout/planner/reviewer get a read-oriented tool set if you omit tools; worker inherits yours. A failed node skips its dependents instead of burning more tokens. Use this when steps depend on each other; use task when they do not.",
+            .schema =
+            \\{"type":"object","properties":{"goal":{"type":"string","description":"One-line label for this workflow."},"fail_fast":{"type":"boolean","description":"If true, skip remaining waves after any node fails. Default false: independent branches keep running."},"nodes":{"type":"array","description":"Named DAG nodes. A node runs when every id in needs has finished. Later tasks may cite earlier output as {id}.","items":{"type":"object","properties":{"id":{"type":"string","description":"Node name. Letters, digits, _ or -. Cited later as {id}."},"task":{"type":"string","description":"Self-contained work. Use {other_id} to splice that node's output."},"role":{"type":"string","enum":["scout","planner","reviewer","worker"],"description":"scout/planner/reviewer get a read-oriented tool set if you omit tools. worker inherits yours."},"needs":{"type":"array","items":{"type":"string"},"description":"Node ids that must finish first."},"read_only":{"type":"boolean"},"plugins":{"type":"array","items":{"type":"string"}},"tools":{"type":"array","items":{"type":"string"}}},"required":["id","task"]}}},"required":["nodes"]}
+            ,
+            .handler = toolCtxStub,
+            .ctx_handler = workflowmod.toolWorkflow,
         },
         .{
             .name = "spawn_agent",
@@ -240,12 +279,14 @@ pub const builtin_plugins = [_]Plugin{
             .ctx_handler = agentsplug.toolCloseAgent,
         },
     } },
-    .{ .name = "todo", .enabled_by_default = false, .tools = &.{
+    .{ .name = "todo", .enabled_by_default = false, .slash_commands = &.{
+        .{ .name = "todo", .desc = "list session todos", .handler = todo.slashTodo },
+    }, .tools = &.{
         .{
             .name = "todo_write",
-            .desc = "Replace the task list for this session. Use it to plan multi-step work and mark progress as you go; call it again with the full updated list after each step.",
+            .desc = "Update the task list for this session. Default mode replace swaps the whole list. mode merge updates items with the same id and appends new ones, so you do not have to resend finished work. Optional bind attaches an item to a workflow node id.",
             .schema =
-            \\{"type":"object","properties":{"items":{"type":"array","description":"Full task list, replacing the previous one.","items":{"type":"object","properties":{"content":{"type":"string","description":"Task description, 5-10 words."},"status":{"type":"string","enum":["pending","in_progress","completed"],"description":"Task state."}},"required":["content","status"]}}},"required":["items"]}
+            \\{"type":"object","properties":{"mode":{"type":"string","enum":["replace","merge"],"description":"replace (default) swaps the list. merge updates matching ids and appends the rest."},"items":{"type":"array","description":"Task items. On replace this is the full list. On merge, matching id updates fields; new id appends.","items":{"type":"object","properties":{"id":{"type":"string","description":"Stable item id. Assigned as t1, t2, … if omitted."},"content":{"type":"string","description":"Task description, 5-10 words."},"status":{"type":"string","enum":["pending","in_progress","completed"],"description":"Task state."},"bind":{"type":"string","description":"Optional workflow node id this item tracks."}},"required":["content"]}}},"required":["items"]}
             ,
             .handler = toolCtxStub,
             .ctx_handler = todo.toolTodoWrite,
@@ -258,7 +299,9 @@ pub const builtin_plugins = [_]Plugin{
             .ctx_handler = todo.toolTodoRead,
         },
     } },
-    .{ .name = "lsp", .enabled_by_default = false, .tools = &.{
+    .{ .name = "lsp", .enabled_by_default = false, .slash_commands = &.{
+        .{ .name = "lsp", .desc = "language servers on PATH", .handler = lspmod.slashLsp },
+    }, .tools = &.{
         .{
             .name = "lsp",
             .desc = "Query a language server for code intelligence: definition, references, hover, rename impact, diagnostics. Prefer this over grep for symbol work — it follows shadowing, re-exports and cross-file usages that text search misses. Give 'symbol' to locate by name, or 'line'/'character' for an exact position.",
@@ -269,9 +312,10 @@ pub const builtin_plugins = [_]Plugin{
             .ctx_handler = lspmod.toolLsp,
         },
     } },
+    .{ .name = "usage-ledger", .after_turn = hookmod.usageLedgerHook },
 };
 
-/// 插件启用集的位掩码类型(14 个内置插件)。
+/// 插件启用集的位掩码类型(15 个内置插件)。
 pub const EnabledSet = u16;
 
 comptime {
@@ -347,6 +391,40 @@ pub fn defaultSet() EnabledSet {
     return default_enabled;
 }
 
+/// settings.json 的 plugins / disabled_plugins 落到进程默认集。
+pub fn applyFromConfig(enabled: []const []const u8, disabled: []const []const u8) void {
+    for (enabled) |name| _ = enable(name);
+    for (disabled) |name| _ = disable(name);
+}
+
+pub fn isFactoryOn(name: []const u8) bool {
+    for (builtin_plugins) |p| {
+        if (std.mem.eql(u8, p.name, name)) return p.enabled_by_default;
+    }
+    return false;
+}
+
+pub fn isOn(name: []const u8) bool {
+    for (&builtin_plugins, 0..) |p, i| {
+        if (std.mem.eql(u8, p.name, name)) return isEnabledIn(defaultSet(), i);
+    }
+    return false;
+}
+
+/// 给 Web 设置页用的插件清单。
+pub fn writeCatalog(w: *std.Io.Writer) !void {
+    try w.writeAll("[");
+    for (builtin_plugins, 0..) |p, i| {
+        if (i > 0) try w.writeByte(',');
+        try w.print("{{\"name\":\"{s}\",\"enabled\":{s},\"optional\":{s}}}", .{
+            p.name,
+            if (isEnabledIn(defaultSet(), i)) "true" else "false",
+            if (p.enabled_by_default) "false" else "true",
+        });
+    }
+    try w.writeAll("]");
+}
+
 /// 在一个启用集上开启某个插件,返回新集合。未知名字原样返回。
 pub fn withEnabled(set: EnabledSet, name: []const u8) EnabledSet {
     for (&builtin_plugins, 0..) |p, i| {
@@ -365,7 +443,7 @@ pub fn withoutEnabled(set: EnabledSet, name: []const u8) EnabledSet {
 
 /// 子 agent 的启用集:继承父集,默认摘掉 `task-delegation`。
 ///
-/// 孩子不该默认再付 7 个委派工具的 schema,也不该默认能再派。
+/// 孩子不该默认再付 8 个委派工具的 schema,也不该默认能再派。
 /// `want` 为 null = 这个默认;非 null = 与父集求交(只能收紧)。
 /// 无工具的钩子插件始终从父集保留 —— `plugins: ["lsp"]` 是加工具,不是关快压。
 pub fn childSet(parent: EnabledSet, want: ?[]const []const u8) !EnabledSet {
@@ -460,18 +538,72 @@ pub fn isToolEnabledIn(set: EnabledSet, tool_name: []const u8) bool {
     return false;
 }
 
-/// 全部插件名与启用状态(供 --plugins 列表与错误提示)。
-pub fn listPlugins(arena: std.mem.Allocator) ![]const u8 {
+pub fn known(name: []const u8) bool {
+    return bitOf(name) != null;
+}
+
+/// 全部插件名与启用状态(供 --plugins 列表、/plugins、错误提示)。
+pub fn listPluginsIn(arena: std.mem.Allocator, set: EnabledSet) ![]const u8 {
     var aw = std.Io.Writer.Allocating.init(arena);
     defer aw.deinit();
     for (&builtin_plugins, 0..) |p, i| {
-        const mark = if (isEnabledIn(defaultSet(), i)) "on " else "off";
+        const mark = if (isEnabledIn(set, i)) "on " else "off";
         try aw.writer.print("  [{s}] {s}", .{ mark, p.name });
         if (p.tools.len > 0) {
             try aw.writer.writeAll("  tools:");
             for (p.tools) |*t| try aw.writer.print(" {s}", .{t.name});
         }
         try aw.writer.writeByte('\n');
+    }
+    return aw.toOwnedSlice();
+}
+
+/// 进程默认启用集的清单。
+pub fn listPlugins(arena: std.mem.Allocator) ![]const u8 {
+    return listPluginsIn(arena, defaultSet());
+}
+
+/// 已启用插件注册的斜杠命令(按 builtin 声明序)。
+pub fn collectSlash(set: EnabledSet, out: []SlashCommand) usize {
+    var n: usize = 0;
+    for (&builtin_plugins, 0..) |p, i| {
+        if (!isEnabledIn(set, i)) continue;
+        for (p.slash_commands) |sc| {
+            if (n >= out.len) return n;
+            out[n] = sc;
+            n += 1;
+        }
+    }
+    return n;
+}
+
+fn slashStem(name: []const u8) []const u8 {
+    if (name.len > 0 and name[0] == '/') return name[1..];
+    return name;
+}
+
+/// 按名分发插件斜杠。未命中返回 null;命中则返回 handler 结果。
+pub fn dispatchSlash(set: EnabledSet, ctx: ?*anyopaque, name: []const u8, args: []const u8) ?anyerror![]const u8 {
+    const want = slashStem(name);
+    var buf: [32]SlashCommand = undefined;
+    const n = collectSlash(set, &buf);
+    for (buf[0..n]) |sc| {
+        if (std.mem.eql(u8, slashStem(sc.name), want)) return sc.handler(ctx, args);
+    }
+    return null;
+}
+
+/// 已开的非默认插件名,空格分隔。供 /status 一行展示。
+pub fn enabledOptionalLine(arena: std.mem.Allocator, set: EnabledSet) ![]const u8 {
+    var aw = std.Io.Writer.Allocating.init(arena);
+    defer aw.deinit();
+    var first = true;
+    for (&builtin_plugins, 0..) |p, i| {
+        if (p.enabled_by_default) continue;
+        if (!isEnabledIn(set, i)) continue;
+        if (!first) try aw.writer.writeByte(' ');
+        first = false;
+        try aw.writer.writeAll(p.name);
     }
     return aw.toOwnedSlice();
 }
@@ -488,6 +620,27 @@ pub fn runBeforeTurn(ctx: ?*anyopaque) void {
     for (&builtin_plugins, 0..) |p, i| {
         if (!isEnabledIn(set, i)) continue;
         if (p.before_turn) |h| h(ctx);
+    }
+}
+
+/// 用户消息提交:启用插件按声明序看,第一个非 null 替换进模型的文本。
+pub fn runUserMessage(ctx: ?*anyopaque, text: []const u8) ?[]const u8 {
+    const set = setOfCtx(ctx);
+    for (&builtin_plugins, 0..) |p, i| {
+        if (!isEnabledIn(set, i)) continue;
+        if (p.on_user_message) |h| {
+            if (h(ctx, text)) |rewritten| return rewritten;
+        }
+    }
+    return null;
+}
+
+/// 一轮结束:启用插件按声明序跑 after_turn。
+pub fn runAfterTurn(ctx: ?*anyopaque) void {
+    const set = setOfCtx(ctx);
+    for (&builtin_plugins, 0..) |p, i| {
+        if (!isEnabledIn(set, i)) continue;
+        if (p.after_turn) |h| h(ctx);
     }
 }
 
@@ -752,7 +905,7 @@ test "optional plugins are gated per agent, not process-wide" {
     // token 估算也跟着集合走 —— 上下文预算必须按本 Agent 的工具集算
     try t.expect(toolDefsTokensIn(with_todo) > toolDefsTokensIn(bare));
 
-    // 子 agent 默认摘掉委派插件:否则每路孩子都付 7 个工具的 schema
+    // 子 agent 默认摘掉委派插件:否则每路孩子都付 8 个工具的 schema
     const parent_full = withEnabled(factorySet(), "task-delegation");
     const child_default = try childSet(parent_full, null);
     try t.expect(findToolIn(parent_full, "task") != null);
@@ -819,6 +972,27 @@ test "listPlugins reflects enable state" {
     try t.expect(std.mem.indexOf(u8, after, "[on ] lsp") != null);
     // 工具名也列出来,便于用户知道开了什么
     try t.expect(std.mem.indexOf(u8, after, "tools: lsp") != null);
+    const none = try enabledOptionalLine(a, factorySet());
+    try t.expectEqual(@as(usize, 0), none.len);
+    const some = try enabledOptionalLine(a, withEnabled(factorySet(), "lsp"));
+    try t.expect(std.mem.indexOf(u8, some, "lsp") != null);
+    try t.expect(std.mem.indexOf(u8, some, "tool-output-pruner") == null);
+}
+
+test "applyFromConfig and catalog expose optional workflow plugin" {
+    const t = std.testing;
+    resetEnabledForTest();
+    defer resetEnabledForTest();
+    try t.expect(!isOn("task-delegation"));
+    applyFromConfig(&.{ "task-delegation", "todo" }, &.{});
+    try t.expect(isOn("task-delegation"));
+    try t.expect(isOn("todo"));
+    try t.expect(!isFactoryOn("task-delegation"));
+    var aw = std.Io.Writer.Allocating.init(t.allocator);
+    defer aw.deinit();
+    try writeCatalog(&aw.writer);
+    try t.expect(std.mem.indexOf(u8, aw.written(), "\"name\":\"task-delegation\"") != null);
+    try t.expect(std.mem.indexOf(u8, aw.written(), "\"enabled\":true") != null);
 }
 
 test "disable withdraws tools hooks and schema" {
@@ -848,6 +1022,62 @@ test "disable withdraws tools hooks and schema" {
     try t.expect(runToolBefore(&agent, "bash", "sudo rm -rf / --no-preserve-root") == null);
     agent.plugins = factorySet();
     try t.expect(runToolBefore(&agent, "bash", "sudo rm -rf / --no-preserve-root") != null);
+    try t.expect(runUserMessage(&agent, "hi") == null);
+    runAfterTurn(&agent);
+}
+
+test "read handler plus after-chain keeps file body" {
+    const t = std.testing;
+    try agentmod.util.testInit();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = agentmod.util.Arena.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cwd_abs = try std.process.currentPathAlloc(agentmod.util.io, a);
+    const tmp_path = try std.fmt.allocPrint(a, "{s}/.zig-cache/tmp/{s}", .{ cwd_abs, tmp.sub_path });
+    const body = "x" ** (8 * 1024) ++ "\n// marker-read-ok\n";
+    try tmp.dir.writeFile(agentmod.util.io, .{ .sub_path = "big.zig", .data = body });
+    try agentmod.util.environ_map.?.put("PIZ_DIR", tmp_path);
+
+    var cfg = agentmod.cfgmod.Config{ .arena = &arena };
+    var provs = [_]agentmod.cfgmod.Provider{.{ .name = "mock", .api = .openai_completions, .base_url = "http://127.0.0.1:1", .api_key = "k" }};
+    cfg.providers = &provs;
+    var agent = try agentmod.Agent.init(a, &cfg, "mock", "m", tmp_path);
+
+    const read_tool = toolsmod.find("read") orelse return error.TestUnexpectedResult;
+    toolsmod.setRoot(tmp_path);
+    defer toolsmod.clearRoot();
+    const result = try read_tool.handler(a, "{\"path\":\"big.zig\"}");
+    try t.expect(!result.is_error);
+    try t.expect(std.mem.indexOf(u8, result.content, "marker-read-ok") != null);
+    try t.expect(result.content.len > 4096);
+
+    try t.expect(runToolAfter(@ptrCast(&agent), "read", result.content) == null);
+
+    const bash_rw = runToolAfter(@ptrCast(&agent), "bash", "y" ** (8 * 1024));
+    try t.expect(bash_rw != null);
+    try t.expect(std.mem.indexOf(u8, bash_rw.?, "[Artifact stored:") != null);
+}
+
+test "collectSlash lists todo when enabled" {
+    const t = std.testing;
+    var off: [4]SlashCommand = undefined;
+    try t.expectEqual(@as(usize, 0), collectSlash(0, &off));
+    const set = withEnabled(withEnabled(withEnabled(withEnabled(withEnabled(withEnabled(withEnabled(0, "todo"), "skills"), "context-budget"), "git-awareness"), "lsp"), "web-search"), "task-delegation");
+    var buf: [8]SlashCommand = undefined;
+    const n = collectSlash(set, &buf);
+    try t.expectEqual(@as(usize, 7), n);
+    try t.expectEqualStrings("skills", buf[0].name);
+    try t.expectEqualStrings("context", buf[1].name);
+    try t.expectEqualStrings("git", buf[2].name);
+    try t.expectEqualStrings("web", buf[3].name);
+    try t.expectEqualStrings("agents", buf[4].name);
+    try t.expectEqualStrings("todo", buf[5].name);
+    try t.expectEqualStrings("lsp", buf[6].name);
+    try t.expect(dispatchSlash(0, null, "todo", "") == null);
+    try t.expect(dispatchSlash(0, null, "web", "") == null);
+    try t.expect(dispatchSlash(0, null, "agents", "") == null);
 }
 
 // lsp 测已迁 plugins/lsp.zig
