@@ -2,7 +2,7 @@
 
 # 架构
 
-piz 是单个静态二进制。Zig 标准库 + vendored stb（读图）。约 1.9 万行 Zig。
+piz 是单个静态二进制。Zig 标准库 + vendored stb（读图）。约 4.6 万行 Zig（含测试）。Release 产物 strip 后约 5MB。
 
 ## 目录
 
