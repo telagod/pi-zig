@@ -1,26 +1,10 @@
-// 默认启用的挂钩:快压、记忆、压缩兜底、概念图、命令规范化、大输出外置。
+// 默认启用的挂钩:记忆、压缩兜底、概念图、命令规范化、大输出外置。
+// 快压已收成入境定形(agent 核心),不再是回溯裁剪插件。
 const std = @import("std");
 const agentmod = @import("../agent.zig");
-const compress = @import("../compress.zig");
 const api = @import("api.zig");
 const BeforeChain = api.BeforeChain;
 const AfterChain = api.AfterChain;
-
-/// 快压入口(before_turn):prune → shake → snap → 硬线救援。
-/// 纯机械,不调模型。实现见 compress.zig。
-pub fn pruneHook(ctx: ?*anyopaque) void {
-    const self: *agentmod.Agent = @ptrCast(@alignCast(ctx.?));
-    const r = compress.runAuto(.{
-        .alloc = self.alloc,
-        .messages = &self.messages,
-        .window = self.ctxWindow(),
-        .api = self.provider.api,
-        .vision = self.hasVision(),
-    });
-    if (compress.formatNotice(self.alloc, r)) |msg| {
-        if (self.cbs.on_notice) |f| f(self.cbs.ctx, msg) catch {};
-    }
-}
 
 /// 一轮结束把 token 记进 ~/.piz/usage.jsonl。
 pub fn usageLedgerHook(ctx: ?*anyopaque) void {
@@ -330,54 +314,4 @@ test "cross-session memory persists and injects idempotently" {
     injectMemory(&agent);
     try t.expectEqual(once, agent.system_prompt.len);
     try t.expect(agent.system_prompt.len > sys_before);
-}
-
-test "prune plugin trims old tool outputs only" {
-    const t = std.testing;
-    try agentmod.util.testInit();
-    var arena = agentmod.util.Arena.init(t.allocator);
-    defer arena.deinit();
-    const a = arena.allocator();
-    var cfg = agentmod.cfgmod.Config{ .arena = &arena };
-    var provs = [_]agentmod.cfgmod.Provider{.{ .name = "mock", .api = .openai_completions, .base_url = "http://127.0.0.1:1", .api_key = "k" }};
-    cfg.providers = &provs;
-    var agent = try agentmod.Agent.init(a, &cfg, "mock", "m", "/tmp");
-
-    // 旧 bash 轮 ×8(240KB)+ read 轮(30KB,不裁)+ 新 bash 轮(30KB,尾部保护)
-    const big = "z" ** (30 * 1024);
-    for (0..8) |i| {
-        const id = try std.fmt.allocPrint(a, "c_bash{d}", .{i});
-        const tcs = try a.alloc(agentmod.ai.ToolCall, 1);
-        tcs[0] = .{ .id = id, .name = "bash", .args = "{}" };
-        try agent.messages.append(.{ .role = "user", .content = "old q" });
-        try agent.messages.append(.{ .role = "assistant", .content = "a", .tool_calls = tcs });
-        try agent.messages.append(.{ .role = "tool", .content = big, .tool_call_id = id });
-    }
-    const read_tcs = try a.alloc(agentmod.ai.ToolCall, 1);
-    read_tcs[0] = .{ .id = "c_read1", .name = "read", .args = "{\"path\":\"keep.zig\"}" };
-    try agent.messages.append(.{ .role = "user", .content = "old read q" });
-    try agent.messages.append(.{ .role = "assistant", .content = "a", .tool_calls = read_tcs });
-    try agent.messages.append(.{ .role = "tool", .content = big, .tool_call_id = "c_read1" });
-    const recent_tcs = try a.alloc(agentmod.ai.ToolCall, 1);
-    recent_tcs[0] = .{ .id = "c_bash9", .name = "bash", .args = "{}" };
-    try agent.messages.append(.{ .role = "user", .content = "new q" });
-    try agent.messages.append(.{ .role = "assistant", .content = "a", .tool_calls = recent_tcs });
-    try agent.messages.append(.{ .role = "tool", .content = big, .tool_call_id = "c_bash9" });
-
-    pruneHook(@ptrCast(&agent));
-    var found_trunc = false;
-    var read_intact = false;
-    var recent_intact = false;
-    for (agent.messages.items) |m| {
-        if (std.mem.eql(u8, m.role, "tool")) {
-            if (std.mem.startsWith(u8, m.content, "[Output truncated")) found_trunc = true;
-            if (std.mem.eql(u8, m.content, big)) {
-                if (std.mem.eql(u8, m.tool_call_id orelse "", "c_read1")) read_intact = true;
-                if (std.mem.eql(u8, m.tool_call_id orelse "", "c_bash9")) recent_intact = true;
-            }
-        }
-    }
-    try t.expect(found_trunc); // 部分旧 bash 输出被裁
-    try t.expect(read_intact); // read 输出不裁
-    try t.expect(recent_intact); // 尾部受保护
 }

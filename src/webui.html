@@ -6368,8 +6368,6 @@
         { name: "/resume", desc: "切到第 n 个会话", accepts: true },
         { name: "/undo", desc: "撤销上一轮" },
         { name: "/compact", desc: "压缩上下文" },
-        { name: "/shake", desc: "裁旧工具输出" },
-        { name: "/snap", desc: "大段输出打成密图" },
         { name: "/fast-compress", desc: "快压状态" },
         { name: "/fork", desc: "派生会话" },
         { name: "/title", desc: "改会话标题", accepts: true },
@@ -6848,16 +6846,6 @@
           case "/compact":
             act({ act: "compact" }, (j) =>
               showToast(j && j.ok ? "压缩完成" : "压缩失败"),
-            );
-            break;
-          case "/shake":
-            act({ act: "shake" }, (j) =>
-              showToast(j && j.ok ? "shake 完成" : "shake 失败"),
-            );
-            break;
-          case "/snap":
-            act({ act: "snap" }, (j) =>
-              showToast(j && j.ok ? "snap 完成" : "snap 失败"),
             );
             break;
           case "/fork": {

@@ -170,43 +170,6 @@ pub fn dispatch(tui: *tui_mod.Tui, app: *App, cmd: []const u8) anyerror!bool {
         main_mod.spawnWorker(app, "", true);
         return true;
     }
-    if (std.mem.eql(u8, cmd, "shake") or std.mem.startsWith(u8, cmd, "shake ")) {
-        if (app.worker_active.load(.acquire)) {
-            tuiNote(app, "\x1b[31m", "cannot shake while a turn is running");
-            return true;
-        }
-        const args = if (std.mem.startsWith(u8, cmd, "shake ")) std.mem.trim(u8, cmd["shake ".len..], " ") else "";
-        const r = compress.shake(.{
-            .alloc = app.alloc,
-            .messages = &app.agent.messages,
-            .window = app.agent.ctxWindow(),
-            .api = app.agent.provider.api,
-            .vision = app.agent.hasVision(),
-        }, .{ .protect_tokens = 0, .min_savings = 0, .drop_images = std.mem.eql(u8, args, "images") });
-        const msg = compress.formatNotice(app.alloc, r) orelse "shake: nothing to elide";
-        tuiNote(app, "\x1b[2m", msg);
-        return true;
-    }
-    if (std.mem.eql(u8, cmd, "snap")) {
-        if (app.worker_active.load(.acquire)) {
-            tuiNote(app, "\x1b[31m", "cannot snap while a turn is running");
-            return true;
-        }
-        const vision = app.agent.hasVision();
-        const r = compress.snap(.{
-            .alloc = app.alloc,
-            .messages = &app.agent.messages,
-            .window = app.agent.ctxWindow(),
-            .api = app.agent.provider.api,
-            .vision = vision,
-        });
-        const msg = compress.formatNotice(app.alloc, r) orelse if (!vision)
-            "snap: model has no vision"
-        else
-            "snap: nothing eligible (need large ASCII tool output + vision)";
-        tuiNote(app, "\x1b[2m", msg);
-        return true;
-    }
     if (std.mem.eql(u8, cmd, "fast-compress")) {
         const msg = compress.formatStatus(app.alloc, .{
             .alloc = app.alloc,

@@ -119,7 +119,6 @@ fn slashSkills(ctx: ?*anyopaque, args: []const u8) anyerror![]const u8 {
 ///   用 settings.json 的 `plugins` 数组或 `--plugin <name>` 开启。
 pub const builtin_plugins = [_]Plugin{
     // ---- 默认启用:只挂钩子,不加工具 ----
-    .{ .name = "tool-output-pruner", .before_turn = hookmod.pruneHook },
     .{ .name = "cross-session-memory", .on_compact = hookmod.memoryAppend },
     .{ .name = "command-canonicalization", .on_tool_before = hookmod.canonicalBlock },
     .{ .name = "artifact-store", .on_tool_result = hookmod.artifactStoreHook },
@@ -352,9 +351,12 @@ fn ensureDefault() void {
 }
 
 comptime {
-    if (!std.mem.eql(u8, builtin_plugins[12].name, "task-delegation")) {
-        @compileError("task-delegation 必须停在 builtin_plugins[12],childbind 的未绑定回退靠这一位");
+    // task-delegation 是 childbind 未绑定回退的锚点,按名查,不写死下标。
+    var found = false;
+    for (builtin_plugins) |p| {
+        if (std.mem.eql(u8, p.name, "task-delegation")) found = true;
     }
+    if (!found) @compileError("task-delegation 插件丢失,childbind 的未绑定回退靠它");
 }
 
 /// 按名开启一个插件(改进程默认集)。未知名字返回 false(调用方给提示)。
@@ -965,7 +967,7 @@ test "listPlugins reflects enable state" {
 
     const before = try listPlugins(a);
     try t.expect(std.mem.indexOf(u8, before, "[off] lsp") != null);
-    try t.expect(std.mem.indexOf(u8, before, "[on ] tool-output-pruner") != null);
+    try t.expect(std.mem.indexOf(u8, before, "[on ] cross-session-memory") != null);
 
     _ = enable("lsp");
     const after = try listPlugins(a);
@@ -976,7 +978,7 @@ test "listPlugins reflects enable state" {
     try t.expectEqual(@as(usize, 0), none.len);
     const some = try enabledOptionalLine(a, withEnabled(factorySet(), "lsp"));
     try t.expect(std.mem.indexOf(u8, some, "lsp") != null);
-    try t.expect(std.mem.indexOf(u8, some, "tool-output-pruner") == null);
+    try t.expect(std.mem.indexOf(u8, some, "cross-session-memory") == null);
 }
 
 test "applyFromConfig and catalog expose optional workflow plugin" {

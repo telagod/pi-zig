@@ -173,8 +173,6 @@ pub const SLASH_ITEMS = [_]HelpItem{
     .{ .cmd = "/plugins [on|off name]", .desc = "list or toggle plugins" },
     .{ .cmd = "/pkg", .desc = "installed packages" },
     .{ .cmd = "/compact", .desc = "snapcompact (no LLM)" },
-    .{ .cmd = "/shake [images]", .desc = "trim old tool output" },
-    .{ .cmd = "/snap", .desc = "pack long text as image" },
     .{ .cmd = "/fast-compress", .desc = "fast-compress status" },
     .{ .cmd = "/clear", .desc = "clear and start over" },
     .{ .cmd = "/plan <goal>", .desc = "write PLAN.md then run" },

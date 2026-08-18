@@ -2059,8 +2059,8 @@ test "every slash command appears in /help" {
     //
     // 命令名取自 onSubmit 里的 `eql(u8, cmd, "…")` / `startsWith(u8, cmd, "… ")`。
     const dispatched = [_][]const u8{
-        "help",  "status", "doctor", "init", "diff", "commit", "log",    "branch",  "mcp", "reload",  "usage", "jobs", "find",          "paste", "think", "theme", "permissions", "sandbox", "model", "refresh", "new", "sessions", "resume",
-        "title", "tree",   "fork",   "copy", "undo", "redo",   "memory", "plugins", "pkg", "compact", "shake", "snap", "fast-compress", "clear", "plan",  "queue", "export",      "dump",    "quit",
+        "help",  "status", "doctor", "init", "diff", "commit", "log",    "branch",  "mcp", "reload",  "usage",         "jobs",  "find", "paste", "think",  "theme", "permissions", "sandbox", "model", "refresh", "new", "sessions", "resume",
+        "title", "tree",   "fork",   "copy", "undo", "redo",   "memory", "plugins", "pkg", "compact", "fast-compress", "clear", "plan", "queue", "export", "dump",  "quit",
     };
     for (dispatched) |cmd| {
         var found = false;

@@ -1239,24 +1239,6 @@ fn poolActionHook(ctx: ?*anyopaque, cwd: []const u8, session: []const u8, act: [
         rebuildSnap(ses);
         return "{\"ok\":true,\"act\":\"compact\"}";
     }
-    if (std.mem.eql(u8, act, "shake") or std.mem.eql(u8, act, "shake-images") or std.mem.eql(u8, act, "snap")) {
-        if (ses.busy.cmpxchgWeak(0, 2, .acq_rel, .acquire) != null) return "{\"ok\":false,\"error\":\"busy\"}";
-        defer ses.busy.store(0, .release);
-        const drop_images = std.mem.eql(u8, act, "shake-images") or (name != null and std.mem.eql(u8, name.?, "images"));
-        const in = compress.Input{
-            .alloc = ses.agent.alloc,
-            .messages = &ses.agent.messages,
-            .window = ses.agent.ctxWindow(),
-            .api = ses.agent.provider.api,
-            .vision = ses.agent.hasVision(),
-        };
-        const r = if (std.mem.eql(u8, act, "snap"))
-            compress.snap(in)
-        else
-            compress.shake(in, .{ .protect_tokens = 0, .min_savings = 0, .drop_images = drop_images });
-        rebuildSnap(ses);
-        return std.fmt.allocPrint(alloc, "{{\"ok\":true,\"act\":\"{s}\",\"saved\":{d}}}", .{ act, r.tokens_saved }) catch null;
-    }
     if (std.mem.eql(u8, act, "queue")) {
         const n = webui_mod.ChatQueue.clear(ses.qkey);
         return std.fmt.allocPrint(alloc, "{{\"ok\":true,\"act\":\"queue\",\"cleared\":{d}}}", .{n}) catch null;

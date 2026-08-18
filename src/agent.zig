@@ -820,6 +820,8 @@ pub const Agent = struct {
         var last_result = ai.RunResult{};
         // 断线续跑计数:一轮之内累计,不因迭代推进而重置。
         var stream_retries: usize = 0;
+        // 窗况脚注每回合只在首个工具批盖一次(turn 节点)。
+        var turn_footered = false;
         // 空转检测有两个判据:调用完全相同(参数级),或成功输出完全相同(结果级)。
         // 后者管得宽 —— 模型常换个写法重跑同一件事,参数每次不同、输出一模一样。
         var last_calls: []const ai.ToolCall = &.{};
@@ -1103,10 +1105,40 @@ pub const Agent = struct {
                         tres.content = new_content;
                     }
                 }
+                // 入境定形:大结果进门即裁(密图+摘录 / 仅摘录),此后永不改。
+                // 已送前缀不动,prompt cache 前缀才稳;回溯裁旧消息会整段炸 cache。
+                var content = tres.content;
+                var snap_image: ?[]const u8 = null;
+                var snap_w: u32 = 0;
+                var snap_h: u32 = 0;
+                var shaped = false;
+                if (!tres.is_error) {
+                    const ing = compress.shapeIngress(self.alloc, content, .{
+                        .vision = self.hasVision(),
+                        .api = self.provider.api,
+                        .tool_name = slot.call.name,
+                        .window = self.ctxWindow(),
+                    }) catch compress.Ingress{ .text = content };
+                    if (ing.changed) {
+                        content = ing.text;
+                        snap_image = ing.image;
+                        snap_w = ing.width;
+                        snap_h = ing.height;
+                        shaped = true;
+                        if (ing.tokens_saved > 0) {
+                            if (self.cbs.on_notice) |f| {
+                                var nb: [96]u8 = undefined;
+                                const msg = std.fmt.bufPrint(&nb, "fast-compress: ingress snap −{d} tok", .{ing.tokens_saved}) catch "fast-compress: ingress snap";
+                                f(self.cbs.ctx, msg) catch |err| util.debugCatch("on_notice.ingress", err);
+                            }
+                        }
+                    }
+                }
                 // 输出指纹:同一份成功输出被反复拿到,说明模型没在用它。
                 // 只看成功的 —— 错误反复相同是模型在试错,用户 Esc 可停。
+                // 指纹打在定稿文本上(不含脚注,脚注带水位每轮都变)。
                 if (!tres.is_error) {
-                    const fp = outputFingerprint(slot.call.name, tres.content);
+                    const fp = outputFingerprint(slot.call.name, content);
                     if (fp == last_output_fp) {
                         same_output_count += 1;
                     } else {
@@ -1114,18 +1146,52 @@ pub const Agent = struct {
                         same_output_count = 1;
                     }
                     // content 挂在本轮 arena 上,活到 send() 返回,够止损时引用。
-                    last_good_output = tres.content;
+                    last_good_output = content;
                     last_good_tool = slot.call.name;
+                }
+                // 窗况脚注:只在任务节点盖(回合首个工具批/入境定形/硬线),不条条都盖。
+                {
+                    const w = self.ctxWindow();
+                    const used = self.estTokens();
+                    const pct = if (w > 0) used * 100 / w else 0;
+                    const node: ?compress.TaskNode = if (pct >= CTX_HARD_PERCENT)
+                        .hard
+                    else if (shaped)
+                        .ingress
+                    else if (!turn_footered)
+                        .turn
+                    else
+                        null;
+                    if (node) |nd| {
+                        if (nd == .turn) turn_footered = true;
+                        const foot = compress.usageFooter(self.alloc, pct, used, w, nd) catch "";
+                        if (foot.len > 0) content = std.fmt.allocPrint(self.alloc, "{s}{s}", .{ content, foot }) catch content;
+                    }
                 }
                 if (self.cbs.on_tool_end) |f| {
                     // 全量 content 给回调(web diff 卡/JSONL 需要完整输出;各调用方自行截断)
-                    _ = f(self.cbs.ctx, slot.call.name, tres.is_error, tres.content) catch |err| util.debugCatch("on_tool_end", err);
+                    _ = f(self.cbs.ctx, slot.call.name, tres.is_error, content) catch |err| util.debugCatch("on_tool_end", err);
                 }
                 try self.messages.append(.{
                     .role = "tool",
-                    .content = tres.content,
+                    .content = content,
                     .tool_call_id = slot.call.id,
                 });
+                // 入境密图与工具产出图片一样挂成 user 消息(协议:image block 只能在
+                // user/assistant 消息上;tool 消息是纯文本)。
+                if (snap_image) |img| {
+                    if (self.hasVision()) {
+                        try self.messages.append(.{
+                            .role = "user",
+                            .content = "[Snapcompact frame — dense pixel text of the shaped tool output]",
+                            .image = img,
+                            .image_mime = "image/png",
+                            .image_w = snap_w,
+                            .image_h = snap_h,
+                            .image_file = sessionmod.persistImageFile(self.alloc, img, "image/png"),
+                        });
+                    }
+                }
                 // 工具产出的图片附件挂成 user 消息(协议:image block 只能在
                 // user/assistant 消息上;tool 消息是纯文本)。data 由工具 dupe
                 // 到会话 arena,这里只引指针,安全。
@@ -1299,7 +1365,7 @@ test "agent init finds provider" {
     try t.expect(std.mem.indexOf(u8, agent.system_prompt, "piz") != null);
 }
 
-test "prune triggers then compaction after hard line" {
+test "compaction triggers after hard line" {
     const t = std.testing;
     try util.testInit();
     var arena = util.Arena.init(t.allocator);
@@ -1310,15 +1376,13 @@ test "prune triggers then compaction after hard line" {
     cfg.providers = &provs;
     var agent = try Agent.init(a, &cfg, "mock", "m", "/tmp");
 
-    // 2 条 250KB 摘要占位(prune 不碰 system)+ 1 条 user → 500KB+ ≈ 125K token > 85%×128K
+    // 2 条 250KB 摘要占位 + 1 条 user → 500KB+ ≈ 125K token > 85%×128K
     for (0..2) |_| {
         try agent.messages.append(.{ .role = "system", .content = "(Conversation compacted. Summary:)\n" ++ ("s" ** (250 * 1024)) });
     }
     try agent.messages.append(.{ .role = "user", .content = "continue" });
     const w = @as(usize, provs[0].context_window);
-    try t.expect(agent.estTokens() > w * CTX_HARD_PERCENT / 100);
-    // 插件(prune)裁不掉 system 摘要 → 仍超硬线 → 需 compact
-    pluginsmod.runBeforeTurn(@ptrCast(&agent));
+    // 入培不定形 system;仍超硬线 → 回合首须 compact
     try t.expect(agent.estTokens() > w * CTX_HARD_PERCENT / 100);
 }
 
