@@ -44,8 +44,13 @@ pub fn formatLog(alloc: std.mem.Allocator, cwd: []const u8, count: usize) ![]u8 
     const root = if (cwd.len == 0) "." else cwd;
     var nb: [8]u8 = undefined;
     const nstr = std.fmt.bufPrint(&nb, "{d}", .{@max(1, @min(count, 50))}) catch "20";
-    const out = git(alloc, root, &.{ "log", "--oneline", "-n", nstr }) catch
-        return alloc.dupe(u8, "not a git repo or git unavailable");
+    const out = git(alloc, root, &.{ "log", "--oneline", "-n", nstr }) catch {
+        // 空仓库 git log 退出 128(尚无提交),与非仓库同错。先探 status:
+        // 能跑通说明是仓库,只是还没有任何提交。
+        _ = git(alloc, root, &.{"status"}) catch
+            return alloc.dupe(u8, "not a git repo or git unavailable");
+        return alloc.dupe(u8, "no commits yet");
+    };
     if (std.mem.trim(u8, out, " \t\r\n").len == 0)
         return alloc.dupe(u8, "no commits yet");
     return out;
@@ -225,6 +230,15 @@ test "formatLog handles empty repo and count clamp" {
     _ = util.execShort(a, &.{ "git", "-C", repo, "init", "-q", "-b", "main" }) catch return error.SkipZigTest;
     const br = currentBranch(a, repo) orelse return error.SkipZigTest;
     try t.expectEqualStrings("main", br);
+    // 空仓库:git log 退出 128,但绝不是「非仓库」——报「尚无提交」。
+    const empty = try formatLog(a, repo, 5);
+    try t.expect(std.mem.indexOf(u8, empty, "no commits yet") != null);
+    // 有一次提交后恢复正常。
+    try std.Io.Dir.cwd().writeFile(util.io, .{ .sub_path = try std.fmt.allocPrint(a, "{s}/a.txt", .{repo}), .data = "hi\n" });
+    _ = util.execShort(a, &.{ "git", "-C", repo, "add", "a.txt" }) catch return error.SkipZigTest;
+    _ = util.execShort(a, &.{ "git", "-C", repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init" }) catch return error.SkipZigTest;
+    const one = try formatLog(a, repo, 5);
+    try t.expect(std.mem.indexOf(u8, one, "init") != null);
 }
 
 test "parseStatusBrief reads ahead behind and changes" {

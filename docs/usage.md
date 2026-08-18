@@ -126,7 +126,7 @@ deepseek/v4-flash think max ctx 1.2k/128k 9% cache 62% ~/project/pi-zig · 17867
 | `/branch` | 当前分支与最近本地分支，不切换（`piz branch` 同） |
 | `/mcp` | 列出已配置 MCP server 与工具（`piz mcp` 同） |
 | `/reload` | 重读 settings.json（主题/授权/沙箱/思考档；Web 当场套用外观；插件与 MCP 需重启；`piz reload` 同） |
-| `/usage` | 跨会话 token 账本（`~/.piz/usage.jsonl`，最近 8 轮，含估算 `$`）。空框按 `u` 同样 |
+| `/usage` | 跨会话 token 账本（`~/.piz/usage.jsonl`，最近 8 轮，含估算 `$`；`piz usage` 同）。空框按 `u` 同样 |
 | `/jobs` | 当前在跑与后台任务（bash `background`、HTTP、子 agent）。空框按 `j` 同样 |
 | `/jobs kill <pid>` | 只杀 activity 表里的进程。`/kill <pid>` 同义 |
 | `/find <text>` | 在对话块里搜，再敲一次跳下一条；命中反色。空输入时 `n`/`N` 下一条/上一条。裁掉的旧块仍可搜到（提示 `match in pruned history`）。Web 上 F3 / Shift+F3 同样跳，没命中会先拉更早历史 |
@@ -144,7 +144,7 @@ deepseek/v4-flash think max ctx 1.2k/128k 9% cache 62% ~/project/pi-zig · 17867
 | `/refresh` | 对各 provider 打 `GET /models`，新 id 并入内存表（不落盘）。Web 同令 |
 | `/new` | 开新会话 |
 | `/clear` | 清空当前会话历史并重开 |
-| `/sessions` | 列出本目录全部会话（带编号与消息数） |
+| `/sessions` | 列出本目录全部会话（带编号与消息数；`piz sessions` 同） |
 | `/resume <n>` | 切到第 n 个会话（编号来自 `/sessions`） |
 | `/title <text>` | 设置会话标题；留空则清除。不设则用首条消息第一行 |
 | `/tree` | 打印当前会话的消息列表（带编号，供 `/fork` 用） |
@@ -157,10 +157,10 @@ deepseek/v4-flash think max ctx 1.2k/128k 9% cache 62% ~/project/pi-zig · 17867
 | `/snap` | 把大段 ASCII tool 输出打成密图并留原文摘（无 vision 则跳过） |
 | `/fast-compress` | 看快压状态：用量、下一层、vision、已裁计数 |
 | `/pkg` | 列出已装资源包（用户 + 项目） |
-| `/plugins` | 列出本会话插件 |
+| `/plugins` | 列出本会话插件（`piz plugins` 同） |
 | `/plugins on <name>` | 开启插件（下一轮生效，写入 settings） |
 | `/plugins off <name>` | 关闭插件 |
-| `/memory` | 查看跨会话记忆内容 |
+| `/memory` | 查看跨会话记忆内容（`piz memory` 同） |
 | `/memory set <text>` | 写入一条跨会话记忆 |
 | `/memory clear` | 清空跨会话记忆 |
 | `/plan <goal>` | 让模型为 `<goal>` 制定分步计划，写入 `PLAN.md` 后按计划执行 |

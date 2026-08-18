@@ -53,6 +53,14 @@ pub const USAGE =
     \\    (git log --oneline,默认 20 条,最多 50)
     \\  branch 子命令: piz branch
     \\    (当前分支与最近本地分支,不切换)
+    \\  usage 子命令: piz usage
+    \\    (token 台账汇总,与 /usage 同源)
+    \\  sessions 子命令: piz sessions
+    \\    (本目录的会话清单,与 /sessions 同源)
+    \\  plugins 子命令: piz plugins
+    \\    (内置插件开关状态,与 /plugins 同源)
+    \\  memory 子命令: piz memory
+    \\    (查看跨会话 memory.md,与 /memory 同源)
     \\  mcp 子命令: piz mcp
     \\    (列出已配置 MCP server 与工具)
     \\  reload 子命令: piz reload

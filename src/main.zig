@@ -1677,6 +1677,69 @@ pub fn main(init: std.process.Init) !void {
             };
             std.debug.print("{s}", .{text});
             std.process.exit(0);
+        } else if (std.mem.eql(u8, arg, "usage")) {
+            // 与 TUI /usage 同源:usage-ledger 插件落的 ~/.piz/usage.jsonl。
+            const uselog = @import("core").usage_log;
+            const sum = uselog.summarize(alloc, 8) catch {
+                std.debug.print("piz: cannot read usage.jsonl\n", .{});
+                std.process.exit(1);
+            };
+            var inb: [16]u8 = undefined;
+            var outb: [16]u8 = undefined;
+            if (sum.usd > 0) {
+                std.debug.print("usage  {d} turns  ↑{s} ↓{s}  ${d:.4}\n", .{ sum.lines, tui_mod.formatTok(&inb, sum.tok_in), tui_mod.formatTok(&outb, sum.tok_out), sum.usd });
+            } else {
+                std.debug.print("usage  {d} turns  ↑{s} ↓{s}\n", .{ sum.lines, tui_mod.formatTok(&inb, sum.tok_in), tui_mod.formatTok(&outb, sum.tok_out) });
+            }
+            if (sum.tail.len > 0) std.debug.print("{s}\n", .{sum.tail});
+            std.process.exit(0);
+        } else if (std.mem.eql(u8, arg, "sessions")) {
+            // 与 TUI /sessions 同源:本目录的会话清单。
+            const here = std.process.currentPathAlloc(util.io, alloc) catch ".";
+            const list = sessionmod.Session.list(alloc, here) catch &.{};
+            defer for (list) |s| {
+                var s2 = s;
+                s2.deinit();
+            };
+            if (list.len == 0) {
+                std.debug.print("no sessions yet\n", .{});
+                std.process.exit(0);
+            }
+            std.debug.print("{d} sessions:\n", .{list.len});
+            const now_ns = std.Io.Clock.now(.real, util.io).nanoseconds;
+            for (list, 0..) |s, i| {
+                const d = s.describe(alloc, now_ns) catch null;
+                defer if (d) |info| info.deinit(alloc);
+                const head = if (d) |info| info.headline else s.sessionId();
+                const meta = if (d) |info| info.hint else "";
+                std.debug.print("{d}. {s}  {s}\n", .{ i + 1, head, meta });
+            }
+            std.process.exit(0);
+        } else if (std.mem.eql(u8, arg, "plugins")) {
+            const text = pluginsmod.listPlugins(alloc) catch {
+                std.debug.print("piz: plugins failed\n", .{});
+                std.process.exit(1);
+            };
+            std.debug.print("{s}", .{text});
+            if (text.len == 0 or text[text.len - 1] != '\n') std.debug.print("\n", .{});
+            std.process.exit(0);
+        } else if (std.mem.eql(u8, arg, "memory")) {
+            const mem_path = util.configDir(alloc) catch {
+                std.debug.print("piz: no config dir\n", .{});
+                std.process.exit(1);
+            };
+            const full = util.joinPath(alloc, mem_path, "memory.md") catch {
+                std.debug.print("piz: cannot build path\n", .{});
+                std.process.exit(1);
+            };
+            const content = std.Io.Dir.cwd().readFileAlloc(util.io, full, alloc, .limited(512 * 1024)) catch {
+                std.debug.print("memory is empty\n", .{});
+                std.process.exit(0);
+            };
+            std.debug.print("{s}", .{content[0..@min(content.len, 4000)]});
+            if (content.len > 4000) std.debug.print("\n…(truncated)", .{});
+            if (content.len == 0 or content[@min(content.len, 4000) - 1] != '\n') std.debug.print("\n", .{});
+            std.process.exit(0);
         } else if (std.mem.eql(u8, arg, "web")) {
             cmd_web.runWebCmd(alloc, &args); // 不返回
         } else if (std.mem.eql(u8, arg, "sandbox-exec")) {
