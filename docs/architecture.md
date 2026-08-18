@@ -45,7 +45,8 @@ graph TD
     cmdw["cmd_web.zig"]
     cmdp["cmd_print.zig"]
     cmdk["cmd_pkg.zig"]
-    webui["webui.zig — HTTP + SSE"]
+    webui["webui.zig — HTTP + SSE 守卫"]
+    webui --> routes["webui_routes.zig — ~40 条路由体"]
     core["core — src/core.zig<br/>聚合入口"]
 
     app --> tui
@@ -144,7 +145,8 @@ graph TD
 | `activity.zig` | 在跑活动的无锁登记表：spinner／耗时／进度、取消世代、转后台 |
 | `pkgs.zig` | 包安装/移除/枚举、marketplace 解析、`tools[]` 声明 |
 | `events.zig` | 扫描包扩展声明、事件触发时 spawn 命令 |
-| `webui.zig` | HTTP 服务、路由、SSE、鉴权 |
+| `webui.zig` | HTTP 服务、鉴权 / CSRF / workspace 守卫、SSE |
+| `webui_routes.zig` | ~40 条 API 路由体（顺序敏感，先匹配先赢） |
 | `webplugins.zig` | 前端插件清单与资源服务 |
 | `main.zig` | argv 解析、交互态编排 |
 | `cmd_help.zig` | CLI `-h`、TUI `/help`、Web `/api/help` 同源清单 |

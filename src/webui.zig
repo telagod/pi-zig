@@ -11,6 +11,7 @@ const sessionmod = @import("core").session;
 const activity = @import("core").activity;
 const pkgsmod = @import("core").pkgs;
 const cmd_help = @import("cmd_help.zig");
+const routes = @import("webui_routes.zig");
 const http = std.http;
 const net = std.Io.net;
 
@@ -177,8 +178,8 @@ pub const EventHub = struct {
     }
 };
 
-const OauthKind = enum { openrouter, xai, openai };
-const OauthPend = struct {
+pub const OauthKind = enum { openrouter, xai, openai };
+pub const OauthPend = struct {
     state: [32]u8 = undefined,
     state_n: u8 = 0,
     verifier: [43]u8 = undefined,
@@ -406,532 +407,109 @@ pub const WebServer = struct {
             try req.respond("unknown workspace", .{ .status = .forbidden });
             return;
         }
+        // 路由体在 webui_routes.zig;顺序即原 if-链顺序,先匹配先赢。
         if (method == .GET and (std.mem.eql(u8, target, "/") or std.mem.startsWith(u8, target, "/?") or std.mem.eql(u8, target, "/index.html"))) {
-            try req.respond(INDEX_HTML, .{
-                .status = .ok,
-                .extra_headers = &.{
-                    .{ .name = "content-type", .value = "text/html; charset=utf-8" },
-                    .{ .name = "cache-control", .value = "no-store" },
-                },
-            });
-            return;
+            return routes.indexHtml(self, req);
         }
         if (method == .GET and std.mem.startsWith(u8, target, "/api/plugins/assets/")) {
-            const plugin_cwd = if (ws.len > 0) ws else self.opts.project_cwd;
-            if (webplugins.readAsset(self.alloc, plugin_cwd, target) catch null) |asset| {
-                defer self.alloc.free(asset.data);
-                try req.respond(asset.data, .{
-                    .status = .ok,
-                    .extra_headers = &.{
-                        .{ .name = "content-type", .value = asset.content_type },
-                        .{ .name = "cache-control", .value = "no-cache" },
-                        .{ .name = "x-content-type-options", .value = "nosniff" },
-                    },
-                });
-                return;
-            }
-            try req.respond("not found", .{ .status = .not_found });
-            return;
+            return routes.pluginsAssets(self, req, target, ws);
         }
         if (method == .GET and std.mem.startsWith(u8, target, "/api/plugins")) {
-            const plugin_cwd = if (ws.len > 0) ws else self.opts.project_cwd;
-            const body = webplugins.manifestJson(self.alloc, plugin_cwd) catch "{\"apiVersion\":1,\"plugins\":[]}";
-            defer if (!std.mem.eql(u8, body, "{\"apiVersion\":1,\"plugins\":[]}")) self.alloc.free(body);
-            try req.respond(body, .{
-                .status = .ok,
-                .extra_headers = &.{
-                    .{ .name = "content-type", .value = "application/json" },
-                    .{ .name = "cache-control", .value = "no-store" },
-                },
-            });
-            return;
+            return routes.plugins(self, req, ws);
         }
         if (method == .GET and std.mem.startsWith(u8, target, "/api/state")) {
-            const session = querySession(self.alloc, target) catch "default";
-            defer if (!std.mem.eql(u8, session, "default")) self.alloc.free(session);
-            const body = if (self.state_hook) |f| f(self.state_ctx, ws, session, self.alloc) else self.stateJson();
-            try req.respond(body, .{
-                .status = .ok,
-                .extra_headers = &.{.{ .name = "content-type", .value = "application/json" }},
-            });
-            return;
+            return routes.stateGet(self, req, target, ws);
         }
         if (method == .GET and std.mem.startsWith(u8, target, "/api/history")) {
-            const session = querySession(self.alloc, target) catch "default";
-            defer if (!std.mem.eql(u8, session, "default")) self.alloc.free(session);
-            const offset = queryUsize(target, "offset", 0);
-            var limit = queryUsize(target, "limit", 80);
-            if (limit == 0 or limit > 200) limit = 80;
-            const body = if (self.history_hook) |f|
-                f(self.history_ctx, ws, session, offset, limit, self.alloc)
-            else
-                "{\"start\":0,\"total\":0,\"history\":[]}";
-            try req.respond(body, .{
-                .status = .ok,
-                .extra_headers = &.{.{ .name = "content-type", .value = "application/json" }},
-            });
-            return;
+            return routes.history(self, req, target, ws);
         }
         if (method == .GET and std.mem.startsWith(u8, target, "/api/sessions")) {
-            const body = if (self.sessions_hook) |f| f(self.sessions_ctx, ws, self.alloc) else "[]";
-            try req.respond(body, .{
-                .status = .ok,
-                .extra_headers = &.{.{ .name = "content-type", .value = "application/json" }},
-            });
-            return;
+            return routes.sessions(self, req, ws);
         }
         if (method == .GET and std.mem.eql(u8, path, "/api/models")) {
-            const body = if (self.models_hook) |f| f(self.models_ctx, self.alloc) else "[]";
-            try req.respond(body, .{
-                .status = .ok,
-                .extra_headers = &.{.{ .name = "content-type", .value = "application/json" }},
-            });
-            return;
+            return routes.models(self, req);
         }
         if (method == .POST and std.mem.eql(u8, path, "/api/activity")) {
-            var body_buf: [4096]u8 = undefined;
-            const reader = req.readerExpectNone(&body_buf);
-            const body = reader.allocRemaining(self.alloc, .limited(4096)) catch "";
-            const toolsmod = @import("core").tools;
-            var killed = false;
-            var pid_n: i32 = 0;
-            if (std.json.parseFromSliceLeaky(std.json.Value, self.alloc, body, .{})) |root| {
-                if (root == .object) {
-                    if (root.object.get("kill")) |kv| {
-                        pid_n = switch (kv) {
-                            .integer => |i| @intCast(i),
-                            .float => |f| @intFromFloat(f),
-                            .string => |s| std.fmt.parseInt(i32, s, 10) catch 0,
-                            else => 0,
-                        };
-                        if (pid_n > 0) killed = toolsmod.killTracked(@intCast(pid_n));
-                    }
-                }
-            } else |_| {}
-            const out = std.fmt.allocPrint(self.alloc, "{{\"ok\":{s},\"pid\":{d}}}", .{ if (killed) "true" else "false", pid_n }) catch "{\"ok\":false}";
-            try req.respond(out, .{ .status = .ok, .extra_headers = &.{.{ .name = "content-type", .value = "application/json" }} });
-            return;
+            return routes.activityPost(self, req);
         }
         if (method == .GET and std.mem.eql(u8, path, "/api/activity")) {
-            var aw = std.Io.Writer.Allocating.init(self.alloc);
-            activity.writeJson(self.alloc, &aw.writer) catch {
-                try req.respond("[]", .{ .status = .ok, .extra_headers = &.{.{ .name = "content-type", .value = "application/json" }} });
-                return;
-            };
-            try req.respond(aw.written(), .{
-                .status = .ok,
-                .extra_headers = &.{.{ .name = "content-type", .value = "application/json" }},
-            });
-            return;
+            return routes.activityGet(self, req);
         }
         if (method == .GET and std.mem.eql(u8, path, "/api/usage")) {
-            const uselog = @import("core").usage_log;
-            const sum = uselog.summarize(self.alloc, 8) catch uselog.Summary{};
-            const body = std.fmt.allocPrint(self.alloc, "{{\"lines\":{d},\"in\":{d},\"out\":{d},\"usd\":{d:.8},\"tail\":{s}}}", .{
-                sum.lines,
-                sum.tok_in,
-                sum.tok_out,
-                sum.usd,
-                util.jsonString(self.alloc, sum.tail) catch "\"\"",
-            }) catch "{\"lines\":0,\"in\":0,\"out\":0,\"usd\":0,\"tail\":\"\"}";
-            try req.respond(body, .{
-                .status = .ok,
-                .extra_headers = &.{.{ .name = "content-type", .value = "application/json" }},
-            });
-            return;
+            return routes.usage(self, req);
         }
         if (method == .GET and std.mem.eql(u8, path, "/api/help")) {
-            const session = querySession(self.alloc, target) catch "default";
-            defer if (!std.mem.eql(u8, session, "default")) self.alloc.free(session);
-            var extra_buf: [32]cmd_help.HelpItem = undefined;
-            const extra_n = if (self.slash_catalog_hook) |f| f(self.slash_ctx, ws, session, extra_buf[0..]) else 0;
-            var aw = std.Io.Writer.Allocating.init(self.alloc);
-            cmd_help.writeCatalogJsonExtra(self.alloc, &aw.writer, extra_buf[0..extra_n]) catch {
-                try req.respond("{\"commands\":[]}", .{ .status = .ok, .extra_headers = &.{.{ .name = "content-type", .value = "application/json" }} });
-                return;
-            };
-            try req.respond(aw.written(), .{
-                .status = .ok,
-                .extra_headers = &.{.{ .name = "content-type", .value = "application/json" }},
-            });
-            return;
+            return routes.help(self, req, target, ws);
         }
         if (method == .POST and std.mem.eql(u8, path, "/api/slash")) {
-            const session = querySession(self.alloc, target) catch "default";
-            defer if (!std.mem.eql(u8, session, "default")) self.alloc.free(session);
-            var body_buf: [1024]u8 = undefined;
-            const reader = req.readerExpectNone(&body_buf);
-            const body = reader.allocRemaining(self.alloc, .limited(4096)) catch "";
-            defer if (body.len > 0) self.alloc.free(body);
-            const root = std.json.parseFromSliceLeaky(std.json.Value, self.alloc, body, .{}) catch {
-                try req.respond("{\"ok\":false,\"error\":\"bad json\"}", .{ .status = .ok, .extra_headers = &.{.{ .name = "content-type", .value = "application/json" }} });
-                return;
-            };
-            const name = if (root == .object) (if (root.object.get("name")) |v| (if (v == .string) v.string else "") else "") else "";
-            const args = if (root == .object) (if (root.object.get("args")) |v| (if (v == .string) v.string else "") else "") else "";
-            if (name.len == 0 or self.slash_hook == null) {
-                try req.respond("{\"ok\":false,\"error\":\"unknown command\"}", .{ .status = .ok, .extra_headers = &.{.{ .name = "content-type", .value = "application/json" }} });
-                return;
-            }
-            var aw = std.Io.Writer.Allocating.init(self.alloc);
-            if (!self.slash_hook.?(self.slash_ctx, ws, session, name, args, &aw.writer)) {
-                try req.respond("{\"ok\":false,\"error\":\"unknown command\"}", .{ .status = .ok, .extra_headers = &.{.{ .name = "content-type", .value = "application/json" }} });
-                return;
-            }
-            const text_js = util.jsonString(self.alloc, aw.written()) catch "\"\"";
-            const resp = std.fmt.allocPrint(self.alloc, "{{\"ok\":true,\"text\":{s}}}", .{text_js}) catch "{\"ok\":true,\"text\":\"\"}";
-            try req.respond(resp, .{ .status = .ok, .extra_headers = &.{.{ .name = "content-type", .value = "application/json" }} });
-            return;
+            return routes.slash(self, req, target, ws);
         }
         if (method == .GET and std.mem.eql(u8, path, "/api/packages")) {
-            const cwd = if (ws.len > 0) ws else self.opts.project_cwd;
-            var aw = std.Io.Writer.Allocating.init(self.alloc);
-            pkgsmod.writeListJson(self.alloc, &aw.writer, cwd) catch {
-                try req.respond("{\"user\":[],\"project\":[]}", .{ .status = .ok, .extra_headers = &.{.{ .name = "content-type", .value = "application/json" }} });
-                return;
-            };
-            try req.respond(aw.written(), .{
-                .status = .ok,
-                .extra_headers = &.{.{ .name = "content-type", .value = "application/json" }},
-            });
-            return;
+            return routes.packages(self, req, ws);
         }
         if (method == .GET and std.mem.eql(u8, path, "/api/config")) {
-            const body = if (self.config_hook) |f| (f(self.config_ctx, self.alloc, null) orelse "{}") else "{}";
-            try req.respond(body, .{
-                .status = .ok,
-                .extra_headers = &.{.{ .name = "content-type", .value = "application/json" }},
-            });
-            return;
+            return routes.configGet(self, req);
         }
         if (method == .POST and std.mem.startsWith(u8, target, "/api/config")) {
-            var body_buf: [16 * 1024]u8 = undefined;
-            const reader = req.readerExpectNone(&body_buf);
-            const body = reader.allocRemaining(self.alloc, .limited(64 * 1024)) catch "";
-            defer if (body.len > 0) self.alloc.free(body);
-            if (self.config_hook) |f| {
-                const out = f(self.config_ctx, self.alloc, if (body.len > 0) body else null) orelse {
-                    try req.respond("{\"ok\":false}", .{ .status = .ok, .extra_headers = &.{.{ .name = "content-type", .value = "application/json" }} });
-                    return;
-                };
-                try req.respond(out, .{ .status = .ok, .extra_headers = &.{.{ .name = "content-type", .value = "application/json" }} });
-                return;
-            }
-            try req.respond("{\"ok\":true}", .{ .status = .ok });
-            return;
+            return routes.configPost(self, req);
         }
         if (method == .GET and std.mem.eql(u8, path, "/api/events")) {
             return self.serveSSE(req, conn_fd);
         }
         if (method == .POST and std.mem.startsWith(u8, target, "/api/chat")) {
-            const session = querySession(self.alloc, target) catch "default";
-            defer if (!std.mem.eql(u8, session, "default")) self.alloc.free(session);
-            var body_buf: [16 * 1024]u8 = undefined;
-            const reader = req.readerExpectNone(&body_buf);
-            const body = reader.allocRemaining(self.alloc, .limited(4 * 1024 * 1024)) catch "";
-            defer if (body.len > 0) self.alloc.free(body);
-            const chat = parseChatBody(self.alloc, body);
-            defer if (chat.text.len > 0) self.alloc.free(chat.text);
-            defer if (chat.image) |img| self.alloc.free(img);
-            if ((chat.text.len > 0 or chat.image != null) and !self.stopping.load(.acquire)) {
-                if (self.chat_hook) |f| {
-                    if (!f(self.chat_ctx, ws, session, chat.text, chat.image, chat.mime)) {
-                        try req.respond("{\"ok\":false,\"error\":\"rejected\"}", .{ .status = .ok, .extra_headers = &.{.{ .name = "content-type", .value = "application/json" }} });
-                        return;
-                    }
-                } else {
-                    self.hub.push("{{\"type\":\"user_message\",\"text\":{s},\"has_image\":{s}}}", .{ try util.jsonString(self.alloc, chat.text), if (chat.image != null) "true" else "false" });
-                    if (!ChatQueue.enqueueEx(session, chat.text, chat.image, chat.mime)) {
-                        try req.respond("{\"ok\":false,\"error\":\"queue failed\"}", .{ .status = .ok, .extra_headers = &.{.{ .name = "content-type", .value = "application/json" }} });
-                        return;
-                    }
-                }
-            }
-            try req.respond("{\"ok\":true}", .{ .status = .ok, .extra_headers = &.{.{ .name = "content-type", .value = "application/json" }} });
-            return;
+            return routes.chatPost(self, req, target, ws);
         }
         if (method == .POST and std.mem.startsWith(u8, target, "/api/interrupt")) {
-            const session = querySession(self.alloc, target) catch "default";
-            defer if (!std.mem.eql(u8, session, "default")) self.alloc.free(session);
-            if (self.interrupt_hook) |f| f(self.interrupt_ctx, ws, session);
-            // 手动响应:0.16 respond 对无 body 的 POST 断言(transfer_encoding/content_length)
-            try req.server.out.writeAll("HTTP/1.1 200 OK\r\ncontent-length: 7\r\nconnection: close\r\n\r\n{\"ok\":true}");
-            try req.server.out.flush();
-            return;
+            return routes.interrupt(self, req, target, ws);
         }
         if (method == .POST and std.mem.eql(u8, path, "/api/approve")) {
-            var body_buf: [1024]u8 = undefined;
-            const reader = req.readerExpectNone(&body_buf);
-            const body = reader.allocRemaining(self.alloc, .limited(4096)) catch "";
-            defer if (body.len > 0) self.alloc.free(body);
-            const root = std.json.parseFromSliceLeaky(std.json.Value, self.alloc, body, .{}) catch return;
-            var id: u32 = 0;
-            var allow = false;
-            if (root == .object) {
-                if (root.object.get("id")) |v| {
-                    if (v == .integer) id = @intCast(v.integer);
-                }
-                if (root.object.get("allow")) |v| {
-                    if (v == .bool) allow = v.bool;
-                }
-            }
-            if (id != 0 and PermGate.resolve(id, allow)) {
-                self.hub.push("{{\"type\":\"permission_result\",\"id\":{d},\"allow\":{s}}}", .{ id, if (allow) "true" else "false" });
-                try req.respond("{\"ok\":true}", .{ .status = .ok });
-                return;
-            }
-            try req.respond("{\"ok\":false,\"error\":\"unknown or already resolved\"}", .{ .status = .ok });
-            return;
+            return routes.approve(self, req);
         }
         if (method == .POST and std.mem.startsWith(u8, target, "/api/mode") and !std.mem.startsWith(u8, target, "/api/model")) {
-            const session = querySession(self.alloc, target) catch "default";
-            defer if (!std.mem.eql(u8, session, "default")) self.alloc.free(session);
-            var mode: ?[]const u8 = null;
-            var body_buf: [256]u8 = undefined;
-            const reader = req.readerExpectNone(&body_buf);
-            const body = reader.allocRemaining(self.alloc, .limited(1024)) catch "";
-            defer if (body.len > 0) self.alloc.free(body);
-            if (body.len > 0) {
-                const root = std.json.parseFromSliceLeaky(std.json.Value, self.alloc, body, .{}) catch null;
-                if (root) |r| {
-                    if (r == .object) {
-                        if (r.object.get("mode")) |v| {
-                            if (v == .string) mode = v.string;
-                        } else if (r.object.get("auto")) |v| {
-                            if (v == .bool) mode = if (v.bool) "yolo" else "ask";
-                        }
-                    }
-                }
-            }
-            if (self.mode_hook) |f| {
-                const cur = f(self.mode_ctx, ws, session, mode) orelse {
-                    try req.respond("{\"ok\":false}", .{ .status = .ok, .extra_headers = &.{.{ .name = "content-type", .value = "application/json" }} });
-                    return;
-                };
-                const s = if (std.mem.eql(u8, cur, "yolo"))
-                    "{\"ok\":true,\"auto\":true,\"mode\":\"yolo\"}"
-                else if (std.mem.eql(u8, cur, "ask"))
-                    "{\"ok\":true,\"auto\":false,\"mode\":\"ask\"}"
-                else
-                    "{\"ok\":true,\"auto\":false,\"mode\":\"read-only\"}";
-                try req.respond(s, .{ .status = .ok, .extra_headers = &.{.{ .name = "content-type", .value = "application/json" }} });
-                return;
-            }
-            try req.respond("{\"ok\":true}", .{ .status = .ok });
-            return;
+            return routes.modePost(self, req, target, ws);
         }
         if (method == .POST and std.mem.startsWith(u8, target, "/api/model")) {
-            const session = querySession(self.alloc, target) catch "default";
-            defer if (!std.mem.eql(u8, session, "default")) self.alloc.free(session);
-            var model: ?[]const u8 = null;
-            var body_buf: [256]u8 = undefined;
-            const reader = req.readerExpectNone(&body_buf);
-            const body = reader.allocRemaining(self.alloc, .limited(1024)) catch "";
-            defer if (body.len > 0) self.alloc.free(body);
-            if (body.len > 0) {
-                const root = std.json.parseFromSliceLeaky(std.json.Value, self.alloc, body, .{}) catch null;
-                if (root) |r| {
-                    if (r == .object) {
-                        if (r.object.get("model")) |v| {
-                            if (v == .string) model = v.string;
-                        }
-                    }
-                }
-            }
-            if (self.model_hook) |f| {
-                const cur = f(self.model_ctx, ws, session, model) orelse {
-                    try req.respond("{\"ok\":false}", .{ .status = .ok, .extra_headers = &.{.{ .name = "content-type", .value = "application/json" }} });
-                    return;
-                };
-                const resp = okJson(self.alloc, "model", cur);
-                defer if (resp) |j| self.alloc.free(j);
-                try req.respond(resp orelse "{\"ok\":true}", .{ .status = .ok, .extra_headers = &.{.{ .name = "content-type", .value = "application/json" }} });
-                return;
-            }
-            try req.respond("{\"ok\":true}", .{ .status = .ok });
-            return;
+            return routes.modelPost(self, req, target, ws);
         }
         if (method == .POST and std.mem.startsWith(u8, target, "/api/title")) {
-            const session = querySession(self.alloc, target) catch "default";
-            defer if (!std.mem.eql(u8, session, "default")) self.alloc.free(session);
-            var title: ?[]const u8 = null;
-            var body_buf: [256]u8 = undefined;
-            const reader = req.readerExpectNone(&body_buf);
-            const body = reader.allocRemaining(self.alloc, .limited(1024)) catch "";
-            defer if (body.len > 0) self.alloc.free(body);
-            if (body.len > 0) {
-                const root = std.json.parseFromSliceLeaky(std.json.Value, self.alloc, body, .{}) catch null;
-                if (root) |r| {
-                    if (r == .object) {
-                        if (r.object.get("title")) |v| {
-                            // 在最外层入口就裁:hook 之后标题会进内存、落盘,
-                            // 再往下每一步都不该见到无界值。
-                            if (v == .string) title = util.clampUtf8(v.string, sessionmod.MAX_TITLE_BYTES);
-                        }
-                    }
-                }
-            }
-            if (self.title_hook) |f| {
-                const cur = f(self.title_ctx, ws, session, title) orelse {
-                    try req.respond("{\"ok\":false}", .{ .status = .ok, .extra_headers = &.{.{ .name = "content-type", .value = "application/json" }} });
-                    return;
-                };
-                // 入口已裁过标题,但读路径拿的是磁盘上的旧值 —— 那可能是限长
-                // 之前写进去的,所以响应侧也必须不设长度上限。
-                const resp = okJson(self.alloc, "title", cur);
-                defer if (resp) |j| self.alloc.free(j);
-                try req.respond(resp orelse "{\"ok\":true}", .{ .status = .ok, .extra_headers = &.{.{ .name = "content-type", .value = "application/json" }} });
-                return;
-            }
-            try req.respond("{\"ok\":true}", .{ .status = .ok });
-            return;
+            return routes.titlePost(self, req, target, ws);
         }
         // /api/action?session=&ws= :fork/undo/compact/archive/restore/delete(kimi 式会话动作)
         if (method == .POST and std.mem.startsWith(u8, target, "/api/action")) {
-            const aws = queryWs(self.alloc, target) catch "";
-            defer if (aws.len > 0) self.alloc.free(aws);
-            const session = querySession(self.alloc, target) catch "";
-            if (session.len == 0) {
-                try req.respond("{\"ok\":false}", .{ .status = .ok, .extra_headers = &.{.{ .name = "content-type", .value = "application/json" }} });
-                return;
-            }
-            var body_buf: [16 * 1024]u8 = undefined;
-            const reader = req.readerExpectNone(&body_buf);
-            const body = reader.allocRemaining(self.alloc, .limited(64 * 1024)) catch "";
-            defer if (body.len > 0) self.alloc.free(body);
-            var act: []const u8 = "";
-            var name: ?[]const u8 = null;
-            var count: usize = 0;
-            if (std.json.parseFromSliceLeaky(std.json.Value, self.alloc, body, .{})) |root| {
-                if (root == .object) {
-                    if (root.object.get("act")) |v| {
-                        if (v == .string) act = v.string;
-                    }
-                    if (root.object.get("name")) |v| {
-                        if (v == .string) name = v.string;
-                    }
-                    if (root.object.get("count")) |v| {
-                        if (v == .integer and v.integer > 0) count = @intCast(v.integer);
-                    }
-                }
-            } else |_| {}
-            if (self.action_hook) |f| {
-                const out = f(self.action_ctx, aws, session, act, name, count) orelse {
-                    try req.respond("{\"ok\":false}", .{ .status = .ok, .extra_headers = &.{.{ .name = "content-type", .value = "application/json" }} });
-                    return;
-                };
-                try req.respond(out, .{ .status = .ok, .extra_headers = &.{.{ .name = "content-type", .value = "application/json" }} });
-                return;
-            }
-            try req.respond("{\"ok\":false}", .{ .status = .ok });
-            return;
+            return routes.action(self, req, target);
         }
         if (method == .GET and std.mem.eql(u8, path, "/api/workspaces")) {
-            const body = if (self.workspaces_hook) |f| (f(self.workspaces_ctx, self.alloc, null) orelse "[]") else "[]";
-            try req.respond(body, .{
-                .status = .ok,
-                .extra_headers = &.{.{ .name = "content-type", .value = "application/json" }},
-            });
-            return;
+            return routes.workspacesGet(self, req);
         }
         if (method == .POST and std.mem.eql(u8, path, "/api/oauth/start")) {
-            var body_buf: [4096]u8 = undefined;
-            const reader = req.readerExpectNone(&body_buf);
-            const body = reader.allocRemaining(self.alloc, .limited(4096)) catch "";
-            const out = oauthStart(self, body);
-            try req.respond(out, .{
-                .status = .ok,
-                .extra_headers = &.{.{ .name = "content-type", .value = "application/json" }},
-            });
-            return;
+            return routes.oauthStartRoute(self, req);
         }
         if (method == .GET and std.mem.eql(u8, path, "/api/oauth/callback")) {
-            const html = oauthCallback(self, target);
-            try req.respond(html, .{
-                .status = .ok,
-                .extra_headers = &.{.{ .name = "content-type", .value = "text/html; charset=utf-8" }},
-            });
-            return;
+            return routes.oauthCallbackRoute(self, req, target);
         }
         if (method == .GET and std.mem.eql(u8, path, "/api/oauth/poll")) {
-            const st = queryParam(target, "state") orelse "";
-            const out = oauthPoll(self, st);
-            try req.respond(out, .{
-                .status = .ok,
-                .extra_headers = &.{.{ .name = "content-type", .value = "application/json" }},
-            });
-            return;
+            return routes.oauthPollRoute(self, req, target);
         }
         if (method == .GET and std.mem.eql(u8, path, "/api/oauth/status")) {
-            const st = queryParam(target, "state") orelse "";
-            const out = oauthStatus(self, st);
-            try req.respond(out, .{
-                .status = .ok,
-                .extra_headers = &.{.{ .name = "content-type", .value = "application/json" }},
-            });
-            return;
+            return routes.oauthStatusRoute(self, req, target);
         }
         if (method == .GET and std.mem.eql(u8, path, "/api/image")) {
-            const raw = queryParam(target, "name") orelse "";
-            const name = if (raw.len == 0) "" else (util.percentDecode(self.alloc, raw) catch raw);
-            if (artifactImage(self.alloc, name)) |img| {
-                try req.respond(img.data, .{
-                    .status = .ok,
-                    .extra_headers = &.{ .{ .name = "content-type", .value = img.mime }, .{ .name = "cache-control", .value = "private, max-age=86400" } },
-                });
-            } else {
-                try req.respond("{\"ok\":false}", .{ .status = .not_found, .extra_headers = &.{.{ .name = "content-type", .value = "application/json" }} });
-            }
-            return;
+            return routes.imageGet(self, req, target);
         }
         if (method == .GET and std.mem.eql(u8, path, "/api/artifact")) {
-            const raw = queryParam(target, "name") orelse "";
-            const name = if (raw.len == 0) "" else (util.percentDecode(self.alloc, raw) catch raw);
-            const body = artifactJson(self.alloc, name) orelse "{\"ok\":false,\"error\":\"not found\"}";
-            try req.respond(body, .{
-                .status = .ok,
-                .extra_headers = &.{.{ .name = "content-type", .value = "application/json" }},
-            });
-            return;
+            return routes.artifact(self, req, target);
         }
         if (method == .GET and (std.mem.eql(u8, path, "/api/files") or std.mem.startsWith(u8, target, "/api/files?"))) {
-            const q_raw = queryParam(target, "q") orelse "";
-            const q = if (q_raw.len == 0) "" else (util.percentDecode(self.alloc, q_raw) catch q_raw);
-            const root = if (ws.len > 0) ws else ".";
-            const body = filesJson(self.alloc, root, q) orelse "{\"ok\":false,\"error\":\"bad path\"}";
-            try req.respond(body, .{
-                .status = .ok,
-                .extra_headers = &.{.{ .name = "content-type", .value = "application/json" }},
-            });
-            return;
+            return routes.files(self, req, target, ws);
         }
         if (method == .GET and (std.mem.eql(u8, path, "/api/file") or std.mem.startsWith(u8, target, "/api/file?"))) {
-            const p_raw = queryParam(target, "path") orelse "";
-            const pth = if (p_raw.len == 0) "" else (util.percentDecode(self.alloc, p_raw) catch p_raw);
-            const root = if (ws.len > 0) ws else ".";
-            const body = fileJson(self.alloc, root, pth) orelse "{\"ok\":false,\"error\":\"bad path\"}";
-            try req.respond(body, .{
-                .status = .ok,
-                .extra_headers = &.{.{ .name = "content-type", .value = "application/json" }},
-            });
-            return;
+            return routes.file(self, req, target, ws);
         }
         if (method == .POST and std.mem.startsWith(u8, target, "/api/workspaces")) {
-            var body_buf: [16 * 1024]u8 = undefined;
-            const reader = req.readerExpectNone(&body_buf);
-            const body = reader.allocRemaining(self.alloc, .limited(64 * 1024)) catch "";
-            defer if (body.len > 0) self.alloc.free(body);
-            if (self.workspaces_hook) |f| {
-                const out = f(self.workspaces_ctx, self.alloc, if (body.len > 0) body else null) orelse {
-                    try req.respond("{\"ok\":false}", .{ .status = .ok, .extra_headers = &.{.{ .name = "content-type", .value = "application/json" }} });
-                    return;
-                };
-                try req.respond(out, .{ .status = .ok, .extra_headers = &.{.{ .name = "content-type", .value = "application/json" }} });
-                return;
-            }
-            try req.respond("{\"ok\":true}", .{ .status = .ok });
-            return;
+            return routes.workspacesPost(self, req);
         }
+
+        // 404:手动响应(respond 对无 body POST 断言;此处保持恒稳)
         // 404:手动响应(respond 对无 body POST 断言;此处保持恒稳)
         try req.server.out.writeAll("HTTP/1.1 404 Not Found\r\ncontent-length: 9\r\nconnection: close\r\n\r\nnot found");
         try req.server.out.flush();
@@ -942,7 +520,7 @@ pub const WebServer = struct {
     }
 
     /// /api/state:端口 + 模型 + ctx% + 最近 20 条历史(刷新恢复)。
-    fn stateJson(self: *WebServer) []const u8 {
+    pub fn stateJson(self: *WebServer) []const u8 {
         const a = self.alloc;
         var stw = std.Io.Writer.Allocating.init(a);
         defer stw.deinit();
@@ -1128,333 +706,23 @@ test "parseChatText extracts text field" {
     try t.expectEqualStrings("中文&转义", s4);
 }
 
-/// 按 `&` 切分取查询参数原始值。
-///
-/// 不能用 `indexOf(rest, "ws=")` —— 那会把 `?foo=1&notws=/etc` 里的 `notws=`
-/// 当成 `ws=`。参数名必须是完整的一段,否则任何以目标名结尾的参数都能顶替它,
-/// 白名单校验也就跟着被绕过。
-fn queryParam(target: []const u8, key: []const u8) ?[]const u8 {
-    const q = std.mem.indexOfScalar(u8, target, '?') orelse return null;
-    var it = std.mem.splitScalar(u8, target[q + 1 ..], '&');
-    while (it.next()) |pair| {
-        const eq = std.mem.indexOfScalar(u8, pair, '=') orelse continue;
-        if (std.mem.eql(u8, pair[0..eq], key)) return pair[eq + 1 ..];
-    }
-    return null;
-}
-
-fn queryUsize(target: []const u8, key: []const u8, fallback: usize) usize {
-    const raw = queryParam(target, key) orelse return fallback;
-    return std.fmt.parseInt(usize, raw, 10) catch fallback;
-}
-
-/// 从 target 提取 ?session= 参数(无则 "default")。
-fn querySession(alloc: std.mem.Allocator, target: []const u8) ![]const u8 {
-    if (queryParam(target, "session")) |name| {
-        if (name.len > 0 and name.len <= 64) return alloc.dupe(u8, name);
-    }
-    return alloc.dupe(u8, "default");
-}
-
-/// 从 target 提取 ?ws= 参数(项目根,percent 解码;无则 "" = 用默认)。
-fn queryWs(alloc: std.mem.Allocator, target: []const u8) ![]const u8 {
-    if (queryParam(target, "ws")) |name| {
-        if (name.len > 0 and name.len <= 512) return util.percentDecode(alloc, name) catch alloc.dupe(u8, name) catch "";
-    }
-    return "";
-}
-
+// 路由 helpers 已移 webui_routes.zig;此处为测试留别名。
+const queryParam = routes.queryParam;
+const queryUsize = routes.queryUsize;
+const querySession = routes.querySession;
+const queryWs = routes.queryWs;
+const okJson = routes.okJson;
+const fileJson = routes.fileJson;
+const filesJson = routes.filesJson;
+const safeArtifactName = routes.safeArtifactName;
+const artifactImage = routes.artifactImage;
+const artifactJson = routes.artifactJson;
+const parseChatBody = routes.parseChatBody;
+const parseChatText = routes.parseChatText;
 const filesmod = @import("core").tools_files;
 const FileItem = filesmod.FileItem;
 const listWorkspaceFiles = filesmod.listWorkspaceFiles;
 const normalizeRel = filesmod.normalizeRel;
-
-fn fileJson(alloc: std.mem.Allocator, root: []const u8, raw: []const u8) ?[]u8 {
-    if (raw.len == 0 or raw.len > 1024) return null;
-    const rel = blk: {
-        if (std.fs.path.isAbsolute(raw)) {
-            if (!std.mem.startsWith(u8, raw, root)) return null;
-            var rest = raw[root.len..];
-            if (rest.len > 0 and (rest[0] == '/' or rest[0] == '\\')) rest = rest[1..];
-            const n = normalizeRel(alloc, rest) catch return null;
-            break :blk n.rel;
-        }
-        const n = normalizeRel(alloc, raw) catch return null;
-        break :blk n.rel;
-    };
-    if (rel.len == 0) return null;
-    const abs = util.joinPath(alloc, root, rel) catch return null;
-    const data = std.Io.Dir.cwd().readFileAlloc(util.io, abs, alloc, .limited(256 * 1024)) catch return null;
-    const path_j = util.jsonString(alloc, rel) catch return null;
-    const text_j = util.jsonString(alloc, data) catch return null;
-    return std.fmt.allocPrint(alloc, "{{\"ok\":true,\"path\":{s},\"text\":{s}}}", .{ path_j, text_j }) catch null;
-}
-
-fn filesJson(alloc: std.mem.Allocator, root: []const u8, q: []const u8) ?[]u8 {
-    const items = listWorkspaceFiles(alloc, root, q) catch return null;
-    var stw = std.Io.Writer.Allocating.init(alloc);
-    const w = &stw.writer;
-    w.writeAll("{\"ok\":true,\"items\":[") catch return null;
-    for (items, 0..) |it, i| {
-        if (i > 0) w.writeAll(",") catch return null;
-        const name_j = util.jsonString(alloc, it.name) catch return null;
-        const path_j = util.jsonString(alloc, it.path) catch return null;
-        if (it.link) |tgt| {
-            const link_j = util.jsonString(alloc, tgt) catch return null;
-            w.print("{{\"name\":{s},\"path\":{s},\"dir\":{s},\"link\":{s}}}", .{
-                name_j,
-                path_j,
-                if (it.dir) "true" else "false",
-                link_j,
-            }) catch return null;
-        } else {
-            w.print("{{\"name\":{s},\"path\":{s},\"dir\":{s}}}", .{
-                name_j,
-                path_j,
-                if (it.dir) "true" else "false",
-            }) catch return null;
-        }
-    }
-    w.writeAll("]}") catch return null;
-    return stw.toOwnedSlice() catch null;
-}
-
-fn safeArtifactName(name: []const u8) bool {
-    if (name.len == 0 or name.len > 128) return false;
-    if (std.mem.eql(u8, name, ".") or std.mem.eql(u8, name, "..")) return false;
-    for (name) |c| {
-        const ok = std.ascii.isAlphanumeric(c) or c == '-' or c == '_' or c == '.';
-        if (!ok) return false;
-    }
-    return true;
-}
-
-fn artifactImage(alloc: std.mem.Allocator, name: []const u8) ?struct { data: []const u8, mime: []const u8 } {
-    if (!safeArtifactName(name)) return null;
-    if (!std.mem.startsWith(u8, name, "img-")) return null;
-    const cfg = util.configDir(alloc) catch return null;
-    const dir = util.joinPath(alloc, cfg, "artifacts") catch return null;
-    const path = util.joinPath(alloc, dir, name) catch return null;
-    const data = std.Io.Dir.cwd().readFileAlloc(util.io, path, alloc, .limited(8 * 1024 * 1024)) catch return null;
-    const mime: []const u8 = if (std.mem.endsWith(u8, name, ".jpg") or std.mem.endsWith(u8, name, ".jpeg"))
-        "image/jpeg"
-    else if (std.mem.endsWith(u8, name, ".webp"))
-        "image/webp"
-    else
-        "image/png";
-    return .{ .data = data, .mime = mime };
-}
-
-fn artifactJson(alloc: std.mem.Allocator, name: []const u8) ?[]u8 {
-    if (!safeArtifactName(name)) return null;
-    const cfg = util.configDir(alloc) catch return null;
-    const dir = util.joinPath(alloc, cfg, "artifacts") catch return null;
-    const path = util.joinPath(alloc, dir, name) catch return null;
-    const data = std.Io.Dir.cwd().readFileAlloc(util.io, path, alloc, .limited(256 * 1024)) catch return null;
-    const text_j = util.jsonString(alloc, util.utf8Prefix(data, data.len)) catch return null;
-    return std.fmt.allocPrint(alloc, "{{\"ok\":true,\"name\":{s},\"bytes\":{d},\"text\":{s}}}", .{
-        util.jsonString(alloc, name) catch "\"\"",
-        data.len,
-        text_j,
-    }) catch null;
-}
-
-fn oauthStart(self: *WebServer, body: []const u8) []const u8 {
-    const provider = blk: {
-        const root = std.json.parseFromSliceLeaky(std.json.Value, self.alloc, body, .{}) catch break :blk "openrouter";
-        if (root == .object) {
-            if (root.object.get("provider")) |v| {
-                if (v == .string) break :blk v.string;
-            }
-        }
-        break :blk "openrouter";
-    };
-    var kind: OauthKind = .openrouter;
-    if (std.mem.eql(u8, provider, "xai")) kind = .xai else if (std.mem.eql(u8, provider, "openai") or std.mem.eql(u8, provider, "codex")) kind = .openai else if (!std.mem.eql(u8, provider, "openrouter")) return "{\"ok\":false,\"error\":\"unsupported\"}";
-    var state_buf: [32]u8 = undefined;
-    const state = oauth.randomState(&state_buf);
-    var pkce: oauth.Pkce = undefined;
-    var user_code: []const u8 = "";
-    var verify_url: []const u8 = "";
-    var device: []const u8 = "";
-    if (kind == .openrouter) {
-        pkce = oauth.generatePkce();
-    } else if (kind == .xai) {
-        const d = oauth.xaiStart(self.alloc) catch return "{\"ok\":false,\"error\":\"device\"}";
-        user_code = d.user_code;
-        verify_url = d.verify_url;
-        device = d.device;
-    } else {
-        const d = oauth.codexStart(self.alloc) catch return "{\"ok\":false,\"error\":\"device\"}";
-        user_code = d.user_code;
-        verify_url = d.verify_url;
-        device = d.device;
-    }
-    self.oauth_mu.lockUncancelable(util.io);
-    defer self.oauth_mu.unlock(util.io);
-    var slot: ?*OauthPend = null;
-    for (&self.oauth_slots) |*s| {
-        if (!s.live or s.done) {
-            slot = s;
-            break;
-        }
-    }
-    const dest = slot orelse return "{\"ok\":false,\"error\":\"busy\"}";
-    dest.* = .{ .live = true, .kind = kind };
-    @memcpy(dest.state[0..state.len], state);
-    dest.state_n = @intCast(state.len);
-    if (kind == .openrouter) dest.verifier = pkce.verifier;
-    if (device.len > 0 and device.len <= dest.device.len) {
-        @memcpy(dest.device[0..device.len], device);
-        dest.device_n = @intCast(device.len);
-    }
-    const st_j = util.jsonString(self.alloc, state) catch return "{\"ok\":false}";
-    if (kind == .openrouter) {
-        const cb = std.fmt.allocPrint(self.alloc, "http://127.0.0.1:{d}/api/oauth/callback", .{self.port}) catch return "{\"ok\":false}";
-        const url = oauth.openrouterAuthUrl(self.alloc, cb, &pkce.challenge) catch return "{\"ok\":false}";
-        const url_j = util.jsonString(self.alloc, url) catch return "{\"ok\":false}";
-        return std.fmt.allocPrint(self.alloc, "{{\"ok\":true,\"url\":{s},\"state\":{s}}}", .{ url_j, st_j }) catch "{\"ok\":false}";
-    }
-    const code_j = util.jsonString(self.alloc, user_code) catch return "{\"ok\":false}";
-    const uri_j = util.jsonString(self.alloc, verify_url) catch return "{\"ok\":false}";
-    return std.fmt.allocPrint(self.alloc, "{{\"ok\":true,\"state\":{s},\"user_code\":{s},\"verification_uri\":{s}}}", .{ st_j, code_j, uri_j }) catch "{\"ok\":false}";
-}
-
-fn oauthPoll(self: *WebServer, state: []const u8) []const u8 {
-    const st = if (state.len == 0) return "{\"ok\":false}" else (util.percentDecode(self.alloc, state) catch state);
-    self.oauth_mu.lockUncancelable(util.io);
-    var found: ?*OauthPend = null;
-    for (&self.oauth_slots) |*s| {
-        if (s.live and s.state_n > 0 and std.mem.eql(u8, s.state[0..s.state_n], st)) {
-            found = s;
-            break;
-        }
-    }
-    const slot = found orelse {
-        self.oauth_mu.unlock(util.io);
-        return "{\"ok\":false,\"done\":true,\"error\":true}";
-    };
-    if (slot.done) {
-        const err = slot.err;
-        self.oauth_mu.unlock(util.io);
-        return if (err) "{\"ok\":false,\"done\":true,\"error\":true}" else "{\"ok\":true,\"done\":true}";
-    }
-    if (slot.kind == .openrouter) {
-        self.oauth_mu.unlock(util.io);
-        return "{\"ok\":true,\"done\":false}";
-    }
-    const kind = slot.kind;
-    const device = slot.device[0..slot.device_n];
-    const dev_copy = self.alloc.dupe(u8, device) catch {
-        self.oauth_mu.unlock(util.io);
-        return "{\"ok\":false}";
-    };
-    self.oauth_mu.unlock(util.io);
-    const polled = if (kind == .xai) oauth.xaiPoll(self.alloc, dev_copy) else oauth.codexPoll(self.alloc, dev_copy);
-    const result = polled catch return "{\"ok\":true,\"done\":false}";
-    if (result.status == .pending) return "{\"ok\":true,\"done\":false}";
-    var saved = false;
-    if (result.status == .done) {
-        if (result.access) |tok| {
-            const name: []const u8 = if (kind == .xai) "xai" else "openai";
-            if (self.auth_save_hook) |h| saved = h(self.auth_save_ctx, name, tok);
-        }
-    }
-    self.oauth_mu.lockUncancelable(util.io);
-    slot.done = true;
-    slot.err = !saved;
-    self.oauth_mu.unlock(util.io);
-    if (saved) return "{\"ok\":true,\"done\":true}";
-    return "{\"ok\":false,\"done\":true,\"error\":true}";
-}
-
-fn oauthCallback(self: *WebServer, target: []const u8) []const u8 {
-    const fail = "<html><body><p>Sign-in failed. You can close this tab.</p></body></html>";
-    const ok_html = "<html><body><p>Signed in. You can close this tab.</p><script>window.close()</script></body></html>";
-    const state = queryParam(target, "state") orelse return fail;
-    const code = queryParam(target, "code") orelse return fail;
-    const st = util.percentDecode(self.alloc, state) catch state;
-    const cd = util.percentDecode(self.alloc, code) catch code;
-    self.oauth_mu.lockUncancelable(util.io);
-    var found: ?*OauthPend = null;
-    for (&self.oauth_slots) |*s| {
-        if (s.live and s.state_n > 0 and std.mem.eql(u8, s.state[0..s.state_n], st)) {
-            found = s;
-            break;
-        }
-    }
-    const slot = found orelse {
-        self.oauth_mu.unlock(util.io);
-        return fail;
-    };
-    const verifier = slot.verifier;
-    self.oauth_mu.unlock(util.io);
-    const key = oauth.exchangeOpenrouter(self.alloc, cd, &verifier) catch {
-        self.oauth_mu.lockUncancelable(util.io);
-        slot.err = true;
-        slot.done = true;
-        self.oauth_mu.unlock(util.io);
-        return fail;
-    };
-    var saved = false;
-    if (self.auth_save_hook) |h| saved = h(self.auth_save_ctx, "openrouter", key);
-    self.oauth_mu.lockUncancelable(util.io);
-    slot.done = true;
-    slot.err = !saved;
-    self.oauth_mu.unlock(util.io);
-    return if (saved) ok_html else fail;
-}
-
-fn oauthStatus(self: *WebServer, state: []const u8) []const u8 {
-    const st = if (state.len == 0) return "{\"ok\":false}" else (util.percentDecode(self.alloc, state) catch state);
-    self.oauth_mu.lockUncancelable(util.io);
-    defer self.oauth_mu.unlock(util.io);
-    for (&self.oauth_slots) |*s| {
-        if (s.state_n > 0 and std.mem.eql(u8, s.state[0..s.state_n], st)) {
-            if (s.err) return "{\"ok\":false,\"done\":true,\"error\":true}";
-            if (s.done) return "{\"ok\":true,\"done\":true}";
-            return "{\"ok\":true,\"done\":false}";
-        }
-    }
-    return "{\"ok\":false,\"done\":true,\"error\":true}";
-}
-
-const ChatBody = struct { text: []const u8, image: ?[]const u8 = null, mime: []const u8 = "" };
-
-fn decodeB64(alloc: std.mem.Allocator, s: []const u8) ?[]u8 {
-    const dec = std.base64.standard.Decoder;
-    const n = dec.calcSizeForSlice(s) catch return null;
-    if (n == 0 or n > 6 * 1024 * 1024) return null;
-    const out = alloc.alloc(u8, n) catch return null;
-    dec.decode(out, s) catch {
-        alloc.free(out);
-        return null;
-    };
-    return out;
-}
-
-fn parseChatBody(alloc: std.mem.Allocator, body: []const u8) ChatBody {
-    const empty = ChatBody{ .text = alloc.dupe(u8, "") catch "" };
-    const root = std.json.parseFromSliceLeaky(std.json.Value, alloc, body, .{}) catch return empty;
-    if (root != .object) return empty;
-    var text: []const u8 = "";
-    if (root.object.get("text")) |v| {
-        if (v == .string) text = alloc.dupe(u8, v.string) catch "";
-    }
-    var image: ?[]u8 = null;
-    var mime: []const u8 = "image/png";
-    if (root.object.get("image")) |v| {
-        if (v == .string and v.string.len > 0) image = decodeB64(alloc, v.string);
-    }
-    if (root.object.get("mime")) |v| {
-        if (v == .string and v.string.len > 0) mime = v.string;
-    }
-    return .{ .text = text, .image = image, .mime = mime };
-}
-
-fn parseChatText(alloc: std.mem.Allocator, body: []const u8) ![]const u8 {
-    return parseChatBody(alloc, body).text;
-}
 
 /// 消息队列(server 线程入队,各 session worker 按名消费)。
 pub const ChatQueue = struct {
@@ -1938,7 +1206,7 @@ var global_gate: PermGate = .{ .reqs = std.array_list.Managed(PermGate.Req).init
 
 /// 单页 UI(复刻 kimi web:apps/kimi-web,设计令牌对齐 style.css;纯静态内嵌)。
 /// 生成:src/webui.html(独立文件,免 zig 字符串转义)。
-const INDEX_HTML = @embedFile("webui.html");
+pub const INDEX_HTML = @embedFile("webui.html");
 
 test "query params are split on &, not matched as substrings" {
     const t = std.testing;
@@ -2078,21 +1346,6 @@ fn wsAllowed(
     if (ws.len == 0) return true;
     const f = hook orelse return false;
     return f(ctx, ws);
-}
-
-/// 构造 `{"ok":true,"<key>":"<value>"}`,长度不受限。分配失败返回 null。
-///
-/// 原先两处用 `[512]u8` 栈缓冲 + `try bufPrint`:模型名或标题一长就
-/// `error.NoSpaceLeft`,错误冒出 handler,**连响应头都没写出去**,客户端
-/// 只看到连接断开 —— 而写操作在这之前已经生效,读路径也走同一段代码,
-/// 于是这个端点在进程余生里每次都断连。
-fn okJson(alloc: std.mem.Allocator, key: []const u8, value: []const u8) ?[]u8 {
-    var w = std.Io.Writer.Allocating.init(alloc);
-    defer w.deinit();
-    const vj: ?[]u8 = util.jsonString(alloc, value) catch null;
-    defer if (vj) |j| alloc.free(j);
-    w.writer.print("{{\"ok\":true,\"{s}\":{s}}}", .{ key, vj orelse "\"\"" }) catch return null;
-    return w.toOwnedSlice() catch null;
 }
 
 test "okJson survives values longer than any fixed buffer" {
