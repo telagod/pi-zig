@@ -2300,6 +2300,26 @@
       #toast.show {
         opacity: 1;
       }
+      /* SSE 断线条:顶部细带,不挡操作 */
+      #ssebar {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        padding: 4px 12px;
+        text-align: center;
+        font-size: 12px;
+        color: var(--warn);
+        background: color-mix(in srgb, var(--warn) 10%, var(--color-surface));
+        border-bottom: 1px solid color-mix(in srgb, var(--warn) 30%, transparent);
+        z-index: var(--z-toast);
+        transform: translateY(-100%);
+        transition: transform 0.25s ease;
+        pointer-events: none;
+      }
+      #ssebar.on {
+        transform: translateY(0);
+      }
       /* ==== 移动端 ==== */
       .topbar {
         display: none;
@@ -3388,11 +3408,17 @@
       }
       let dlgOnok = null,
         dlgOncancel = null;
+      let dlgPrevFocus = null;
       function closeDlg() {
         const ov = $("overlay");
         ov.classList.remove("open", "sheet");
         ov.innerHTML = "";
         dlgOnok = dlgOncancel = null;
+        // 焦点还给弹出前的元素(还在文档里才还)。
+        if (dlgPrevFocus && document.contains(dlgPrevFocus)) {
+          try { dlgPrevFocus.focus({ preventScroll: true }); } catch {}
+        }
+        dlgPrevFocus = null;
       }
       function openDlg(opts) {
         if (typeof closeMenus === "function") closeMenus();
@@ -3425,6 +3451,7 @@
           "</div>";
         dlgOnok = opts.onok || null;
         dlgOncancel = opts.oncancel || null;
+        dlgPrevFocus = document.activeElement; // 关时还原焦点
         $("dlgX").onclick = () => {
           if (dlgOncancel) dlgOncancel();
           closeDlg();
@@ -3451,6 +3478,13 @@
           const el = $(opts.focus);
           el.focus();
           if (el.select) el.select();
+        } else {
+          // 默认焦点给第一个可输入控件,否则给主按钮 —— 键盘流不用先 Tab 一圈。
+          const el = ov.querySelector(
+            ".dlg-bd input, .dlg-bd textarea, .dlg-bd select, .dlg-bd button",
+          );
+          const btn = el || $("dlgOk");
+          if (btn) btn.focus({ preventScroll: true });
         }
       }
       function askText(title, value, placeholder) {
@@ -3998,6 +4032,31 @@
           else showToast("没有可重发的输入");
           return;
         }
+        // 输入框外按 "/":聚焦输入框并直接进斜杠菜单。
+        if (
+          e.key === "/" &&
+          !e.metaKey &&
+          !e.ctrlKey &&
+          !e.altKey &&
+          !e.isComposing
+        ) {
+          const ae = document.activeElement;
+          const editable =
+            ae &&
+            (ae.tagName === "INPUT" ||
+              ae.tagName === "TEXTAREA" ||
+              ae.isContentEditable);
+          if (!editable && !$("overlay").classList.contains("open")) {
+            e.preventDefault();
+            const inp = $("inp");
+            inp.focus();
+            if (!inp.value) {
+              inp.value = "/";
+              inp.dispatchEvent(new Event("input"));
+            }
+            return;
+          }
+        }
         if (e.key === "Escape") {
           const kh = $("keysHint");
           if (kh && !kh.hidden) {
@@ -4317,6 +4376,11 @@
                   ne.className = "sg-name";
                   ne.textContent = "无匹配会话";
                   wrap.appendChild(ne);
+                } else if (!vis.length) {
+                  const ne = document.createElement("div");
+                  ne.className = "sg-name";
+                  ne.textContent = "还没有会话,发一条消息开始";
+                  wrap.appendChild(ne);
                 }
                 for (const s of vis) wrap.appendChild(sessionRow(s, false, w.root));
                 if (archList.length) {
@@ -4350,6 +4414,13 @@
             if (sb) {
               sb.innerHTML = "";
               for (const s of sessList) sb.appendChild(sessionRow(s, false, cur));
+              if (!sessList.length && !archList.length) {
+                const ne2 = document.createElement("div");
+                ne2.className = "sg-name";
+                ne2.style.padding = "12px 14px";
+                ne2.textContent = "还没有会话,发一条消息开始";
+                sb.appendChild(ne2);
+              }
               if (archList.length) {
                 const se2 = document.createElement("div");
                 se2.className = "sg-sep";
@@ -5836,22 +5907,6 @@
         if (last < raw.length) out.push(mdInline(raw.slice(last)));
         return out.join("");
       }
-      function mdInline(t) {
-        const out = [];
-        const re = /`([^`\n]+)`/g;
-        let last = 0,
-          m;
-        while ((m = re.exec(t)) !== null) {
-          if (m.index > last) out.push(esc(t.slice(last, m.index)));
-          out.push("<code>" + esc(m[1]) + "</code>");
-          last = m.index + m[0].length;
-        }
-        if (last < t.length) out.push(esc(t.slice(last)));
-        return out
-          .join("")
-          .replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>")
-          .replace(/\n/g, "<br>");
-      }
       const AC = {
         30: "#333",
         31: "#f85149",
@@ -6114,11 +6169,13 @@
             headers: { accept: "text/event-stream" },
           });
           if (!res.ok || !res.body) {
+            sseDown();
             sseRetry = Math.min(sseRetry + 1, 8);
             setTimeout(connectSSE, 1000 * sseRetry);
             return;
           }
           sseRetry = 0;
+          sseUp();
           const reader = res.body.getReader();
           const dec = new TextDecoder();
           let buf = "";
@@ -6134,7 +6191,30 @@
             }
           }
         } catch {}
-        setTimeout(connectSSE, 1500);
+        sseDown();
+        setTimeout(connectSSE, sseDelay());
+      }
+      // 断线反馈:横幅 + 指数退避(1.5s→3s→6s→10s 封顶),连上即复位。
+      let sseFails = 0;
+      function sseDelay() {
+        return Math.min(10000, 1500 * Math.pow(2, sseFails++));
+      }
+      function sseDown() {
+        let b = $("ssebar");
+        if (!b) {
+          b = document.createElement("div");
+          b.id = "ssebar";
+          b.textContent = "连接断开,重连中…";
+          document.body.appendChild(b);
+        }
+        b.classList.add("on");
+      }
+      function sseUp() {
+        if (sseFails || $("ssebar")) {
+          sseFails = 0;
+          const b = $("ssebar");
+          if (b) b.classList.remove("on");
+        }
       }
       let running = false;
       let lastUser = "";
@@ -7648,6 +7728,7 @@
         }
         paintImgChip();
         setRun(true);
+        let ok = false;
         try {
           const body = { text: t || "" };
           if (img) {
@@ -7664,13 +7745,25 @@
           );
           const j = await r.json().catch(() => ({}));
           if (!r.ok || j.ok === false) {
-            setRun(false);
             showToast(j.error || "send failed");
-          }
+          } else ok = true;
         } catch {
-          setRun(false);
           showToast("send failed");
         }
+        if (!ok) {
+          // 失败不吞草稿:文本塞回输入框,图也还回 pending。
+          setRun(false);
+          if (t && $("inp")) {
+            $("inp").value = t;
+            autosizeInp();
+            refreshSend();
+          }
+          if (img && !pendingImg) {
+            pendingImg = img;
+            paintImgChip();
+          }
+        }
+        return ok;
       }
       async function send() {
         hideSlash();
@@ -7700,16 +7793,51 @@
         hideSlash();
         refreshSend();
         await sendPlain(t);
+        // 桌面端发完回焦,接着打下一行;触屏不弹键盘。
+        if (window.matchMedia("(hover: hover)").matches) $("inp").focus();
       }
       // ---- 移动 sheet ----
       const sheet = $("sheet");
       function openSheet() {
         loadSessions();
         sheet.classList.add("open");
+        document.body.style.overflow = "hidden"; // 锁住背后滚动
       }
       function closeSheet() {
         sheet.classList.remove("open");
+        document.body.style.overflow = "";
       }
+      // 下滑关闭:按住 grab/头部往下拖超过 70px 或快甩即收。
+      (function () {
+        const pnl = $("spnl");
+        if (!pnl) return;
+        let y0 = 0,
+          dy = 0,
+          t0 = 0,
+          drag = false;
+        pnl.addEventListener("touchstart", (e) => {
+          const onHandle = e.target.closest(".grab, .shd");
+          const atTop = $("sbody") && $("sbody").scrollTop <= 0;
+          drag = !!(onHandle || atTop);
+          y0 = e.touches[0].clientY;
+          t0 = Date.now();
+          dy = 0;
+          if (drag) pnl.style.transition = "none";
+        }, { passive: true });
+        pnl.addEventListener("touchmove", (e) => {
+          if (!drag) return;
+          dy = Math.max(0, e.touches[0].clientY - y0);
+          pnl.style.transform = "translateY(" + dy + "px)";
+        }, { passive: true });
+        pnl.addEventListener("touchend", () => {
+          if (!drag) return;
+          drag = false;
+          pnl.style.transition = "";
+          pnl.style.transform = "";
+          const fling = Date.now() - t0 < 250 && dy > 30;
+          if (dy > 70 || fling) closeSheet();
+        });
+      })();
       $("scrim").onclick = closeSheet;
       $("scls").onclick = closeSheet;
       $("tbMid").onclick = openSheet;
