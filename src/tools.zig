@@ -523,8 +523,11 @@ test "find sort=mtime returns newest first" {
     var arena = util.Arena.init(t.allocator);
     defer arena.deinit();
     const a = arena.allocator();
+    // 写入之间隔 10ms:CI 文件系统时间戳粒度粗,连着写会撞 mtime。
     try tmp.dir.writeFile(util.io, .{ .sub_path = "old.txt", .data = "a\n" });
+    std.Io.sleep(util.io, .{ .nanoseconds = 10 * std.time.ns_per_ms }, .awake) catch {};
     try tmp.dir.writeFile(util.io, .{ .sub_path = "new.txt", .data = "b\n" });
+    std.Io.sleep(util.io, .{ .nanoseconds = 10 * std.time.ns_per_ms }, .awake) catch {};
     try tmp.dir.writeFile(util.io, .{ .sub_path = "old.txt", .data = "a2\n" });
     const cwd_abs = try std.process.currentPathAlloc(util.io, a);
     const dir = try std.fmt.allocPrint(a, "{s}/.zig-cache/tmp/{s}", .{ cwd_abs, tmp.sub_path });
@@ -543,8 +546,11 @@ test "ls sort=mtime returns newest first" {
     var arena = util.Arena.init(t.allocator);
     defer arena.deinit();
     const a = arena.allocator();
+    // 写入之间隔 10ms:CI 文件系统时间戳粒度粗,连着写会撞 mtime。
     try tmp.dir.writeFile(util.io, .{ .sub_path = "old.txt", .data = "a\n" });
+    std.Io.sleep(util.io, .{ .nanoseconds = 10 * std.time.ns_per_ms }, .awake) catch {};
     try tmp.dir.writeFile(util.io, .{ .sub_path = "new.txt", .data = "b\n" });
+    std.Io.sleep(util.io, .{ .nanoseconds = 10 * std.time.ns_per_ms }, .awake) catch {};
     try tmp.dir.writeFile(util.io, .{ .sub_path = "old.txt", .data = "a2\n" });
     const cwd_abs = try std.process.currentPathAlloc(util.io, a);
     const dir = try std.fmt.allocPrint(a, "{s}/.zig-cache/tmp/{s}", .{ cwd_abs, tmp.sub_path });
