@@ -11,10 +11,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # mlugg/setup-zig 的镜像名单对 0.16.0 全体 404(实测)，改从 ziglang.org 直拉并验 shasum。
       - name: Install Zig 0.16
-        uses: mlugg/setup-zig@v1
-        with:
-          version: 0.16.0
+        run: |
+          curl -fsSL https://ziglang.org/download/0.16.0/zig-x86_64-linux-0.16.0.tar.xz -o /tmp/zig.tar.xz
+          echo "70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00  /tmp/zig.tar.xz" | sha256sum -c -
+          sudo tar -xJf /tmp/zig.tar.xz -C /opt
+          echo "/opt/zig-x86_64-linux-0.16.0" >> $GITHUB_PATH
 
       - name: Format check
         run: zig fmt --check build.zig src/
