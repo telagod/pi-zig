@@ -5481,6 +5481,9 @@
         const e = curAsst.querySelector(".md");
         if (!e) return;
         const raw = e.dataset.raw || "";
+        // 未变不画 —— 流式期 dataset.raw 涨但定时器空跑时省一次全量重排。
+        if (!final && e.dataset.painted === String(raw.length)) return;
+        e.dataset.painted = String(raw.length);
         e.innerHTML = md(final ? raw : closeFences(raw));
         scrl();
       }
@@ -5488,11 +5491,15 @@
         if (!txt) return;
         const e = asstEl().querySelector(".md");
         e.dataset.raw = (e.dataset.raw || "") + txt;
-        if (!mdTimer)
+        if (!mdTimer) {
+          // 自适应节流:回复越长全量重排越贵,间隔跟着涨(80→160→280ms)。
+          const n = e.dataset.raw.length;
+          const iv = n > 20000 ? 280 : n > 5000 ? 160 : 80;
           mdTimer = setTimeout(() => {
             mdTimer = 0;
             paintAsst(false);
-          }, 80);
+          }, iv);
+        }
         scrl();
       }
       function finishAsst() {
@@ -5504,6 +5511,7 @@
           const e = curAsst.querySelector(".md");
           const raw = e.dataset.raw || e.textContent;
           e.dataset.raw = raw;
+          e.dataset.painted = String(raw.length);
           e.innerHTML = md(raw);
           if (!curAsst.querySelector(".a-ops")) {
             const ops = document.createElement("div");
@@ -6121,7 +6129,9 @@
         if (ty === "term") {
           const pre = document.createElement("pre");
           pre.className = "term";
-          pre.innerHTML = ansiHtml(text);
+          // 与 code 同帽:超长输出别让 ansi 逐字扫拖住主线程。
+          const capped = text.length > 32000 ? text.slice(0, 32000) + "\n…" : text;
+          pre.innerHTML = ansiHtml(capped);
           return pre;
         }
         if (ty === "diff") {
