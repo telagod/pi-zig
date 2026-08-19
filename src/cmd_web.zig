@@ -10,6 +10,7 @@ const pluginsmod = @import("core").plugins;
 const compress = @import("core").compress;
 const toolsmod = @import("core").tools;
 const mcpmod = @import("core").mcp;
+const jsrt = @import("core").jsrt;
 const webui_mod = @import("webui.zig");
 const cmd_help = @import("cmd_help.zig");
 const cmd_doctor = @import("cmd_doctor.zig");
@@ -149,6 +150,13 @@ pub fn runWebCmd(alloc: std.mem.Allocator, args: *std.process.Args.Iterator) voi
     ws.ws_allowed_ctx = &pool;
     ws.auth_save_hook = poolAuthSave;
     ws.auth_save_ctx = &pool;
+    // JS 扩展运行时:web 模式只装全局目(~/.piz/extensions),项目目由 CLI 模式管。
+    // (web 多 workspace,引擎单例;工作区级扩展后置,见 docs/research-extension-runtime.md)
+    jsrt.init(alloc);
+    if (util.configDir(alloc)) |cd| {
+        defer alloc.free(cd);
+        jsrt.loadExtensions(cd, "");
+    } else |_| {}
     ws.run() catch |err| util.warn("web server stopped: {s}", .{@errorName(err)});
     webui_mod.ChatQueue.shutdown();
     for (pool.sessions.items) |ses| {
@@ -787,7 +795,18 @@ fn poolSlashHook(ctx: ?*anyopaque, cwd: []const u8, session: []const u8, name: [
         out.writeAll(text) catch return false;
         return true;
     }
-    const res = pluginsmod.dispatchSlash(ses.agent.plugins, ses.agent, name, args) orelse return false;
+    const res = pluginsmod.dispatchSlash(ses.agent.plugins, ses.agent, name, args) orelse {
+        // JS 扩展命令(注册于 QuickJS 运行时)。
+        if (jsrt.enabled) {
+            var ja = util.Arena.init(ses.agent.alloc);
+            defer ja.deinit();
+            if (jsrt.runCommand(ja.allocator(), name, args)) |text| {
+                out.writeAll(text) catch return false;
+                return true;
+            }
+        }
+        return false;
+    };
     const text = res catch return false;
     defer ses.agent.alloc.free(text);
     out.writeAll(text) catch return false;
@@ -803,6 +822,12 @@ fn poolSlashCatalogHook(ctx: ?*anyopaque, cwd: []const u8, session: []const u8, 
     var i: usize = 0;
     while (i < n and i < out.len) : (i += 1) {
         out[i] = .{ .cmd = plug[i].name, .desc = plug[i].desc };
+    }
+    // JS 扩展命令进目录(斜杠补全/help 可见)。
+    for (jsrt.jsCommands()) |jc| {
+        if (i >= out.len) break;
+        out[i] = .{ .cmd = jc.name, .desc = jc.desc };
+        i += 1;
     }
     return i;
 }

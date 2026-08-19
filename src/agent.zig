@@ -5,6 +5,7 @@ pub const ai = @import("ai.zig");
 pub const cfgmod = @import("config.zig");
 const toolsmod = @import("tools.zig");
 const pluginsmod = @import("plugins.zig");
+const jsrt = @import("jsrt.zig");
 const pkgsmod = @import("pkgs.zig");
 const compress = @import("compress.zig");
 const seams = @import("seams.zig");
@@ -172,15 +173,27 @@ fn runToolSlot(slot: *ToolSlot) void {
     seams.setFs(self.fs);
     defer toolsmod.clearRoot();
     defer toolsmod.clearSandbox();
+    // JS 扩展钩子:tool_call 可拦截(block),tool_result 旁路通知。
+    // 桥全程互斥;无处理器时缓存旗标直接短路,不进 JS。
+    var js_arena_inst = std.heap.ArenaAllocator.init(self.alloc);
+    defer js_arena_inst.deinit();
+    const ja = js_arena_inst.allocator();
+    if (jsrt.emitToolCall(ja, slot.call.name, slot.call.args)) |reason| {
+        slot.result = .{ .content = self.alloc.dupe(u8, reason) catch "blocked by js extension", .is_error = true };
+        return;
+    }
     if (t.payload.len > 0) {
         slot.result = toolsmod.runPkgCommand(self.alloc, t.payload, slot.call.args) catch |err| toolsmod.crashResult(self.alloc, slot.call.name, err);
+    } else if (jsrt.enabled and t.ctx_handler == jsrt.toolEntryMarker) {
+        // JS 注册工具:名字从 call 取(ctx_handler 不带名),全程互斥序列化。
+        slot.result = jsrt.runJsTool(self.alloc, slot.call.name, slot.call.args) catch |err| toolsmod.crashResult(self.alloc, slot.call.name, err);
     } else if (t.ctx_handler) |h| {
         slot.result = h(@ptrCast(self), self.alloc, slot.call.args) catch |err| toolsmod.crashResult(self.alloc, slot.call.name, err);
     } else {
         slot.result = t.handler(self.alloc, slot.call.args) catch |err| toolsmod.crashResult(self.alloc, slot.call.name, err);
     }
+    jsrt.emitToolResult(ja, slot.call.name, slot.result.content);
 }
-
 /// 限流包装:等到有名额才执行,完成后归还。
 ///
 /// 为什么不用「一批 8 个、join 完再开下一批」:那样一批里最慢的会拖住整批,
@@ -639,6 +652,8 @@ pub const Agent = struct {
         for (self.pkg_tools) |*t| {
             if (std.mem.eql(u8, t.name, name)) return t;
         }
+        // JS 扩展工具:最后兜底(同名内置/插件优先)。
+        if (jsrt.findTool(name)) |t| return t;
         return null;
     }
 
@@ -857,6 +872,7 @@ pub const Agent = struct {
             defer tool_defs.deinit();
             self.ensurePkgTools();
             if (!self.read_only) try pluginsmod.appendToolDefsFiltered(self.plugins, self.tool_allow, &tool_defs);
+            if (!self.read_only) try jsrt.appendToolDefs(self.tool_allow, &tool_defs);
             if (!self.read_only) {
                 for (self.pkg_tools) |t| {
                     if (self.tool_allow.len > 0) {

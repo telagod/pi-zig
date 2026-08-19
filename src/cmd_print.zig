@@ -6,6 +6,7 @@ const cfgmod = @import("core").config;
 const ai = @import("core").ai;
 const agentmod = @import("core").agent;
 const sessionmod = @import("core").session;
+const jsrt = @import("core").jsrt;
 const pluginsmod = @import("core").plugins;
 const eventsmod = @import("core").events;
 const runopts = @import("runopts.zig");
@@ -139,6 +140,24 @@ pub fn runPrint(alloc: std.mem.Allocator, cfg: *cfgmod.Config, cwd: []const u8, 
     }
     const loaded = try sess.loadMessages();
     try agent.messages.appendSlice(loaded);
+
+    // JS 扩展运行时(与 TUI 同桥):工具/命令/钩子在打印模式同样生效。
+    jsrt.init(alloc);
+    jsrt.notify_cb = struct {
+        fn f(msg: []const u8, level: []const u8) void {
+            std.debug.print("piz ext[{s}]: {s}\n", .{ level, msg });
+        }
+    }.f;
+    if (util.configDir(alloc)) |cd| {
+        defer alloc.free(cd);
+        jsrt.loadExtensions(cd, abs_cwd);
+    } else |_| {}
+    if (jsrt.wantsSessionStart()) {
+        var ea = util.Arena.init(alloc);
+        defer ea.deinit();
+        const payload = std.fmt.allocPrint(ea.allocator(), "{{\"cwd\":{s}}}", .{util.jsonString(ea.allocator(), abs_cwd) catch "\"\""}) catch "";
+        _ = jsrt.emit(ea.allocator(), "session_start", payload);
+    } else {}
 
     // 输出模式:jsonl 用事件回调,text 用现有回调,json 静默流式
     var jctx = JsonlCtx{ .alloc = alloc };

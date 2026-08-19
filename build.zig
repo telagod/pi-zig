@@ -7,6 +7,24 @@ pub fn build(b: *std.Build) void {
     // README 安装指引就是裸 `zig build`,用户照做拿到的是带调试信息的
     // 46MB 慢二进制。这里反过来:默认快,想调试传 -Doptimize=Debug。
     const optimize = b.option(std.builtin.OptimizeMode, "optimize", "Override the default ReleaseFast (e.g. -Doptimize=Debug)") orelse .ReleaseFast;
+    // 嵌 QuickJS 扩展运行时(vendor/quickjs-ng,MIT):运行时 JS 钩子/工具/命令。
+    // 开启后链接 libc(linux 静态发布请配 -Dtarget=x86_64-linux-musl);关则无 libc 纯静态。
+    const quickjs = b.option(bool, "quickjs", "Embed QuickJS extension runtime (vendor/quickjs-ng)") orelse true;
+    const build_opts = b.addOptions();
+    build_opts.addOption(bool, "quickjs", quickjs);
+
+    // qjs C 单元 + 头路径挂到指定模块。libc 开时 vendor/shim 必须让位(否则假 stdlib.h 遮蔽真头)。
+    const qjs_files = [_][]const u8{ "quickjs.c", "libregexp.c", "libunicode.c", "dtoa.c", "quickjs-libc.c" };
+    const qjs_flags = [_][]const u8{ "-std=c11", "-O2", "-DQUICKJS_NG_BUILD", "-DQJS_BUILD_LIBC", "-D_GNU_SOURCE", "-Wno-unused-parameter", "-Wno-unused-but-set-variable" };
+    const attachQjs = struct {
+        fn f(m: *std.Build.Module, bb: *std.Build, on: bool, files: []const []const u8, flags: []const []const u8) void {
+            if (on) {
+                m.link_libc = true;
+                m.addCSourceFiles(.{ .root = bb.path("vendor/quickjs-ng"), .files = files, .flags = flags });
+                m.addIncludePath(bb.path("vendor/quickjs-ng"));
+            }
+        }
+    }.f;
 
     // ---- 模块拆分(对齐 pi 子包结构) ----
     // core:agent 循环、AI 客户端、工具、会话、配置、包管理
@@ -20,9 +38,12 @@ pub fn build(b: *std.Build) void {
         .file = b.path("vendor/stb_impl.c"),
         .flags = &.{ "-std=c99", "-O2" },
     });
-    // shim 在前:无 libc 时 <stdlib.h> 等落到 shim,不碰系统头
-    core_mod.addIncludePath(b.path("vendor/shim"));
+    // shim 在前:无 libc 时 <stdlib.h> 等落到 shim,不碰系统头。
+    // 有 libc(quickjs 开)时 shim 必须缺席,否则假头遮蔽真头。
+    if (!quickjs) core_mod.addIncludePath(b.path("vendor/shim"));
     core_mod.addIncludePath(b.path("vendor"));
+    core_mod.addOptions("build_options", build_opts);
+    attachQjs(core_mod, b, quickjs, &qjs_files, &qjs_flags);
     // tui:终端界面
     const tui_mod = b.createModule(.{
         .root_source_file = b.path("src/tui.zig"),
@@ -65,6 +86,8 @@ pub fn build(b: *std.Build) void {
     // Release 剥离调试信息:46MB→20MB 全是 dwarf,strip 后个位数 MB。
     // Debug 保留符号供 gdb / panic 栈回溯。
     exe.root_module.strip = optimize != .Debug;
+    // qjs 的 C 对象在 core 模块里,最终链 exe 需 libc 登场。
+    if (quickjs) exe.root_module.link_libc = true;
     b.installArtifact(exe);
 
     const run_cmd = b.addRunArtifact(exe);
@@ -84,8 +107,10 @@ pub fn build(b: *std.Build) void {
         .file = b.path("vendor/stb_impl.c"),
         .flags = &.{ "-std=c99", "-O2" },
     });
-    test_core.addIncludePath(b.path("vendor/shim"));
+    if (!quickjs) test_core.addIncludePath(b.path("vendor/shim"));
     test_core.addIncludePath(b.path("vendor"));
+    test_core.addOptions("build_options", build_opts);
+    attachQjs(test_core, b, quickjs, &qjs_files, &qjs_flags);
     const test_tui = b.createModule(.{
         .root_source_file = b.path("src/tui.zig"),
         .target = target,

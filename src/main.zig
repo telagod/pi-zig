@@ -1,6 +1,7 @@
 // main.zig — piz 入口:CLI 解析、交互模式(线程编排)、会话挂载。print/web/pkg 见 cmd_*.zig。
 const std = @import("std");
 const util = @import("core").util;
+const jsrt = @import("core").jsrt;
 const activity = @import("core").activity;
 const cfgmod = @import("core").config;
 const sandboxmod = @import("core").sandbox;
@@ -1172,6 +1173,15 @@ fn onSubmit(tui: *tui_mod.Tui, line: []const u8) anyerror!void {
                 tuiNote(app, "", text);
                 return;
             }
+            // JS 扩展命令(/name [args] → piz.registerCommand)。
+            if (jsrt.enabled) {
+                var ja = util.Arena.init(app.alloc);
+                defer ja.deinit();
+                if (jsrt.runCommand(ja.allocator(), sname, sargs)) |out| {
+                    if (out.len > 0) tuiNote(app, "", out);
+                    return;
+                }
+            }
         }
         // 未知斜杠命令:尝试 prompt 模板(/name [args])
         if (std.mem.indexOfScalar(u8, cmd, ' ') orelse cmd.len > 0) {
@@ -1382,10 +1392,37 @@ pub fn runInteractive(alloc: std.mem.Allocator, cfg: *cfgmod.Config, cwd: []cons
     const loaded = try sess.loadMessages();
     try agent.messages.appendSlice(loaded);
 
+    // JS 扩展运行时(QuickJS):~/.piz/extensions/*.js + <cwd>/.piz/extensions/*.js。
+    // 在进 raw 模式前加载:加载错误可直接打 stderr,不花屏。
+    jsrt.init(alloc);
+    if (util.configDir(alloc)) |cd| {
+        defer alloc.free(cd);
+        jsrt.loadExtensions(cd, abs_cwd);
+    } else |_| {}
+    if (jsrt.wantsSessionStart()) {
+        var ea = util.Arena.init(alloc);
+        defer ea.deinit();
+        const payload = std.fmt.allocPrint(ea.allocator(), "{{\"cwd\":{s}}}", .{util.jsonString(ea.allocator(), abs_cwd) catch "\"\""}) catch "";
+        _ = jsrt.emit(ea.allocator(), "session_start", payload);
+    }
+
     // TUI
     var tui = try tui_mod.Tui.init(alloc);
     defer tui.deinit();
-    tui.slash_items = &SLASH_ITEMS;
+    // 斜杠补全:内置目录 + JS 扩展命令(有则合并一份长驻切片)。
+    if (jsrt.jsCommands().len > 0) {
+        const extra = jsrt.jsCommands();
+        if (alloc.alloc(tui_mod.SlashItem, SLASH_ITEMS.len + extra.len)) |merged| {
+            @memcpy(merged[0..SLASH_ITEMS.len], &SLASH_ITEMS);
+            for (extra, 0..) |jc, k| {
+                merged[SLASH_ITEMS.len + k] = .{
+                    .cmd = std.fmt.allocPrint(alloc, "/{s}", .{jc.name}) catch jc.name,
+                    .desc = jc.desc,
+                };
+            }
+            tui.slash_items = merged;
+        } else |_| tui.slash_items = &SLASH_ITEMS;
+    } else tui.slash_items = &SLASH_ITEMS;
     // 声明在 tui.deinit 之后 → LIFO 下先执行:长驻 subagent 先收摊,
     // 之后才还原终端,它们的收尾输出不会打在已经恢复的 shell 上。
     defer pluginsmod.shutdownAgents();
