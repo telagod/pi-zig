@@ -5,9 +5,12 @@ piz 内嵌 QuickJS-ng(MIT,vendor/quickjs-ng),运行时加载 JS 扩展,免编译
 
 ## 位置与加载
 
-- `~/.piz/extensions/*.js`(全局)+ `<项目>/.piz/extensions/*.js`(项目,web 模式不装)
+- `~/.piz/extensions/*.{js,mjs}`(全局)+ `<项目>/.piz/extensions/*.{js,mjs}`(项目,web 模式不装)
 - 字典序加载;单文件 1MB 封顶;加载错误打 stderr,不致命
-- classic script,顶层用全局 `piz` 对象;**暂不支持 ESM/TS**(pi 式 default-export 与 TS 剥离后置)
+- **ESM 支持**:`.mjs` 或源含 `export default` 即走模块支路,pi 式
+  `export default function(pi) { ... }` 会被调用,参数即下述 `piz` 对象;
+  顶层 await / promise 微任务由 job 泵跑尽;unhandled rejection 打 stderr
+- classic script 顶层用全局 `piz` 对象;**暂不支持 TS**(类型剥离后置)、不支持 import(无模块加载器)
 
 ## API(窄桥)
 
@@ -35,7 +38,7 @@ piz.registerCommand("hellojs", {
 });
 
 // 宿主交互
-piz.notify("msg", "info");   // 打印模式 → stderr;TUI 接线后置
+piz.notify("msg", "info");   // print → stderr;TUI → transcript 行(TUI 起前暂存一条)
 piz.confirm("sure?");        // 未接管一律 false(安全默认)
 ```
 
@@ -56,5 +59,8 @@ piz.confirm("sure?");        // 未接管一律 false(安全默认)
 
 ## 已知雷(实测)
 
-- `JS_Eval` 词法器会瞥 `input[len]`:必须传 NUL 结尾缓冲(dupeZ),否则按相邻
-  堆字节随机报 SyntaxError(jsrt.zig evalFile 有详注)。
+- `JS_Eval` 词法器会读 `input[len]`(头注释明写 must be zero terminated):
+  必须 NUL 结尾缓冲(dupeZ),否则按相邻堆字节随机报 SyntaxError(jsrt.zig evalFile 有详注)
+- `JS_EvalFunction` 对 JS_TAG_MODULE **吃掉**传入引用(内部 FreeValue,
+  注释 refcount should be >= 2);模块 JSValue 到手后绝不再 free——模块
+  refcount 到 0 直接 `abort()`(js_free_value_rt: never freed here)

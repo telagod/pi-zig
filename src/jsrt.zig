@@ -232,6 +232,16 @@ pub fn init(alloc: std.mem.Allocator) void {
         rt = null;
         return;
     }
+    // 静默 promise 拒绝打到 stderr(否则扩展里的异步错谁也看不见)。
+    c.JS_SetHostPromiseRejectionTracker(rt.?, struct {
+        fn f(ctx_: ?*c.JSContext, _: c.JSValueConst, reason: c.JSValueConst, handled: bool, _: ?*anyopaque) callconv(.c) void {
+            if (handled) return;
+            const cx = ctx_ orelse return;
+            const s = c.JS_ToCString(cx, reason);
+            defer c.JS_FreeCString(cx, s);
+            std.debug.print("piz: extension: unhandled rejection: {s}\n", .{s});
+        }
+    }.f, null);
     // host 原语
     const global = c.JS_GetGlobalObject(ctx.?);
     defer c.JS_FreeValue(ctx.?, global);
@@ -293,16 +303,82 @@ fn evalFile(path: []const u8) bool {
     defer a.free(src_z);
     const path_z = a.dupeZ(u8, path) catch return false;
     defer a.free(path_z);
+    if (isModule(path, src)) return evalModule(path_z.ptr, src_z.ptr, src.len);
     const v = c.JS_Eval(ctx_, src_z.ptr, @intCast(src.len), path_z.ptr, c.JS_EVAL_TYPE_GLOBAL);
     if (c.JS_IsException(v)) {
-        var tmp = std.heap.ArenaAllocator.init(std.heap.c_allocator);
-        defer tmp.deinit();
-        const msg = jsThrowToString(ctx_, tmp.allocator());
-        std.debug.print("piz: extension {s}: {s}\n", .{ path, msg });
+        reportEx(ctx_, path);
         c.JS_FreeValue(ctx_, v);
         return false;
     }
     c.JS_FreeValue(ctx_, v);
+    drainJobs();
+    return true;
+}
+
+/// pi 式扩展是 ESM(`export default function(pi)`)。判定从宽:
+/// .mjs 后缀或源含 "export default" 即走模块支路。
+fn isModule(path: []const u8, src: []const u8) bool {
+    return std.mem.endsWith(u8, path, ".mjs") or std.mem.indexOf(u8, src, "export default") != null;
+}
+
+/// 取异常并打 stderr(模块/classic 共用)。
+fn reportEx(ctx_: *c.JSContext, path: []const u8) void {
+    var tmp = std.heap.ArenaAllocator.init(std.heap.c_allocator);
+    defer tmp.deinit();
+    const msg = jsThrowToString(ctx_, tmp.allocator());
+    std.debug.print("piz: extension {s}: {s}\n", .{ path, msg });
+}
+
+/// 跑尽待决作业(promise 微任务)。模块顶层 await / default 导出返回 promise 皆靠此。
+fn drainJobs() void {
+    const rt_ = rt orelse return;
+    var n: u32 = 0;
+    while (c.JS_IsJobPending(rt_)) {
+        var pctx: ?*c.JSContext = null;
+        if (c.JS_ExecutePendingJob(rt_, &pctx) < 0) break; // job 异常已在 ctx 上,由调用方报
+        n += 1;
+        if (n > 100_000) break;
+    }
+}
+
+/// 模块支路:COMPILE_ONLY 编译 → EvalFunction 执行 → 取 default 导出,是函数则以 piz 对象为参调用。
+fn evalModule(path_z: [*:0]const u8, src_z: [*:0]const u8, len: usize) bool {
+    const ctx_ = ctx orelse return false;
+    const mv = c.JS_Eval(ctx_, src_z, @intCast(len), path_z, c.JS_EVAL_TYPE_MODULE | c.JS_EVAL_FLAG_COMPILE_ONLY);
+    if (c.JS_IsException(mv)) {
+        reportEx(ctx_, std.mem.span(path_z));
+        return false;
+    }
+    // 勿再 JS_FreeValue(mv):JS_EvalFunction 对 JS_TAG_MODULE 会吃掉这份引用
+    // (quickjs.c JS_EvalFunctionInternal: "the module refcount should be >= 2" 后即 FreeValue)。
+    // 模块本体由 runtime 注册表续命,GetModuleNamespace 之后仍可用。
+    const mod: ?*c.JSModuleDef = @ptrCast(c.JS_VALUE_GET_PTR(mv));
+    const rv = c.JS_EvalFunction(ctx_, mv);
+    const rv_bad = c.JS_IsException(rv);
+    c.JS_FreeValue(ctx_, rv);
+    drainJobs();
+    if (rv_bad) {
+        reportEx(ctx_, std.mem.span(path_z));
+        return false;
+    }
+    const ns = c.JS_GetModuleNamespace(ctx_, mod);
+    defer c.JS_FreeValue(ctx_, ns);
+    const def = c.JS_GetPropertyStr(ctx_, ns, "default");
+    defer c.JS_FreeValue(ctx_, def);
+    if (!c.JS_IsFunction(ctx_, def)) return true; // 纯副作用模块
+    const global = c.JS_GetGlobalObject(ctx_);
+    defer c.JS_FreeValue(ctx_, global);
+    const piz_obj = c.JS_GetPropertyStr(ctx_, global, "piz");
+    defer c.JS_FreeValue(ctx_, piz_obj);
+    var argv = [_]c.JSValue{piz_obj};
+    const res = c.JS_Call(ctx_, def, piz_obj, 1, &argv);
+    if (c.JS_IsException(res)) {
+        reportEx(ctx_, std.mem.span(path_z));
+        c.JS_FreeValue(ctx_, res);
+        return false;
+    }
+    c.JS_FreeValue(ctx_, res);
+    drainJobs();
     return true;
 }
 
@@ -317,7 +393,7 @@ fn loadDir(path: []const u8) void {
     var it = d.iterate();
     while (it.next(util.io) catch null) |ent| {
         if (ent.kind != .file) continue;
-        if (!std.mem.endsWith(u8, ent.name, ".js")) continue;
+        if (!std.mem.endsWith(u8, ent.name, ".js") and !std.mem.endsWith(u8, ent.name, ".mjs")) continue;
         const full = util.joinPath(gpa.?, path, ent.name) catch continue;
         names.append(full) catch {
             gpa.?.free(full);
@@ -641,4 +717,35 @@ fn refreshRegistryLockedForTest() void {
     mu.lockUncancelable(util.io);
     defer mu.unlock(util.io);
     refreshRegistry();
+}
+
+test "qjs esm: module default export gets piz api" {
+    if (!enabled) return error.SkipZigTest;
+    const t = std.testing;
+    const a = t.allocator;
+    deinit();
+    init(a);
+    defer deinit();
+    try t.expect(rt != null);
+    const path = std.fmt.allocPrint(a, "/tmp/piz_jsrt_esm_{d}.mjs", .{std.os.linux.getpid()}) catch return error.SkipZigTest;
+    defer a.free(path);
+    defer std.Io.Dir.cwd().deleteFile(util.io, path) catch {};
+    const src =
+        \\export default function(pi) {
+        \\  pi.registerCommand("esmcmd", { description: "d", handler: (x) => "esm:" + x });
+        \\}
+    ;
+    try std.Io.Dir.cwd().writeFile(util.io, .{ .sub_path = path, .data = src });
+    mu.lockUncancelable(util.io);
+    const ok = evalFile(path);
+    mu.unlock(util.io);
+    try t.expect(ok);
+    mu.lockUncancelable(util.io);
+    defer mu.unlock(util.io);
+    refreshRegistry();
+    var found = false;
+    for (jsCommands()) |jc| {
+        if (std.mem.eql(u8, jc.name, "esmcmd")) found = true;
+    }
+    try t.expect(found);
 }

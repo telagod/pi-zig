@@ -1,4 +1,7 @@
-# 扩展运行时选型调研（2026-08，只研未动）
+# 扩展运行时选型调研（2026-08，QuickJS-ng 已落地）
+
+> 状态：选项 2 已于 1873e2f 落地（窄桥），用法见 [extensions-js.md](extensions-js.md)。
+> WASM/TS 剥离/异步仍后置。下文留调研原貌。
 
 背景：piz 现为纯编译期插件表（Zig @embed/comptime），改扩展须重编（增量秒级）。
 目标：扩展免编译 + 保住「单文件、静态、零依赖、低占用」。
@@ -39,6 +42,12 @@ libunicode/quickjs,+quickjs-libc),strip 后引擎+musl 共 1.13 MB,
 - **TS 障碍**：pi 扩展多为 .ts,QuickJS 只认 JS。须加类型剥离层
   （sucrase 类）或先只支持 .js 扩展
 
+## 落地账（实证 2026-08-20）
+
+- 体积：4.85MB ↔ 5.97MB（-Dquickjs 开/关），+1.13MB 与探针预测一致；musl 仍零依赖
+- 四入口接线：CLI/TUI/web/print；357 测试绿
+- 雷：`JS_Eval` 词法器瞥 `input[len]`，必须 NUL 结尾缓冲（jsrt.zig evalFile 详注）
+
 ## 判断
 
 1. **工具型扩展**:MCP 已够，文档化即可，+0 成本。
@@ -48,7 +57,7 @@ libunicode/quickjs,+quickjs-libc),strip 后引擎+musl 共 1.13 MB,
 3. **WASM 留作远期**：若将来要跑「不可信第三方扩展」，WAMR 的
    import 白名单 + 内存隔离比 JS 沙箱硬得多。第一步不上。
 
-## 若落地（窄桥先行）
+## 若落地（窄桥先行）—— 已落地，下为原始方案留档
 
 - vendor quickjs-ng 进 build.zig,feature flag `-Dquickjs` 可关
 - 桥面：`piz.on(event, fn)` / `piz.registerTool(def)` / `piz.registerCommand`

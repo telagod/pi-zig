@@ -1394,6 +1394,7 @@ pub fn runInteractive(alloc: std.mem.Allocator, cfg: *cfgmod.Config, cwd: []cons
 
     // JS 扩展运行时(QuickJS):~/.piz/extensions/*.js + <cwd>/.piz/extensions/*.js。
     // 在进 raw 模式前加载:加载错误可直接打 stderr,不花屏。
+    jsrt.notify_cb = extNotify;
     jsrt.init(alloc);
     if (util.configDir(alloc)) |cd| {
         defer alloc.free(cd);
@@ -1409,6 +1410,12 @@ pub fn runInteractive(alloc: std.mem.Allocator, cfg: *cfgmod.Config, cwd: []cons
     // TUI
     var tui = try tui_mod.Tui.init(alloc);
     defer tui.deinit();
+    tui_notify_target = &tui;
+    defer tui_notify_target = null;
+    if (pending_notify_len > 0) {
+        tuiOk("ext.notify", tui.appendLine("", "\x1b[2m", pending_notify_buf[0..pending_notify_len]));
+        pending_notify_len = 0;
+    }
     // 斜杠补全:内置目录 + JS 扩展命令(有则合并一份长驻切片)。
     if (jsrt.jsCommands().len > 0) {
         const extra = jsrt.jsCommands();
@@ -1513,6 +1520,22 @@ pub fn runInteractive(alloc: std.mem.Allocator, cfg: *cfgmod.Config, cwd: []cons
 }
 
 // ---------- CLI ----------
+
+// ── JS 扩展 notify 桥:TUI 起前先暂存一条,起后落 transcript。──
+var tui_notify_target: ?*tui_mod.Tui = null;
+var pending_notify_buf: [256]u8 = undefined;
+var pending_notify_len: usize = 0;
+
+fn extNotify(msg: []const u8, level: []const u8) void {
+    if (tui_notify_target) |t| {
+        const style: []const u8 = if (std.mem.eql(u8, level, "error")) "\x1b[31m" else "\x1b[2m";
+        tuiOk("ext.notify", t.appendLine("", style, msg));
+    } else {
+        const n = @min(msg.len, pending_notify_buf.len);
+        @memcpy(pending_notify_buf[0..n], msg[0..n]);
+        pending_notify_len = n;
+    }
+}
 
 pub fn main(init: std.process.Init) !void {
     util.io = init.io;
