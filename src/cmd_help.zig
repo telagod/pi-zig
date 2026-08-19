@@ -17,8 +17,8 @@ pub const USAGE =
     \\  -p, --print      print 模式,流式输出到 stdout
     \\  -m, --model M    指定模型
     \\      --provider P 指定 provider
-    \\  -n, --new        新会话(不续载旧会话)
-    \\  -c, --continue   续载最近会话(默认行为,显式指明可覆盖 -n 前置)
+    \\  -n, --new        新会话(默认行为,每次启动都是新会话)
+    \\  -c, --continue   续载最近会话
     \\  -t, --title T    新会话标题
     \\  -r, --read-only  只读:危险工具直接拒
     \\  -x, --execute    全权(默认):工具不询问

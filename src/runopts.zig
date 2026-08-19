@@ -11,7 +11,8 @@ pub const RunOptions = struct {
     ask: bool = false,
     /// --sandbox off|workspace|strict。null = 用 settings.json。
     sandbox: ?[]const u8 = null,
-    new_session: bool = false,
+    /// -c/--continue:续载最近会话。默认false —— 每次启动都是新会话。
+    continue_session: bool = false,
     title: ?[]const u8 = null,
     output_format: OutputFormat = .text,
     /// -s:恢复指定会话(id 为文件名去 .jsonl)

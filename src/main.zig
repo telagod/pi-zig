@@ -1356,18 +1356,20 @@ pub fn runInteractive(alloc: std.mem.Allocator, cfg: *cfgmod.Config, cwd: []cons
     const abs_cwd = std.process.currentPathAlloc(util.io, alloc) catch cwd;
     tui_mod.applyTheme(cfg.theme);
 
-    // 会话:指定 id → 恢复;显式新会话/带标题 → fresh;否则续载最新
+    // 会话:指定 id → 恢复;-c → 续载最新;默认新会话(不带旧上下文开工)
     var sess = if (opts.session_id) |id| blk: {
         const found = (try sessionmod.Session.findById(alloc, abs_cwd, id)) orelse {
             std.debug.print("piz: session '{s}' not found in {s}\n", .{ id, abs_cwd });
             std.process.exit(1);
         };
         break :blk found;
-    } else if (opts.new_session or opts.title != null)
+    } else if (opts.title != null)
         (try sessionmod.Session.freshTitle(alloc, abs_cwd, opts.title))
-    else
+    else if (opts.continue_session)
         (try sessionmod.Session.findLatest(alloc, abs_cwd)) orelse
-            (try sessionmod.Session.fresh(alloc, abs_cwd));
+            (try sessionmod.Session.fresh(alloc, abs_cwd))
+    else
+        (try sessionmod.Session.fresh(alloc, abs_cwd));
 
     // agent
     var agent = try agentmod.Agent.initOpts(alloc, cfg, opts.provider_name, opts.model_name, abs_cwd, .{ .read_only = opts.read_only, .system_override = opts.system_override, .depth = pluginsmod.processBaseDepth() });
@@ -1521,9 +1523,9 @@ pub fn main(init: std.process.Init) !void {
                 std.process.exit(1);
             };
         } else if (std.mem.eql(u8, arg, "-n") or std.mem.eql(u8, arg, "--new")) {
-            opts.new_session = true;
+            opts.continue_session = false; // 本就是默认,留着兼容旧习惯
         } else if (std.mem.eql(u8, arg, "-c") or std.mem.eql(u8, arg, "--continue")) {
-            opts.new_session = false;
+            opts.continue_session = true;
         } else if (std.mem.eql(u8, arg, "-r") or std.mem.eql(u8, arg, "--read-only")) {
             opts.read_only = true;
         } else if (std.mem.eql(u8, arg, "-x") or std.mem.eql(u8, arg, "--execute") or std.mem.eql(u8, arg, "--yolo")) {
@@ -1540,7 +1542,6 @@ pub fn main(init: std.process.Init) !void {
                 std.debug.print("piz: missing value for {s}\n", .{arg});
                 std.process.exit(1);
             };
-            opts.new_session = true;
         } else if (std.mem.eql(u8, arg, "-s") or std.mem.eql(u8, arg, "--session")) {
             opts.session_id = args.next() orelse {
                 std.debug.print("piz: missing value for {s}\n", .{arg});
