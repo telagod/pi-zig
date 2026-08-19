@@ -372,6 +372,19 @@ pub fn indexHtml(self: *WebServer, req: *http.Server.Request) !void {
     });
 }
 
+/// /app.css /app.js —— 拆分出的静态件,与 HTML 同策略 no-store(版本随二进制走)。
+pub fn staticAsset(self: *WebServer, req: *http.Server.Request, path: []const u8) !void {
+    _ = self;
+    const is_css = std.mem.endsWith(u8, path, ".css");
+    try req.respond(if (is_css) webui.APP_CSS else webui.APP_JS, .{
+        .status = .ok,
+        .extra_headers = &.{
+            .{ .name = "content-type", .value = if (is_css) "text/css; charset=utf-8" else "text/javascript; charset=utf-8" },
+            .{ .name = "cache-control", .value = "no-store" },
+        },
+    });
+}
+
 pub fn pluginsAssets(self: *WebServer, req: *http.Server.Request, target: []const u8, ws: []const u8) !void {
     const plugin_cwd = if (ws.len > 0) ws else self.opts.project_cwd;
     if (webplugins.readAsset(self.alloc, plugin_cwd, target) catch null) |asset| {

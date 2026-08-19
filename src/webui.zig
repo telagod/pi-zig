@@ -355,6 +355,8 @@ pub const WebServer = struct {
         const is_static = method == .GET and
             (std.mem.eql(u8, target, "/") or std.mem.startsWith(u8, target, "/?") or
                 std.mem.eql(u8, target, "/index.html") or
+                std.mem.eql(u8, path, "/app.css") or
+                std.mem.eql(u8, path, "/app.js") or
                 std.mem.startsWith(u8, target, "/api/plugins/assets/") or
                 std.mem.eql(u8, path, "/api/oauth/callback"));
         if (!is_static) {
@@ -410,6 +412,9 @@ pub const WebServer = struct {
         // 路由体在 webui_routes.zig;顺序即原 if-链顺序,先匹配先赢。
         if (method == .GET and (std.mem.eql(u8, target, "/") or std.mem.startsWith(u8, target, "/?") or std.mem.eql(u8, target, "/index.html"))) {
             return routes.indexHtml(self, req);
+        }
+        if (method == .GET and (std.mem.eql(u8, path, "/app.css") or std.mem.eql(u8, path, "/app.js"))) {
+            return routes.staticAsset(self, req, path);
         }
         if (method == .GET and std.mem.startsWith(u8, target, "/api/plugins/assets/")) {
             return routes.pluginsAssets(self, req, target, ws);
@@ -1205,8 +1210,10 @@ test "http: unregistered ws is refused before reaching any handler" {
 var global_gate: PermGate = .{ .reqs = std.array_list.Managed(PermGate.Req).init(std.heap.page_allocator) };
 
 /// 单页 UI(复刻 kimi web:apps/kimi-web,设计令牌对齐 style.css;纯静态内嵌)。
-/// 生成:src/webui.html(独立文件,免 zig 字符串转义)。
+/// 生成:src/webui.html + webui.css + webui.js(独立文件,免 zig 字符串转义)。
 pub const INDEX_HTML = @embedFile("webui.html");
+pub const APP_CSS = @embedFile("webui.css");
+pub const APP_JS = @embedFile("webui.js");
 
 test "query params are split on &, not matched as substrings" {
     const t = std.testing;
