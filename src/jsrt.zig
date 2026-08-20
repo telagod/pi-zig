@@ -98,6 +98,7 @@ const PRELUDE =
     \\      }
     \\      try {
     \\        const r = settle(t.execute(args, api));
+    \\        if (r && r.error !== undefined) return JSON.stringify({ error: String(r.error) });
     \\        const text = r && r.content !== undefined ? r.content : r;
     \\        return JSON.stringify({ content: typeof text === "string" ? text : JSON.stringify(text) });
     \\      } catch (e) {
@@ -284,14 +285,19 @@ fn hostFetch(ctx_: ?*c.JSContext, _: c.JSValue, argc: c_int, argv: [*c]c.JSValue
     defer if (url_c != null) c.JS_FreeCString(cx, url_c);
     if (url_c == null) return jsNull();
     const a = gpa orelse return jsNull();
+    // opts 解析与 headers 用临时 arena:此前直用 gpa 是漏的(扩展每 fetch 一次漏一串)。
+    var tmp_arena = std.heap.ArenaAllocator.init(std.heap.c_allocator);
+    defer tmp_arena.deinit();
+    const ta = tmp_arena.allocator();
     var method: std.http.Method = .GET;
     var body: []const u8 = "";
     var headers = std.ArrayList(std.http.Header).empty;
+    var safe = false;
     if (argc > 1) {
         const oj = c.JS_ToCString(cx, argv[1]);
         defer if (oj != null) c.JS_FreeCString(cx, oj);
         if (oj != null and std.mem.span(oj).len > 0) {
-            const v = std.json.parseFromSliceLeaky(std.json.Value, a, std.mem.span(oj), .{}) catch {
+            const v = std.json.parseFromSliceLeaky(std.json.Value, ta, std.mem.span(oj), .{}) catch {
                 return c.JS_ThrowInternalError(cx, "fetch: bad opts json");
             };
             if (v == .object) {
@@ -308,12 +314,15 @@ fn hostFetch(ctx_: ?*c.JSContext, _: c.JSValue, argc: c_int, argv: [*c]c.JSValue
                 if (v.object.get("body")) |b| {
                     if (b == .string) body = b.string;
                 }
+                if (v.object.get("safe")) |sv| {
+                    if (sv == .bool) safe = sv.bool;
+                }
                 if (v.object.get("headers")) |h| {
                     if (h == .object) {
                         var it = h.object.iterator();
                         while (it.next()) |e| {
                             if (e.value_ptr.* == .string)
-                                headers.append(a, .{ .name = e.key_ptr.*, .value = e.value_ptr.string }) catch {};
+                                headers.append(ta, .{ .name = e.key_ptr.*, .value = e.value_ptr.string }) catch {};
                         }
                     }
                 }
@@ -321,6 +330,10 @@ fn hostFetch(ctx_: ?*c.JSContext, _: c.JSValue, argc: c_int, argv: [*c]c.JSValue
         }
     }
     if (body.len > MAX_FS_IO) return c.JS_ThrowInternalError(cx, "fetch: body too large");
+    // safe: true = SSRF 护栏(fetch_url 用):私网/本机/metadata 拦,含 getent 解析回拦
+    if (safe and httpc.urlBlocked(a, std.mem.span(url_c))) {
+        return c.JS_ThrowInternalError(cx, "fetch: blocked private or local address");
+    }
     const stream = httpc.Stream.initWith(a, std.mem.span(url_c), headers.items, body, method) catch |err| {
         return c.JS_ThrowInternalError(cx, "fetch: %s", @errorName(err).ptr);
     };
@@ -504,10 +517,16 @@ pub fn deinit() void {
     freeRegistry();
     if (gpa) |a| {
         if (last_notify) |s| a.free(s);
+        if (saved_cfg) |s| a.free(s);
+        if (saved_cwd) |s| a.free(s);
+        if (gate_names.len > 0) a.free(gate_names);
     }
     js_tools = &.{};
     js_commands = &.{};
     last_notify = null;
+    saved_cfg = null;
+    saved_cwd = null;
+    gate_names = &.{};
     loaded_files = 0;
     load_errors = 0;
     h_tool_call = false;
@@ -682,9 +701,48 @@ fn evalModule(path_z: [*:0]const u8, src_z: [*:0]const u8, len: usize) bool {
 }
 
 /// 内嵌出厂扩展:随二进制,先于目录档加载;用户/项目目有同名 basename 则让位(覆写)。
-const bundled_exts = [_]struct { name: []const u8, src: []const u8 }{
+/// gate 非空 = 抽离件:仅当插件启用集含其名才装载(开关语义与内置表一致,见 plugins.pushGates)。
+const bundled_exts = [_]struct { name: []const u8, gate: []const u8 = "", src: []const u8 }{
     .{ .name = "usage-ledger.js", .src = @embedFile("embedded/extensions/usage-ledger.js") },
+    .{ .name = "web-search.js", .gate = "web-search", .src = @embedFile("embedded/extensions/web-search.js") },
 };
+
+var gate_names: []const []const u8 = &.{};
+var saved_cfg: ?[]u8 = null;
+var saved_cwd: ?[]u8 = null;
+
+/// 内嵌门控:传入启用的插件名(静态串,dupe 容器;plugins.enabledNamesList 供)。
+pub fn setGates(names: []const []const u8) void {
+    if (!enabled) return;
+    mu.lockUncancelable(util.io);
+    defer mu.unlock(util.io);
+    const a = gpa orelse return;
+    if (gate_names.len > 0) a.free(gate_names);
+    gate_names = a.dupe([]const u8, names) catch &.{};
+}
+
+fn gateOn(name: []const u8) bool {
+    for (gate_names) |n| {
+        if (std.mem.eql(u8, n, name)) return true;
+    }
+    return false;
+}
+
+/// 用上次 loadExtensions 的两项目重扫(开关抽离件后由 plugins.refreshExtracted 调)。
+pub fn reloadSaved() void {
+    if (!enabled) return;
+    mu.lockUncancelable(util.io);
+    const a = gpa orelse {
+        mu.unlock(util.io);
+        return;
+    };
+    const cd = if (saved_cfg) |s| a.dupe(u8, s) catch null else null;
+    const cw = if (saved_cwd) |s| a.dupe(u8, s) catch null else null;
+    mu.unlock(util.io);
+    defer if (cd) |s| a.free(s);
+    defer if (cw) |s| a.free(s);
+    if (cd) |d| reload(d, cw orelse "");
+}
 
 fn dirHasFile(path: ?[]const u8, name: []const u8) bool {
     const p = path orelse return false;
@@ -755,12 +813,18 @@ pub fn loadExtensions(cfg_dir: []const u8, cwd: []const u8) void {
     defer mu.unlock(util.io);
     if (rt == null) return;
     const a = gpa.?;
+    // 存档装载目,reloadSaved 复用(开关抽离件后无 cwd 在手也能重扫)。
+    if (saved_cfg) |s| a.free(s);
+    saved_cfg = a.dupe(u8, cfg_dir) catch null;
+    if (saved_cwd) |s| a.free(s);
+    saved_cwd = a.dupe(u8, cwd) catch null;
     const user_dir = util.joinPath(a, cfg_dir, "extensions") catch null;
     defer if (user_dir) |p| a.free(p);
     const proj_dir = if (cwd.len > 0) (util.joinPath(a, cwd, ".piz/extensions") catch null) else null;
     defer if (proj_dir) |p| a.free(p);
-    // 内嵌档先行;同名见于用户/项目目则跳过(目录档顶替)。
+    // 内嵌档先行;gate 未开或同名见于用户/项目目则跳过。
     for (bundled_exts) |b| {
+        if (b.gate.len > 0 and !gateOn(b.gate)) continue;
         if (dirHasFile(user_dir, b.name) or dirHasFile(proj_dir, b.name)) continue;
         if (evalBundled(b.name, b.src)) loaded_files += 1 else load_errors += 1;
     }
@@ -1369,6 +1433,81 @@ test "qjs appendFile 追加并新建" {
     var arena_inst = util.Arena.init(a);
     defer arena_inst.deinit();
     try t.expectEqualStrings("a\nb\n", runCommand(arena_inst.allocator(), "aprobe", "").?);
+}
+
+test "qjs bundled gate: web-search 默认关,setGates 开后装载" {
+    if (!enabled) return error.SkipZigTest;
+    const t = std.testing;
+    const a = t.allocator;
+    deinit();
+    init(a);
+    defer deinit();
+    const root = std.fmt.allocPrint(a, "/tmp/piz_jsrt_gate_{d}", .{std.os.linux.getpid()}) catch return error.SkipZigTest;
+    defer a.free(root);
+    defer std.Io.Dir.cwd().deleteTree(util.io, root) catch {};
+    try std.Io.Dir.cwd().createDirPath(util.io, root);
+    loadExtensions(root, "");
+    try t.expect(findTool("web_search") == null); // 门控默认关
+    try t.expect(hasHandlers("agent_end")); // usage-ledger 无门,仍在
+    setGates(&.{"web-search"});
+    reloadSaved();
+    try t.expect(findTool("web_search") != null);
+    try t.expect(findTool("fetch_url") != null);
+    // 私网拦:safe fetch 拦 127.0.0.1,报错原文与原 Zig 工具一致
+    const r = try runJsTool(a, "fetch_url", "{\"url\":\"http://127.0.0.1:5494/api/chat\"}");
+    defer a.free(r.content);
+    try t.expect(r.is_error);
+    try t.expect(std.mem.indexOf(u8, r.content, "blocked private or local address") != null);
+    // 未配端点:web_search 报配置指引(假定测试环境未设 PIZ_WEB_SEARCH_URL)
+    const r2 = try runJsTool(a, "web_search", "{\"query\":\"zig\"}");
+    defer a.free(r2.content);
+    try t.expect(r2.is_error);
+    try t.expect(std.mem.indexOf(u8, r2.content, "PIZ_WEB_SEARCH_URL") != null);
+    // 门控件同享同名覆写
+    const ext_dir = try std.fmt.allocPrint(a, "{s}/extensions", .{root});
+    defer a.free(ext_dir);
+    try std.Io.Dir.cwd().createDirPath(util.io, ext_dir);
+    const op = try std.fmt.allocPrint(a, "{s}/web-search.js", .{ext_dir});
+    defer a.free(op);
+    try std.Io.Dir.cwd().writeFile(util.io, .{ .sub_path = op, .data = "piz.registerCommand(\"wovr\", { handler: () => \"WOVR\" });\n" });
+    reloadSaved();
+    try t.expect(findTool("web_search") == null); // 内嵌让位
+    var arena_inst = util.Arena.init(a);
+    defer arena_inst.deinit();
+    try t.expectEqualStrings("WOVR", runCommand(arena_inst.allocator(), "wovr", "").?);
+}
+
+test "qjs bundled web-search: 内部函数探针(整形/编码/HTML 抽文/状态)" {
+    if (!enabled) return error.SkipZigTest;
+    const t = std.testing;
+    const a = t.allocator;
+    deinit();
+    init(a);
+    defer deinit();
+    mu.lockUncancelable(util.io);
+    const src = @embedFile("embedded/extensions/web-search.js") ++
+        "piz.registerCommand(\"t_enc\", { handler: (x) => urlEncode(x) });\n" ++
+        "piz.registerCommand(\"t_html\", { handler: (x) => htmlToText(x) });\n" ++
+        "piz.registerCommand(\"t_shape\", { handler: (x) => shapeSearchResults(x, \"zig\") });\n" ++
+        "piz.registerCommand(\"t_status\", { handler: () => webStatus() });\n";
+    const v = c.JS_Eval(ctx.?, src.ptr, src.len, "<test>", c.JS_EVAL_TYPE_GLOBAL);
+    try t.expect(!c.JS_IsException(v));
+    c.JS_FreeValue(ctx.?, v);
+    mu.unlock(util.io);
+    var arena_inst = util.Arena.init(a);
+    defer arena_inst.deinit();
+    const ar = arena_inst.allocator();
+    try t.expectEqualStrings("zig%200.16", runCommand(ar, "t_enc", "zig 0.16").?);
+    const html = runCommand(ar, "t_html", "<html><head><title>x</title></head><body><h1>Hello</h1><p>world &amp; zig</p><script>bad()</script></body></html>").?;
+    try t.expect(std.mem.indexOf(u8, html, "Hello") != null);
+    try t.expect(std.mem.indexOf(u8, html, "world & zig") != null);
+    try t.expect(std.mem.indexOf(u8, html, "bad()") == null);
+    try t.expect(std.mem.indexOf(u8, html, "<") == null);
+    const shaped = runCommand(ar, "t_shape", "{\"results\":[{\"title\":\"Zig\",\"url\":\"https://ziglang.org\",\"content\":\"A programming language.\"}]}").?;
+    try t.expect(std.mem.indexOf(u8, shaped, "Zig") != null);
+    try t.expect(std.mem.indexOf(u8, shaped, "https://ziglang.org") != null);
+    try t.expect(std.mem.indexOf(u8, shaped, "fetch_url") != null);
+    try t.expect(std.mem.indexOf(u8, runCommand(ar, "t_status", "").?, "usage: /web") != null);
 }
 
 test "qjs reload: registry resets, no double registration" {

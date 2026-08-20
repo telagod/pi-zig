@@ -313,6 +313,8 @@ pub fn dispatch(tui: *tui_mod.Tui, app: *App, cmd: []const u8) anyerror!bool {
             pluginsmod.withEnabled(app.agent.plugins, name)
         else
             pluginsmod.withoutEnabled(app.agent.plugins, name);
+        // 抽离件(jsrt 内嵌)门控重推 + 重扫
+        pluginsmod.refreshExtracted(app.alloc, app.agent.plugins);
         if (on) {
             _ = pluginsmod.enable(name);
         } else {
@@ -488,6 +490,7 @@ pub fn dispatch(tui: *tui_mod.Tui, app: *App, cmd: []const u8) anyerror!bool {
         if (jsrt.enabled) {
             if (util.configDir(app.alloc)) |cd| {
                 defer app.alloc.free(cd);
+                pluginsmod.pushGates(app.alloc, app.agent.plugins);
                 jsrt.reload(cd, app.agent.cwd);
                 tuiNote(app, "\x1b[2m", "js extensions reloaded");
             } else |_| {}

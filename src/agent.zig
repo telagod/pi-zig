@@ -494,7 +494,8 @@ pub const Agent = struct {
             \\
         );
         // 联网准则:仅在工具真的可用时才说,否则是在教模型用不存在的东西
-        if (pluginsmod.exposesTool(enabled, opts.tool_allow, "web_search") or pluginsmod.exposesTool(enabled, opts.tool_allow, "fetch_url")) {
+        // (web-search 已抽离:内置表查不到时看 JS 门控侧)
+        if (pluginsmod.exposesTool(enabled, opts.tool_allow, "web_search") or pluginsmod.exposesTool(enabled, opts.tool_allow, "fetch_url") or jsrt.findTool("web_search") != null) {
             try spw.writer.writeAll(
                 \\# When local information runs out
                 \\Your knowledge has a cutoff and this machine may not have the answer.

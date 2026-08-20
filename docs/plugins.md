@@ -42,7 +42,7 @@ piz 的插件是**编译期注册的 Zig 函数表**，不是运行时加载的�
 | `lsp` | `lsp` |
 | `todo` | `todo_write` `todo_read` |
 | `task-delegation` | `task` `workflow` `spawn_agent` `wait_agent` `read_agent` `send_agent` `list_agents` `close_agent`；斜杠 `/agents` |
-| `web-search` | `web_search` `fetch_url`（`fetch_url` 拒内网 / metadata / localhost）；斜杠 `/web` |
+| `web-search` | `web_search` `fetch_url`(`fetch_url` 拒内网 / metadata / localhost);斜杠 `/web`(**已抽为内嵌 JS 扩展**,开关语义不变,见 [抽离路线](plugin-extraction.md)) |
 | `git-awareness` | `git_status` |
 | `context-budget` | `get_context_remaining` |
 | `elicitation` | `ask_user`（成功后本轮立刻停，答复即问题正文） |

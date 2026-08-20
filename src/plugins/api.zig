@@ -61,6 +61,9 @@ pub const Plugin = struct {
     on_user_message: ?*const fn (ctx: ?*anyopaque, text: []const u8) ?[]const u8 = null,
     /// 一轮结束(有答复、中止、空转止损之后)。串行,可写会话/记账。
     after_turn: ?*const fn (ctx: ?*anyopaque) void = null,
+    /// 已抽离为内嵌 JS 扩展:本行只留名籍(开关/目录/子代理继承按名工作),
+    /// 实现由 jsrt 内嵌档按启用集门控装载。见 docs/plugin-extraction.md。
+    extracted: bool = false,
     /// 斜杠命令(交互模式 /<name>)。
     slash_commands: []const SlashCommand = &.{},
     /// 插件注册的工具(与核心工具合并暴露给模型)。

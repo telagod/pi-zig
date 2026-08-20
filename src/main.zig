@@ -577,6 +577,7 @@ pub fn runInteractive(alloc: std.mem.Allocator, cfg: *cfgmod.Config, cwd: []cons
     jsrt.init(alloc);
     if (util.configDir(alloc)) |cd| {
         defer alloc.free(cd);
+        pluginsmod.pushGates(alloc, pluginsmod.defaultSet());
         jsrt.loadExtensions(cd, abs_cwd);
     } else |_| {}
     if (jsrt.wantsSessionStart()) {

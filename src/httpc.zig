@@ -422,6 +422,187 @@ pub const SseParser = struct {
     }
 };
 
+// =====================================================================
+// 私网拦(SSRF 护栏):自 plugins/web.zig 迁来,fetch_url 与 jsrt safe fetch 共用。
+// 主机名黑名单 + IPv4 宽松解析(八/十六进制、短式)+ IPv6 + getent 解析回拦。
+// =====================================================================
+
+fn urlHost(url: []const u8) ?[]const u8 {
+    const sep = std.mem.indexOf(u8, url, "://") orelse return null;
+    var rest = url[sep + 3 ..];
+    if (rest.len == 0) return null;
+    if (rest[0] == '[') {
+        const close = std.mem.indexOfScalar(u8, rest, ']') orelse return null;
+        return rest[1..close];
+    }
+    if (std.mem.indexOfScalar(u8, rest, '@')) |at| rest = rest[at + 1 ..];
+    var end: usize = 0;
+    while (end < rest.len) : (end += 1) {
+        switch (rest[end]) {
+            ':', '/', '?', '#' => break,
+            else => {},
+        }
+    }
+    if (end == 0) return null;
+    if (rest[end - 1] == '.') return rest[0 .. end - 1];
+    return rest[0..end];
+}
+
+fn parseHexU32(s: []const u8) ?u32 {
+    if (s.len == 0) return null;
+    var acc: u32 = 0;
+    for (s) |c| {
+        const d: u32 = switch (c) {
+            '0'...'9' => c - '0',
+            'a'...'f' => c - 'a' + 10,
+            'A'...'F' => c - 'A' + 10,
+            else => return null,
+        };
+        acc = acc *% 16 + d;
+    }
+    return acc;
+}
+
+fn parseOctet(s: []const u8, max: u32) ?u32 {
+    if (s.len == 0) return null;
+    var v: u32 = 0;
+    if (s.len > 2 and s[0] == '0' and (s[1] == 'x' or s[1] == 'X')) {
+        v = parseHexU32(s[2..]) orelse return null;
+    } else if (s.len > 1 and s[0] == '0') {
+        for (s) |c| {
+            if (c < '0' or c > '7') return null;
+            v = v *% 8 + (c - '0');
+        }
+    } else {
+        for (s) |c| {
+            if (c < '0' or c > '9') return null;
+            v = v *% 10 + (c - '0');
+        }
+    }
+    if (v > max) return null;
+    return v;
+}
+
+fn parseIpv4Loose(host: []const u8) ?u32 {
+    if (host.len == 0) return null;
+    for (host) |c| {
+        switch (c) {
+            '0'...'9', '.', 'x', 'X' => {},
+            else => return null,
+        }
+    }
+    var vals: [4]u32 = undefined;
+    var n: usize = 0;
+    var it = std.mem.splitScalar(u8, host, '.');
+    while (it.next()) |p| {
+        if (n >= 4) return null;
+        vals[n] = parseOctet(p, 0xffff_ffff) orelse return null;
+        n += 1;
+    }
+    return switch (n) {
+        1 => vals[0],
+        2 => if (vals[0] <= 255 and vals[1] <= 0xff_ffff) (vals[0] << 24) | vals[1] else null,
+        3 => if (vals[0] <= 255 and vals[1] <= 255 and vals[2] <= 0xffff) (vals[0] << 24) | (vals[1] << 16) | vals[2] else null,
+        4 => if (vals[0] <= 255 and vals[1] <= 255 and vals[2] <= 255 and vals[3] <= 255)
+            (vals[0] << 24) | (vals[1] << 16) | (vals[2] << 8) | vals[3]
+        else
+            null,
+        else => null,
+    };
+}
+
+fn ipv4Blocked(ip: u32) bool {
+    const a = ip >> 24;
+    const b = (ip >> 16) & 0xff;
+    if (a == 0 or a == 10 or a == 127) return true;
+    if (a == 169 and b == 254) return true;
+    if (a == 172 and b >= 16 and b <= 31) return true;
+    if (a == 192 and b == 168) return true;
+    if (a == 100 and b >= 64 and b <= 127) return true;
+    if (a == 198 and (b == 18 or b == 19)) return true;
+    if (a >= 224) return true;
+    return false;
+}
+
+fn ipv6Blocked(bytes: [16]u8) bool {
+    var zeros: usize = 0;
+    for (bytes[0..15]) |c| {
+        if (c == 0) zeros += 1;
+    }
+    if (zeros == 15 and (bytes[15] == 0 or bytes[15] == 1)) return true;
+    if (bytes[0] == 0xfe and (bytes[1] & 0xc0) == 0x80) return true;
+    if (bytes[0] & 0xfe == 0xfc) return true;
+    if (std.mem.eql(u8, bytes[0..12], &[_]u8{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff })) {
+        return ipv4Blocked(std.mem.readInt(u32, bytes[12..16], .big));
+    }
+    return false;
+}
+
+fn hostNameBlocked(host: []const u8) bool {
+    var buf: [256]u8 = undefined;
+    if (host.len == 0 or host.len >= buf.len) return true;
+    const lower = std.ascii.lowerString(&buf, host);
+    const names = [_][]const u8{
+        "localhost",                "localhost.localdomain",
+        "ip6-localhost",            "ip6-loopback",
+        "metadata.google.internal", "metadata.internal",
+        "host.docker.internal",     "gateway.docker.internal",
+        "kubernetes.default",       "kubernetes.default.svc",
+    };
+    for (names) |n| {
+        if (std.mem.eql(u8, lower, n)) return true;
+    }
+    if (std.mem.endsWith(u8, lower, ".localhost")) return true;
+    if (std.mem.endsWith(u8, lower, ".local")) return true;
+    if (std.mem.endsWith(u8, lower, ".internal")) return true;
+    return false;
+}
+
+fn hostBlocked(host: []const u8) bool {
+    if (hostNameBlocked(host)) return true;
+    if (parseIpv4Loose(host)) |ip| return ipv4Blocked(ip);
+    if (std.Io.net.IpAddress.parseIp6(host, 0)) |addr| {
+        return ipv6Blocked(addr.ip6.bytes);
+    } else |_| {}
+    return false;
+}
+
+fn resolveBlocked(alloc: std.mem.Allocator, host: []const u8) bool {
+    if (hostBlocked(host)) return true;
+    const out = util.execShortTimeout(alloc, &.{ "getent", "ahosts", host }, 3) catch return false;
+    var it = std.mem.splitScalar(u8, out, '\n');
+    while (it.next()) |line| {
+        const cut = std.mem.indexOfAny(u8, line, " \t") orelse line.len;
+        const ip = std.mem.trim(u8, line[0..cut], " \t");
+        if (ip.len == 0) continue;
+        if (hostBlocked(ip)) return true;
+    }
+    return false;
+}
+
+/// URL 指向私网/本机/metadata 则 true(含 getent 解析回拦)。host 解不出也拦。
+pub fn urlBlocked(alloc: std.mem.Allocator, url: []const u8) bool {
+    const host = urlHost(url) orelse return true;
+    return resolveBlocked(alloc, host);
+}
+
+test "urlBlocked guards private and local addresses" {
+    const t = std.testing;
+    try t.expectEqualStrings("127.0.0.1", urlHost("http://evil.com@127.0.0.1/x").?);
+    try t.expectEqualStrings("::1", urlHost("https://[::1]:8080/").?);
+    try t.expectEqualStrings("example.com", urlHost("https://example.com./path").?);
+    try t.expect(hostBlocked("127.0.0.1"));
+    try t.expect(hostBlocked("localhost"));
+    try t.expect(hostBlocked("169.254.169.254"));
+    try t.expect(hostBlocked("10.1.2.3"));
+    try t.expect(hostBlocked("192.168.0.1"));
+    try t.expect(hostBlocked("172.16.0.1"));
+    try t.expect(hostBlocked("::1"));
+    try t.expect(hostBlocked("metadata.google.internal"));
+    try t.expect(hostBlocked("foo.localhost"));
+    try t.expect(!hostBlocked("ziglang.org"));
+}
+
 test "retryable status classification" {
     const t = std.testing;
     // 限流与服务端瞬时故障:重试

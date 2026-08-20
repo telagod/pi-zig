@@ -63,6 +63,8 @@ const r = piz.fetch("http://127.0.0.1:8873/x", {
   body: "{}",
 });
 // r = { status: 200, ok: true, body: "..." }(body 8MB 封顶)
+// opts.safe: true = SSRF 护栏(私网/本机/metadata 拦,抛 "blocked private or local address")
+// execute 返 string | {content} | {error}(error → is_error,模型见失败态)
 ```
 
 扩展是**受信代码**(同插件/钩子同级信任):fs 原语不过权限闸,装前自己审。

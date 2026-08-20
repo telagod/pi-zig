@@ -155,6 +155,7 @@ pub fn runWebCmd(alloc: std.mem.Allocator, args: *std.process.Args.Iterator) voi
     jsrt.init(alloc);
     if (util.configDir(alloc)) |cd| {
         defer alloc.free(cd);
+        pluginsmod.pushGates(alloc, pluginsmod.defaultSet());
         jsrt.loadExtensions(cd, abs_cwd);
     } else |_| {}
     ws.run() catch |err| util.warn("web server stopped: {s}", .{@errorName(err)});
@@ -1011,6 +1012,8 @@ fn poolConfigHook(ctx: ?*anyopaque, alloc: std.mem.Allocator, body: ?[]const u8)
                     } else {
                         _ = pluginsmod.disable(name);
                     }
+                    // 抽离件(jsrt 内嵌)门控重推 + 重扫,开关即刻生效
+                    pluginsmod.refreshExtracted(alloc, pluginsmod.defaultSet());
                     pool.mutex.lockUncancelable(util.io);
                     defer pool.mutex.unlock(util.io);
                     for (pool.sessions.items) |ses| {

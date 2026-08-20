@@ -44,9 +44,10 @@
 ## plugins(内置插件)
 
 - `plugins.zig`:合同 re-export + 出厂表 + 启用集 + 钩子分发,**零实现**。
-- 实现按域居 `src/plugins/`(hooks/extras/web/todo/agents/task/workflow/lsp/childbind),
+- 实现按域居 `src/plugins/`(hooks/extras/todo/agents/task/workflow/lsp/childbind),
   合同在 `plugins/api.zig`,工具限流在 `plugins/limits.zig`。
-- 加插件:先读 [plugins.md](plugins.md);能走 JS 扩展者不入此表(见抽离路线)。
+- 能走 JS 扩展者不入此表;抽离件留**空壳行**(`extracted = true`)守名籍,实现居
+  `src/embedded/extensions/`,jsrt 按启用集门控装载(见 [抽离路线](plugin-extraction.md))。
 - 文档插件数须与 `builtin_plugins` 实数核对。
 
 ## jsrt(JS 窄桥)

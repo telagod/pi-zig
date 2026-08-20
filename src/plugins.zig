@@ -8,7 +8,6 @@ const aimod = @import("ai.zig");
 const api = @import("plugins/api.zig");
 const hookmod = @import("plugins/hooks.zig");
 const extras = @import("plugins/extras.zig");
-const web = @import("plugins/web.zig");
 const todo = @import("plugins/todo.zig");
 const agentsplug = @import("plugins/agents.zig");
 const taskmod = @import("plugins/task.zig");
@@ -171,28 +170,9 @@ pub const builtin_plugins = [_]Plugin{
             .ctx_handler = extras.toolGitStatus,
         },
     } },
-    .{ .name = "web-search", .enabled_by_default = false, .slash_commands = &.{
-        .{ .name = "web", .desc = "web search status or /web <query>", .handler = web.slashWeb },
-    }, .tools = &.{
-        .{
-            .name = "web_search",
-            .desc = "Search the web when local information is insufficient or possibly out of date. Returns a ranked list of titles, URLs and snippets; follow up with fetch_url to read a result in full. Requires PIZ_WEB_SEARCH_URL.",
-            .schema =
-            \\{"type":"object","properties":{"query":{"type":"string","description":"Search query."}},"required":["query"]}
-            ,
-            .handler = toolCtxStub,
-            .ctx_handler = web.toolWebSearch,
-        },
-        .{
-            .name = "fetch_url",
-            .desc = "Fetch a web page or plain-text URL and return its readable text with markup stripped. Use it to read documentation, changelogs, issues or search results in full.",
-            .schema =
-            \\{"type":"object","properties":{"url":{"type":"string","description":"http:// or https:// URL to fetch."}},"required":["url"]}
-            ,
-            .handler = toolCtxStub,
-            .ctx_handler = web.toolFetchUrl,
-        },
-    } },
+    // web-search 已抽为内嵌 JS 扩展(src/embedded/extensions/web-search.js,jsrt 按启用集门控);
+    // 空壳留此:开关/目录/子代理继承/工具白名单仍按名工作。
+    .{ .name = "web-search", .enabled_by_default = false, .extracted = true },
     .{ .name = "elicitation", .enabled_by_default = false, .tools = &.{
         .{
             .name = "ask_user",
@@ -392,6 +372,33 @@ pub fn defaultSet() EnabledSet {
     return default_enabled;
 }
 
+fn namesListAlloc(alloc: std.mem.Allocator, set: EnabledSet) ![][]const u8 {
+    ensureDefault();
+    var list = std.array_list.Managed([]const u8).init(alloc);
+    errdefer list.deinit();
+    for (&builtin_plugins, 0..) |p, i| {
+        if (isEnabledIn(set, i)) try list.append(p.name);
+    }
+    return list.toOwnedSlice();
+}
+
+/// 把启用名推给 jsrt 内嵌门控(抽离件的装载开关)。JS 关(no-quickjs)空转。
+pub fn pushGates(alloc: std.mem.Allocator, set: EnabledSet) void {
+    const jsrt = @import("jsrt.zig");
+    if (!jsrt.enabled) return;
+    const names = namesListAlloc(alloc, set) catch return;
+    defer alloc.free(names);
+    jsrt.setGates(names);
+}
+
+/// 开关抽离件后:推门控 + 按上次装载目重扫(内嵌件装上/卸下)。
+pub fn refreshExtracted(alloc: std.mem.Allocator, set: EnabledSet) void {
+    const jsrt = @import("jsrt.zig");
+    if (!jsrt.enabled) return;
+    pushGates(alloc, set);
+    jsrt.reloadSaved();
+}
+
 /// settings.json 的 plugins / disabled_plugins 落到进程默认集。
 pub fn applyFromConfig(enabled: []const []const u8, disabled: []const []const u8) void {
     for (enabled) |name| _ = enable(name);
@@ -417,10 +424,11 @@ pub fn writeCatalog(w: *std.Io.Writer) !void {
     try w.writeAll("[");
     for (builtin_plugins, 0..) |p, i| {
         if (i > 0) try w.writeByte(',');
-        try w.print("{{\"name\":\"{s}\",\"enabled\":{s},\"optional\":{s}}}", .{
+        try w.print("{{\"name\":\"{s}\",\"enabled\":{s},\"optional\":{s},\"extracted\":{s}}}", .{
             p.name,
             if (isEnabledIn(defaultSet(), i)) "true" else "false",
             if (p.enabled_by_default) "false" else "true",
+            if (p.extracted) "true" else "false",
         });
     }
     try w.writeAll("]");
@@ -1068,17 +1076,19 @@ test "collectSlash lists todo when enabled" {
     const set = withEnabled(withEnabled(withEnabled(withEnabled(withEnabled(withEnabled(withEnabled(0, "todo"), "skills"), "context-budget"), "git-awareness"), "lsp"), "web-search"), "task-delegation");
     var buf: [8]SlashCommand = undefined;
     const n = collectSlash(set, &buf);
-    try t.expectEqual(@as(usize, 7), n);
+    // web-search 已抽离:空壳行无斜杠,/web 由 JS 侧 registerCommand 供(门控开时)
+    try t.expectEqual(@as(usize, 6), n);
     try t.expectEqualStrings("skills", buf[0].name);
     try t.expectEqualStrings("context", buf[1].name);
     try t.expectEqualStrings("git", buf[2].name);
-    try t.expectEqualStrings("web", buf[3].name);
-    try t.expectEqualStrings("agents", buf[4].name);
-    try t.expectEqualStrings("todo", buf[5].name);
-    try t.expectEqualStrings("lsp", buf[6].name);
+    try t.expectEqualStrings("agents", buf[3].name);
+    try t.expectEqualStrings("todo", buf[4].name);
+    try t.expectEqualStrings("lsp", buf[5].name);
     try t.expect(dispatchSlash(0, null, "todo", "") == null);
-    try t.expect(dispatchSlash(0, null, "web", "") == null);
     try t.expect(dispatchSlash(0, null, "agents", "") == null);
+    // 名籍仍在:抽离件可开可关
+    try t.expect((set & bitOf("web-search").?) != 0);
+    try t.expect(known("web-search"));
 }
 
 // lsp 测已迁 plugins/lsp.zig
@@ -1089,7 +1099,6 @@ test {
     _ = @import("plugins/jsonx.zig");
     _ = @import("plugins/hooks.zig");
     _ = @import("plugins/extras.zig");
-    _ = @import("plugins/web.zig");
     _ = @import("plugins/todo.zig");
     _ = @import("plugins/limits.zig");
     _ = @import("plugins/task.zig");
