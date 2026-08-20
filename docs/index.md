@@ -41,6 +41,7 @@ export DEEPSEEK_API_KEY=sk-... # 或写入 ~/.piz/auth.json
 ## 扩展
 
 - [Plugins](plugins.md) — 内置插件清单、钩子契约、如何新增一个插件
+- [插件抽离路线](plugin-extraction.md) — 内置 Zig → 真 JS 插件:对账表、缺桥清单、内嵌层、抽离序
 - [Packages](packages.md) — 资源包（skills / prompts / AGENTS.md）、事件扩展、包声明工具
 - [JS 扩展](extensions-js.md) — QuickJS 窄桥：加载位置、API、ESM/TS/async、fs/fetch 原语、热重载
 - [Web plugins](web-plugins.md) — 给 Web UI 注入前端 JS/CSS
@@ -50,6 +51,7 @@ export DEEPSEEK_API_KEY=sk-... # 或写入 ~/.piz/auth.json
 
 - [Sessions](sessions.md) — 会话存储、分支、JSONL 格式
 - [Architecture](architecture.md) — 模块划分、构建目标、主链路时序、测试约定
+- [模块规矩](modules.md) — 每模块职责/禁则/测试归处,review 依据
 - [Code review](code-review.md) — 自查走读:强项、弱项、改进优先级
 
 ## 与 pi 的关系

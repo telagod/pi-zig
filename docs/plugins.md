@@ -4,7 +4,9 @@
 
 piz 的插件是**编译期注册的 Zig 函数表**，不是运行时加载的模块。它们随二进制发布，零配置生效，无加载开销。
 
-这是有意的取舍：核心（`src/agent.zig`）只做主链路，凡是「有用但不该进核心」的能力都做成插件挂钩子。想改插件行为要改代码重编译 —— 换来的是没有插件加载器、没有沙箱、没有 ABI 兼容性负担。
+这是有意的取舍:核心(`src/agent.zig`)只做主链路,凡是「有用但不该进核心」的能力都做成插件挂钩子。想改插件行为要改代码重编译 —— 换来的是没有插件加载器、没有沙箱、没有 ABI 兼容性负担。
+
+适合免编译的场景化插件正逐步抽成真 JS 扩展(内嵌层随二进制出厂,同名可覆写),路线图见 [插件抽离](plugin-extraction.md)。
 
 面向终端用户的运行时扩展点是 [Packages](packages.md) 的事件声明和 `tools[]`，那条路不需要重编译。
 
@@ -29,7 +31,7 @@ piz 的插件是**编译期注册的 Zig 函数表**，不是运行时加载的�
 | `compact-resilience` | `on_compact_failed` | 压缩失败时换备用模型重试 |
 | `command-canonicalization` | `on_tool_before` | 拦截危险 shell 命令 |
 | `artifact-store` | `on_tool_result` | 超大输出外置到文件 |
-| `usage-ledger` | `after_turn` | 每轮 token 追加到 `~/.piz/usage.jsonl` |
+| `usage-ledger` | `after_turn` | 每轮 token 追加到 `~/.piz/usage.jsonl`(**已抽为内嵌 JS 扩展**,见 [抽离路线](plugin-extraction.md)) |
 
 ### 默认关闭
 
