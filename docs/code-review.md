@@ -108,7 +108,7 @@ deepseek 的 DSML 标记、U+FF5C 全角竖线直接出现在 agent 主循环的
 |---|---|---|---|
 | P0 | 工具失败透出错误名/错误信息,不再统一 "tool crashed" | 直接伤害模型侧自愈能力 | 已落地: `tools.crashResult`,三处调用点 |
 | P1 | 审计 `catch {}`,入口层吞错至少留 debug 日志通道 | "坏了能不能查" | 通道已有;`cmd_web`/`webui`/`session`/`main` 斜杠与 JSON 已改 `debugCatch`;余 mutex/sleep/signal/测试清理 |
-| P2 | provider 怪癖隔离到适配层;大文件按边界拆 | 每加 provider 都要动主循环,review 成本 | 标记清单在 `ai_markers.zig`;tui/tools 已拆,main/ai 仍大 |
+| P2 | provider 怪癖隔离到适配层;大文件按边界拆 | 每加 provider 都要动主循环,review 成本 | 标记清单在 `ai_markers.zig`;tui/tools 已拆;main 拆出 `app_pickers`/`app_views`(2264→1792 行),剩 App 壳/worker/CLI 派发;ai 仍大 |
 | P3 | pricing.zig 生成物考虑构建时生成 | 避免价格表变更的 diff 噪音 | 未做 |
 
 ### 已落地(2026-08-16)
