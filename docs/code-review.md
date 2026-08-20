@@ -108,7 +108,7 @@ deepseek 的 DSML 标记、U+FF5C 全角竖线直接出现在 agent 主循环的
 |---|---|---|---|
 | P0 | 工具失败透出错误名/错误信息,不再统一 "tool crashed" | 直接伤害模型侧自愈能力 | 已落地: `tools.crashResult`,三处调用点 |
 | P1 | 审计 `catch {}`,入口层吞错至少留 debug 日志通道 | "坏了能不能查" | 通道已有;`cmd_web`/`webui`/`session`/`main` 斜杠与 JSON 已改 `debugCatch`;余 mutex/sleep/signal/测试清理 |
-| P2 | provider 怪癖隔离到适配层;大文件按边界拆 | 每加 provider 都要动主循环,review 成本 | 测试出壳毕:`ai/tools/agent/session/config/webui/cmd_web/e2e/tui` 九件 `_tests.zig`(尾挂 `test{}` 钩引回,收集不变,378 绿);main 三拆毕(2264→1455)。遗珠:pricing/catalog(生成物,不动) |
+| P2 | provider 怪癖隔离到适配层;大文件按边界拆 | 每加 provider 都要动主循环,review 成本 | 测试出壳毕:`ai/tools/agent/session/config/webui/cmd_web/e2e/tui` 九件 `_tests.zig`(尾挂 `test{}` 钩引回,收集不变,381 绿);main 三拆毕(2264→1455)。遗珠:pricing/catalog(生成物,不动)。插件抽离开工:`usage-ledger` 首抽为内嵌 JS 扩展(jsrt 内嵌档+appendFile+agent_end usage 载荷),路线与模块规矩落 docs/plugin-extraction.md、docs/modules.md |
 | P3 | pricing.zig 生成物考虑构建时生成 | 避免价格表变更的 diff 噪音 | 未做 |
 
 ### 已落地(2026-08-16)
