@@ -68,17 +68,6 @@ fn toolCtxStub(_: std.mem.Allocator, args: []const u8) anyerror!toolsmod.Result 
 // =====================================================================
 // 上下文预算查询插件:get_context_remaining 工具。
 // =====================================================================
-fn slashSkills(ctx: ?*anyopaque, args: []const u8) anyerror![]const u8 {
-    _ = args;
-    const self: *agentmod.Agent = @ptrCast(@alignCast(ctx orelse return error.NoAgent));
-    const idx = agentmod.util.loadSkillsIndex(self.alloc) catch return self.alloc.dupe(u8, "no skills");
-    if (idx.len == 0) {
-        self.alloc.free(idx);
-        return self.alloc.dupe(u8, "no skills");
-    }
-    return idx;
-}
-
 // 实现按域分居 src/plugins/。
 
 /// 内置插件表。
@@ -114,18 +103,7 @@ pub const builtin_plugins = [_]Plugin{
     } },
 
     // ---- 默认关闭:按需开启的场景化工具 ----
-    .{ .name = "skills", .enabled_by_default = false, .slash_commands = &.{
-        .{ .name = "skills", .desc = "list available skills", .handler = slashSkills },
-    }, .tools = &.{
-        .{
-            .name = "skill",
-            .desc = "Load a skill's SKILL.md content by name. Skill names are listed in the system prompt.",
-            .schema =
-            \\{"type":"object","properties":{"name":{"type":"string","description":"Skill name as listed in the skills index."}},"required":["name"]}
-            ,
-            .handler = toolsmod.toolSkill,
-        },
-    } },
+    .{ .name = "skills", .enabled_by_default = false, .extracted = true },
     .{ .name = "context-budget", .enabled_by_default = false, .extracted = true },
     .{ .name = "git-awareness", .enabled_by_default = false, .slash_commands = &.{
         .{ .name = "git", .desc = "git status + diffstat", .handler = extras.slashGit },
@@ -1042,13 +1020,12 @@ test "collectSlash lists todo when enabled" {
     const set = withEnabled(withEnabled(withEnabled(withEnabled(withEnabled(withEnabled(withEnabled(0, "todo"), "skills"), "context-budget"), "git-awareness"), "lsp"), "web-search"), "task-delegation");
     var buf: [8]SlashCommand = undefined;
     const n = collectSlash(set, &buf);
-    // web-search/context-budget 已抽离:空壳行无斜杠,/web 与 /context 由 JS 侧 registerCommand 供(门控开时)
-    try t.expectEqual(@as(usize, 5), n);
-    try t.expectEqualStrings("skills", buf[0].name);
-    try t.expectEqualStrings("git", buf[1].name);
-    try t.expectEqualStrings("agents", buf[2].name);
-    try t.expectEqualStrings("todo", buf[3].name);
-    try t.expectEqualStrings("lsp", buf[4].name);
+    // web-search/context-budget/skills 已抽离:空壳行无斜杠,/web、/context、/skills 由 JS 侧供(门控开时)
+    try t.expectEqual(@as(usize, 4), n);
+    try t.expectEqualStrings("git", buf[0].name);
+    try t.expectEqualStrings("agents", buf[1].name);
+    try t.expectEqualStrings("todo", buf[2].name);
+    try t.expectEqualStrings("lsp", buf[3].name);
     try t.expect(dispatchSlash(0, null, "todo", "") == null);
     try t.expect(dispatchSlash(0, null, "agents", "") == null);
     // 名籍仍在:抽离件可开可关

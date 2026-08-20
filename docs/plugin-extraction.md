@@ -15,7 +15,7 @@
 | `concept-graph` | `on_compact` | 同上 | ⏳ 待桥 |
 | `compact-resilience` | `on_compact_failed` | on_compact_failed(可返备用模型名) | ⏳ 待桥 |
 | `web-search` | tools + /web | fetch + safe 护栏 + 门控装载 | ✅ **已抽**(safe fetch + `{error}` 透传 + gate 三桥随件落) |
-| `skills` | tool + /skills | 宿主 API:skills index | ⏳ 待桥 |
+| `skills` | tool + /skills | 宿主 API:skills index | ✅ **已抽**(`piz.listDir` 原语;pushGates 装了技能即开门) |
 | `context-budget` | tool + /context | 宿主 API:estTokens/窗口 | ✅ **已抽**(`piz.contextStats()` 快照,桥注人) |
 | `git-awareness` | tool + /git | exec 子进程 | ⏳ 待桥 |
 | `elicitation` | ask_user 工具 | 自由文问客(confirm 只 y/n) | ⏳ 待桥(或接受 y/n 退化) |
@@ -33,7 +33,7 @@
 5. ~~内嵌档 gate 门控~~ ✅ 已落(bundled_exts.gate + plugins.pushGates/refreshExtracted;开关即重扫)
 6. ~~`tool_result` 许改写~~ ✅ 已落(handler 返 `{replace}` 替换输出,全文不截;`piz.configDir()` 同落)
 7. 事件:`before_turn` / `on_user_message` / `on_compact(summary)` / `on_compact_failed`
-8. 宿主 API:`contextStats()`(est/窗口/压缩线)、`skillsIndex()`、`exec(argv)`(白名单?)
+8. 宿主 API:~~`contextStats()`~~ ✅、~~`skillsIndex()`~~ ✅(以 `listDir`+`readFile` 拼)、`exec(argv)`(白名单?)
 
 ## 内嵌层(默认启用件的抽离去处)
 
@@ -61,7 +61,8 @@
 3. ✅ `artifact-store`(默认开;`{replace}` 改写桥;read 系跳过/阈值/预览边界与原 Zig 版同则)
 4. ✅ `cross-session-memory` / `concept-graph`(compact 事件;e2e 记忆管线改经 JS 件验)
 5. ✅ `context-budget`(`piz.contextStats()`;callTool/runCommand 携快照,互斥下无竞态;默认关保语义)
-6. `skills`(skillsIndex 可以现有 fs 原语拼)→ `git-awareness`(exec 原语,安全须裁)
+6. ✅ `skills`(`piz.listDir`;搜索序与 toolSkill/loadSkillsIndex 同;名校验/error 文案 parity)
+7. `git-awareness`(exec 原语,安全须裁)
 6. 留核:`command-canonicalization`(安全)、`vision-input`(二进制)、子代理三家(调度);`compact-resilience` 暂缓(见对账表)
 
 ## 验收标准(每件必过)

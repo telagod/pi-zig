@@ -63,6 +63,7 @@ const PRELUDE =
     \\    notify(msg, level) { __piz_host_notify(String(msg), String(level || "info")); },
     \\    confirm(msg) { return !!__piz_host_confirm(String(msg)); },
     \\    readFile(path) { return __piz_host_readFile(String(path)); },
+    \\    listDir(path) { const s = __piz_host_listDir(String(path)); if (s == null) return null; try { return JSON.parse(s); } catch (_) { return null; } },
     \\    writeFile(path, text) { return !!__piz_host_writeFile(String(path), String(text)); },
     \\    appendFile(path, text) { return !!__piz_host_appendFile(String(path), String(text)); },
     \\    env(name) { return __piz_host_env(String(name)); },
@@ -221,6 +222,40 @@ fn hostReadFile(ctx_: ?*c.JSContext, _: c.JSValue, argc: c_int, argv: [*c]c.JSVa
     const data = std.Io.Dir.cwd().readFileAlloc(util.io, std.mem.span(p), a, .limited(MAX_FS_IO)) catch return jsNull();
     defer a.free(data);
     return c.JS_NewStringLen(cx, data.ptr, @intCast(data.len));
+}
+
+/// host 原语:__piz_host_listDir(path) -> JSON 数组串|null。项 {name,kind:dir|file|link|other}。
+fn hostListDir(ctx_: ?*c.JSContext, _: c.JSValue, argc: c_int, argv: [*c]c.JSValue) callconv(.c) c.JSValue {
+    const cx = ctx_ orelse return jsNull();
+    if (argc < 1) return jsNull();
+    const p = c.JS_ToCString(cx, argv[0]);
+    defer if (p != null) c.JS_FreeCString(cx, p);
+    if (p == null) return jsNull();
+    const a = gpa orelse return jsNull();
+    var dir = std.Io.Dir.cwd().openDir(util.io, std.mem.span(p), .{ .iterate = true }) catch return jsNull();
+    defer dir.close(util.io);
+    var buf = std.array_list.Managed(u8).init(a);
+    defer buf.deinit();
+    buf.append('[') catch return jsNull();
+    var it = dir.iterate();
+    var first = true;
+    while (it.next(util.io) catch null) |entry| {
+        const kind: []const u8 = switch (entry.kind) {
+            .directory => "dir",
+            .file => "file",
+            .sym_link => "link",
+            else => "other",
+        };
+        const qname = std.json.Stringify.valueAlloc(a, entry.name, .{}) catch break;
+        defer a.free(qname);
+        if (!first) buf.append(',') catch break;
+        first = false;
+        const item = std.fmt.allocPrint(a, "{{\"name\":{s},\"kind\":\"{s}\"}}", .{ qname, kind }) catch break;
+        defer a.free(item);
+        buf.appendSlice(item) catch break;
+    }
+    buf.append(']') catch return jsNull();
+    return c.JS_NewStringLen(cx, buf.items.ptr, @intCast(buf.items.len));
 }
 
 /// host 原语:__piz_host_writeFile(path, text) -> bool。
@@ -496,6 +531,8 @@ pub fn init(alloc: std.mem.Allocator) void {
     _ = c.JS_SetPropertyStr(ctx.?, global, "__piz_host_settle", sf);
     const rf = c.JS_NewCFunction(ctx.?, hostReadFile, "__piz_host_readFile", 1);
     _ = c.JS_SetPropertyStr(ctx.?, global, "__piz_host_readFile", rf);
+    const ld = c.JS_NewCFunction(ctx.?, hostListDir, "__piz_host_listDir", 1);
+    _ = c.JS_SetPropertyStr(ctx.?, global, "__piz_host_listDir", ld);
     const wf = c.JS_NewCFunction(ctx.?, hostWriteFile, "__piz_host_writeFile", 2);
     _ = c.JS_SetPropertyStr(ctx.?, global, "__piz_host_writeFile", wf);
     const af = c.JS_NewCFunction(ctx.?, hostAppendFile, "__piz_host_appendFile", 2);
@@ -730,6 +767,7 @@ const bundled_exts = [_]struct { name: []const u8, gate: []const u8 = "", src: [
     .{ .name = "cross-session-memory.js", .gate = "cross-session-memory", .src = @embedFile("embedded/extensions/cross-session-memory.js") },
     .{ .name = "concept-graph.js", .gate = "concept-graph", .src = @embedFile("embedded/extensions/concept-graph.js") },
     .{ .name = "context-budget.js", .gate = "context-budget", .src = @embedFile("embedded/extensions/context-budget.js") },
+    .{ .name = "skills.js", .gate = "skills", .src = @embedFile("embedded/extensions/skills.js") },
 };
 
 var gate_names: []const []const u8 = &.{};
@@ -1561,6 +1599,45 @@ test "qjs tool_result replace:artifact-store 外置大件,小件/read/已置不�
     const zh = try ar.dupe(u8, "x" ++ "// 中文注释行填充凑长\n" ** 300);
     const zrepl = emitToolResult(ar, "bash", zh).?;
     try t.expect(std.unicode.utf8ValidateSlice(zrepl));
+}
+
+test "qjs bundled skills: 列表/加载/名校验(parity)" {
+    if (!enabled) return error.SkipZigTest;
+    const t = std.testing;
+    const a = t.allocator;
+    deinit();
+    init(a);
+    defer deinit();
+    const root = std.fmt.allocPrint(a, "/tmp/piz_jsrt_sk_{d}", .{std.os.linux.getpid()}) catch return error.SkipZigTest;
+    defer a.free(root);
+    defer std.Io.Dir.cwd().deleteTree(util.io, root) catch {};
+    const skills_md = try std.fmt.allocPrint(a, "{s}/skills/myskill/SKILL.md", .{root});
+    defer a.free(skills_md);
+    const pkg_md = try std.fmt.allocPrint(a, "{s}/packages/pkg1/skills/pkgskill/SKILL.md", .{root});
+    defer a.free(pkg_md);
+    try std.Io.Dir.cwd().createDirPath(util.io, std.fs.path.dirname(skills_md).?);
+    try std.Io.Dir.cwd().writeFile(util.io, .{ .sub_path = skills_md, .data = "---\nname: real-name\ndescription:  D one\n---\nBODY-MINE" });
+    try std.Io.Dir.cwd().createDirPath(util.io, std.fs.path.dirname(pkg_md).?);
+    try std.Io.Dir.cwd().writeFile(util.io, .{ .sub_path = pkg_md, .data = "description: D pkg\nBODY-PKG" });
+    setGates(&.{"skills"});
+    loadExtensions(root, "");
+    var arena_inst = util.Arena.init(a);
+    defer arena_inst.deinit();
+    const ar = arena_inst.allocator();
+    const idx = runCommand(ar, "skills", "", null).?;
+    try t.expect(std.mem.indexOf(u8, idx, "- real-name: D one\n") != null); // name 行覆写目名,trim
+    try t.expect(std.mem.indexOf(u8, idx, "- pkgskill: D pkg\n") != null); // 包目扫到
+    const r = try runJsTool(a, "skill", "{\"name\":\"pkgskill\"}", null);
+    defer a.free(r.content);
+    try t.expectEqualStrings("# Skill pkgskill\n\ndescription: D pkg\nBODY-PKG", r.content);
+    const bad = try runJsTool(a, "skill", "{\"name\":\"../etc\"}", null);
+    defer a.free(bad.content);
+    try t.expect(bad.is_error);
+    try t.expectEqualStrings("error: invalid skill name", bad.content);
+    const miss = try runJsTool(a, "skill", "{\"name\":\"nope\"}", null);
+    defer a.free(miss.content);
+    try t.expect(miss.is_error);
+    try t.expect(std.mem.indexOf(u8, miss.content, "not found in") != null);
 }
 
 test "qjs bundled context-budget: 快照注人与文案 parity" {
