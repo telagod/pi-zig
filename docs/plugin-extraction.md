@@ -59,9 +59,9 @@
 1. ✅ `usage-ledger`(after_turn+记账,最小,验水道)
 2. ✅ `web-search`(默认关;gate 门控保开关语义,护栏迁 httpc 供 safe fetch)
 3. ✅ `artifact-store`(默认开;`{replace}` 改写桥;read 系跳过/阈值/预览边界与原 Zig 版同则)
-4. `cross-session-memory`/`concept-graph`/`compact-resilience`(待桥 7:on_compact 系事件)
-4. 宿主 API 就绪后:`context-budget` → `skills` → `git-awareness`(exec)
-5. 留核:`command-canonicalization`(安全)、`vision-input`(二进制)、子代理三家(调度)
+4. ✅ `cross-session-memory` / `concept-graph`(compact 事件;e2e 记忆管线改经 JS 件验)
+5. 宿主 API 就绪后:`context-budget` → `skills` → `git-awareness`(exec)
+6. 留核:`command-canonicalization`(安全)、`vision-input`(二进制)、子代理三家(调度);`compact-resilience` 暂缓(见对账表)
 
 ## 验收标准(每件必过)
 

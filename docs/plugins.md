@@ -26,8 +26,8 @@ piz 的插件是**编译期注册的 Zig 函数表**，不是运行时加载的�
 
 | 插件 | 挂载点 | 作用 |
 |------|--------|------|
-| `cross-session-memory` | `on_compact` | 压缩摘要落盘，跨会话注入 |
-| `concept-graph` | `on_compact` | 从摘要提取概念 |
+| `cross-session-memory` | `on_compact` | 压缩摘要落盘,跨会话注入(**已抽为内嵌 JS 扩展**,写侧在 JS;启动注入留核) |
+| `concept-graph` | `on_compact` | 从摘要提取概念(**已抽为内嵌 JS 扩展**) |
 | `compact-resilience` | `on_compact_failed` | 压缩失败时换备用模型重试 |
 | `command-canonicalization` | `on_tool_before` | 拦截危险 shell 命令 |
 | `artifact-store` | `on_tool_result` | 超大输出外置到文件(**已抽为内嵌 JS 扩展**,见下) |

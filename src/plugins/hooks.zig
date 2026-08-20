@@ -19,19 +19,6 @@ fn memoryFilePath(alloc: std.mem.Allocator, self: *agentmod.Agent) ![]const u8 {
     return std.fs.path.join(alloc, &.{ dir, "memories", try std.fmt.allocPrint(alloc, "{s}.md", .{slug}) });
 }
 
-pub fn memoryAppend(ctx: ?*anyopaque, summary: []const u8) void {
-    const self: *agentmod.Agent = @ptrCast(@alignCast(ctx.?));
-    const path = memoryFilePath(self.alloc, self) catch return;
-    defer self.alloc.free(path);
-    var content = std.array_list.Managed(u8).init(self.alloc);
-    defer content.deinit();
-    const ts = @divTrunc(std.Io.Clock.now(.real, agentmod.util.io).nanoseconds, std.time.ns_per_ms);
-    const clip_max: usize = 2048;
-    const clipped = if (summary.len > clip_max) summary[0..clip_max] else summary;
-    content.appendSlice(std.fmt.allocPrint(self.alloc, "## [{d}] {s}\n{s}\n\n", .{ ts, self.cwd, clipped }) catch return) catch return;
-    std.Io.Dir.cwd().writeFile(agentmod.util.io, .{ .sub_path = path, .data = content.items }) catch |err| agentmod.util.debugCatch("memory.md", err);
-}
-
 /// 启动注入:读本项目记忆,追加到 system_prompt(幂等)。
 pub fn injectMemory(self: *agentmod.Agent) void {
     if (std.mem.indexOf(u8, self.system_prompt, MEMORY_HEADER) != null) return; // 已注入
@@ -104,51 +91,6 @@ pub fn canonicalBlock(chain: *BeforeChain) ?[]const u8 {
     return chain.next();
 }
 
-// =====================================================================
-// concept-graph 插件(最小版):压缩摘要中提取事实(decision/constraint/goal 等行)
-// 追加到 <configDir>/concepts/<cwd-slug>.md,跨会话项目知识沉淀。
-// =====================================================================
-const FACT_MARKERS = [_][]const u8{ "decision:", "decided", "constraint:", "goal:", "convention:", "architecture:" };
-
-pub fn conceptExtract(ctx: ?*anyopaque, summary: []const u8) void {
-    const self: *agentmod.Agent = @ptrCast(@alignCast(ctx.?));
-    var facts = std.array_list.Managed(u8).init(self.alloc);
-    defer facts.deinit();
-    var lines = std.mem.splitScalar(u8, summary, '\n');
-    while (lines.next()) |line| {
-        const l = std.mem.trim(u8, line, " \t");
-        if (l.len == 0) continue;
-        for (FACT_MARKERS) |mk| {
-            if (std.ascii.startsWithIgnoreCase(l, mk)) {
-                facts.appendSlice(l) catch {};
-                facts.appendSlice("\n") catch {};
-                break;
-            }
-        }
-    }
-    if (facts.items.len == 0) return;
-    const dir = agentmod.util.configDir(self.alloc) catch return;
-    defer self.alloc.free(dir);
-    const slug = agentmod.util.cwdSlug(self.alloc, self.cwd) catch return;
-    defer self.alloc.free(slug);
-    const concepts_dir = std.fs.path.join(self.alloc, &.{ dir, "concepts" }) catch return;
-    defer self.alloc.free(concepts_dir);
-    std.Io.Dir.cwd().createDirPath(agentmod.util.io, concepts_dir) catch {};
-    const fname = std.fmt.allocPrint(self.alloc, "{s}.md", .{slug}) catch return;
-    defer self.alloc.free(fname);
-    const fpath = std.fs.path.join(self.alloc, &.{ concepts_dir, fname }) catch return;
-    defer self.alloc.free(fpath);
-    // 追加(读旧+写新)
-    var content = std.array_list.Managed(u8).init(self.alloc);
-    defer content.deinit();
-    if (std.Io.Dir.cwd().readFileAlloc(agentmod.util.io, fpath, self.alloc, .limited(256 * 1024))) |old| {
-        defer self.alloc.free(old);
-        content.appendSlice(old) catch {};
-    } else |_| {}
-    content.appendSlice(facts.items) catch {};
-    std.Io.Dir.cwd().writeFile(agentmod.util.io, .{ .sub_path = fpath, .data = content.items }) catch |err| agentmod.util.debugCatch("concepts.md", err);
-}
-
 pub fn compactFallback(ctx: ?*anyopaque) ?[]const u8 {
     const self: *agentmod.Agent = @ptrCast(@alignCast(ctx.?));
     if (self.provider.models.len > 1) return self.provider.models[1];
@@ -206,9 +148,10 @@ test "cross-session memory persists and injects idempotently" {
     var agent = try agentmod.Agent.init(a, &cfg, "mock", "m", "/tmp");
     const sys_before = agent.system_prompt.len;
 
-    // 压缩钩子 → 记忆文件
-    memoryAppend(&agent, "summary one");
-    memoryAppend(&agent, "summary two");
+    // 压缩写侧已抽为内嵌 JS 件(jsrt 层有 parity 测试);此直写等价文件测注入
+    const mp = try memoryFilePath(a, &agent);
+    try std.Io.Dir.cwd().createDirPath(agentmod.util.io, std.fs.path.dirname(mp).?);
+    try std.Io.Dir.cwd().writeFile(agentmod.util.io, .{ .sub_path = mp, .data = "## [1] /tmp\nsummary two\n\n" });
 
     // 注入:system_prompt 含记忆;幂等(二次注入不重复)
     injectMemory(&agent);

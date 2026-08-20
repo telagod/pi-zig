@@ -235,6 +235,15 @@ pub fn testMemoryPipeline() !void {
     const tmp_path = try std.fmt.allocPrint(a, "{s}/.zig-cache/tmp/{s}", .{ cwd_abs, tmp.sub_path });
 
     try util.environ_map.?.put("PIZ_DIR", tmp_path);
+    // 压缩写侧已抽为内嵌 JS 件:测试进程自起引擎并开门(生产由 main 入口做)
+    const jsrt = @import("core").jsrt;
+    if (jsrt.enabled) {
+        jsrt.deinit();
+        jsrt.init(std.heap.c_allocator);
+        // 不 defer deinit:引擎全局,后续 e2e 共用;进程终即收
+        jsrt.setGates(&.{ "usage-ledger", "artifact-store", "cross-session-memory", "concept-graph" });
+        jsrt.loadExtensions(tmp_path, "/tmp");
+    }
 
     // 手工 provider 指向 mock(记忆管线走密图折页,/compact 不调模型)
     const url_buf = try std.fmt.allocPrint(a, "http://127.0.0.1:{d}/v1/chat/completions", .{MOCK_PORT2});

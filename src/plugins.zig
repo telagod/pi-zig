@@ -118,12 +118,14 @@ fn slashSkills(ctx: ?*anyopaque, args: []const u8) anyerror![]const u8 {
 ///   用 settings.json 的 `plugins` 数组或 `--plugin <name>` 开启。
 pub const builtin_plugins = [_]Plugin{
     // ---- 默认启用:只挂钩子,不加工具 ----
-    .{ .name = "cross-session-memory", .on_compact = hookmod.memoryAppend },
+    // cross-session-memory 已抽为内嵌 JS 扩展(compact 事件);空壳守名籍(默认开)。启动注入 injectMemory 留核。
+    .{ .name = "cross-session-memory", .extracted = true },
     .{ .name = "command-canonicalization", .on_tool_before = hookmod.canonicalBlock },
     // artifact-store 已抽为内嵌 JS 扩展;空壳守名籍(默认开,gate 门控)。
     .{ .name = "artifact-store", .extracted = true },
     .{ .name = "compact-resilience", .on_compact_failed = hookmod.compactFallback },
-    .{ .name = "concept-graph", .on_compact = hookmod.conceptExtract },
+    // concept-graph 已抽为内嵌 JS 扩展(compact 事件);空壳守名籍(默认开)。
+    .{ .name = "concept-graph", .extracted = true },
     // usage-ledger 已抽为内嵌 JS 扩展;空壳守名籍(默认开,gate 门控)。
     .{ .name = "usage-ledger", .extracted = true },
     .{ .name = "vision-input", .enabled_by_default = false, .tools = &.{

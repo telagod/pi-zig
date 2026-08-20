@@ -150,6 +150,7 @@ var h_tool_call = false;
 var h_tool_result = false;
 var h_session_start = false;
 var h_agent_end = false;
+var h_compact = false;
 
 fn jsThrowToString(ctx_: *c.JSContext, arena: std.mem.Allocator) []const u8 {
     const ex = c.JS_GetException(ctx_);
@@ -546,6 +547,7 @@ pub fn deinit() void {
     h_tool_result = false;
     h_session_start = false;
     h_agent_end = false;
+    h_compact = false;
     ts_ready = false;
     if (sucrase_z) |z| {
         if (gpa) |a| a.free(z);
@@ -719,6 +721,8 @@ const bundled_exts = [_]struct { name: []const u8, gate: []const u8 = "", src: [
     .{ .name = "usage-ledger.js", .gate = "usage-ledger", .src = @embedFile("embedded/extensions/usage-ledger.js") },
     .{ .name = "web-search.js", .gate = "web-search", .src = @embedFile("embedded/extensions/web-search.js") },
     .{ .name = "artifact-store.js", .gate = "artifact-store", .src = @embedFile("embedded/extensions/artifact-store.js") },
+    .{ .name = "cross-session-memory.js", .gate = "cross-session-memory", .src = @embedFile("embedded/extensions/cross-session-memory.js") },
+    .{ .name = "concept-graph.js", .gate = "concept-graph", .src = @embedFile("embedded/extensions/concept-graph.js") },
 };
 
 var gate_names: []const []const u8 = &.{};
@@ -879,6 +883,7 @@ fn refreshRegistry() void {
     h_tool_result = bridgeHas(arena, "tool_result");
     h_session_start = bridgeHas(arena, "session_start");
     h_agent_end = bridgeHas(arena, "agent_end");
+    h_compact = bridgeHas(arena, "compact");
 }
 
 fn bridgeHas(arena: std.mem.Allocator, ev: []const u8) bool {
@@ -1013,6 +1018,18 @@ pub fn emitToolResult(arena: std.mem.Allocator, name: []const u8, content: []con
         if (v == .string) return v.string;
     }
     return null;
+}
+
+/// compact 事件:压缩成功后携摘要发(跨会话记忆/概念图)。fire-and-forget。
+pub fn emitCompact(arena: std.mem.Allocator, summary: []const u8, cwd: []const u8) void {
+    if (!enabled or rt == null or !h_compact) return;
+    const payload = std.json.Stringify.valueAlloc(arena, .{
+        .summary = summary,
+        .cwd = cwd,
+        .config_dir = saved_cfg orelse "",
+        .ts = @as(i64, @intCast(@divTrunc(std.Io.Clock.now(.real, util.io).nanoseconds, std.time.ns_per_ms))),
+    }, .{}) catch return;
+    _ = emit(arena, "compact", payload);
 }
 
 /// session_start 是否有人听(供调用方省 payload 构造)。
@@ -1537,6 +1554,40 @@ test "qjs tool_result replace:artifact-store 外置大件,小件/read/已置不�
     const zh = try ar.dupe(u8, "x" ++ "// 中文注释行填充凑长\n" ** 300);
     const zrepl = emitToolResult(ar, "bash", zh).?;
     try t.expect(std.unicode.utf8ValidateSlice(zrepl));
+}
+
+test "qjs compact: memory 覆写 + concept 追加(parity)" {
+    if (!enabled) return error.SkipZigTest;
+    const t = std.testing;
+    const a = t.allocator;
+    deinit();
+    init(a);
+    defer deinit();
+    const root = std.fmt.allocPrint(a, "/tmp/piz_jsrt_cp_{d}", .{std.os.linux.getpid()}) catch return error.SkipZigTest;
+    defer a.free(root);
+    defer std.Io.Dir.cwd().deleteTree(util.io, root) catch {};
+    try std.Io.Dir.cwd().createDirPath(util.io, root);
+    setGates(&.{ "cross-session-memory", "concept-graph" });
+    loadExtensions(root, "");
+    try t.expect(hasHandlers("compact"));
+    var arena_inst = util.Arena.init(a);
+    defer arena_inst.deinit();
+    const ar = arena_inst.allocator();
+    emitCompact(ar, "Decision: keep zig\nnoise line\nGoal: ship", "/tmp/proj");
+    const mem_path = try std.fmt.allocPrint(ar, "{s}/memories/--tmp-proj--.md", .{root});
+    const con_path = try std.fmt.allocPrint(ar, "{s}/concepts/--tmp-proj--.md", .{root});
+    const mem = try std.Io.Dir.cwd().readFileAlloc(util.io, mem_path, ar, .limited(64 * 1024));
+    try t.expect(std.mem.indexOf(u8, mem, "] /tmp/proj\n") != null);
+    try t.expect(std.mem.indexOf(u8, mem, "noise line") != null); // 记忆存全摘要
+    const con = try std.Io.Dir.cwd().readFileAlloc(util.io, con_path, ar, .limited(64 * 1024));
+    try t.expectEqualStrings("Decision: keep zig\nGoal: ship\n", con); // 概念只存事实行
+    // 无事实行不写概念文件;二次 compact 记忆覆写
+    emitCompact(ar, "nothing facty", "/tmp/proj");
+    const con2 = try std.Io.Dir.cwd().readFileAlloc(util.io, con_path, ar, .limited(64 * 1024));
+    try t.expectEqualStrings(con, con2);
+    const mem2 = try std.Io.Dir.cwd().readFileAlloc(util.io, mem_path, ar, .limited(64 * 1024));
+    try t.expect(std.mem.indexOf(u8, mem2, "nothing facty") != null);
+    try t.expect(std.mem.indexOf(u8, mem2, "noise line") == null);
 }
 
 test "qjs bundled web-search: 内部函数探针(整形/编码/HTML 抽文/状态)" {

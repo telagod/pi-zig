@@ -1406,6 +1406,12 @@ pub const Agent = struct {
         }
         try self.messages.appendSlice(keep.items);
         pluginsmod.runAfterCompact(@ptrCast(self), fold.summary);
+        // JS 扩展 compact 事件(跨会话记忆/概念图已抽为内嵌件)
+        if (jsrt.enabled) {
+            var ca = std.heap.ArenaAllocator.init(std.heap.c_allocator);
+            defer ca.deinit();
+            jsrt.emitCompact(ca.allocator(), fold.summary, self.cwd);
+        }
         return fold.summary;
     }
 };
