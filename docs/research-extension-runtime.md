@@ -1,7 +1,7 @@
 # 扩展运行时选型调研（2026-08，QuickJS-ng 已落地）
 
 > 状态：选项 2 已于 1873e2f 落地（窄桥），用法见 [extensions-js.md](extensions-js.md)。
-> WASM/TS 剥离/异步仍后置。下文留调研原貌。
+> ESM/import/async/TS 已落地(见 docs/extensions-js.md);WASM 沙箱仍后置。下文留调研原貌。
 
 背景：piz 现为纯编译期插件表（Zig @embed/comptime），改扩展须重编（增量秒级）。
 目标：扩展免编译 + 保住「单文件、静态、零依赖、低占用」。
@@ -63,5 +63,5 @@ libunicode/quickjs,+quickjs-libc),strip 后引擎+musl 共 1.13 MB,
 - 桥面：`piz.on(event, fn)` / `piz.registerTool(def)` / `piz.registerCommand`
   + `ctx.notify/confirm` 子集；事件先接 session_start、tool_call、tool_result
 - 权限：扩展注册的 tool 走现有 permissions/沙箱同一闸
-- TS 剥离后置；首版只吃 .js
+- ~~TS 剥离后置~~ 已落地(sucrase 内嵌,见 extensions-js.md)
 - 内存纪律：JS 侧对象进出即拷贝，不留跨 GC/arena 引用

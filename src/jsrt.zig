@@ -42,6 +42,7 @@ pub var last_notify: ?[]u8 = null;
 
 const MAX_EXT_FILE = 1 << 20; // 单个扩展脚本 1MB 封顶
 const MAX_RET = 4 << 20; // JS 返回串 4MB 封顶
+const MAX_FS_IO = 8 << 20; // piz.readFile/writeFile 单发 8MB 封顶
 
 /// JS prelude:注册表全部在 JS 侧,Zig 只供两个 host 原语与四个内省入口。
 const PRELUDE =
@@ -58,6 +59,10 @@ const PRELUDE =
     \\    registerCommand(name, def) { if (name) commands[name] = def || {}; },
     \\    notify(msg, level) { __piz_host_notify(String(msg), String(level || "info")); },
     \\    confirm(msg) { return !!__piz_host_confirm(String(msg)); },
+    \\    readFile(path) { return __piz_host_readFile(String(path)); },
+    \\    writeFile(path, text) { return !!__piz_host_writeFile(String(path), String(text)); },
+    \\    env(name) { return __piz_host_env(String(name)); },
+    \\    cwd() { return __piz_host_cwd(); },
     \\  };
     \\  Object.defineProperty(globalThis, "__piz", { value: {
     \\    emit(ev, json) {
@@ -158,6 +163,9 @@ fn mkVal(tag: i64, val: i32) c.JSValue {
 fn jsUndef() c.JSValue {
     return mkVal(c.JS_TAG_UNDEFINED, 0);
 }
+fn jsNull() c.JSValue {
+    return mkVal(c.JS_TAG_NULL, 0);
+}
 fn jsBool(v: bool) c.JSValue {
     return mkVal(c.JS_TAG_BOOL, @intFromBool(v));
 }
@@ -187,6 +195,54 @@ fn hostConfirm(ctx_: ?*c.JSContext, _: c.JSValue, argc: c_int, argv: [*c]c.JSVal
     const m = if (msg != null) std.mem.span(msg) else "";
     const ok = if (confirm_cb) |cb| cb(m) else false;
     return jsBool(ok);
+}
+
+/// host 原语:__piz_host_readFile(path) -> string|null。相对路径走进程 cwd(=agent cwd)。
+fn hostReadFile(ctx_: ?*c.JSContext, _: c.JSValue, argc: c_int, argv: [*c]c.JSValue) callconv(.c) c.JSValue {
+    const cx = ctx_ orelse return jsNull();
+    if (argc < 1) return jsNull();
+    const p = c.JS_ToCString(cx, argv[0]);
+    defer if (p != null) c.JS_FreeCString(cx, p);
+    if (p == null) return jsNull();
+    const a = gpa orelse return jsNull();
+    const data = std.Io.Dir.cwd().readFileAlloc(util.io, std.mem.span(p), a, .limited(MAX_FS_IO)) catch return jsNull();
+    defer a.free(data);
+    return c.JS_NewStringLen(cx, data.ptr, @intCast(data.len));
+}
+
+/// host 原语:__piz_host_writeFile(path, text) -> bool。
+fn hostWriteFile(ctx_: ?*c.JSContext, _: c.JSValue, argc: c_int, argv: [*c]c.JSValue) callconv(.c) c.JSValue {
+    const cx = ctx_ orelse return jsBool(false);
+    if (argc < 2) return jsBool(false);
+    const p = c.JS_ToCString(cx, argv[0]);
+    defer if (p != null) c.JS_FreeCString(cx, p);
+    const t = c.JS_ToCString(cx, argv[1]);
+    defer if (t != null) c.JS_FreeCString(cx, t);
+    if (p == null or t == null) return jsBool(false);
+    const text = std.mem.span(t);
+    if (text.len > MAX_FS_IO) return jsBool(false);
+    std.Io.Dir.cwd().writeFile(util.io, .{ .sub_path = std.mem.span(p), .data = text }) catch return jsBool(false);
+    return jsBool(true);
+}
+
+/// host 原语:__piz_host_env(name) -> string|null。
+fn hostEnv(ctx_: ?*c.JSContext, _: c.JSValue, argc: c_int, argv: [*c]c.JSValue) callconv(.c) c.JSValue {
+    const cx = ctx_ orelse return jsNull();
+    if (argc < 1) return jsNull();
+    const n = c.JS_ToCString(cx, argv[0]);
+    defer if (n != null) c.JS_FreeCString(cx, n);
+    if (n == null) return jsNull();
+    const v = util.getEnv(std.mem.span(n)) orelse return jsNull();
+    return c.JS_NewStringLen(cx, v.ptr, @intCast(v.len));
+}
+
+/// host 原语:__piz_host_cwd() -> string。
+fn hostCwd(ctx_: ?*c.JSContext, _: c.JSValue, _: c_int, _: [*c]c.JSValue) callconv(.c) c.JSValue {
+    const cx = ctx_ orelse return jsNull();
+    const a = gpa orelse return jsNull();
+    const p = std.process.currentPathAlloc(util.io, a) catch return jsNull();
+    defer a.free(p);
+    return c.JS_NewStringLen(cx, p.ptr, @intCast(p.len));
 }
 
 /// host 原语:__piz_host_settle(promise) -> 落定值;拒绝则 throw;永不 pending 也 throw。
@@ -311,6 +367,14 @@ pub fn init(alloc: std.mem.Allocator) void {
     _ = c.JS_SetPropertyStr(ctx.?, global, "__piz_host_confirm", cf);
     const sf = c.JS_NewCFunction(ctx.?, hostSettle, "__piz_host_settle", 1);
     _ = c.JS_SetPropertyStr(ctx.?, global, "__piz_host_settle", sf);
+    const rf = c.JS_NewCFunction(ctx.?, hostReadFile, "__piz_host_readFile", 1);
+    _ = c.JS_SetPropertyStr(ctx.?, global, "__piz_host_readFile", rf);
+    const wf = c.JS_NewCFunction(ctx.?, hostWriteFile, "__piz_host_writeFile", 2);
+    _ = c.JS_SetPropertyStr(ctx.?, global, "__piz_host_writeFile", wf);
+    const ef = c.JS_NewCFunction(ctx.?, hostEnv, "__piz_host_env", 1);
+    _ = c.JS_SetPropertyStr(ctx.?, global, "__piz_host_env", ef);
+    const pf = c.JS_NewCFunction(ctx.?, hostCwd, "__piz_host_cwd", 0);
+    _ = c.JS_SetPropertyStr(ctx.?, global, "__piz_host_cwd", pf);
     // prelude
     const pv = c.JS_Eval(ctx.?, PRELUDE.ptr, PRELUDE.len, "<prelude>", c.JS_EVAL_TYPE_GLOBAL);
     if (c.JS_IsException(pv)) {
@@ -966,4 +1030,32 @@ test "qjs ts: typescript extension strips and loads" {
     var arena_inst = util.Arena.init(a);
     defer arena_inst.deinit();
     try t.expectEqualStrings("TS:q", runCommand(arena_inst.allocator(), "tsc", "q").?);
+}
+
+test "qjs fs primitives: readFile/writeFile/env/cwd" {
+    if (!enabled) return error.SkipZigTest;
+    const t = std.testing;
+    const a = t.allocator;
+    deinit();
+    init(a);
+    defer deinit();
+    mu.lockUncancelable(util.io);
+    const src =
+        \\const out = [];
+        \\const wp = "/tmp/piz_jsrt_fs_" + String(Date.now()) + ".txt";
+        \\out.push(piz.writeFile(wp, "fsok:" + piz.env("PIZ_TEST_MARKER")));
+        \\out.push(piz.readFile(wp));
+        \\out.push(piz.readFile("/definitely/missing") === null);
+        \\out.push(typeof piz.cwd() === "string" && piz.cwd().length > 0);
+        \\piz.registerCommand("fsprobe", { handler: () => out.join("|") });
+    ;
+    const v = c.JS_Eval(ctx.?, src.ptr, src.len, "<test>", c.JS_EVAL_TYPE_GLOBAL);
+    try t.expect(!c.JS_IsException(v));
+    c.JS_FreeValue(ctx.?, v);
+    mu.unlock(util.io);
+    var arena_inst = util.Arena.init(a);
+    defer arena_inst.deinit();
+    const out = runCommand(arena_inst.allocator(), "fsprobe", "").?;
+    try t.expect(std.mem.indexOf(u8, out, "true|fsok:") != null);
+    try t.expect(std.mem.indexOf(u8, out, "|true|true") != null);
 }
