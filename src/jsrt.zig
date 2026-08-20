@@ -335,6 +335,10 @@ fn hostSettle(ctx_: ?*c.JSContext, _: c.JSValue, argc: c_int, argv: [*c]c.JSValu
 /// 无此函数/异常/undefined 一律回 null。
 fn callBridge(arena: std.mem.Allocator, name: []const u8, args: []const []const u8) ?[]const u8 {
     const ctx_ = ctx orelse return null;
+    // 工具回调跑在 worker 线程上:ng 的栈深上限按 stack_top 地址差算,
+    // 不随线程刷新就在工作线程上误报 "Maximum call stack size exceeded"
+    // (e2e:js-ext block 在真 agent 循环里失效,2026-08-20 实擒)。
+    c.JS_UpdateStackTop(rt.?);
     const global = c.JS_GetGlobalObject(ctx_);
     defer c.JS_FreeValue(ctx_, global);
     const api = c.JS_GetPropertyStr(ctx_, global, "__piz");

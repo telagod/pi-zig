@@ -1597,6 +1597,18 @@ test "e2e -- passes a dash-leading prompt through" {
     try @import("e2e.zig").testDashSeparator(exe);
 }
 
+test "e2e js extension blocks bash via tool_call" {
+    if (!jsrt.enabled) return error.SkipZigTest;
+    try util.testInit();
+    var arena = util.Arena.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cwd = try std.process.currentPathAlloc(util.io, a);
+    const exe = try std.fmt.allocPrint(a, "{s}/zig-out/bin/piz", .{cwd});
+    std.Io.Dir.cwd().access(util.io, exe, .{}) catch return error.SkipZigTest;
+    try @import("e2e.zig").testJsExtBlocksBash(exe);
+}
+
 test "expandRefs" {
     const t = std.testing;
     try util.testInit();

@@ -39,6 +39,8 @@ const MockState = struct {
     req6_was_compact: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     /// 请求体里 tools 是否排在 messages 之前(缓存前缀稳定性:静态部分在前)
     tools_before_messages: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    /// jsrt e2e:第二轮请求体的 tool 结果里是否带扩展的 block reason
+    req2_had_block_reason: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 };
 
 fn sseEvent(alloc: std.mem.Allocator, data_json: []const u8) ![]u8 {
@@ -200,6 +202,9 @@ fn handleRequest(state: *MockState, conn: *std.Io.net.Stream) !void {
         // 第二轮:检查 tool 消息,回最终答案
         if (std.mem.indexOf(u8, body, "\"role\":\"tool\"") != null) {
             state.req2_had_tool.store(true, .release);
+        }
+        if (std.mem.indexOf(u8, body, "js-ext-no") != null) {
+            state.req2_had_block_reason.store(true, .release);
         }
         var buf = std.array_list.Managed(u8).init(alloc);
         defer buf.deinit();
@@ -1455,4 +1460,85 @@ test "mcp: formatStatus when none configured" {
 
 test "mcp: script server roundtrip (stdout streaming + tool dispatch)" {
     try mcpmod.runScriptServerTest(std.testing);
+}
+
+/// JS 扩展端到端:tool_call 事件 block 在真实 agent 循环里拦住 bash。
+/// mock 首轮要跑 bash;扩展挡下,第二轮请求体的 tool 结果应带 block reason,
+/// 且最终答复照常(E2E-OK)。
+pub fn testJsExtBlocksBash(exe_path: []const u8) !void {
+    const t = std.testing;
+    try util.testInit();
+    var arena = util.Arena.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const PORT: u16 = 18528;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const cwd_abs = try std.process.currentPathAlloc(util.io, a);
+    const cfg_dir = try std.fmt.allocPrint(a, "{s}/.zig-cache/tmp/{s}", .{ cwd_abs, tmp.sub_path });
+    const models = try std.fmt.allocPrint(a,
+        \\{{"providers":{{"mock":{{"baseUrl":"http://127.0.0.1:{d}/v1","apiKey":"k","api":"openai-completions","models":["mock-model"]}}}}}}
+    , .{PORT});
+    try tmp.dir.writeFile(util.io, .{ .sub_path = "models.json", .data = models });
+    try tmp.dir.createDirPath(util.io, "extensions");
+    try tmp.dir.writeFile(util.io, .{ .sub_path = "extensions/block.js", .data =
+        \\piz.on("tool_call", (e) => e.toolName === "bash" ? { block: true, reason: "js-ext-no" } : undefined);
+        \\
+    });
+
+    var state = MockState{ .alloc = std.heap.page_allocator, .port = PORT };
+    const thread = try std.Thread.spawn(.{}, mockServerMain, .{&state});
+    defer {
+        state.stop.store(true, .release);
+        thread.join();
+        state.stop.store(false, .release);
+    }
+    var ready = false;
+    for (0..100) |_| {
+        const addr = std.Io.net.IpAddress.parseIp4("127.0.0.1", PORT) catch break;
+        var s = addr.connect(util.io, .{ .mode = .stream, .protocol = .tcp }) catch {
+            _ = std.Io.sleep(util.io, .{ .nanoseconds = 10 * std.time.ns_per_ms }, .awake) catch {};
+            continue;
+        };
+        s.close(util.io);
+        ready = true;
+        break;
+    }
+    try t.expect(ready);
+
+    var env = std.process.Environ.Map.init(a);
+    defer env.deinit();
+    var it = util.environ_map.?.iterator();
+    while (it.next()) |kv| try env.put(kv.key_ptr.*, kv.value_ptr.*);
+    try env.put("PIZ_DIR", cfg_dir);
+
+    var child = try std.process.spawn(util.io, .{
+        .argv = &.{ exe_path, "-p", "run bash", "-n", "--provider", "mock", "-m", "mock-model", "-x" },
+        .cwd = .{ .path = "/tmp" },
+        .environ_map = &env,
+        .stdin = .ignore,
+        .stdout = .pipe,
+        .stderr = .pipe,
+    });
+    util.setNonBlock(child.stdout.?.handle);
+    util.setNonBlock(child.stderr.?.handle);
+    var out = std.array_list.Managed(u8).init(a);
+    var errbuf = std.array_list.Managed(u8).init(a);
+    var pipes = toolsmod.PipeState{
+        .buf = &out,
+        .err_buf = &errbuf,
+        .out_fd = child.stdout.?.handle,
+        .err_fd = child.stderr.?.handle,
+    };
+    const timed_out = try toolsmod.pumpPipes(&pipes, 60_000, activity.Handle.none);
+    try t.expect(!timed_out);
+    const term = try child.wait(util.io);
+    try t.expectEqual(std.process.Child.Term{ .exited = 0 }, term);
+    // 扩展拦了 bash:第二轮 tool 结果带 reason;bash 没真跑(marker 不应出现在工具输出)。
+    if (!state.req2_had_block_reason.load(.acquire)) {
+        std.debug.print("-- child stdout --\n{s}\n-- child stderr --\n{s}\n-- requests={d} --\n", .{ out.items[out.items.len -| 1200 ..], errbuf.items[errbuf.items.len -| 1200 ..], state.requests.load(.monotonic) });
+    }
+    try t.expect(state.req2_had_block_reason.load(.acquire));
+    try t.expect(std.mem.indexOf(u8, out.items, "E2E-OK") != null);
 }
