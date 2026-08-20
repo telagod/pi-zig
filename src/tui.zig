@@ -305,7 +305,7 @@ pub const Tui = struct {
             defer alloc.free(content);
             var lines = std.mem.splitScalar(u8, content, '\n');
             while (lines.next()) |line| {
-                if (line.len > 0) try hist.append(try alloc.dupe(u8, line));
+                if (line.len > 0) try hist.append(try histUnescape(alloc, line));
                 if (hist.items.len >= 2000) break;
             }
         } else |_| {} else {}
@@ -1335,7 +1335,16 @@ pub const Tui = struct {
         var wbuf: [4096]u8 = undefined;
         var wr = f.writer(util.io, &wbuf);
         wr.seekTo(f.length(util.io) catch return) catch return;
-        wr.interface.writeAll(line) catch return;
+        // 多行草稿:落盘前 \n → \\n 转义,读回再解(单行条目不受影响;
+        // 代价:含字面 "\n" 两字符的旧条目读回会变真换行,仅影响历史回看,记录在案)。
+        var esc: ?[]u8 = null;
+        defer if (esc) |e| self.alloc.free(e);
+        var out = line;
+        if (std.mem.indexOfScalar(u8, line, '\n') != null) {
+            esc = histEscape(self.alloc, line) catch return;
+            out = esc.?;
+        }
+        wr.interface.writeAll(out) catch return;
         wr.interface.writeAll("\n") catch return;
         wr.flush() catch return;
     }
@@ -1343,6 +1352,49 @@ pub const Tui = struct {
 
 pub fn nowNs() i64 {
     return @intCast(std.Io.Clock.now(.real, util.io).nanoseconds);
+}
+
+/// 历史落盘转义:\n → \\n(不碰反斜杠,见 addHistory 注释)。
+fn histEscape(alloc: std.mem.Allocator, s: []const u8) ![]u8 {
+    var out = std.array_list.Managed(u8).init(alloc);
+    errdefer out.deinit();
+    for (s) |ch| {
+        if (ch == '\n') try out.appendSlice("\\n") else try out.append(ch);
+    }
+    return out.toOwnedSlice();
+}
+
+/// 读回解转义:\\n → \n(无条件;旧文件不含此序列者原样)。
+fn histUnescape(alloc: std.mem.Allocator, s: []const u8) ![]const u8 {
+    if (std.mem.indexOf(u8, s, "\\n") == null) return alloc.dupe(u8, s);
+    var out = std.array_list.Managed(u8).init(alloc);
+    errdefer out.deinit();
+    var i: usize = 0;
+    while (i < s.len) {
+        if (i + 1 < s.len and s[i] == '\\' and s[i + 1] == 'n') {
+            try out.append('\n');
+            i += 2;
+        } else {
+            try out.append(s[i]);
+            i += 1;
+        }
+    }
+    return out.toOwnedSlice();
+}
+
+test "history escape roundtrip" {
+    const t = std.testing;
+    const a = t.allocator;
+    const esc = try histEscape(a, "zz\nyy");
+    defer a.free(esc);
+    try t.expectEqualStrings("zz\\nyy", esc);
+    const back = try histUnescape(a, esc);
+    defer a.free(back);
+    try t.expectEqualStrings("zz\nyy", back);
+    // 单行不转义,读回原样
+    const plain = try histUnescape(a, "hello");
+    defer a.free(plain);
+    try t.expectEqualStrings("hello", plain);
 }
 
 fn nowMs() i64 {
