@@ -64,6 +64,11 @@ const r = piz.fetch("http://127.0.0.1:8873/x", {
 
 扩展是**受信代码**(同插件/钩子同级信任):fs 原语不过权限闸,装前自己审。
 
+## 热重载
+
+TUI `/reload` 除重灌配置外同刷 JS 扩展:重置 prelude 注册表(不重启引擎,
+扩展全局态归零)后重扫两处扩展目。写扩展改完 `/reload` 即生效。
+
 ## 约束(窄桥期)
 
 - execute/handler 可同步也可 **async**:async 的 await 链只能链 microtask
