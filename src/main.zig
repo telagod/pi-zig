@@ -29,9 +29,10 @@ const cmd_diff = @import("cmd_diff.zig");
 const cmd_commit = @import("cmd_commit.zig");
 const cmd_slash = @import("cmd_slash.zig");
 const app_pickers = @import("app_pickers.zig");
+const app_views = @import("app_views.zig");
 const runopts = @import("runopts.zig");
 
-const VERSION = "0.1.0";
+pub const VERSION = "0.1.0";
 
 const StatusRow = struct {
     version: []const u8,
@@ -166,7 +167,7 @@ pub const App = struct {
         self.queue.clearRetainingCapacity();
     }
 
-    fn fmtTok(buf: *[16]u8, n: u64) []const u8 {
+    pub fn fmtTok(buf: *[16]u8, n: u64) []const u8 {
         if (n >= 1_000_000) {
             const m = n / 1_000_000;
             const frac = (n % 1_000_000) / 100_000;
@@ -220,13 +221,13 @@ pub const App = struct {
         }) catch |err| util.debugCatch("footer.ident", err);
     }
 
-    fn modelLabel(self: *App, buf: *[96]u8) []const u8 {
+    pub fn modelLabel(self: *App, buf: *[96]u8) []const u8 {
         var model_seg: []const u8 = self.agent.model;
         if (std.mem.indexOfScalar(u8, model_seg, '-')) |dash| model_seg = model_seg[dash + 1 ..];
         return std.fmt.bufPrint(buf, "{s}/{s}", .{ self.agent.provider.name, model_seg }) catch self.agent.model;
     }
 
-    fn permsLabel(self: *const App) []const u8 {
+    pub fn permsLabel(self: *const App) []const u8 {
         const a = switch (self.approval) {
             .yolo => "yolo",
             .ask => "ask",
@@ -311,93 +312,32 @@ pub fn rebuildSlashCatalog(app: *App) void {
     app.tui.slash_items = app.slash_merged[0..n];
 }
 
-pub fn showWelcome(app: *App, n_msgs: usize) void {
-    _ = n_msgs;
-    app.refreshFooter();
-}
+// 只读视图群已拆 app_views.zig(评审 P2);再导出保调用点/测试零改。
+pub const showWelcome = app_views.showWelcome;
+pub const replaceSession = app_views.replaceSession;
+pub const showStatusCard = app_views.showStatusCard;
+pub const showDoctor = app_views.showDoctor;
+pub const replayTranscript = app_views.replayTranscript;
+pub const redoLast = app_views.redoLast;
+pub const showDiff = app_views.showDiff;
+pub const showLog = app_views.showLog;
+pub const showJobs = app_views.showJobs;
+pub const showUsage = app_views.showUsage;
+pub const copyLastReply = app_views.copyLastReply;
+pub const copyToClipboard = app_views.copyToClipboard;
 
-pub fn replaceSession(app: *App) !void {
-    const next = try sessionmod.Session.fresh(app.alloc, app.agent.cwd);
-    app.agent.messages.clearRetainingCapacity();
-    app.tui.clearScroll();
-    app.sess.deinit();
-    app.sess.* = next;
-}
-
-pub fn showStatusCard(app: *App) void {
-    const note = welcomeNote(app.alloc, app.agent.messages.items.len, app.sess.title) catch return;
-    defer app.alloc.free(note);
-    const session = std.fmt.allocPrint(app.alloc, "{s}  {s}", .{ app.sess.sessionId(), note }) catch return;
-    defer app.alloc.free(session);
-    const cwd = tildePath(app.alloc, app.agent.cwd) catch return;
-    defer app.alloc.free(cwd);
-    const ctx = welcomeContext(app.alloc) catch return;
-    defer app.alloc.free(ctx);
-    const cw = app.agent.ctxWindow();
-    const used = app.est_ctx.load(.acquire);
-    const pct = if (cw > 0) used * 100 / cw else 0;
-    var ub: [16]u8 = undefined;
-    var wb: [16]u8 = undefined;
-    const meta = app.agent.modelMeta();
-    const rates = pricing.lookupAny(app.agent.provider.name, app.agent.model);
-    const usage = blk: {
-        if (rates) |r| {
-            const think = if (meta.reasoning == true) " · think" else "";
-            const vis = if (meta.vision == true) " · vis" else "";
-            break :blk std.fmt.allocPrint(app.alloc, "{d}%  {s}/{s}  ·  ${d:.2}/{d:.2}{s}{s}", .{
-                pct,
-                App.fmtTok(&ub, @as(u64, used)),
-                App.fmtTok(&wb, @as(u64, cw)),
-                r.input,
-                r.output,
-                think,
-                vis,
-            }) catch return;
-        }
-        break :blk std.fmt.allocPrint(app.alloc, "{d}%  {s}/{s}", .{
-            pct,
-            App.fmtTok(&ub, @as(u64, used)),
-            App.fmtTok(&wb, @as(u64, cw)),
-        }) catch return;
-    };
-    defer app.alloc.free(usage);
-    const plugs = pluginsmod.enabledOptionalLine(app.alloc, app.agent.plugins) catch "";
-    const usage_line = if (plugs.len == 0) usage else (std.fmt.allocPrint(app.alloc, "{s}  ·  {s}", .{ usage, plugs }) catch usage);
-    defer if (usage_line.ptr != usage.ptr) app.alloc.free(usage_line);
-    var model_buf: [96]u8 = undefined;
-    var br_buf: [128]u8 = undefined;
-    const branch = cmd_diff.currentBranchBuf(app.agent.cwd, &br_buf) orelse "";
-    app.tui.appendStatusCard(.{
-        .version = VERSION,
-        .model = app.modelLabel(&model_buf),
-        .think = tui_mod.thinkLabel(app.tui.think_level),
-        .cwd = cwd,
-        .branch = branch,
-        .session = session,
-        .perms = app.permsLabel(),
-        .context = ctx,
-        .usage = usage_line,
-    }) catch |err| util.debugCatch("tui.status", err);
-}
-
-pub fn showDoctor(app: *App) void {
-    const plugs = pluginsmod.enabledOptionalLine(app.alloc, app.agent.plugins) catch "";
-    const sb = sandboxmod.describe(app.alloc, app.cfg.default_sandbox) catch app.cfg.default_sandbox.label();
-    const key = app.agent.key orelse "";
-    const text = cmd_doctor.format(app.alloc, .{
-        .version = VERSION,
-        .cwd = app.agent.cwd,
-        .provider = app.agent.provider.name,
-        .model = app.agent.model,
-        .has_key = key.len > 0,
-        .think = tui_mod.thinkLabel(app.tui.think_level),
-        .approval = app.approval.label(),
-        .sandbox_mode = sb,
-        .plugins = plugs,
-    }) catch return;
-    defer app.alloc.free(text);
-    tuiNotes(app, "\x1b[2m", text);
-}
+// 选择器群已拆 app_pickers.zig(评审 P2);再导出保调用点零改。
+pub const persistTheme = app_pickers.persistTheme;
+pub const openThemePicker = app_pickers.openThemePicker;
+pub const persistThink = app_pickers.persistThink;
+pub const applyApproval = app_pickers.applyApproval;
+pub const applySandbox = app_pickers.applySandbox;
+pub const openSandboxPicker = app_pickers.openSandboxPicker;
+pub const openApprovalPicker = app_pickers.openApprovalPicker;
+pub const openThinkPicker = app_pickers.openThinkPicker;
+pub const refreshProviderModels = app_pickers.refreshProviderModels;
+pub const openModelPicker = app_pickers.openModelPicker;
+pub const openResumePicker = app_pickers.openResumePicker;
 
 pub fn tuiOk(comptime where: []const u8, result: anyerror!void) void {
     result catch |err| util.debugCatch(where, err);
@@ -410,59 +350,6 @@ pub fn tuiNote(app: *App, color: []const u8, text: []const u8) void {
 pub fn tuiNotes(app: *App, color: []const u8, text: []const u8) void {
     var it = std.mem.splitScalar(u8, std.mem.trim(u8, text, "\n"), '\n');
     while (it.next()) |ln| tuiNote(app, color, ln);
-}
-
-/// 把已载入的会话画进 TUI。续载只把消息给了模型,不画的话 PageUp 没有历史可滚。
-pub fn replayTranscript(tui: *tui_mod.Tui, msgs: []const ai.Message) void {
-    var pending: [16][]const u8 = undefined;
-    var pending_n: usize = 0;
-    var pending_i: usize = 0;
-    for (msgs) |m| {
-        if (std.mem.eql(u8, m.role, "system")) continue;
-        if (std.mem.eql(u8, m.role, "user")) {
-            if (m.image != null) {
-                const shown = if (m.content.len > 0 and !std.mem.eql(u8, m.content, "(image)"))
-                    m.content
-                else
-                    "[image]";
-                tuiOk("replay.user.img", tui.appendUser(shown));
-            } else if (m.content.len > 0) tuiOk("replay.user", tui.appendUser(m.content));
-            continue;
-        }
-        if (std.mem.eql(u8, m.role, "assistant")) {
-            if (m.reasoning) |r| {
-                if (r.len > 0) tuiOk("replay.think", tui.appendThink(r));
-            }
-            if (m.content.len > 0) tuiOk("replay.text", tui.appendText(m.content));
-            pending_n = 0;
-            pending_i = 0;
-            if (m.tool_calls) |tcs| {
-                for (tcs) |tc| {
-                    if (std.mem.eql(u8, tc.name, "workflow")) {
-                        tuiOk("replay.flow", tui.appendWorkflow(tc.args));
-                    } else {
-                        const preview = toolArgsPreview(tc.args);
-                        tuiOk("replay.tool", tui.appendTool(tc.name, preview[0..@min(preview.len, 120)]));
-                    }
-                    if (pending_n < pending.len) {
-                        pending[pending_n] = tc.name;
-                        pending_n += 1;
-                    }
-                }
-            }
-            tui.bakeThink();
-            continue;
-        }
-        if (std.mem.eql(u8, m.role, "tool")) {
-            const name = if (pending_i < pending_n) blk: {
-                const n = pending[pending_i];
-                pending_i += 1;
-                break :blk n;
-            } else "";
-            tuiOk("replay.toolend", tui.appendToolEnd(name, false, m.content));
-        }
-    }
-    tui.bakeThink();
 }
 
 fn tuiOnText(ctx: ?*anyopaque, text: []const u8) anyerror!void {
@@ -478,7 +365,7 @@ fn tuiOnReasoning(ctx: ?*anyopaque, text: []const u8) anyerror!void {
 }
 
 /// 工具参数预览:优先抽出 command / path / pattern,别整段 JSON 糊在一行上。
-fn toolArgsPreview(args: []const u8) []const u8 {
+pub fn toolArgsPreview(args: []const u8) []const u8 {
     const keys = [_][]const u8{ "\"command\":\"", "\"pattern\":\"", "\"query\":\"", "\"path\":\"", "\"goal\":\"" };
     for (keys) |k| {
         if (std.mem.indexOf(u8, args, k)) |i| {
@@ -558,15 +445,6 @@ fn tuiOnUsage(ctx: ?*anyopaque) void {
     showUsage(app);
 }
 
-pub fn redoLast(app: *App) void {
-    if (app.last_line.len == 0) {
-        tuiNote(app, "\x1b[2m", "nothing to redo");
-        return;
-    }
-    tuiOk("tui.user", app.tui.appendUser(app.last_line));
-    spawnWorker(app, app.last_line, false);
-}
-
 fn tuiOnRedo(ctx: ?*anyopaque) void {
     const app: *App = @ptrCast(@alignCast(ctx orelse return));
     redoLast(app);
@@ -577,112 +455,15 @@ fn tuiOnDoctor(ctx: ?*anyopaque) void {
     showDoctor(app);
 }
 
-pub fn showDiff(app: *App) void {
-    const text = cmd_diff.format(app.alloc, app.agent.cwd) catch {
-        tuiNote(app, "\x1b[31m", "diff failed");
-        return;
-    };
-    defer app.alloc.free(text);
-    tuiNotes(app, "\x1b[2m", text);
-}
-
 fn tuiOnDiff(ctx: ?*anyopaque) void {
     const app: *App = @ptrCast(@alignCast(ctx orelse return));
     showDiff(app);
-}
-
-pub fn showLog(app: *App, raw: []const u8) void {
-    const text = cmd_diff.formatLog(app.alloc, app.agent.cwd, cmd_diff.parseLogCount(raw)) catch {
-        tuiNote(app, "\x1b[31m", "log failed");
-        return;
-    };
-    defer app.alloc.free(text);
-    tuiNotes(app, "\x1b[2m", text);
 }
 
 fn tuiOnLog(ctx: ?*anyopaque) void {
     const app: *App = @ptrCast(@alignCast(ctx orelse return));
     showLog(app, "");
 }
-
-pub fn showJobs(app: *App) void {
-    var views: [activity.MAX_SLOTS]activity.View = undefined;
-    const n = activity.snapshot(&views);
-    if (n == 0) {
-        tuiNote(app, "\x1b[2m", "no running jobs");
-        return;
-    }
-    var i: usize = 0;
-    while (i < n) : (i += 1) {
-        var aw = std.Io.Writer.Allocating.init(app.alloc);
-        defer aw.deinit();
-        if (views[i].pid > 0) tuiOk("jobs.pid", aw.writer.print("pid {d}  ", .{views[i].pid}));
-        tuiOk("jobs.line", tui_mod.writeActivityLine(&aw.writer, views[i], 0, 80));
-        tuiNote(app, "", aw.written());
-    }
-}
-
-pub fn showUsage(app: *App) void {
-    const uselog = @import("core").usage_log;
-    const sum = uselog.summarize(app.alloc, 8) catch {
-        tuiNote(app, "\x1b[31m", "cannot read usage.jsonl");
-        return;
-    };
-    var inb: [16]u8 = undefined;
-    var outb: [16]u8 = undefined;
-    var bw = std.Io.Writer.Allocating.init(app.alloc);
-    defer bw.deinit();
-    if (sum.usd > 0) {
-        bw.writer.print("usage  {d} turns  ↑{s} ↓{s}  ${d:.4}", .{
-            sum.lines,
-            tui_mod.formatTok(&inb, sum.tok_in),
-            tui_mod.formatTok(&outb, sum.tok_out),
-            sum.usd,
-        }) catch |err| util.debugCatch("usage.usd", err);
-    } else {
-        bw.writer.print("usage  {d} turns  ↑{s} ↓{s}", .{
-            sum.lines,
-            tui_mod.formatTok(&inb, sum.tok_in),
-            tui_mod.formatTok(&outb, sum.tok_out),
-        }) catch |err| util.debugCatch("usage.plain", err);
-    }
-    tuiNote(app, "\x1b[2m", bw.written());
-    if (sum.tail.len > 0) tuiNote(app, "\x1b[2m", sum.tail);
-}
-
-pub fn copyLastReply(app: *App) void {
-    var last: ?[]const u8 = null;
-    var i = app.agent.messages.items.len;
-    while (i > 0) {
-        i -= 1;
-        if (std.mem.eql(u8, app.agent.messages.items[i].role, "assistant")) {
-            last = app.agent.messages.items[i].content;
-            break;
-        }
-    }
-    const text = last orelse {
-        tuiNote(app, "\x1b[2m", "no assistant message yet");
-        return;
-    };
-    if (copyToClipboard(app.alloc, text)) {
-        tuiNote(app, "\x1b[2m", "copied to clipboard");
-    } else if (util.writeFile("/tmp/piz-copy.txt", text)) |_| {
-        tuiNote(app, "\x1b[2m", "no clipboard tool — saved to /tmp/piz-copy.txt");
-    } else |_| {}
-}
-
-// 选择器群已拆 app_pickers.zig(评审 P2);再导出保调用点零改。
-pub const persistTheme = app_pickers.persistTheme;
-pub const openThemePicker = app_pickers.openThemePicker;
-pub const persistThink = app_pickers.persistThink;
-pub const applyApproval = app_pickers.applyApproval;
-pub const applySandbox = app_pickers.applySandbox;
-pub const openSandboxPicker = app_pickers.openSandboxPicker;
-pub const openApprovalPicker = app_pickers.openApprovalPicker;
-pub const openThinkPicker = app_pickers.openThinkPicker;
-pub const refreshProviderModels = app_pickers.refreshProviderModels;
-pub const openModelPicker = app_pickers.openModelPicker;
-pub const openResumePicker = app_pickers.openResumePicker;
 
 fn tuiOnTurnEnd(ctx: ?*anyopaque) anyerror!void {
     const app: *App = @ptrCast(@alignCast(ctx.?));
@@ -900,42 +681,6 @@ fn workerMain(wctx: *WorkerCtx) void {
 }
 
 /// 复制文本到剪贴板:wl-copy(Wayland) → xclip(X11);均不可用返回 false。
-pub fn copyToClipboard(alloc: std.mem.Allocator, text: []const u8) bool {
-    const candidates = [_][]const []const u8{
-        &.{"wl-copy"},
-        &.{ "xclip", "-selection", "clipboard" },
-    };
-    for (candidates) |argv| {
-        var child = std.process.spawn(util.io, .{
-            .argv = argv,
-            .stdin = .pipe,
-            .stdout = .ignore,
-            .stderr = .ignore,
-        }) catch continue;
-        defer {
-            _ = child.wait(util.io) catch {};
-        }
-        // 写完必须把 stdin 关掉,否则 wl-copy/xclip 一直等 EOF,child.wait 卡死。
-        //
-        // 关完要把 handle 置空:`child.wait` 内部还会再关一遍
-        // (Threaded.childCleanupPosix → closeFd(stdin.handle)),同一个 fd
-        // 关两次拿到 EBADF,std 视为 OS bug —— Debug 构建直接
-        // `unreachable`,整个 piz 崩掉。实测 /copy 必崩。
-        if (child.stdin) |f| {
-            var wbuf: [8192]u8 = undefined;
-            var w = f.writer(util.io, &wbuf);
-            if (w.interface.writeAll(text)) |_| {
-                w.flush() catch {};
-            } else |_| {}
-            f.close(util.io);
-            child.stdin = null;
-        }
-        return true;
-    }
-    _ = alloc;
-    return false;
-}
-
 fn onSubmit(tui: *tui_mod.Tui, line: []const u8) anyerror!void {
     const app: *App = @ptrCast(@alignCast(tui.ctx orelse return));
     app.tui.addHistory(line);
