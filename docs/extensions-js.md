@@ -27,6 +27,7 @@ piz.on("tool_call", (e) => {
   if (e.toolName === "bash") return { block: true, reason: "no bash" };
 });
 piz.on("tool_result", (e) => { /* e.toolName, e.output(截 8KB) */ });
+piz.on("agent_end", (e) => { /* e.text = 回合最后 assistant 正文(截 8KB,可空) */ });
 
 // 注册 LLM 工具(走与内置工具同一 permissions 闸;同步 execute)
 piz.registerTool({
@@ -51,6 +52,14 @@ piz.readFile("/abs/or/rel");     // 不在/出错 → null
 piz.writeFile("/tmp/x", "txt");  // 成 → true
 piz.env("HOME");                 // 未设 → null
 piz.cwd();                       // 进程 cwd 串
+
+// 同步 HTTP(阻塞引擎互斥锁期间其他扩展调用排队;传输错 throw,HTTP 错状态看 .status)
+const r = piz.fetch("http://127.0.0.1:8873/x", {
+  method: "POST",                 // GET/POST/PUT/DELETE/PATCH/HEAD
+  headers: { authorization: "Bearer k" },
+  body: "{}",
+});
+// r = { status: 200, ok: true, body: "..." }(body 8MB 封顶)
 ```
 
 扩展是**受信代码**(同插件/钩子同级信任):fs 原语不过权限闸,装前自己审。

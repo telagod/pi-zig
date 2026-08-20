@@ -11,6 +11,7 @@ const mcpmod = @import("core").mcp;
 const pluginsmod = @import("core").plugins;
 const pkgsmod = @import("core").pkgs;
 const compress = @import("core").compress;
+const jsrt = @import("core").jsrt;
 const tui_mod = @import("tui");
 const cmd_help = @import("cmd_help.zig");
 const cmd_init = @import("cmd_init.zig");
@@ -466,6 +467,14 @@ pub fn dispatch(tui: *tui_mod.Tui, app: *App, cmd: []const u8) anyerror!bool {
             app.agent.think_level = app.tui.think_level;
         }
         tuiNotes(app, "\x1b[2m", text);
+        // JS 扩展同刷:重置 prelude 注册表后重扫全局目+项目目。
+        if (jsrt.enabled) {
+            if (util.configDir(app.alloc)) |cd| {
+                defer app.alloc.free(cd);
+                jsrt.reload(cd, app.agent.cwd);
+                tuiNote(app, "\x1b[2m", "js extensions reloaded");
+            } else |_| {}
+        }
         return true;
     }
     if (std.mem.eql(u8, cmd, "mcp")) {

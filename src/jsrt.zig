@@ -116,7 +116,7 @@ const PRELUDE =
     \\      try { const r = settle(fn(args || "", api)); return r === undefined || r === null ? "" : String(r); }
     \\      catch (e) { return JSON.stringify({ error: String(e && (e.stack || e.message) || e) }); }
     \\    },
-    \\  }, enumerable: false });
+    \\  }, enumerable: false, configurable: true }); // configurable:/reload 重 eval prelude 重置注册表靠它
     \\  return api;
     \\})();
 ;
@@ -870,6 +870,22 @@ pub fn emitAgentEnd(arena: std.mem.Allocator, text: []const u8) void {
     _ = emit(arena, "agent_end", payload);
 }
 
+/// 热重载:重 eval prelude(JS 侧 handlers/tools/commands 清零,扩展全局态随之归零)
+/// 再重扫两处扩展目。引擎/ctx 不动;sucrase 全局保留。失败打 stderr,不致命。
+pub fn reload(cfg_dir: []const u8, cwd: []const u8) void {
+    if (!enabled) return;
+    {
+        mu.lockUncancelable(util.io);
+        defer mu.unlock(util.io);
+        const ctx_ = ctx orelse return;
+        const v = c.JS_Eval(ctx_, PRELUDE.ptr, PRELUDE.len, "<prelude>", c.JS_EVAL_TYPE_GLOBAL);
+        if (c.JS_IsException(v)) reportEx(ctx_, "<prelude>");
+        c.JS_FreeValue(ctx_, v);
+        drainJobs();
+    }
+    loadExtensions(cfg_dir, cwd);
+}
+
 /// marker:JS 工具的 Tool.ctx_handler 占位 —— runToolSlot 凭它改走 runJsTool。
 /// 直接被调 = 路由错了。
 pub fn toolEntryMarker(host_ctx: ?*anyopaque, arena: std.mem.Allocator, args: []const u8) anyerror!toolsmod.Result {
@@ -1157,4 +1173,42 @@ test "qjs agent_end: fires with last assistant text" {
     emitAgentEnd(arena_inst.allocator(), "回合正文");
     try t.expect(last_notify != null);
     try t.expectEqualStrings("[info] AE:回合正文", last_notify.?);
+}
+
+test "qjs reload: registry resets, no double registration" {
+    if (!enabled) return error.SkipZigTest;
+    const t = std.testing;
+    const a = t.allocator;
+    deinit();
+    init(a);
+    defer deinit();
+    const root = std.fmt.allocPrint(a, "/tmp/piz_jsrt_rl_{d}", .{std.os.linux.getpid()}) catch return error.SkipZigTest;
+    defer a.free(root);
+    defer std.Io.Dir.cwd().deleteTree(util.io, root) catch {};
+    const ext_dir = try std.fmt.allocPrint(a, "{s}/extensions", .{root});
+    defer a.free(ext_dir);
+    try std.Io.Dir.cwd().createDirPath(util.io, ext_dir);
+    const pa = try std.fmt.allocPrint(a, "{s}/a.js", .{ext_dir});
+    defer a.free(pa);
+    try std.Io.Dir.cwd().writeFile(util.io, .{ .sub_path = pa, .data =
+        \\piz.registerCommand("cmdA", { handler: () => "A" });
+        \\piz.on("tool_call", () => undefined);
+    });
+    reload(root, "");
+    try t.expect(h_tool_call);
+    try t.expect(js_commands.len == 1);
+    // 换装:删 a.js,加 b.js
+    try std.Io.Dir.cwd().deleteFile(util.io, pa);
+    const pb = try std.fmt.allocPrint(a, "{s}/b.js", .{ext_dir});
+    defer a.free(pb);
+    try std.Io.Dir.cwd().writeFile(util.io, .{ .sub_path = pb, .data =
+        \\piz.registerCommand("cmdB", { handler: () => "B" });
+    });
+    reload(root, "");
+    try t.expect(!h_tool_call); // 旧事件处理器清零
+    try t.expect(js_commands.len == 1); // cmdA 不在了,无双注册
+    var arena_inst = util.Arena.init(a);
+    defer arena_inst.deinit();
+    try t.expectEqualStrings("B", runCommand(arena_inst.allocator(), "cmdB", "").?);
+    try t.expect(runCommand(arena_inst.allocator(), "cmdA", "") == null);
 }
