@@ -7,6 +7,7 @@ const cfgmod = @import("config.zig");
 const ai = @import("ai.zig");
 const toolsmod = @import("tools.zig");
 const pluginsmod = @import("plugins.zig");
+const jsrt = @import("jsrt.zig");
 const agentmod = @import("agent.zig");
 
 const Agent = agentmod.Agent;
@@ -582,6 +583,13 @@ test "ask_user stops the turn without another model call" {
     cfg.providers = &provs;
     var agent = try Agent.init(a, &cfg, "mock", "m", "/tmp");
     agent.plugins = pluginsmod.withEnabled(agent.plugins, "elicitation");
+    // ask_user 已抽为内嵌 JS 件:测试进程自起引擎开门(生产由入口做);不 defer deinit(全局共享)
+    if (jsrt.enabled) {
+        jsrt.deinit();
+        jsrt.init(std.heap.c_allocator);
+        jsrt.setGates(&.{ "usage-ledger", "artifact-store", "cross-session-memory", "concept-graph", "elicitation" });
+        jsrt.loadExtensions("", "/tmp");
+    }
     const Hook = struct {
         var calls: usize = 0;
         var noticed: bool = false;

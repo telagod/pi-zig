@@ -17,10 +17,10 @@
 | `web-search` | tools + /web | fetch + safe 护栏 + 门控装载 | ✅ **已抽**(safe fetch + `{error}` 透传 + gate 三桥随件落) |
 | `skills` | tool + /skills | 宿主 API:skills index | ✅ **已抽**(`piz.listDir` 原语;pushGates 装了技能即开门) |
 | `context-budget` | tool + /context | 宿主 API:estTokens/窗口 | ✅ **已抽**(`piz.contextStats()` 快照,桥注人) |
-| `git-awareness` | tool + /git | exec 子进程 | ⏳ 待桥 |
-| `elicitation` | ask_user 工具 | 自由文问客(confirm 只 y/n) | ⏳ 待桥(或接受 y/n 退化) |
-| `todo` | tools + /todo | 会话态;引擎按 workspace 隔离 | ⏳ 待隔离 |
-| `lsp` | /lsp + stdio 子进程 | exec + 长连 stdio | ⏳ 待桥,重 |
+| `git-awareness` | tool + /git | exec 子进程 | ✅ **已抽**(`piz.exec(argv)`,与 execShort 同则:截 64KB/exit≠0→null) |
+| `elicitation` | ask_user 工具 | 无(原件不触 UI,纯回执文本) | ✅ **已抽**(零桥复刻;停轮逻辑按名在核) |
+| `todo` | tools + /todo | 会话态隔离 | ✅ **已抽**(快照携 `sid`=Agent 指针,JS 按 sid 分桶;plugins/todo.zig 删,语义由 jsrt parity 测试担) |
+| `lsp` | /lsp + stdio 子进程 | exec + 长连 stdio | ❌ 留核:桥无长连 stdio(exec 为一次性收干),非安全因 |
 | `vision-input` | read_image 工具 | 图像解码/缩压 | ❌ 二进制活,留核 |
 | `task-delegation`/`workflow`/`childbind` | 生/管子代理 | 核内调度 | ❌ 永不抽 |
 
@@ -62,7 +62,8 @@
 4. ✅ `cross-session-memory` / `concept-graph`(compact 事件;e2e 记忆管线改经 JS 件验)
 5. ✅ `context-budget`(`piz.contextStats()`;callTool/runCommand 携快照,互斥下无竞态;默认关保语义)
 6. ✅ `skills`(`piz.listDir`;搜索序与 toolSkill/loadSkillsIndex 同;名校验/error 文案 parity)
-7. `git-awareness`(exec 原语,安全须裁)
+7. ✅ `elicitation`(零桥)→ `todo`(sid 桶)→ `git-awareness`(`piz.exec`)
+8. 留核定案:`lsp`(长连 stdio)、`compact-resilience`(死件,接线另立差)、`command-canonicalization`/`vision-input`/子代理三家
 6. 留核:`command-canonicalization`(安全)、`vision-input`(二进制)、子代理三家(调度);`compact-resilience` 暂缓(见对账表)
 
 ## 验收标准(每件必过)

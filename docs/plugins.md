@@ -40,12 +40,12 @@ piz 的插件是**编译期注册的 Zig 函数表**，不是运行时加载的�
 | `skills` | `skill`（**装了技能时自动开启**） |
 | `vision-input` | `read_image`（默认关，`read` 对图片已做同样的事） |
 | `lsp` | `lsp` |
-| `todo` | `todo_write` `todo_read` |
+| `todo` | `todo_write` `todo_read`（已抽为内嵌 JS 扩展,按会话 sid 隔离) |
 | `task-delegation` | `task` `workflow` `spawn_agent` `wait_agent` `read_agent` `send_agent` `list_agents` `close_agent`；斜杠 `/agents` |
 | `web-search` | `web_search` `fetch_url`(`fetch_url` 拒内网 / metadata / localhost);斜杠 `/web`(**已抽为内嵌 JS 扩展**,开关语义不变,见 [抽离路线](plugin-extraction.md)) |
-| `git-awareness` | `git_status` |
+| `git-awareness` | `git_status`（已抽为内嵌 JS 扩展） |
 | `context-budget` | `get_context_remaining` |
-| `elicitation` | `ask_user`（成功后本轮立刻停，答复即问题正文） |
+| `elicitation` | `ask_user`（成功后本轮立刻停，答复即问题正文;已抽为内嵌 JS 扩展） |
 
 `task` 阻塞等独立结果；`workflow` 跑命名 DAG（后步用 `{id}` 引用前步）。其余 6 个是长驻 sub-agent 的生命周期管理（派出去、按需收、中途改向）。孩子默认不继承这组工具；要嵌套委派或收紧核心工具，用 `plugins` / `tools` 参数，见 [Tools](tools.md)。
 

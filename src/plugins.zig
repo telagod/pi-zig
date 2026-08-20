@@ -8,7 +8,6 @@ const aimod = @import("ai.zig");
 const api = @import("plugins/api.zig");
 const hookmod = @import("plugins/hooks.zig");
 const extras = @import("plugins/extras.zig");
-const todo = @import("plugins/todo.zig");
 const agentsplug = @import("plugins/agents.zig");
 const taskmod = @import("plugins/task.zig");
 const workflowmod = @import("plugins/workflow.zig");
@@ -105,31 +104,11 @@ pub const builtin_plugins = [_]Plugin{
     // ---- 默认关闭:按需开启的场景化工具 ----
     .{ .name = "skills", .enabled_by_default = false, .extracted = true },
     .{ .name = "context-budget", .enabled_by_default = false, .extracted = true },
-    .{ .name = "git-awareness", .enabled_by_default = false, .slash_commands = &.{
-        .{ .name = "git", .desc = "git status + diffstat", .handler = extras.slashGit },
-    }, .tools = &.{
-        .{
-            .name = "git_status",
-            .desc = "Show git status and diff stat for the working tree.",
-            .schema = toolsmod.EMPTY_SCHEMA,
-            .handler = toolCtxStub,
-            .ctx_handler = extras.toolGitStatus,
-        },
-    } },
+    .{ .name = "git-awareness", .enabled_by_default = false, .extracted = true },
     // web-search 已抽为内嵌 JS 扩展(src/embedded/extensions/web-search.js,jsrt 按启用集门控);
     // 空壳留此:开关/目录/子代理继承/工具白名单仍按名工作。
     .{ .name = "web-search", .enabled_by_default = false, .extracted = true },
-    .{ .name = "elicitation", .enabled_by_default = false, .tools = &.{
-        .{
-            .name = "ask_user",
-            .desc = "Ask the user a clarifying question when information is insufficient to proceed.",
-            .schema =
-            \\{"type":"object","properties":{"question":{"type":"string","description":"Question to ask the user."}},"required":["question"]}
-            ,
-            .handler = toolCtxStub,
-            .ctx_handler = extras.toolAskUser,
-        },
-    } },
+    .{ .name = "elicitation", .enabled_by_default = false, .extracted = true },
     .{ .name = "task-delegation", .enabled_by_default = false, .slash_commands = &.{
         .{ .name = "agents", .desc = "list live sub-agents", .handler = agentsplug.slashAgents },
     }, .tools = &.{
@@ -204,26 +183,7 @@ pub const builtin_plugins = [_]Plugin{
             .ctx_handler = agentsplug.toolCloseAgent,
         },
     } },
-    .{ .name = "todo", .enabled_by_default = false, .slash_commands = &.{
-        .{ .name = "todo", .desc = "list session todos", .handler = todo.slashTodo },
-    }, .tools = &.{
-        .{
-            .name = "todo_write",
-            .desc = "Update the task list for this session. Default mode replace swaps the whole list. mode merge updates items with the same id and appends new ones, so you do not have to resend finished work. Optional bind attaches an item to a workflow node id.",
-            .schema =
-            \\{"type":"object","properties":{"mode":{"type":"string","enum":["replace","merge"],"description":"replace (default) swaps the list. merge updates matching ids and appends the rest."},"items":{"type":"array","description":"Task items. On replace this is the full list. On merge, matching id updates fields; new id appends.","items":{"type":"object","properties":{"id":{"type":"string","description":"Stable item id. Assigned as t1, t2, … if omitted."},"content":{"type":"string","description":"Task description, 5-10 words."},"status":{"type":"string","enum":["pending","in_progress","completed"],"description":"Task state."},"bind":{"type":"string","description":"Optional workflow node id this item tracks."}},"required":["content"]}}},"required":["items"]}
-            ,
-            .handler = toolCtxStub,
-            .ctx_handler = todo.toolTodoWrite,
-        },
-        .{
-            .name = "todo_read",
-            .desc = "Read the current task list for this session.",
-            .schema = toolsmod.EMPTY_SCHEMA,
-            .handler = toolCtxStub,
-            .ctx_handler = todo.toolTodoRead,
-        },
-    } },
+    .{ .name = "todo", .enabled_by_default = false, .extracted = true },
     .{ .name = "lsp", .enabled_by_default = false, .slash_commands = &.{
         .{ .name = "lsp", .desc = "language servers on PATH", .handler = lspmod.slashLsp },
     }, .tools = &.{
@@ -843,22 +803,21 @@ test "optional plugins are gated per agent, not process-wide" {
     try appendToolDefsIn(with_lsp, &defs2);
     try t.expectEqual(toolsmod.tools.len + 1, defs2.items.len);
     // 其他插件仍然关着
-    try t.expect(findToolIn(with_lsp, "todo_write") == null);
+    try t.expect(findToolIn(with_lsp, "task") == null);
 
-    // 多工具插件一次性全开
-    const with_todo = withEnabled(with_lsp, "todo");
-    try t.expect(findToolIn(with_todo, "todo_write") != null);
-    try t.expect(findToolIn(with_todo, "todo_read") != null);
+    // 多工具插件一次性全开(task-delegation)
+    const with_td = withEnabled(with_lsp, "task-delegation");
+    try t.expect(findToolIn(with_td, "task") != null);
 
     // **本次改动的核心契约:启用集互不影响。**
     // 从前是进程级单例 —— 一个 Agent 开了 lsp,所有 Agent 都能调 lsp,
     // 而只读的调研 subagent 更不该因为兄弟 agent 的设置拿到别的工具。
     try t.expect(findToolIn(bare, "lsp") == null);
-    try t.expect(findToolIn(with_lsp, "todo_write") == null);
-    try t.expect(findToolIn(with_todo, "lsp") != null);
+    try t.expect(findToolIn(with_lsp, "task") == null);
+    try t.expect(findToolIn(with_td, "lsp") != null);
 
     // token 估算也跟着集合走 —— 上下文预算必须按本 Agent 的工具集算
-    try t.expect(toolDefsTokensIn(with_todo) > toolDefsTokensIn(bare));
+    try t.expect(toolDefsTokensIn(with_lsp) > toolDefsTokensIn(bare));
 
     // 子 agent 默认摘掉委派插件:否则每路孩子都付 8 个工具的 schema
     const parent_full = withEnabled(factorySet(), "task-delegation");
@@ -1020,12 +979,10 @@ test "collectSlash lists todo when enabled" {
     const set = withEnabled(withEnabled(withEnabled(withEnabled(withEnabled(withEnabled(withEnabled(0, "todo"), "skills"), "context-budget"), "git-awareness"), "lsp"), "web-search"), "task-delegation");
     var buf: [8]SlashCommand = undefined;
     const n = collectSlash(set, &buf);
-    // web-search/context-budget/skills 已抽离:空壳行无斜杠,/web、/context、/skills 由 JS 侧供(门控开时)
-    try t.expectEqual(@as(usize, 4), n);
-    try t.expectEqualStrings("git", buf[0].name);
-    try t.expectEqualStrings("agents", buf[1].name);
-    try t.expectEqualStrings("todo", buf[2].name);
-    try t.expectEqualStrings("lsp", buf[3].name);
+    // web-search/context-budget/skills/git-awareness/todo 已抽离:空壳行无斜杠,斜杠由 JS 侧供(门控开时)
+    try t.expectEqual(@as(usize, 2), n);
+    try t.expectEqualStrings("agents", buf[0].name);
+    try t.expectEqualStrings("lsp", buf[1].name);
     try t.expect(dispatchSlash(0, null, "todo", "") == null);
     try t.expect(dispatchSlash(0, null, "agents", "") == null);
     // 名籍仍在:抽离件可开可关
@@ -1041,7 +998,6 @@ test {
     _ = @import("plugins/jsonx.zig");
     _ = @import("plugins/hooks.zig");
     _ = @import("plugins/extras.zig");
-    _ = @import("plugins/todo.zig");
     _ = @import("plugins/limits.zig");
     _ = @import("plugins/task.zig");
     _ = @import("plugins/agents.zig");

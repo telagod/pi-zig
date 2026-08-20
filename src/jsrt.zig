@@ -70,6 +70,7 @@ const PRELUDE =
     \\    cwd() { return __piz_host_cwd(); },
     \\    configDir() { return __piz_host_configDir(); },
     \\    fetch(url, opts) { return __piz_host_fetch(String(url), opts === undefined ? "" : JSON.stringify(opts)); },
+    \\    exec(argv) { return __piz_host_exec(JSON.stringify((argv || []).map(String))); },
     \\    contextStats() { return curStats; },
     \\  };
     \\  Object.defineProperty(globalThis, "__piz", { value: {
@@ -299,6 +300,24 @@ fn hostAppendFile(ctx_: ?*c.JSContext, _: c.JSValue, argc: c_int, argv: [*c]c.JS
     w.interface.writeAll(text) catch return jsBool(false);
     w.flush() catch return jsBool(false);
     return jsBool(true);
+}
+
+/// host 原语:__piz_host_exec(argvJson) -> stdout 串|null(spawn 败或 exit≠0 → null)。
+/// stdout 截 64KB、stderr 弃、无 shell(与 util.execShort 同则)。扩展为受信本地代码。
+fn hostExec(ctx_: ?*c.JSContext, _: c.JSValue, argc: c_int, argv: [*c]c.JSValue) callconv(.c) c.JSValue {
+    const cx = ctx_ orelse return jsNull();
+    if (argc < 1) return jsNull();
+    const j = c.JS_ToCString(cx, argv[0]);
+    defer if (j != null) c.JS_FreeCString(cx, j);
+    if (j == null) return jsNull();
+    const a = gpa orelse return jsNull();
+    var arena = std.heap.ArenaAllocator.init(a);
+    defer arena.deinit(); // JS_NewStringLen 先拷字节,arena 后弃
+    const aa = arena.allocator();
+    const parsed = std.json.parseFromSliceLeaky([]const []const u8, aa, std.mem.span(j), .{}) catch return jsNull();
+    if (parsed.len == 0 or parsed.len > 64) return jsNull();
+    const out = util.execShort(aa, parsed) catch return jsNull();
+    return c.JS_NewStringLen(cx, out.ptr, @intCast(out.len));
 }
 
 /// host 原语:__piz_host_configDir() -> string|null。值在 loadExtensions 存档。
@@ -543,6 +562,8 @@ pub fn init(alloc: std.mem.Allocator) void {
     _ = c.JS_SetPropertyStr(ctx.?, global, "__piz_host_cwd", pf);
     const cdf = c.JS_NewCFunction(ctx.?, hostConfigDir, "__piz_host_configDir", 0);
     _ = c.JS_SetPropertyStr(ctx.?, global, "__piz_host_configDir", cdf);
+    const ex = c.JS_NewCFunction(ctx.?, hostExec, "__piz_host_exec", 1);
+    _ = c.JS_SetPropertyStr(ctx.?, global, "__piz_host_exec", ex);
     const ff = c.JS_NewCFunction(ctx.?, hostFetch, "__piz_host_fetch", 2);
     _ = c.JS_SetPropertyStr(ctx.?, global, "__piz_host_fetch", ff);
     // prelude
@@ -768,6 +789,9 @@ const bundled_exts = [_]struct { name: []const u8, gate: []const u8 = "", src: [
     .{ .name = "concept-graph.js", .gate = "concept-graph", .src = @embedFile("embedded/extensions/concept-graph.js") },
     .{ .name = "context-budget.js", .gate = "context-budget", .src = @embedFile("embedded/extensions/context-budget.js") },
     .{ .name = "skills.js", .gate = "skills", .src = @embedFile("embedded/extensions/skills.js") },
+    .{ .name = "git-awareness.js", .gate = "git-awareness", .src = @embedFile("embedded/extensions/git-awareness.js") },
+    .{ .name = "elicitation.js", .gate = "elicitation", .src = @embedFile("embedded/extensions/elicitation.js") },
+    .{ .name = "todo.js", .gate = "todo", .src = @embedFile("embedded/extensions/todo.js") },
 };
 
 var gate_names: []const []const u8 = &.{};
@@ -1599,6 +1623,89 @@ test "qjs tool_result replace:artifact-store 外置大件,小件/read/已置不�
     const zh = try ar.dupe(u8, "x" ++ "// 中文注释行填充凑长\n" ** 300);
     const zrepl = emitToolResult(ar, "bash", zh).?;
     try t.expect(std.unicode.utf8ValidateSlice(zrepl));
+}
+
+test "qjs bundled elicitation/todo: ask_user 文案 + todo 往返与 sid 隔离(parity)" {
+    if (!enabled) return error.SkipZigTest;
+    const t = std.testing;
+    const a = t.allocator;
+    deinit();
+    init(a);
+    defer deinit();
+    const root = std.fmt.allocPrint(a, "/tmp/piz_jsrt_et_{d}", .{std.os.linux.getpid()}) catch return error.SkipZigTest;
+    defer a.free(root);
+    defer std.Io.Dir.cwd().deleteTree(util.io, root) catch {};
+    try std.Io.Dir.cwd().createDirPath(util.io, root);
+    setGates(&.{ "elicitation", "todo" });
+    loadExtensions(root, "");
+
+    // ask_user:文案逐字节同原 Zig 版
+    const ask = try runJsTool(a, "ask_user", "{\"question\":\"Q?\"}", null);
+    defer a.free(ask.content);
+    try t.expectEqualStrings("The user has been asked: Q?\nSTOP and present this question to the user in your reply. Do not guess or continue until the user answers in their next message.", ask.content);
+    const askbad = try runJsTool(a, "ask_user", "{}", null);
+    defer a.free(askbad.content);
+    try t.expect(askbad.is_error);
+    try t.expectEqualStrings("error: ask_user requires 'question'", askbad.content);
+
+    // todo:sid=1 写三条(自动 id),渲染格式同原版;读回
+    const s1 = "{\"sid\":1}";
+    const w = try runJsTool(a, "todo_write", "{\"items\":[{\"content\":\"scan repo\",\"status\":\"completed\"},{\"content\":\"fix bug\",\"status\":\"in_progress\",\"bind\":\"n2\"},{\"content\":\"run tests\"}]}", s1);
+    defer a.free(w.content);
+    try t.expectEqualStrings("[x] scan repo\n[>] fix bug  @n2\n[ ] run tests\n(1/3 done)", w.content);
+    // merge:按 id 补丁 + 新条目自动 id 取 max+1
+    const m = try runJsTool(a, "todo_write", "{\"mode\":\"merge\",\"items\":[{\"id\":\"t2\",\"status\":\"completed\"},{\"content\":\"deploy\"}]}", s1);
+    defer a.free(m.content);
+    try t.expectEqualStrings("[x] scan repo\n[x] fix bug  @n2\n[ ] run tests\n[ ] deploy\n(2/4 done)", m.content);
+    // 错:new 缺 content / 坏 status / 重复 id / 坏 mode
+    const e1 = try runJsTool(a, "todo_write", "{\"mode\":\"merge\",\"items\":[{\"id\":\"zzz\"}]}", s1);
+    defer a.free(e1.content);
+    try t.expectEqualStrings("error: new item missing 'content'", e1.content);
+    const e2 = try runJsTool(a, "todo_write", "{\"items\":[{\"content\":\"x\",\"status\":\"weird\"}]}", s1);
+    defer a.free(e2.content);
+    try t.expectEqualStrings("error: bad status 'weird'; use pending | in_progress | completed", e2.content);
+    const e3 = try runJsTool(a, "todo_write", "{\"items\":[{\"id\":\"k\",\"content\":\"x\"},{\"id\":\"k\",\"content\":\"y\"}]}", s1);
+    defer a.free(e3.content);
+    try t.expectEqualStrings("error: duplicate id 'k'", e3.content);
+    const e4 = try runJsTool(a, "todo_write", "{\"mode\":\"x\",\"items\":[]}", s1);
+    defer a.free(e4.content);
+    try t.expectEqualStrings("error: mode must be replace | merge", e4.content);
+    // sid 隔离:sid=2 读空;sid=1 读回四条
+    const r2 = try runJsTool(a, "todo_read", "{}", "{\"sid\":2}");
+    defer a.free(r2.content);
+    try t.expectEqualStrings("todo list is empty", r2.content);
+    const r1 = try runJsTool(a, "todo_read", "{}", s1);
+    defer a.free(r1.content);
+    try t.expect(std.mem.indexOf(u8, r1.content, "(2/4 done)") != null);
+    // /todo 命令同源
+    var arena_inst = util.Arena.init(a);
+    defer arena_inst.deinit();
+    const out = runCommand(arena_inst.allocator(), "todo", "", s1).?;
+    try t.expectEqualStrings(r1.content, out);
+}
+
+test "qjs bundled git-awareness: 仓内取状" {
+    if (!enabled) return error.SkipZigTest;
+    const t = std.testing;
+    const a = t.allocator;
+    deinit();
+    init(a);
+    defer deinit();
+    const root = std.fmt.allocPrint(a, "/tmp/piz_jsrt_git_{d}", .{std.os.linux.getpid()}) catch return error.SkipZigTest;
+    defer a.free(root);
+    defer std.Io.Dir.cwd().deleteTree(util.io, root) catch {};
+    try std.Io.Dir.cwd().createDirPath(util.io, root);
+    setGates(&.{"git-awareness"});
+    loadExtensions(root, "");
+    // 测试进程 cwd = 项目仓(git 可用);非仓分支在原版亦无测(execShort 语义已由 util 担)
+    const r = try runJsTool(a, "git_status", "{}", null);
+    defer a.free(r.content);
+    try t.expect(!r.is_error);
+    try t.expect(std.mem.startsWith(u8, r.content, "Git status:\n"));
+    var arena_inst = util.Arena.init(a);
+    defer arena_inst.deinit();
+    const out = runCommand(arena_inst.allocator(), "git", "", null).?;
+    try t.expect(std.mem.startsWith(u8, out, "Git status:\n"));
 }
 
 test "qjs bundled skills: 列表/加载/名校验(parity)" {

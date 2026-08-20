@@ -800,6 +800,7 @@ pub const Agent = struct {
             .hard_pct = CTX_HARD_PERCENT,
             .limit = limit,
             .until_compact = until_compact,
+            .sid = @intFromPtr(self), // 会话键:todo 等 JS 件按它隔离(原版按 Agent 指针)
         }, .{}) catch return "";
     }
 

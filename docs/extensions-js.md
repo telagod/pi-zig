@@ -62,6 +62,8 @@ piz.configDir();                 // 配置目(~/.piz 或 $PIZ_DIR),未装载 →
 piz.contextStats();              // 调用方 context 快照 {window,used,tools_share,remaining,hard_pct,limit,until_compact};
                                  // 仅工具/命令执行进行中可得,否则 null
 piz.listDir(path);               // [{name,kind:dir|file|link|other}];不在/出错 → null
+piz.exec(["git","status"]);      // stdout 串(截 64KB,stderr 弃,无 shell);spawn 败或 exit≠0 → null
+                                 // ※ 扩展为受信本地代码,exec 不设白名单
 
 // 同步 HTTP(阻塞引擎互斥锁期间其他扩展调用排队;传输错 throw,HTTP 错状态看 .status)
 const r = piz.fetch("http://127.0.0.1:8873/x", {
