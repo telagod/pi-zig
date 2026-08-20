@@ -20,6 +20,13 @@ const toolsmod = @import("tools.zig");
 const aimod = @import("ai.zig");
 
 pub const enabled = build_options.quickjs;
+/// TS 类型剥离(-Djsts,默认随 quickjs):.ts/.mts 扩展先经 sucrase 剥皮再 eval。
+pub const jsts_on = enabled and build_options.jsts;
+/// sucrase standalone(MIT,vendor/sucrase.standalone.js;复现见 vendor/sucrase.BUILD.md)。
+/// 只在首个 .ts 扩展出现时惰性 eval 一次。embedFile 产出无 NUL,用前 dupeZ。
+const sucrase_src: []const u8 = if (jsts_on) @embedFile("embedded/sucrase.standalone.js") else "";
+var ts_ready = false; // sucrase 已在本 runtime 里 eval 过
+var sucrase_z: ?[:0]u8 = null; // bundle 的 NUL 副本,deinit 时 free
 
 const c = if (enabled) @cImport({
     @cInclude("quickjs.h");
@@ -42,6 +49,9 @@ const PRELUDE =
     \\  const handlers = Object.create(null);
     \\  const tools = [];
     \\  const commands = Object.create(null);
+    \\  // promise 收干:async handler 的 await 链全是 microtask(桥无 IO 原语),
+    \\  // host_settle 同步泵 job 至 settle;拒绝则 throw,落进各处既有 try/catch。
+    \\  const settle = (r) => (r && typeof r.then === "function") ? __piz_host_settle(r) : r;
     \\  const api = {
     \\    on(ev, fn) { (handlers[ev] || (handlers[ev] = [])).push(fn); },
     \\    registerTool(def) { if (def && def.name) tools.push(def); },
@@ -57,7 +67,7 @@ const PRELUDE =
     \\      try { payload = json ? JSON.parse(json) : {}; } catch (_) { payload = {}; }
     \\      let out;
     \\      for (const h of hs) {
-    \\        try { const r = h(payload, api); if (r !== undefined) out = r; }
+    \\        try { const r = settle(h(payload, api)); if (r !== undefined) out = r; }
     \\        catch (e) { api.notify("ext " + ev + " handler: " + (e && e.message || e), "error"); }
     \\      }
     \\      return out === undefined ? undefined : JSON.stringify(out);
@@ -79,7 +89,7 @@ const PRELUDE =
     \\        return JSON.stringify({ error: "bad args json: " + (e && e.message || e) });
     \\      }
     \\      try {
-    \\        const r = t.execute(args, api);
+    \\        const r = settle(t.execute(args, api));
     \\        const text = r && r.content !== undefined ? r.content : r;
     \\        return JSON.stringify({ content: typeof text === "string" ? text : JSON.stringify(text) });
     \\      } catch (e) {
@@ -96,7 +106,7 @@ const PRELUDE =
     \\      if (!d) return undefined;
     \\      const fn = typeof d === "function" ? d : d.handler;
     \\      if (typeof fn !== "function") return "";
-    \\      try { const r = fn(args || "", api); return r === undefined || r === null ? "" : String(r); }
+    \\      try { const r = settle(fn(args || "", api)); return r === undefined || r === null ? "" : String(r); }
     \\      catch (e) { return JSON.stringify({ error: String(e && (e.stack || e.message) || e) }); }
     \\    },
     \\  }, enumerable: false });
@@ -179,6 +189,26 @@ fn hostConfirm(ctx_: ?*c.JSContext, _: c.JSValue, argc: c_int, argv: [*c]c.JSVal
     return jsBool(ok);
 }
 
+/// host 原语:__piz_host_settle(promise) -> 落定值;拒绝则 throw;永不 pending 也 throw。
+/// js_std_await 同款模式:host fn 里同步泵 job,允许嵌套。
+fn hostSettle(ctx_: ?*c.JSContext, _: c.JSValue, argc: c_int, argv: [*c]c.JSValue) callconv(.c) c.JSValue {
+    const cx = ctx_ orelse return jsUndef();
+    if (argc < 1) return jsUndef();
+    if (!c.JS_IsPromise(argv[0])) return c.JS_DupValue(cx, argv[0]);
+    var spins: u32 = 0;
+    while (c.JS_PromiseState(cx, argv[0]) == c.JS_PROMISE_PENDING and spins < 100_000) : (spins += 1) {
+        drainJobs();
+        if (!c.JS_IsJobPending(rt orelse return jsUndef())) break;
+    }
+    const st = c.JS_PromiseState(cx, argv[0]);
+    if (st == c.JS_PROMISE_FULFILLED) return c.JS_PromiseResult(cx, argv[0]); // 新引用,调用方收
+    if (st == c.JS_PROMISE_REJECTED) {
+        const reason = c.JS_PromiseResult(cx, argv[0]);
+        return c.JS_Throw(cx, reason); // JS_Throw 吃掉 reason 引用
+    }
+    return c.JS_ThrowInternalError(cx, "promise never settles (no host async in piz extensions)");
+}
+
 /// 取 globalThis.__piz 上的函数并调用,返回值转 Zig 串(dupe 到 arena)。
 /// 无此函数/异常/undefined 一律回 null。
 fn callBridge(arena: std.mem.Allocator, name: []const u8, args: []const []const u8) ?[]const u8 {
@@ -207,13 +237,41 @@ fn callBridge(arena: std.mem.Allocator, name: []const u8, args: []const []const 
         if (notify_cb) |cb| cb(msg, "error");
         return null;
     }
-    if (c.JS_IsUndefined(ret) or c.JS_IsNull(ret)) return null;
-    const s = c.JS_ToCString(ctx_, ret);
+    // promise 已在 JS 侧经 __piz_host_settle 收干(见 prelude settle),到不了这里。
+    return jsRetToString(arena, ctx_, ret);
+}
+
+/// undefined/null/超长 → null;否则 dupe 到 arena。
+fn jsRetToString(arena: std.mem.Allocator, ctx_: *c.JSContext, v: c.JSValue) ?[]const u8 {
+    if (c.JS_IsUndefined(v) or c.JS_IsNull(v)) return null;
+    const s = c.JS_ToCString(ctx_, v);
     if (s == null) return null;
     defer c.JS_FreeCString(ctx_, s);
     const span = std.mem.span(s);
     if (span.len > MAX_RET) return null;
     return arena.dupe(u8, span) catch null;
+}
+
+/// 模块加载器:引擎默认 normalizer 已把 './x.js' 按 base 文件名解成绝对路径,
+/// 这里读盘编译(COMPILE_ONLY),引用直接移交引擎 —— 勿 free(模块 refcount
+/// 到 0 走 abort)。
+fn moduleLoader(ctx_: ?*c.JSContext, name: ?[*:0]const u8, _: ?*anyopaque) callconv(.c) ?*c.JSModuleDef {
+    const cx = ctx_ orelse return null;
+    const path = std.mem.span(name orelse return null);
+    const a = gpa orelse return null;
+    const src = std.Io.Dir.cwd().readFileAlloc(util.io, path, a, .limited(MAX_EXT_FILE)) catch {
+        _ = c.JS_ThrowReferenceError(cx, "cannot load module '%s'", path.ptr);
+        return null;
+    };
+    defer a.free(src);
+    // JS_Eval 要求 NUL 结尾(见 evalFile 注)。
+    const src_z = a.dupeZ(u8, src) catch return null;
+    defer a.free(src_z);
+    const path_z = a.dupeZ(u8, path) catch return null;
+    defer a.free(path_z);
+    const mv = c.JS_Eval(cx, src_z.ptr, @intCast(src.len), path_z.ptr, c.JS_EVAL_TYPE_MODULE | c.JS_EVAL_FLAG_COMPILE_ONLY);
+    if (c.JS_IsException(mv)) return null; // 异常已挂在 ctx 上
+    return @ptrCast(c.JS_VALUE_GET_PTR(mv));
 }
 
 /// 初始化引擎并加载扩展目。幂等;重复调用只生效一次。
@@ -242,6 +300,8 @@ pub fn init(alloc: std.mem.Allocator) void {
             std.debug.print("piz: extension: unhandled rejection: {s}\n", .{s});
         }
     }.f, null);
+    // 模块加载器:import './x.js' 由默认 normalizer 解相对路径,这里读盘编译。
+    c.JS_SetModuleLoaderFunc(rt.?, null, moduleLoader, null);
     // host 原语
     const global = c.JS_GetGlobalObject(ctx.?);
     defer c.JS_FreeValue(ctx.?, global);
@@ -249,6 +309,8 @@ pub fn init(alloc: std.mem.Allocator) void {
     _ = c.JS_SetPropertyStr(ctx.?, global, "__piz_host_notify", nf);
     const cf = c.JS_NewCFunction(ctx.?, hostConfirm, "__piz_host_confirm", 1);
     _ = c.JS_SetPropertyStr(ctx.?, global, "__piz_host_confirm", cf);
+    const sf = c.JS_NewCFunction(ctx.?, hostSettle, "__piz_host_settle", 1);
+    _ = c.JS_SetPropertyStr(ctx.?, global, "__piz_host_settle", sf);
     // prelude
     const pv = c.JS_Eval(ctx.?, PRELUDE.ptr, PRELUDE.len, "<prelude>", c.JS_EVAL_TYPE_GLOBAL);
     if (c.JS_IsException(pv)) {
@@ -287,15 +349,35 @@ pub fn deinit() void {
     h_tool_call = false;
     h_tool_result = false;
     h_session_start = false;
+    ts_ready = false;
+    if (sucrase_z) |z| {
+        if (gpa) |a| a.free(z);
+        sucrase_z = null;
+    }
     gpa = null;
 }
 
 fn evalFile(path: []const u8) bool {
     const ctx_ = ctx orelse return false;
     const a = gpa orelse return false;
-    const src = std.Io.Dir.cwd().readFileAlloc(util.io, path, a, .limited(MAX_EXT_FILE)) catch return false;
-    defer a.free(src);
-    if (src.len == 0) return true;
+    const raw = std.Io.Dir.cwd().readFileAlloc(util.io, path, a, .limited(MAX_EXT_FILE)) catch return false;
+    defer a.free(raw);
+    if (raw.len == 0) return true;
+    // TS 剥皮:.ts/.mts 先过 sucrase(惰性,一次);剥不动(语法错)按加载错报出。
+    var src: []const u8 = raw;
+    var stripped: ?[]const u8 = null;
+    defer if (stripped) |s| a.free(s);
+    if (isTsFile(path)) {
+        if (!jsts_on) {
+            std.debug.print("piz: extension {s}: TypeScript disabled (rebuild without -Djsts=false)\n", .{path});
+            return false;
+        }
+        stripped = tsStrip(a, raw) orelse {
+            std.debug.print("piz: extension {s}: ts strip failed\n", .{path});
+            return false;
+        };
+        src = stripped.?;
+    }
     // 必须 NUL 后送:实测 quickjs-ng 词法器会瞥 input[len] 一眼 —— 非 NUL 结尾的
     // 堆缓冲按相邻字节随机报 "invalid UTF-8"/"unexpected token"(4/4 复现),
     // dupeZ 后 4/4 干净。len 不变,NUL 只是兜底界标。
@@ -318,7 +400,59 @@ fn evalFile(path: []const u8) bool {
 /// pi 式扩展是 ESM(`export default function(pi)`)。判定从宽:
 /// .mjs 后缀或源含 "export default" 即走模块支路。
 fn isModule(path: []const u8, src: []const u8) bool {
-    return std.mem.endsWith(u8, path, ".mjs") or std.mem.indexOf(u8, src, "export default") != null;
+    return std.mem.endsWith(u8, path, ".mjs") or std.mem.endsWith(u8, path, ".mts") or std.mem.indexOf(u8, src, "export default") != null;
+}
+
+fn isTsFile(path: []const u8) bool {
+    return std.mem.endsWith(u8, path, ".ts") or std.mem.endsWith(u8, path, ".mts") or std.mem.endsWith(u8, path, ".cts");
+}
+
+/// 惰性起 sucrase:bundle 走 global script eval,产出全局 Sucrase。
+fn ensureTs() bool {
+    if (!jsts_on) return false;
+    if (ts_ready) return true;
+    const ctx_ = ctx orelse return false;
+    const a = gpa orelse return false;
+    const z = a.dupeZ(u8, sucrase_src) catch return false; // 登记在 sucrase_z,deinit 时 free
+    sucrase_z = z;
+    const v = c.JS_Eval(ctx_, z.ptr, @intCast(sucrase_src.len), "sucrase.standalone.js", c.JS_EVAL_TYPE_GLOBAL);
+    if (c.JS_IsException(v)) {
+        reportEx(ctx_, "<sucrase>");
+        c.JS_FreeValue(ctx_, v);
+        return false;
+    }
+    c.JS_FreeValue(ctx_, v);
+    drainJobs();
+    ts_ready = true;
+    return true;
+}
+
+/// sucrase transform(src, {transforms:["typescript"]}) → JS 源(dupe 到 a,调用方 free)。
+fn tsStrip(a: std.mem.Allocator, src: []const u8) ?[]const u8 {
+    if (!ensureTs()) return null;
+    const ctx_ = ctx orelse return null;
+    const global = c.JS_GetGlobalObject(ctx_);
+    defer c.JS_FreeValue(ctx_, global);
+    const s = c.JS_GetPropertyStr(ctx_, global, "Sucrase");
+    defer c.JS_FreeValue(ctx_, s);
+    if (c.JS_IsUndefined(s)) return null;
+    const tr = c.JS_GetPropertyStr(ctx_, s, "transform");
+    defer c.JS_FreeValue(ctx_, tr);
+    const arg0 = c.JS_NewStringLen(ctx_, src.ptr, @intCast(src.len));
+    defer c.JS_FreeValue(ctx_, arg0);
+    const opt_src = "({transforms:['typescript']})";
+    const opt = c.JS_Eval(ctx_, opt_src.ptr, opt_src.len, "<opt>", c.JS_EVAL_TYPE_GLOBAL);
+    defer c.JS_FreeValue(ctx_, opt);
+    var argv = [_]c.JSValue{ arg0, opt };
+    const r = c.JS_Call(ctx_, tr, s, 2, &argv);
+    defer c.JS_FreeValue(ctx_, r);
+    if (c.JS_IsException(r)) {
+        reportEx(ctx_, "<ts>");
+        return null;
+    }
+    const code = c.JS_GetPropertyStr(ctx_, r, "code");
+    defer c.JS_FreeValue(ctx_, code);
+    return jsRetToString(a, ctx_, code);
 }
 
 /// 取异常并打 stderr(模块/classic 共用)。
@@ -393,7 +527,7 @@ fn loadDir(path: []const u8) void {
     var it = d.iterate();
     while (it.next(util.io) catch null) |ent| {
         if (ent.kind != .file) continue;
-        if (!std.mem.endsWith(u8, ent.name, ".js") and !std.mem.endsWith(u8, ent.name, ".mjs")) continue;
+        if (!std.mem.endsWith(u8, ent.name, ".js") and !std.mem.endsWith(u8, ent.name, ".mjs") and !std.mem.endsWith(u8, ent.name, ".ts") and !std.mem.endsWith(u8, ent.name, ".mts") and !std.mem.endsWith(u8, ent.name, ".cts")) continue;
         const full = util.joinPath(gpa.?, path, ent.name) catch continue;
         names.append(full) catch {
             gpa.?.free(full);
@@ -748,4 +882,88 @@ test "qjs esm: module default export gets piz api" {
         if (std.mem.eql(u8, jc.name, "esmcmd")) found = true;
     }
     try t.expect(found);
+}
+
+test "qjs settle: async handlers resolve synchronously" {
+    if (!enabled) return error.SkipZigTest;
+    const t = std.testing;
+    const a = t.allocator;
+    deinit();
+    init(a);
+    defer deinit();
+    mu.lockUncancelable(util.io);
+    const src =
+        \\piz.registerCommand("ac", { handler: async (x) => "A:" + (await Promise.resolve(x)) });
+        \\piz.registerTool({ name: "at", description: "d", schema: {}, execute: async (args) => "T:" + (await Promise.resolve(args.v || "")) });
+    ;
+    const v = c.JS_Eval(ctx.?, src.ptr, src.len, "<test>", c.JS_EVAL_TYPE_GLOBAL);
+    try t.expect(!c.JS_IsException(v));
+    c.JS_FreeValue(ctx.?, v);
+    mu.unlock(util.io);
+    refreshRegistryLockedForTest();
+    var arena_inst = util.Arena.init(a);
+    defer arena_inst.deinit();
+    const arena = arena_inst.allocator();
+    try t.expectEqualStrings("A:xyz", runCommand(arena, "ac", "xyz").?);
+    const out = callTool(arena, "at", "{\"v\":\"q\"}").?;
+    try t.expect(std.mem.indexOf(u8, out, "T:q") != null);
+}
+
+test "qjs esm import: relative module loads" {
+    if (!enabled) return error.SkipZigTest;
+    const t = std.testing;
+    const a = t.allocator;
+    deinit();
+    init(a);
+    defer deinit();
+    const base = std.fmt.allocPrint(a, "/tmp/piz_jsrt_imp_{d}", .{std.os.linux.getpid()}) catch return error.SkipZigTest;
+    defer a.free(base);
+    defer std.Io.Dir.cwd().deleteTree(util.io, base) catch {};
+    try std.Io.Dir.cwd().createDirPath(util.io, base);
+    const util_p = try std.fmt.allocPrint(a, "{s}/dep.mjs", .{base});
+    defer a.free(util_p);
+    try std.Io.Dir.cwd().writeFile(util.io, .{ .sub_path = util_p, .data = "export const tag = \"DEPOK\";\n" });
+    const main_p = try std.fmt.allocPrint(a, "{s}/main.mjs", .{base});
+    defer a.free(main_p);
+    try std.Io.Dir.cwd().writeFile(util.io, .{ .sub_path = main_p, .data =
+        \\import { tag } from "./dep.mjs";
+        \\export default function(pi) {
+        \\  pi.registerCommand("depcmd", { handler: () => "tag=" + tag });
+        \\}
+    });
+    mu.lockUncancelable(util.io);
+    const ok = evalFile(main_p);
+    mu.unlock(util.io);
+    try t.expect(ok);
+    refreshRegistryLockedForTest();
+    var arena_inst = util.Arena.init(a);
+    defer arena_inst.deinit();
+    try t.expectEqualStrings("tag=DEPOK", runCommand(arena_inst.allocator(), "depcmd", "").?);
+}
+
+test "qjs ts: typescript extension strips and loads" {
+    if (!enabled or !jsts_on) return error.SkipZigTest;
+    const t = std.testing;
+    const a = t.allocator;
+    deinit();
+    init(a);
+    defer deinit();
+    const path = std.fmt.allocPrint(a, "/tmp/piz_jsrt_ts_{d}.ts", .{std.os.linux.getpid()}) catch return error.SkipZigTest;
+    defer a.free(path);
+    defer std.Io.Dir.cwd().deleteFile(util.io, path) catch {};
+    const src =
+        \\interface Opt { v: string }
+        \\export default function(pi: any) {
+        \\  pi.registerCommand("tsc", { handler: (x: string) => "TS:" + (x as string) });
+        \\}
+    ;
+    try std.Io.Dir.cwd().writeFile(util.io, .{ .sub_path = path, .data = src });
+    mu.lockUncancelable(util.io);
+    const ok = evalFile(path);
+    mu.unlock(util.io);
+    try t.expect(ok);
+    refreshRegistryLockedForTest();
+    var arena_inst = util.Arena.init(a);
+    defer arena_inst.deinit();
+    try t.expectEqualStrings("TS:q", runCommand(arena_inst.allocator(), "tsc", "q").?);
 }

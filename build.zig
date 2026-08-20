@@ -10,8 +10,12 @@ pub fn build(b: *std.Build) void {
     // 嵌 QuickJS 扩展运行时(vendor/quickjs-ng,MIT):运行时 JS 钩子/工具/命令。
     // 开启后链接 libc(linux 静态发布请配 -Dtarget=x86_64-linux-musl);关则无 libc 纯静态。
     const quickjs = b.option(bool, "quickjs", "Embed QuickJS extension runtime (vendor/quickjs-ng)") orelse true;
+    // TS 类型剥离(sucrase standalone, src/embedded/sucrase.standalone.js,随 quickjs 才有意义):
+    // 关掉则 .ts/.mts 扩展拒绝加载,二进制省 ~295KB 嵌文本。复现打包见 src/embedded/sucrase.BUILD.md。
+    const jsts = b.option(bool, "jsts", "Enable TypeScript type-stripping for extensions (sucrase)") orelse quickjs;
     const build_opts = b.addOptions();
     build_opts.addOption(bool, "quickjs", quickjs);
+    build_opts.addOption(bool, "jsts", jsts and quickjs);
 
     // qjs C 单元 + 头路径挂到指定模块。libc 开时 vendor/shim 必须让位(否则假 stdlib.h 遮蔽真头)。
     const qjs_files = [_][]const u8{ "quickjs.c", "libregexp.c", "libunicode.c", "dtoa.c", "quickjs-libc.c" };

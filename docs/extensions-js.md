@@ -5,12 +5,17 @@ piz 内嵌 QuickJS-ng(MIT,vendor/quickjs-ng),运行时加载 JS 扩展,免编译
 
 ## 位置与加载
 
-- `~/.piz/extensions/*.{js,mjs}`(全局)+ `<项目>/.piz/extensions/*.{js,mjs}`(项目,web 模式不装)
+- `~/.piz/extensions/`(全局)+ `<项目>/.piz/extensions/`(项目,web 模式不装)
+- 认 `.js`(classic/ESM)、`.mjs`(ESM)、`.ts/.mts/.cts`(先 sucrase 剥皮)
 - 字典序加载;单文件 1MB 封顶;加载错误打 stderr,不致命
-- **ESM 支持**:`.mjs` 或源含 `export default` 即走模块支路,pi 式
+- **ESM 支持**:`.mjs/.mts` 或源含 `export default` 即走模块支路,pi 式
   `export default function(pi) { ... }` 会被调用,参数即下述 `piz` 对象;
   顶层 await / promise 微任务由 job 泵跑尽;unhandled rejection 打 stderr
-- classic script 顶层用全局 `piz` 对象;**暂不支持 TS**(类型剥离后置)、不支持 import(无模块加载器)
+- **import 支持**:`import { x } from "./dep.mjs"` 按相对路径解析(引擎默认
+  normalizer + 宿主读盘编译);裸包名/远程 URL 报 cannot load module
+- **TS 支持**:sucrase 类型剥离(仅 typescript transform;enum/装饰器这类
+  有运行论语义的不在范围内);bundle 内嵌 src/embedded/(复现见同目 BUILD.md),
+  首个 .ts 才惰性起,加载错误原样报出
 
 ## API(窄桥)
 
