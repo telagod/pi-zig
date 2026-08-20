@@ -1,61 +1,12 @@
-// usage_log.zig — 每轮 token 账本。~/.piz/usage.jsonl,一行一轮。
-// after_turn 追加; /usage 读尾。不记 API key,只记量。
+// usage_log.zig — 每轮 token 账本读侧。~/.piz/usage.jsonl,一行一轮。
+// 写侧已抽为内嵌 JS 扩展(src/embedded/extensions/usage-ledger.js,agent_end 携 usage 落账);
+// 本文件只留 filePath/summarize 供 /usage 与 web 读。不记 API key,只记量。
 const std = @import("std");
 const util = @import("util.zig");
-const agentmod = @import("agent.zig");
-const pricing = @import("pricing.zig");
 
-pub fn filePath(alloc: std.mem.Allocator) ![]u8 {
+pub fn filePath(alloc: std.mem.Allocator) ![]const u8 {
     const dir = try util.configDir(alloc);
     return util.joinPath(alloc, dir, "usage.jsonl");
-}
-
-fn esc(alloc: std.mem.Allocator, s: []const u8) []const u8 {
-    return util.jsonString(alloc, s) catch "\"\"";
-}
-
-/// 有用量才落一行。无 input/output 的空转不记。
-pub fn appendTurn(self: *agentmod.Agent) void {
-    const u = self.last_usage;
-    if (u.input == null and u.output == null) return;
-    const path = filePath(self.alloc) catch return;
-    const ts = @divTrunc(std.Io.Clock.now(.real, util.io).nanoseconds, std.time.ns_per_s);
-    const inp = u.input orelse 0;
-    const out = u.output orelse 0;
-    const cr = u.cache_read orelse 0;
-    const cw = u.cache_write orelse 0;
-    const usd = if (pricing.lookupAny(self.provider.name, self.model)) |r|
-        pricing.turnCost(r, inp, out, cr, cw)
-    else
-        0;
-    const line = std.fmt.allocPrint(self.alloc, "{{\"ts\":{d},\"model\":{s},\"in\":{d},\"out\":{d},\"cr\":{d},\"cw\":{d},\"usd\":{d:.8},\"cwd\":{s}}}\n", .{
-        ts,
-        esc(self.alloc, self.model),
-        inp,
-        out,
-        cr,
-        cw,
-        usd,
-        esc(self.alloc, self.cwd),
-    }) catch return;
-    const dir = std.fs.path.dirname(path) orelse return;
-    std.Io.Dir.cwd().createDirPath(util.io, dir) catch |err| util.debugCatch("usage.mkdir", err);
-    var f = std.Io.Dir.cwd().createFile(util.io, path, .{ .exclusive = true, .permissions = @enumFromInt(0o600) }) catch |err| switch (err) {
-        error.PathAlreadyExists => std.Io.Dir.cwd().openFile(util.io, path, .{ .mode = .write_only }) catch |e| {
-            util.debugCatch("usage.open", e);
-            return;
-        },
-        else => {
-            util.debugCatch("usage.create", err);
-            return;
-        },
-    };
-    defer f.close(util.io);
-    var wbuf: [512]u8 = undefined;
-    var w = f.writer(util.io, &wbuf);
-    w.seekTo(f.length(util.io) catch 0) catch |err| util.debugCatch("usage.seek", err);
-    w.interface.writeAll(line) catch |err| util.debugCatch("usage.write", err);
-    w.flush() catch |err| util.debugCatch("usage.flush", err);
 }
 
 pub const Summary = struct {
@@ -115,7 +66,7 @@ fn fieldF64(line: []const u8, key: []const u8) ?f64 {
     return std.fmt.parseFloat(f64, line[p..e]) catch null;
 }
 
-test "appendTurn writes in/out and summarize tails" {
+test "summarize reads ledger lines and tails" {
     const t = std.testing;
     try util.testInit();
     var tmp = std.testing.tmpDir(.{});
@@ -126,22 +77,16 @@ test "appendTurn writes in/out and summarize tails" {
     const cwd_abs = try std.process.currentPathAlloc(util.io, a);
     const tmp_path = try std.fmt.allocPrint(a, "{s}/.zig-cache/tmp/{s}", .{ cwd_abs, tmp.sub_path[0..] });
     try util.environ_map.?.put("PIZ_DIR", tmp_path);
-
-    var cfg = @import("config.zig").Config{ .arena = &arena };
-    var provs = [_]@import("config.zig").Provider{.{ .name = "mock", .api = .openai_completions, .base_url = "http://127.0.0.1:1", .api_key = "k" }};
-    cfg.providers = &provs;
-    var agent = try agentmod.Agent.init(a, &cfg, "mock", "m", "/proj");
-    agent.model = "gpt-4o-mini";
-    agent.last_usage = .{ .input = 12, .output = 3, .cache_read = 4, .cache_write = 1 };
-    appendTurn(&agent);
-    appendTurn(&agent);
+    // 行式与内嵌 usage-ledger.js 产出一致(原 Zig appendTurn 同式)
+    const line = "{\"ts\":1,\"model\":\"gpt-4o-mini\",\"in\":12,\"out\":3,\"cr\":4,\"cw\":1,\"usd\":0.00100000,\"cwd\":\"/proj\"}\n";
+    const path = try filePath(a);
+    try std.Io.Dir.cwd().writeFile(util.io, .{ .sub_path = path, .data = line ++ line });
 
     const sum = try summarize(a, 1);
     try t.expectEqual(@as(u32, 2), sum.lines);
     try t.expectEqual(@as(u64, 24), sum.tok_in);
     try t.expectEqual(@as(u64, 6), sum.tok_out);
-    const one = pricing.turnCost(pricing.lookupAny("mock", "gpt-4o-mini").?, 12, 3, 4, 1);
-    try t.expectApproxEqAbs(one * 2, sum.usd, 1e-12);
+    try t.expectApproxEqAbs(@as(f64, 0.002), sum.usd, 1e-12);
     try t.expect(std.mem.indexOf(u8, sum.tail, "\"in\":12") != null);
     try t.expect(std.mem.indexOf(u8, sum.tail, "\"usd\":") != null);
     try t.expect(std.mem.indexOf(u8, sum.tail, "\n") == null);

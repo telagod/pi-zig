@@ -5,7 +5,8 @@ piz 内嵌 QuickJS-ng(MIT,vendor/quickjs-ng),运行时加载 JS 扩展,免编译
 
 ## 位置与加载
 
-- `~/.piz/extensions/`(全局)+ `<项目>/.piz/extensions/`(项目;web 模式装**服务器启动目**那份,引擎单例、全体会话共享,按 workspace 分装后置)
+- **内嵌出厂档** `src/embedded/extensions/`(@embedFile 随二进制,先载);`~/.piz/extensions/`(全局)+ `<项目>/.piz/extensions/`(项目;web 模式装**服务器启动目**那份,引擎单例、全体会话共享,按 workspace 分装后置)
+- 覆写语义:用户/项目目放**同名 basename** 即顶替内嵌件(内嵌让位)
 - 认 `.js`(classic/ESM)、`.mjs`(ESM)、`.ts/.mts/.cts`(先 sucrase 剥皮)
 - 字典序加载;单文件 1MB 封顶;加载错误打 stderr,不致命
 - **ESM 支持**:`.mjs/.mts` 或源含 `export default` 即走模块支路,pi 式
@@ -27,7 +28,8 @@ piz.on("tool_call", (e) => {
   if (e.toolName === "bash") return { block: true, reason: "no bash" };
 });
 piz.on("tool_result", (e) => { /* e.toolName, e.output(截 8KB) */ });
-piz.on("agent_end", (e) => { /* e.text = 回合最后 assistant 正文(截 8KB,可空) */ });
+piz.on("agent_end", (e) => { /* e.text = 回合最后 assistant 正文(截 8KB,可空);
+     e.model/e.cwd/e.config_dir/e.ts;有用量时 e.usage = {in,out,cr,cw,usd},无则 null */ });
 
 // 注册 LLM 工具(走与内置工具同一 permissions 闸;同步 execute)
 piz.registerTool({
@@ -50,6 +52,7 @@ piz.confirm("sure?");        // 未接管一律 false(安全默认)
 // 同步 fs/env(文本向,单发 8MB 封顶;相对路径 = 进程 cwd)
 piz.readFile("/abs/or/rel");     // 不在/出错 → null
 piz.writeFile("/tmp/x", "txt");  // 成 → true
+piz.appendFile("/tmp/x", "txt"); // 尾追加,不在则建(0600),父目须已在
 piz.env("HOME");                 // 未设 → null
 piz.cwd();                       // 进程 cwd 串
 

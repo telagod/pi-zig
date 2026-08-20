@@ -6,6 +6,7 @@ pub const cfgmod = @import("config.zig");
 const toolsmod = @import("tools.zig");
 const pluginsmod = @import("plugins.zig");
 const jsrt = @import("jsrt.zig");
+const pricing = @import("pricing.zig");
 const pkgsmod = @import("pkgs.zig");
 const compress = @import("compress.zig");
 const seams = @import("seams.zig");
@@ -796,7 +797,25 @@ pub const Agent = struct {
             }
             var scratch = std.heap.ArenaAllocator.init(std.heap.c_allocator);
             defer scratch.deinit();
-            jsrt.emitAgentEnd(scratch.allocator(), text);
+            const sa = scratch.allocator();
+            const u = self.last_usage;
+            const inp = u.input orelse 0;
+            const outp = u.output orelse 0;
+            const cr = u.cache_read orelse 0;
+            const cw = u.cache_write orelse 0;
+            jsrt.emitAgentEnd(sa, .{
+                .text = text,
+                .model = self.model,
+                .cwd = self.cwd,
+                .config_dir = util.configDir(sa) catch "",
+                .ts = @intCast(@divTrunc(std.Io.Clock.now(.real, util.io).nanoseconds, std.time.ns_per_s)),
+                .has_usage = u.input != null or u.output != null,
+                .in = inp,
+                .out = outp,
+                .cr = cr,
+                .cw = cw,
+                .usd = if (pricing.lookupAny(self.provider.name, self.model)) |r| pricing.turnCost(r, inp, outp, cr, cw) else 0,
+            });
         }
     }
 

@@ -62,6 +62,7 @@ const PRELUDE =
     \\    confirm(msg) { return !!__piz_host_confirm(String(msg)); },
     \\    readFile(path) { return __piz_host_readFile(String(path)); },
     \\    writeFile(path, text) { return !!__piz_host_writeFile(String(path), String(text)); },
+    \\    appendFile(path, text) { return !!__piz_host_appendFile(String(path), String(text)); },
     \\    env(name) { return __piz_host_env(String(name)); },
     \\    cwd() { return __piz_host_cwd(); },
     \\    fetch(url, opts) { return __piz_host_fetch(String(url), opts === undefined ? "" : JSON.stringify(opts)); },
@@ -225,6 +226,31 @@ fn hostWriteFile(ctx_: ?*c.JSContext, _: c.JSValue, argc: c_int, argv: [*c]c.JSV
     const text = std.mem.span(t);
     if (text.len > MAX_FS_IO) return jsBool(false);
     std.Io.Dir.cwd().writeFile(util.io, .{ .sub_path = std.mem.span(p), .data = text }) catch return jsBool(false);
+    return jsBool(true);
+}
+
+/// host 原语:__piz_host_appendFile(path, text) -> bool。尾追加,不存在则建(0600),父目须已在。
+fn hostAppendFile(ctx_: ?*c.JSContext, _: c.JSValue, argc: c_int, argv: [*c]c.JSValue) callconv(.c) c.JSValue {
+    const cx = ctx_ orelse return jsBool(false);
+    if (argc < 2) return jsBool(false);
+    const p = c.JS_ToCString(cx, argv[0]);
+    defer if (p != null) c.JS_FreeCString(cx, p);
+    const t = c.JS_ToCString(cx, argv[1]);
+    defer if (t != null) c.JS_FreeCString(cx, t);
+    if (p == null or t == null) return jsBool(false);
+    const text = std.mem.span(t);
+    if (text.len > MAX_FS_IO) return jsBool(false);
+    const path = std.mem.span(p);
+    var f = std.Io.Dir.cwd().createFile(util.io, path, .{ .exclusive = true, .permissions = @enumFromInt(0o600) }) catch |err| switch (err) {
+        error.PathAlreadyExists => std.Io.Dir.cwd().openFile(util.io, path, .{ .mode = .write_only }) catch return jsBool(false),
+        else => return jsBool(false),
+    };
+    defer f.close(util.io);
+    var wbuf: [512]u8 = undefined;
+    var w = f.writer(util.io, &wbuf);
+    w.seekTo(f.length(util.io) catch 0) catch return jsBool(false);
+    w.interface.writeAll(text) catch return jsBool(false);
+    w.flush() catch return jsBool(false);
     return jsBool(true);
 }
 
@@ -441,6 +467,8 @@ pub fn init(alloc: std.mem.Allocator) void {
     _ = c.JS_SetPropertyStr(ctx.?, global, "__piz_host_readFile", rf);
     const wf = c.JS_NewCFunction(ctx.?, hostWriteFile, "__piz_host_writeFile", 2);
     _ = c.JS_SetPropertyStr(ctx.?, global, "__piz_host_writeFile", wf);
+    const af = c.JS_NewCFunction(ctx.?, hostAppendFile, "__piz_host_appendFile", 2);
+    _ = c.JS_SetPropertyStr(ctx.?, global, "__piz_host_appendFile", af);
     const ef = c.JS_NewCFunction(ctx.?, hostEnv, "__piz_host_env", 1);
     _ = c.JS_SetPropertyStr(ctx.?, global, "__piz_host_env", ef);
     const pf = c.JS_NewCFunction(ctx.?, hostCwd, "__piz_host_cwd", 0);
@@ -653,6 +681,43 @@ fn evalModule(path_z: [*:0]const u8, src_z: [*:0]const u8, len: usize) bool {
     return true;
 }
 
+/// 内嵌出厂扩展:随二进制,先于目录档加载;用户/项目目有同名 basename 则让位(覆写)。
+const bundled_exts = [_]struct { name: []const u8, src: []const u8 }{
+    .{ .name = "usage-ledger.js", .src = @embedFile("embedded/extensions/usage-ledger.js") },
+};
+
+fn dirHasFile(path: ?[]const u8, name: []const u8) bool {
+    const p = path orelse return false;
+    var d = std.Io.Dir.cwd().openDir(util.io, p, .{ .iterate = true }) catch return false;
+    defer d.close(util.io);
+    var it = d.iterate();
+    while (it.next(util.io) catch null) |ent| {
+        if (ent.kind == .file and std.mem.eql(u8, ent.name, name)) return true;
+    }
+    return false;
+}
+
+/// 内嵌件求值:源在二进制里,无盘读/TS 剥;模块判定同 evalFile。
+fn evalBundled(name: []const u8, src: []const u8) bool {
+    const ctx_ = ctx orelse return false;
+    const a = gpa orelse return false;
+    if (src.len == 0) return true;
+    const src_z = a.dupeZ(u8, src) catch return false;
+    defer a.free(src_z);
+    const label = std.fmt.allocPrintSentinel(a, "<embedded:{s}>", .{name}, 0) catch return false;
+    defer a.free(label);
+    if (isModule(name, src)) return evalModule(label.ptr, src_z.ptr, src.len);
+    const v = c.JS_Eval(ctx_, src_z.ptr, @intCast(src.len), label.ptr, c.JS_EVAL_TYPE_GLOBAL);
+    if (c.JS_IsException(v)) {
+        reportEx(ctx_, label);
+        c.JS_FreeValue(ctx_, v);
+        return false;
+    }
+    c.JS_FreeValue(ctx_, v);
+    drainJobs();
+    return true;
+}
+
 fn loadDir(path: []const u8) void {
     var d = std.Io.Dir.cwd().openDir(util.io, path, .{ .iterate = true }) catch return;
     defer d.close(util.io);
@@ -692,9 +757,14 @@ pub fn loadExtensions(cfg_dir: []const u8, cwd: []const u8) void {
     const a = gpa.?;
     const user_dir = util.joinPath(a, cfg_dir, "extensions") catch null;
     defer if (user_dir) |p| a.free(p);
-    if (user_dir) |p| loadDir(p);
     const proj_dir = if (cwd.len > 0) (util.joinPath(a, cwd, ".piz/extensions") catch null) else null;
     defer if (proj_dir) |p| a.free(p);
+    // 内嵌档先行;同名见于用户/项目目则跳过(目录档顶替)。
+    for (bundled_exts) |b| {
+        if (dirHasFile(user_dir, b.name) or dirHasFile(proj_dir, b.name)) continue;
+        if (evalBundled(b.name, b.src)) loaded_files += 1 else load_errors += 1;
+    }
+    if (user_dir) |p| loadDir(p);
     if (proj_dir) |p| loadDir(p);
     refreshRegistry();
 }
@@ -867,10 +937,41 @@ pub fn wantsSessionStart() bool {
 }
 
 /// agent_end 事件:回合收口(text = 最后一条 assistant 正文,可空)。只发不收。
-pub fn emitAgentEnd(arena: std.mem.Allocator, text: []const u8) void {
+pub const AgentEndInfo = struct {
+    text: []const u8 = "",
+    model: []const u8 = "",
+    cwd: []const u8 = "",
+    config_dir: []const u8 = "",
+    ts: i64 = 0,
+    has_usage: bool = false,
+    in: u64 = 0,
+    out: u64 = 0,
+    cr: u64 = 0,
+    cw: u64 = 0,
+    usd: f64 = 0,
+};
+
+const AgentEndUsage = struct { in: u64 = 0, out: u64 = 0, cr: u64 = 0, cw: u64 = 0, usd: f64 = 0 };
+
+/// agent_end:正文 + usage 载荷(无用量则 usage=null,插件自跳)。
+pub fn emitAgentEnd(arena: std.mem.Allocator, info: AgentEndInfo) void {
     if (!enabled or rt == null or !h_agent_end) return;
-    const clipped = if (text.len > 8192) text[0..8192] else text;
-    const payload = std.json.Stringify.valueAlloc(arena, .{ .text = clipped }, .{}) catch return;
+    const clipped = if (info.text.len > 8192) info.text[0..8192] else info.text;
+    const usage: ?AgentEndUsage = if (info.has_usage) .{
+        .in = info.in,
+        .out = info.out,
+        .cr = info.cr,
+        .cw = info.cw,
+        .usd = info.usd,
+    } else null;
+    const payload = std.json.Stringify.valueAlloc(arena, .{
+        .text = clipped,
+        .model = info.model,
+        .cwd = info.cwd,
+        .config_dir = info.config_dir,
+        .ts = info.ts,
+        .usage = usage,
+    }, .{}) catch return;
     _ = emit(arena, "agent_end", payload);
 }
 
@@ -1174,9 +1275,100 @@ test "qjs agent_end: fires with last assistant text" {
     refreshRegistryLockedForTest();
     var arena_inst = util.Arena.init(a);
     defer arena_inst.deinit();
-    emitAgentEnd(arena_inst.allocator(), "回合正文");
+    emitAgentEnd(arena_inst.allocator(), .{ .text = "回合正文" });
     try t.expect(last_notify != null);
     try t.expectEqualStrings("[info] AE:回合正文", last_notify.?);
+}
+
+test "qjs bundled: usage-ledger 内嵌出厂,agent_end 携 usage 落账" {
+    if (!enabled) return error.SkipZigTest;
+    const t = std.testing;
+    const a = t.allocator;
+    deinit();
+    init(a);
+    defer deinit();
+    const root = std.fmt.allocPrint(a, "/tmp/piz_jsrt_bund_{d}", .{std.os.linux.getpid()}) catch return error.SkipZigTest;
+    defer a.free(root);
+    defer std.Io.Dir.cwd().deleteTree(util.io, root) catch {};
+    try std.Io.Dir.cwd().createDirPath(util.io, root);
+    loadExtensions(root, "");
+    try t.expect(hasHandlers("agent_end")); // 内嵌件在场
+    var arena_inst = util.Arena.init(a);
+    defer arena_inst.deinit();
+    emitAgentEnd(arena_inst.allocator(), .{
+        .text = "ok",
+        .model = "gpt-4o-mini",
+        .cwd = "/proj",
+        .config_dir = root,
+        .ts = 123,
+        .has_usage = true,
+        .in = 12,
+        .out = 3,
+        .cr = 4,
+        .cw = 1,
+        .usd = 0.5,
+    });
+    const path = try std.fmt.allocPrint(a, "{s}/usage.jsonl", .{root});
+    defer a.free(path);
+    const got = try std.Io.Dir.cwd().readFileAlloc(util.io, path, a, .limited(4096));
+    defer a.free(got);
+    // 与原 Zig usage_log.appendTurn 行式逐字节一致
+    try t.expectEqualStrings("{\"ts\":123,\"model\":\"gpt-4o-mini\",\"in\":12,\"out\":3,\"cr\":4,\"cw\":1,\"usd\":0.50000000,\"cwd\":\"/proj\"}\n", got);
+    // 无 usage 不记
+    emitAgentEnd(arena_inst.allocator(), .{ .text = "x", .config_dir = root });
+    const got2 = try std.Io.Dir.cwd().readFileAlloc(util.io, path, a, .limited(4096));
+    defer a.free(got2);
+    try t.expectEqualStrings(got, got2);
+}
+
+test "qjs bundled override: 同名文件顶替内嵌件" {
+    if (!enabled) return error.SkipZigTest;
+    const t = std.testing;
+    const a = t.allocator;
+    deinit();
+    init(a);
+    defer deinit();
+    const root = std.fmt.allocPrint(a, "/tmp/piz_jsrt_ovr_{d}", .{std.os.linux.getpid()}) catch return error.SkipZigTest;
+    defer a.free(root);
+    defer std.Io.Dir.cwd().deleteTree(util.io, root) catch {};
+    const ext_dir = try std.fmt.allocPrint(a, "{s}/extensions", .{root});
+    defer a.free(ext_dir);
+    try std.Io.Dir.cwd().createDirPath(util.io, ext_dir);
+    const op = try std.fmt.allocPrint(a, "{s}/usage-ledger.js", .{ext_dir});
+    defer a.free(op);
+    try std.Io.Dir.cwd().writeFile(util.io, .{ .sub_path = op, .data = "piz.registerCommand(\"ovr\", { handler: () => \"OVR\" });\n" });
+    loadExtensions(root, "");
+    var arena_inst = util.Arena.init(a);
+    defer arena_inst.deinit();
+    try t.expectEqualStrings("OVR", runCommand(arena_inst.allocator(), "ovr", "").?);
+    // 内嵌 ledger 已让位:无 agent_end 手写者,发事件不落账
+    emitAgentEnd(arena_inst.allocator(), .{ .text = "x", .config_dir = root, .has_usage = true, .in = 1 });
+    const up = try std.fmt.allocPrint(a, "{s}/usage.jsonl", .{root});
+    defer a.free(up);
+    try t.expectError(error.FileNotFound, std.Io.Dir.cwd().readFileAlloc(util.io, up, a, .limited(4096)));
+}
+
+test "qjs appendFile 追加并新建" {
+    if (!enabled) return error.SkipZigTest;
+    const t = std.testing;
+    const a = t.allocator;
+    deinit();
+    init(a);
+    defer deinit();
+    mu.lockUncancelable(util.io);
+    const src =
+        \\const wp = "/tmp/piz_jsrt_ap_" + String(Date.now()) + ".txt";
+        \\piz.appendFile(wp, "a\n");
+        \\piz.appendFile(wp, "b\n");
+        \\piz.registerCommand("aprobe", { handler: () => piz.readFile(wp) });
+    ;
+    const v = c.JS_Eval(ctx.?, src.ptr, src.len, "<test>", c.JS_EVAL_TYPE_GLOBAL);
+    try t.expect(!c.JS_IsException(v));
+    c.JS_FreeValue(ctx.?, v);
+    mu.unlock(util.io);
+    var arena_inst = util.Arena.init(a);
+    defer arena_inst.deinit();
+    try t.expectEqualStrings("a\nb\n", runCommand(arena_inst.allocator(), "aprobe", "").?);
 }
 
 test "qjs reload: registry resets, no double registration" {

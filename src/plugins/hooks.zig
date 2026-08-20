@@ -6,12 +6,6 @@ const api = @import("api.zig");
 const BeforeChain = api.BeforeChain;
 const AfterChain = api.AfterChain;
 
-/// 一轮结束把 token 记进 ~/.piz/usage.jsonl。
-pub fn usageLedgerHook(ctx: ?*anyopaque) void {
-    const self: *agentmod.Agent = @ptrCast(@alignCast(ctx.?));
-    @import("../usage_log.zig").appendTurn(self);
-}
-
 // =====================================================================
 const MEMORY_HEADER = "## Cross-session memory";
 const MEMORY_MAX_CHARS = 8 * 1024; // 注入上限 ≈ 2K token

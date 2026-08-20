@@ -311,10 +311,9 @@ pub const builtin_plugins = [_]Plugin{
             .ctx_handler = lspmod.toolLsp,
         },
     } },
-    .{ .name = "usage-ledger", .after_turn = hookmod.usageLedgerHook },
 };
 
-/// 插件启用集的位掩码类型(15 个内置插件)。
+/// 插件启用集的位掩码类型(14 个内置插件;usage-ledger 已抽为内嵌 JS 扩展,见 docs/plugin-extraction.md)。
 pub const EnabledSet = u16;
 
 comptime {
