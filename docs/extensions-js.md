@@ -32,6 +32,7 @@ piz.on("tool_result", (e) => {
 });
 piz.on("agent_end", (e) => { /* e.text = 回合最后 assistant 正文(截 8KB,可空);
      e.model/e.cwd/e.config_dir/e.ts;有用量时 e.usage = {in,out,cr,cw,usd},无则 null */ });
+piz.on("compact", (e) => { /* e.summary/e.cwd/e.config_dir/e.ts(压缩成功后,fire-and-forget) */ });
 
 // 注册 LLM 工具(走与内置工具同一 permissions 闸;同步 execute)
 piz.registerTool({
@@ -58,6 +59,8 @@ piz.appendFile("/tmp/x", "txt"); // 尾追加,不在则建(0600),父目须已在
 piz.env("HOME");                 // 未设 → null
 piz.cwd();                       // 进程 cwd 串
 piz.configDir();                 // 配置目(~/.piz 或 $PIZ_DIR),未装载 → null
+piz.contextStats();              // 调用方 context 快照 {window,used,tools_share,remaining,hard_pct,limit,until_compact};
+                                 // 仅工具/命令执行进行中可得,否则 null
 
 // 同步 HTTP(阻塞引擎互斥锁期间其他扩展调用排队;传输错 throw,HTTP 错状态看 .status)
 const r = piz.fetch("http://127.0.0.1:8873/x", {

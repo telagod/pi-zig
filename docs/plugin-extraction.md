@@ -16,7 +16,7 @@
 | `compact-resilience` | `on_compact_failed` | on_compact_failed(可返备用模型名) | ⏳ 待桥 |
 | `web-search` | tools + /web | fetch + safe 护栏 + 门控装载 | ✅ **已抽**(safe fetch + `{error}` 透传 + gate 三桥随件落) |
 | `skills` | tool + /skills | 宿主 API:skills index | ⏳ 待桥 |
-| `context-budget` | tool + /context | 宿主 API:estTokens/窗口 | ⏳ 待桥 |
+| `context-budget` | tool + /context | 宿主 API:estTokens/窗口 | ✅ **已抽**(`piz.contextStats()` 快照,桥注人) |
 | `git-awareness` | tool + /git | exec 子进程 | ⏳ 待桥 |
 | `elicitation` | ask_user 工具 | 自由文问客(confirm 只 y/n) | ⏳ 待桥(或接受 y/n 退化) |
 | `todo` | tools + /todo | 会话态;引擎按 workspace 隔离 | ⏳ 待隔离 |
@@ -60,7 +60,8 @@
 2. ✅ `web-search`(默认关;gate 门控保开关语义,护栏迁 httpc 供 safe fetch)
 3. ✅ `artifact-store`(默认开;`{replace}` 改写桥;read 系跳过/阈值/预览边界与原 Zig 版同则)
 4. ✅ `cross-session-memory` / `concept-graph`(compact 事件;e2e 记忆管线改经 JS 件验)
-5. 宿主 API 就绪后:`context-budget` → `skills` → `git-awareness`(exec)
+5. ✅ `context-budget`(`piz.contextStats()`;callTool/runCommand 携快照,互斥下无竞态;默认关保语义)
+6. `skills`(skillsIndex 可以现有 fs 原语拼)→ `git-awareness`(exec 原语,安全须裁)
 6. 留核:`command-canonicalization`(安全)、`vision-input`(二进制)、子代理三家(调度);`compact-resilience` 暂缓(见对账表)
 
 ## 验收标准(每件必过)

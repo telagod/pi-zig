@@ -51,6 +51,8 @@ const PRELUDE =
     \\  const handlers = Object.create(null);
     \\  const tools = [];
     \\  const commands = Object.create(null);
+    \\  // 当前调用方的 context 快照(callTool/runCommand 进入时由桥设,返后清)。
+    \\  let curStats = null;
     \\  // promise 收干:async handler 的 await 链全是 microtask(桥无 IO 原语),
     \\  // host_settle 同步泵 job 至 settle;拒绝则 throw,落进各处既有 try/catch。
     \\  const settle = (r) => (r && typeof r.then === "function") ? __piz_host_settle(r) : r;
@@ -67,6 +69,7 @@ const PRELUDE =
     \\    cwd() { return __piz_host_cwd(); },
     \\    configDir() { return __piz_host_configDir(); },
     \\    fetch(url, opts) { return __piz_host_fetch(String(url), opts === undefined ? "" : JSON.stringify(opts)); },
+    \\    contextStats() { return curStats; },
     \\  };
     \\  Object.defineProperty(globalThis, "__piz", { value: {
     \\    emit(ev, json) {
@@ -89,7 +92,7 @@ const PRELUDE =
     \\        schema: t.schema || t.parameters || null,
     \\      })));
     \\    },
-    \\    callTool(name, argsJson) {
+    \\    callTool(name, argsJson, statsJson) {
     \\      const t = tools.find(x => x.name === name);
     \\      if (!t || typeof t.execute !== "function")
     \\        return JSON.stringify({ error: "js tool not found: " + name });
@@ -97,6 +100,7 @@ const PRELUDE =
     \\      try { args = argsJson ? JSON.parse(argsJson) : {}; } catch (e) {
     \\        return JSON.stringify({ error: "bad args json: " + (e && e.message || e) });
     \\      }
+    \\      try { curStats = statsJson ? JSON.parse(statsJson) : null; } catch (_) { curStats = null; }
     \\      try {
     \\        const r = settle(t.execute(args, api));
     \\        if (r && r.error !== undefined) return JSON.stringify({ error: String(r.error) });
@@ -104,20 +108,22 @@ const PRELUDE =
     \\        return JSON.stringify({ content: typeof text === "string" ? text : JSON.stringify(text) });
     \\      } catch (e) {
     \\        return JSON.stringify({ error: String(e && (e.stack || e.message) || e) });
-    \\      }
+    \\      } finally { curStats = null; }
     \\    },
     \\    commandsJson() {
     \\      return JSON.stringify(Object.keys(commands).map(name => ({
     \\        name, description: String((commands[name] && commands[name].description) || ""),
     \\      })));
     \\    },
-    \\    runCommand(name, args) {
+    \\    runCommand(name, args, statsJson) {
     \\      const d = commands[name];
     \\      if (!d) return undefined;
     \\      const fn = typeof d === "function" ? d : d.handler;
     \\      if (typeof fn !== "function") return "";
+    \\      try { curStats = statsJson ? JSON.parse(statsJson) : null; } catch (_) { curStats = null; }
     \\      try { const r = settle(fn(args || "", api)); return r === undefined || r === null ? "" : String(r); }
     \\      catch (e) { return JSON.stringify({ error: String(e && (e.stack || e.message) || e) }); }
+    \\      finally { curStats = null; }
     \\    },
     \\  }, enumerable: false, configurable: true }); // configurable:/reload 重 eval prelude 重置注册表靠它
     \\  return api;
@@ -723,6 +729,7 @@ const bundled_exts = [_]struct { name: []const u8, gate: []const u8 = "", src: [
     .{ .name = "artifact-store.js", .gate = "artifact-store", .src = @embedFile("embedded/extensions/artifact-store.js") },
     .{ .name = "cross-session-memory.js", .gate = "cross-session-memory", .src = @embedFile("embedded/extensions/cross-session-memory.js") },
     .{ .name = "concept-graph.js", .gate = "concept-graph", .src = @embedFile("embedded/extensions/concept-graph.js") },
+    .{ .name = "context-budget.js", .gate = "context-budget", .src = @embedFile("embedded/extensions/context-budget.js") },
 };
 
 var gate_names: []const []const u8 = &.{};
@@ -1129,10 +1136,10 @@ pub fn appendToolDefs(allow: []const []const u8, out: *std.array_list.Managed(ai
 }
 
 /// 执行 JS 工具并产出 Result。{error} → is_error。
-pub fn runJsTool(alloc: std.mem.Allocator, name: []const u8, args_json: []const u8) !toolsmod.Result {
+pub fn runJsTool(alloc: std.mem.Allocator, name: []const u8, args_json: []const u8, stats_json: ?[]const u8) !toolsmod.Result {
     var arena_inst = std.heap.ArenaAllocator.init(alloc);
     defer arena_inst.deinit();
-    const json = callTool(arena_inst.allocator(), name, args_json) orelse
+    const json = callTool(arena_inst.allocator(), name, args_json, stats_json) orelse
         return .{ .content = try alloc.dupe(u8, "js runtime unavailable"), .is_error = true };
     const parsed = std.json.parseFromSliceLeaky(std.json.Value, arena_inst.allocator(), json, .{}) catch
         return .{ .content = try alloc.dupe(u8, json), .is_error = false };
@@ -1147,19 +1154,19 @@ pub fn runJsTool(alloc: std.mem.Allocator, name: []const u8, args_json: []const 
 }
 
 /// 执行 JS 注册工具。返回 JSON:{content}|{error}(dupe 到 arena)。
-pub fn callTool(arena: std.mem.Allocator, name: []const u8, args_json: []const u8) ?[]const u8 {
+pub fn callTool(arena: std.mem.Allocator, name: []const u8, args_json: []const u8, stats_json: ?[]const u8) ?[]const u8 {
     if (!enabled or rt == null) return null;
     mu.lockUncancelable(util.io);
     defer mu.unlock(util.io);
-    return callBridge(arena, "callTool", &.{ name, args_json });
+    return callBridge(arena, "callTool", &.{ name, args_json, stats_json orelse "" });
 }
 
 /// 执行 JS 注册命令。未注册 = null;输出串(可空)或 {error} JSON。
-pub fn runCommand(arena: std.mem.Allocator, name: []const u8, args: []const u8) ?[]const u8 {
+pub fn runCommand(arena: std.mem.Allocator, name: []const u8, args: []const u8, stats_json: ?[]const u8) ?[]const u8 {
     if (!enabled or rt == null) return null;
     mu.lockUncancelable(util.io);
     defer mu.unlock(util.io);
-    return callBridge(arena, "runCommand", &.{ name, args });
+    return callBridge(arena, "runCommand", &.{ name, args, stats_json orelse "" });
 }
 
 test "qjs bridge: load, events, tools, commands" {
@@ -1198,12 +1205,12 @@ test "qjs bridge: load, events, tools, commands" {
     try t.expect(std.mem.eql(u8, blocked.?, "no bash"));
     try t.expect(emitToolCall(arena, "read", "{}") == null);
     // 工具
-    const out = callTool(arena, "greet", "{\"who\":\"piz\"}").?;
+    const out = callTool(arena, "greet", "{\"who\":\"piz\"}", null).?;
     try t.expect(std.mem.indexOf(u8, out, "hello piz") != null);
     // 命令
-    const cmd_out = runCommand(arena, "wave", "abc").?;
+    const cmd_out = runCommand(arena, "wave", "abc", null).?;
     try t.expect(std.mem.eql(u8, cmd_out, "waved abc"));
-    try t.expect(runCommand(arena, "missing", "") == null);
+    try t.expect(runCommand(arena, "missing", "", null) == null);
     // notify 落账
     _ = emit(arena, "session_start", "{\"cwd\":\"/tmp\"}");
     try t.expect(last_notify != null);
@@ -1268,8 +1275,8 @@ test "qjs settle: async handlers resolve synchronously" {
     var arena_inst = util.Arena.init(a);
     defer arena_inst.deinit();
     const arena = arena_inst.allocator();
-    try t.expectEqualStrings("A:xyz", runCommand(arena, "ac", "xyz").?);
-    const out = callTool(arena, "at", "{\"v\":\"q\"}").?;
+    try t.expectEqualStrings("A:xyz", runCommand(arena, "ac", "xyz", null).?);
+    const out = callTool(arena, "at", "{\"v\":\"q\"}", null).?;
     try t.expect(std.mem.indexOf(u8, out, "T:q") != null);
 }
 
@@ -1302,7 +1309,7 @@ test "qjs esm import: relative module loads" {
     refreshRegistryLockedForTest();
     var arena_inst = util.Arena.init(a);
     defer arena_inst.deinit();
-    try t.expectEqualStrings("tag=DEPOK", runCommand(arena_inst.allocator(), "depcmd", "").?);
+    try t.expectEqualStrings("tag=DEPOK", runCommand(arena_inst.allocator(), "depcmd", "", null).?);
 }
 
 test "qjs ts: typescript extension strips and loads" {
@@ -1329,7 +1336,7 @@ test "qjs ts: typescript extension strips and loads" {
     refreshRegistryLockedForTest();
     var arena_inst = util.Arena.init(a);
     defer arena_inst.deinit();
-    try t.expectEqualStrings("TS:q", runCommand(arena_inst.allocator(), "tsc", "q").?);
+    try t.expectEqualStrings("TS:q", runCommand(arena_inst.allocator(), "tsc", "q", null).?);
 }
 
 test "qjs fs primitives: readFile/writeFile/env/cwd" {
@@ -1355,7 +1362,7 @@ test "qjs fs primitives: readFile/writeFile/env/cwd" {
     mu.unlock(util.io);
     var arena_inst = util.Arena.init(a);
     defer arena_inst.deinit();
-    const out = runCommand(arena_inst.allocator(), "fsprobe", "").?;
+    const out = runCommand(arena_inst.allocator(), "fsprobe", "", null).?;
     try t.expect(std.mem.indexOf(u8, out, "true|fsok:") != null);
     try t.expect(std.mem.indexOf(u8, out, "|true|true") != null);
 }
@@ -1443,7 +1450,7 @@ test "qjs bundled override: 同名文件顶替内嵌件" {
     loadExtensions(root, "");
     var arena_inst = util.Arena.init(a);
     defer arena_inst.deinit();
-    try t.expectEqualStrings("OVR", runCommand(arena_inst.allocator(), "ovr", "").?);
+    try t.expectEqualStrings("OVR", runCommand(arena_inst.allocator(), "ovr", "", null).?);
     // 内嵌 ledger 已让位:无 agent_end 手写者,发事件不落账
     emitAgentEnd(arena_inst.allocator(), .{ .text = "x", .config_dir = root, .has_usage = true, .in = 1 });
     const up = try std.fmt.allocPrint(a, "{s}/usage.jsonl", .{root});
@@ -1471,7 +1478,7 @@ test "qjs appendFile 追加并新建" {
     mu.unlock(util.io);
     var arena_inst = util.Arena.init(a);
     defer arena_inst.deinit();
-    try t.expectEqualStrings("a\nb\n", runCommand(arena_inst.allocator(), "aprobe", "").?);
+    try t.expectEqualStrings("a\nb\n", runCommand(arena_inst.allocator(), "aprobe", "", null).?);
 }
 
 test "qjs bundled gate: web-search 默认关,setGates 开后装载" {
@@ -1494,12 +1501,12 @@ test "qjs bundled gate: web-search 默认关,setGates 开后装载" {
     try t.expect(findTool("web_search") != null);
     try t.expect(findTool("fetch_url") != null);
     // 私网拦:safe fetch 拦 127.0.0.1,报错原文与原 Zig 工具一致
-    const r = try runJsTool(a, "fetch_url", "{\"url\":\"http://127.0.0.1:5494/api/chat\"}");
+    const r = try runJsTool(a, "fetch_url", "{\"url\":\"http://127.0.0.1:5494/api/chat\"}", null);
     defer a.free(r.content);
     try t.expect(r.is_error);
     try t.expect(std.mem.indexOf(u8, r.content, "blocked private or local address") != null);
     // 未配端点:web_search 报配置指引(假定测试环境未设 PIZ_WEB_SEARCH_URL)
-    const r2 = try runJsTool(a, "web_search", "{\"query\":\"zig\"}");
+    const r2 = try runJsTool(a, "web_search", "{\"query\":\"zig\"}", null);
     defer a.free(r2.content);
     try t.expect(r2.is_error);
     try t.expect(std.mem.indexOf(u8, r2.content, "PIZ_WEB_SEARCH_URL") != null);
@@ -1514,7 +1521,7 @@ test "qjs bundled gate: web-search 默认关,setGates 开后装载" {
     try t.expect(findTool("web_search") == null); // 内嵌让位
     var arena_inst = util.Arena.init(a);
     defer arena_inst.deinit();
-    try t.expectEqualStrings("WOVR", runCommand(arena_inst.allocator(), "wovr", "").?);
+    try t.expectEqualStrings("WOVR", runCommand(arena_inst.allocator(), "wovr", "", null).?);
 }
 
 test "qjs tool_result replace:artifact-store 外置大件,小件/read/已置不动" {
@@ -1554,6 +1561,37 @@ test "qjs tool_result replace:artifact-store 外置大件,小件/read/已置不�
     const zh = try ar.dupe(u8, "x" ++ "// 中文注释行填充凑长\n" ** 300);
     const zrepl = emitToolResult(ar, "bash", zh).?;
     try t.expect(std.unicode.utf8ValidateSlice(zrepl));
+}
+
+test "qjs bundled context-budget: 快照注人与文案 parity" {
+    if (!enabled) return error.SkipZigTest;
+    const t = std.testing;
+    const a = t.allocator;
+    deinit();
+    init(a);
+    defer deinit();
+    const root = std.fmt.allocPrint(a, "/tmp/piz_jsrt_cb_{d}", .{std.os.linux.getpid()}) catch return error.SkipZigTest;
+    defer a.free(root);
+    defer std.Io.Dir.cwd().deleteTree(util.io, root) catch {};
+    try std.Io.Dir.cwd().createDirPath(util.io, root);
+    setGates(&.{"context-budget"});
+    loadExtensions(root, "");
+    const stats = "{\"window\":1000,\"used\":300,\"tools_share\":50,\"remaining\":700,\"hard_pct\":85,\"limit\":850,\"until_compact\":550}";
+    const want = "Context budget: window 1000 tokens, used ~300 (of which ~50 is the fixed tool definitions), remaining ~700. Auto-compaction triggers at 85% (850 tokens) — ~550 tokens of headroom before that.";
+    const r = try runJsTool(a, "get_context_remaining", "{}", stats);
+    defer a.free(r.content);
+    try t.expect(!r.is_error);
+    try t.expectEqualStrings(want, r.content);
+    var arena_inst = util.Arena.init(a);
+    defer arena_inst.deinit();
+    const out = runCommand(arena_inst.allocator(), "context", "", stats).?;
+    try t.expectEqualStrings(want, out);
+    // 无快照:工具报 error、命令报不可用
+    const r2 = try runJsTool(a, "get_context_remaining", "{}", null);
+    defer a.free(r2.content);
+    try t.expect(r2.is_error);
+    const out2 = runCommand(arena_inst.allocator(), "context", "", null).?;
+    try t.expectEqualStrings("context stats unavailable", out2);
 }
 
 test "qjs compact: memory 覆写 + concept 追加(parity)" {
@@ -1610,17 +1648,17 @@ test "qjs bundled web-search: 内部函数探针(整形/编码/HTML 抽文/状�
     var arena_inst = util.Arena.init(a);
     defer arena_inst.deinit();
     const ar = arena_inst.allocator();
-    try t.expectEqualStrings("zig%200.16", runCommand(ar, "t_enc", "zig 0.16").?);
-    const html = runCommand(ar, "t_html", "<html><head><title>x</title></head><body><h1>Hello</h1><p>world &amp; zig</p><script>bad()</script></body></html>").?;
+    try t.expectEqualStrings("zig%200.16", runCommand(ar, "t_enc", "zig 0.16", null).?);
+    const html = runCommand(ar, "t_html", "<html><head><title>x</title></head><body><h1>Hello</h1><p>world &amp; zig</p><script>bad()</script></body></html>", null).?;
     try t.expect(std.mem.indexOf(u8, html, "Hello") != null);
     try t.expect(std.mem.indexOf(u8, html, "world & zig") != null);
     try t.expect(std.mem.indexOf(u8, html, "bad()") == null);
     try t.expect(std.mem.indexOf(u8, html, "<") == null);
-    const shaped = runCommand(ar, "t_shape", "{\"results\":[{\"title\":\"Zig\",\"url\":\"https://ziglang.org\",\"content\":\"A programming language.\"}]}").?;
+    const shaped = runCommand(ar, "t_shape", "{\"results\":[{\"title\":\"Zig\",\"url\":\"https://ziglang.org\",\"content\":\"A programming language.\"}]}", null).?;
     try t.expect(std.mem.indexOf(u8, shaped, "Zig") != null);
     try t.expect(std.mem.indexOf(u8, shaped, "https://ziglang.org") != null);
     try t.expect(std.mem.indexOf(u8, shaped, "fetch_url") != null);
-    try t.expect(std.mem.indexOf(u8, runCommand(ar, "t_status", "").?, "usage: /web") != null);
+    try t.expect(std.mem.indexOf(u8, runCommand(ar, "t_status", "", null).?, "usage: /web") != null);
 }
 
 test "qjs reload: registry resets, no double registration" {
@@ -1657,6 +1695,6 @@ test "qjs reload: registry resets, no double registration" {
     try t.expect(js_commands.len == 1); // cmdA 不在了,无双注册
     var arena_inst = util.Arena.init(a);
     defer arena_inst.deinit();
-    try t.expectEqualStrings("B", runCommand(arena_inst.allocator(), "cmdB", "").?);
-    try t.expect(runCommand(arena_inst.allocator(), "cmdA", "") == null);
+    try t.expectEqualStrings("B", runCommand(arena_inst.allocator(), "cmdB", "", null).?);
+    try t.expect(runCommand(arena_inst.allocator(), "cmdA", "", null) == null);
 }

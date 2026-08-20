@@ -27,7 +27,7 @@ pub const agentOpenCountForTest = agentsplug.agentOpenCountForTest;
 
 // Plugin 合同已迁至 plugins/api.zig。
 
-test "context budget report separates fixed tool cost from headroom" {
+test "context budget snapshot separates fixed tool cost from headroom" {
     const t = std.testing;
     try agentmod.util.testInit();
     var arena = agentmod.util.Arena.init(t.allocator);
@@ -38,23 +38,23 @@ test "context budget report separates fixed tool cost from headroom" {
     cfg.providers = &provs;
     var agent = try agentmod.Agent.init(a, &cfg, "mock", "m", "/tmp");
 
-    const r = try toolContextRemaining(@ptrCast(&agent), a, "{}");
-    try t.expect(!r.is_error);
-
-    // 用量必须已含工具定义 —— 修前这里报的是不含工具的数,虚报约 1024 token 余量
-    try t.expect(std.mem.indexOf(u8, r.content, "fixed tool definitions") != null);
-    // 压缩线而非窗口尽头才是模型能用的信号
-    try t.expect(std.mem.indexOf(u8, r.content, "Auto-compaction triggers at 85%") != null);
-    try t.expect(std.mem.indexOf(u8, r.content, "headroom") != null);
+    // 快照口径(工具定义份额、压缩线余量)——文案 parity 由 jsrt 测试担
+    const v = try std.json.parseFromSliceLeaky(std.json.Value, a, agent.jsStatsJson(a), .{});
+    const o = v.object;
+    try t.expect(o.get("tools_share").?.integer > 0); // 用量已含工具定义,不虚报
+    try t.expectEqual(@as(i64, 85), o.get("hard_pct").?.integer);
+    try t.expect(o.get("until_compact").?.integer > 0);
+    try t.expect(o.get("remaining").?.integer > 0);
 
     // 塞满历史 → 余量归零而不是回绕成巨大的数
     const w = @as(usize, provs[0].context_window);
     while (agent.estTokens() < w) {
         try agent.messages.append(.{ .role = "user", .content = "x" ** 4096 });
     }
-    const full = try toolContextRemaining(@ptrCast(&agent), a, "{}");
-    try t.expect(std.mem.indexOf(u8, full.content, "remaining ~0") != null);
-    try t.expect(std.mem.indexOf(u8, full.content, "~0 tokens of headroom") != null);
+    const v2 = try std.json.parseFromSliceLeaky(std.json.Value, a, agent.jsStatsJson(a), .{});
+    const o2 = v2.object;
+    try t.expectEqual(@as(i64, 0), o2.get("remaining").?.integer);
+    try t.expectEqual(@as(i64, 0), o2.get("until_compact").?.integer);
 }
 
 // 跨会话记忆已迁至 plugins/hooks.zig
@@ -68,33 +68,6 @@ fn toolCtxStub(_: std.mem.Allocator, args: []const u8) anyerror!toolsmod.Result 
 // =====================================================================
 // 上下文预算查询插件:get_context_remaining 工具。
 // =====================================================================
-fn toolContextRemaining(ctx: ?*anyopaque, arena: std.mem.Allocator, args: []const u8) anyerror!toolsmod.Result {
-    _ = args;
-    const self: *agentmod.Agent = @ptrCast(@alignCast(ctx.?));
-    const w = self.ctxWindow();
-    const used = self.estTokens();
-    const remain = if (used < w) w - used else 0;
-    // 报到压缩线的余量,不是报到窗口尽头 —— 模型该知道还能塞多少才会触发压缩,
-    // 「离窗口还有多远」对它没有可操作性。
-    const limit = w * agentmod.CTX_HARD_PERCENT / 100;
-    const until_compact = if (used < limit) limit - used else 0;
-    // 工具定义的份额单列:它是恒定开销,模型省不掉,不该让它以为那是可回收的空间。
-    const tools_share = if (self.read_only) 0 else toolDefsTokensIn(self.plugins);
-    return .{ .content = try std.fmt.allocPrint(
-        arena,
-        "Context budget: window {d} tokens, used ~{d} (of which ~{d} is the fixed tool definitions), remaining ~{d}. Auto-compaction triggers at {d}% ({d} tokens) — ~{d} tokens of headroom before that.",
-        .{ w, used, tools_share, remain, agentmod.CTX_HARD_PERCENT, limit, until_compact },
-    ) };
-}
-
-fn slashContext(ctx: ?*anyopaque, args: []const u8) anyerror![]const u8 {
-    const self: *agentmod.Agent = @ptrCast(@alignCast(ctx orelse return error.NoAgent));
-    var arena = agentmod.util.Arena.init(self.alloc);
-    defer arena.deinit();
-    const r = try toolContextRemaining(ctx, arena.allocator(), args);
-    return self.alloc.dupe(u8, r.content);
-}
-
 fn slashSkills(ctx: ?*anyopaque, args: []const u8) anyerror![]const u8 {
     _ = args;
     const self: *agentmod.Agent = @ptrCast(@alignCast(ctx orelse return error.NoAgent));
@@ -153,17 +126,7 @@ pub const builtin_plugins = [_]Plugin{
             .handler = toolsmod.toolSkill,
         },
     } },
-    .{ .name = "context-budget", .enabled_by_default = false, .slash_commands = &.{
-        .{ .name = "context", .desc = "context budget remaining", .handler = slashContext },
-    }, .tools = &.{
-        .{
-            .name = "get_context_remaining",
-            .desc = "Report remaining context budget in tokens.",
-            .schema = toolsmod.EMPTY_SCHEMA,
-            .handler = toolCtxStub,
-            .ctx_handler = toolContextRemaining,
-        },
-    } },
+    .{ .name = "context-budget", .enabled_by_default = false, .extracted = true },
     .{ .name = "git-awareness", .enabled_by_default = false, .slash_commands = &.{
         .{ .name = "git", .desc = "git status + diffstat", .handler = extras.slashGit },
     }, .tools = &.{
@@ -1079,14 +1042,13 @@ test "collectSlash lists todo when enabled" {
     const set = withEnabled(withEnabled(withEnabled(withEnabled(withEnabled(withEnabled(withEnabled(0, "todo"), "skills"), "context-budget"), "git-awareness"), "lsp"), "web-search"), "task-delegation");
     var buf: [8]SlashCommand = undefined;
     const n = collectSlash(set, &buf);
-    // web-search 已抽离:空壳行无斜杠,/web 由 JS 侧 registerCommand 供(门控开时)
-    try t.expectEqual(@as(usize, 6), n);
+    // web-search/context-budget 已抽离:空壳行无斜杠,/web 与 /context 由 JS 侧 registerCommand 供(门控开时)
+    try t.expectEqual(@as(usize, 5), n);
     try t.expectEqualStrings("skills", buf[0].name);
-    try t.expectEqualStrings("context", buf[1].name);
-    try t.expectEqualStrings("git", buf[2].name);
-    try t.expectEqualStrings("agents", buf[3].name);
-    try t.expectEqualStrings("todo", buf[4].name);
-    try t.expectEqualStrings("lsp", buf[5].name);
+    try t.expectEqualStrings("git", buf[1].name);
+    try t.expectEqualStrings("agents", buf[2].name);
+    try t.expectEqualStrings("todo", buf[3].name);
+    try t.expectEqualStrings("lsp", buf[4].name);
     try t.expect(dispatchSlash(0, null, "todo", "") == null);
     try t.expect(dispatchSlash(0, null, "agents", "") == null);
     // 名籍仍在:抽离件可开可关

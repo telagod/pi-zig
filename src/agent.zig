@@ -187,7 +187,10 @@ pub fn runToolSlot(slot: *ToolSlot) void {
         slot.result = toolsmod.runPkgCommand(self.alloc, t.payload, slot.call.args) catch |err| toolsmod.crashResult(self.alloc, slot.call.name, err);
     } else if (jsrt.enabled and t.ctx_handler == jsrt.toolEntryMarker) {
         // JS 注册工具:名字从 call 取(ctx_handler 不带名),全程互斥序列化。
-        slot.result = jsrt.runJsTool(self.alloc, slot.call.name, slot.call.args) catch |err| toolsmod.crashResult(self.alloc, slot.call.name, err);
+        // 携 context 快照供 piz.contextStats()(scratch arena 即弃)。
+        var sa = std.heap.ArenaAllocator.init(self.alloc);
+        defer sa.deinit();
+        slot.result = jsrt.runJsTool(self.alloc, slot.call.name, slot.call.args, self.jsStatsJson(sa.allocator())) catch |err| toolsmod.crashResult(self.alloc, slot.call.name, err);
     } else if (t.ctx_handler) |h| {
         slot.result = h(@ptrCast(self), self.alloc, slot.call.args) catch |err| toolsmod.crashResult(self.alloc, slot.call.name, err);
     } else {
@@ -779,6 +782,25 @@ pub const Agent = struct {
     /// 单段文本的 token 估算。按 UTF-8 序列长度分档计权。
     pub fn estTokensOf(text: []const u8) usize {
         return util.estTokensUtf8(text);
+    }
+
+    /// JS 调用方的 context 快照(context-budget 等)。数字口径与原 plugins.zig 版一致。
+    pub fn jsStatsJson(self: *Agent, arena: std.mem.Allocator) []const u8 {
+        const w = self.ctxWindow();
+        const used = self.estTokens();
+        const remain = if (used < w) w - used else 0;
+        const limit = w * CTX_HARD_PERCENT / 100;
+        const until_compact = if (used < limit) limit - used else 0;
+        const tools_share = if (self.read_only) 0 else pluginsmod.toolDefsTokensIn(self.plugins);
+        return std.json.Stringify.valueAlloc(arena, .{
+            .window = w,
+            .used = used,
+            .tools_share = tools_share,
+            .remaining = remain,
+            .hard_pct = CTX_HARD_PERCENT,
+            .limit = limit,
+            .until_compact = until_compact,
+        }, .{}) catch return "";
     }
 
     /// 追加用户消息并跑完一轮(含工具循环)。

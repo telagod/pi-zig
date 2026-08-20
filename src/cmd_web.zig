@@ -801,7 +801,7 @@ fn poolSlashHook(ctx: ?*anyopaque, cwd: []const u8, session: []const u8, name: [
         if (jsrt.enabled) {
             var ja = util.Arena.init(ses.agent.alloc);
             defer ja.deinit();
-            if (jsrt.runCommand(ja.allocator(), name, args)) |text| {
+            if (jsrt.runCommand(ja.allocator(), name, args, ses.agent.jsStatsJson(ja.allocator()))) |text| {
                 out.writeAll(text) catch return false;
                 return true;
             }

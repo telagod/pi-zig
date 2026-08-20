@@ -206,7 +206,7 @@ pub fn onSubmit(tui: *tui_mod.Tui, line: []const u8) anyerror!void {
             if (jsrt.enabled) {
                 var ja = util.Arena.init(app.alloc);
                 defer ja.deinit();
-                if (jsrt.runCommand(ja.allocator(), sname, sargs)) |out| {
+                if (jsrt.runCommand(ja.allocator(), sname, sargs, app.agent.jsStatsJson(ja.allocator()))) |out| {
                     if (out.len > 0) tuiNote(app, "", out);
                     return;
                 }
