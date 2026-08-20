@@ -127,6 +127,7 @@ deepseek/v4-flash think max ctx 1.2k/128k 9% cache 62% ~/project/pi-zig · 17867
 | `/mcp` | 列出已配置 MCP server 与工具（`piz mcp` 同） |
 | `/reload` | 重读 settings.json（主题/授权/沙箱/思考档；Web 当场套用外观；插件与 MCP 需重启；`piz reload` 同） |
 | `/usage` | 跨会话 token 账本（`~/.piz/usage.jsonl`，最近 8 轮，含估算 `$`；`piz usage` 同）。空框按 `u` 同样 |
+| `/extensions` | 已载 JS 扩展：文件数/错误数、注册的工具与斜杠命令（`/reload` 后即时反映） |
 | `/jobs` | 当前在跑与后台任务（bash `background`、HTTP、子 agent）。空框按 `j` 同样 |
 | `/jobs kill <pid>` | 只杀 activity 表里的进程。`/kill <pid>` 同义 |
 | `/find <text>` | 在对话块里搜，再敲一次跳下一条；命中反色。空输入时 `n`/`N` 下一条/上一条。裁掉的旧块仍可搜到（提示 `match in pruned history`）。Web 上 F3 / Shift+F3 同样跳，没命中会先拉更早历史 |
