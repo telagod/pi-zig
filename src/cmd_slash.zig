@@ -24,6 +24,23 @@ const tuiOk = main_mod.tuiOk;
 const tuiNote = main_mod.tuiNote;
 const tuiNotes = main_mod.tuiNotes;
 
+/// /extensions:JS 扩展可观测量(装了几个文件/工具/命令,加载错几桩)。
+fn showExtensions(app: *App) void {
+    if (!jsrt.enabled) {
+        tuiNote(app, "\x1b[2m", "js extensions disabled (built without -Dquickjs)");
+        return;
+    }
+    var aw = std.Io.Writer.Allocating.init(app.alloc);
+    defer aw.deinit();
+    const w = &aw.writer;
+    w.print("js extensions: {d} file(s) loaded, {d} error(s)", .{ jsrt.loadedCount(), jsrt.loadErrorCount() }) catch return;
+    for (jsrt.jsTools()) |t| w.print("\n  tool     {s} — {s}", .{ t.name, t.desc }) catch return;
+    for (jsrt.jsCommands()) |cm| w.print("\n  /{s}  {s}", .{ cm.name, cm.desc }) catch return;
+    if (jsrt.jsTools().len == 0 and jsrt.jsCommands().len == 0 and jsrt.loadedCount() > 0)
+        w.print("\n  (只挂了事件处理器)\n", .{}) catch return;
+    tuiNotes(app, "\x1b[2m", aw.written());
+}
+
 pub fn dispatch(tui: *tui_mod.Tui, app: *App, cmd: []const u8) anyerror!bool {
     if (std.mem.eql(u8, cmd, "quit") or std.mem.eql(u8, cmd, "exit") or std.mem.eql(u8, cmd, "q")) {
         app.quit.store(true, .release);
@@ -548,6 +565,10 @@ pub fn dispatch(tui: *tui_mod.Tui, app: *App, cmd: []const u8) anyerror!bool {
             return true;
         }
         main_mod.showJobs(app);
+        return true;
+    }
+    if (std.mem.eql(u8, cmd, "extensions")) {
+        showExtensions(app);
         return true;
     }
     if (std.mem.eql(u8, cmd, "usage")) {

@@ -150,6 +150,7 @@ pub const SLASH_ITEMS = [_]HelpItem{
     .{ .cmd = "/mcp", .desc = "list MCP servers" },
     .{ .cmd = "/reload", .desc = "reload settings.json" },
     .{ .cmd = "/usage", .desc = "token ledger" },
+    .{ .cmd = "/extensions", .desc = "loaded JS extensions" },
     .{ .cmd = "/jobs", .desc = "running / background jobs" },
     .{ .cmd = "/jobs kill <pid>", .desc = "kill a tracked job" },
     .{ .cmd = "/find", .desc = "search transcript" },
