@@ -150,12 +150,12 @@ pub fn runWebCmd(alloc: std.mem.Allocator, args: *std.process.Args.Iterator) voi
     ws.ws_allowed_ctx = &pool;
     ws.auth_save_hook = poolAuthSave;
     ws.auth_save_ctx = &pool;
-    // JS 扩展运行时:web 模式只装全局目(~/.piz/extensions),项目目由 CLI 模式管。
-    // (web 多 workspace,引擎单例;工作区级扩展后置,见 docs/research-extension-runtime.md)
+    // JS 扩展运行时:全局目 + 服务器启动目的 .piz/extensions 一并装入。
+    // 引擎单例,扩展全体会话共享;按 workspace 分装后置(见 docs/research-extension-runtime.md)。
     jsrt.init(alloc);
     if (util.configDir(alloc)) |cd| {
         defer alloc.free(cd);
-        jsrt.loadExtensions(cd, "");
+        jsrt.loadExtensions(cd, abs_cwd);
     } else |_| {}
     ws.run() catch |err| util.warn("web server stopped: {s}", .{@errorName(err)});
     webui_mod.ChatQueue.shutdown();

@@ -5,7 +5,7 @@ piz 内嵌 QuickJS-ng(MIT,vendor/quickjs-ng),运行时加载 JS 扩展,免编译
 
 ## 位置与加载
 
-- `~/.piz/extensions/`(全局)+ `<项目>/.piz/extensions/`(项目,web 模式不装)
+- `~/.piz/extensions/`(全局)+ `<项目>/.piz/extensions/`(项目;web 模式装**服务器启动目**那份,引擎单例、全体会话共享,按 workspace 分装后置)
 - 认 `.js`(classic/ESM)、`.mjs`(ESM)、`.ts/.mts/.cts`(先 sucrase 剥皮)
 - 字典序加载;单文件 1MB 封顶;加载错误打 stderr,不致命
 - **ESM 支持**:`.mjs/.mts` 或源含 `export default` 即走模块支路,pi 式
@@ -49,7 +49,9 @@ piz.confirm("sure?");        // 未接管一律 false(安全默认)
 
 ## 约束(窄桥期)
 
-- execute/handler 必须**同步**;promise 不支持
+- execute/handler 可同步也可 **async**:async 的 await 链只能链 microtask
+  (桥内无 IO 原语,无 fetch/timer/fs);宿主 `__piz_host_settle` 同步泵 job
+  至落定,拒绝则原路 throw 进扩展既有 try/catch;永不 settle 报 never settles
 - JS 侧一切调用全局互斥序列化(QuickJS 上下文非线程安全;工具回调跑在工作线程上)
 - 同名内置/插件工具优先,JS 工具最后兜底
 - 对象进出即拷贝;不留跨 GC/arena 引用
