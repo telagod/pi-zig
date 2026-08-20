@@ -166,7 +166,7 @@ pub fn composerBoxWidth(cols: usize) usize {
 /// Prefix `│ › ` is 4 cols; plus the right `│` is 5. Inner text fits in the rest.
 const COMPOSER_FRAME: usize = 5;
 
-fn composerInnerWidth(boxed: bool, cols: usize) usize {
+pub fn composerInnerWidth(boxed: bool, cols: usize) usize {
     if (!boxed) return @max(cols, 2) - 2;
     const box_w = composerBoxWidth(cols);
     return @max(box_w, COMPOSER_FRAME) - COMPOSER_FRAME;

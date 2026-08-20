@@ -343,7 +343,8 @@ piz web [--port N] [--no-open] [--token T | --no-token]
 
 多行输入:`Alt+Enter` 插换行;粘贴走 bracketed paste(终端对粘贴块自动加
 `ESC[200~…ESC[201~`,piz 默认开启),多行原文整体进草稿,不再碰回车误提交。
-`Shift+Enter` 需 kitty 键盘协议,暂不支持。跨行光标移动暂无(←/→ 按字节走)。
+↑/↓ 在多行草稿内同列移动(顶行再 ↑ 才翻历史,软绕行同理);←/→ 按字节走。
+`Shift+Enter` 需 kitty 键盘协议,暂不支持。
 
 ## 主题
 

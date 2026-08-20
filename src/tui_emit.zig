@@ -777,6 +777,46 @@ test "styled markdown is cached per cell until text or theme changes" {
     try t.expect(cell.md_fp != fp_before);
 }
 
+/// 多行草稿内纵向移动:同列(显示格)移到上/下一可视行;行短则钉行尾。
+/// delta ±1;超界返回原 cursor。软绕行与硬换行同法。
+pub fn wrapMoveVertical(s: []const u8, cursor: usize, width: usize, delta: isize) usize {
+    const w = @max(width, 1);
+    const cur = wrapCursor(s, cursor, w);
+    const target: usize = if (delta < 0) cur.row -| @as(usize, @intCast(-delta)) else cur.row + @as(usize, @intCast(delta));
+    if (target == cur.row) return cursor;
+    var row: usize = 0;
+    var cols: usize = 0;
+    var i: usize = 0;
+    while (i <= s.len) {
+        if (row == target) {
+            if (cols >= cur.col) return i;
+            if (i >= s.len) return s.len;
+            if (s[i] == '\n') return i; // 钉行尾
+            const ch = charCols(s, i);
+            if (cols > 0 and cols + ch.cols > w) return i; // 本可视行尽
+            cols += ch.cols;
+            i += ch.n;
+            continue;
+        }
+        if (i >= s.len) return s.len;
+        if (s[i] == '\n') {
+            row += 1;
+            cols = 0;
+            i += 1;
+            continue;
+        }
+        const ch = charCols(s, i);
+        if (cols > 0 and cols + ch.cols > w) {
+            row += 1;
+            cols = 0;
+            continue; // 软绕不消耗 i
+        }
+        cols += ch.cols;
+        i += ch.n;
+    }
+    return s.len;
+}
+
 test "wrap hard-breaks on newline (multiline composer)" {
     const t = std.testing;
     try t.expectEqual(@as(usize, 2), wrapRowCount("ab\ncd", 80));
@@ -790,6 +830,25 @@ test "wrap hard-breaks on newline (multiline composer)" {
     try t.expectEqual(@as(usize, 2), on_nl.col);
     // 窄宽硬断优先于软绕:"ab\ncdefgh" w=3 → ab / cde / fgh = 3
     try t.expectEqual(@as(usize, 3), wrapRowCount("ab\ncdefgh", 3));
+}
+
+test "wrapMoveVertical: 同列跨行/钉行尾/超界不动" {
+    const t = std.testing;
+    const s = "ab\ncdef\ng";
+    // 行1 col1(idx 4) → 行0 col1 = idx 1
+    try t.expectEqual(@as(usize, 1), wrapMoveVertical(s, 4, 80, -1));
+    // 行0 col1(idx 1) → 行1 col1 = idx 4
+    try t.expectEqual(@as(usize, 4), wrapMoveVertical(s, 1, 80, 1));
+    // 行1 col3(idx 6) → 行2 只有 1 字符 → 钉行尾 = 'g' 之后 = s.len
+    try t.expectEqual(s.len, wrapMoveVertical(s, 6, 80, 1));
+    // 顶行再上 → 原处
+    try t.expectEqual(@as(usize, 1), wrapMoveVertical(s, 1, 80, -1));
+    // 底行再下 → 文末
+    try t.expectEqual(s.len, wrapMoveVertical(s, 7, 80, 1));
+    // 中间行短行: "ab\nx\ncd" 行0 col1(idx1) ↓ → 行1 col1 = 'x' 之后 idx 4
+    try t.expectEqual(@as(usize, 4), wrapMoveVertical("ab\nx\ncd", 1, 80, 1));
+    // 软绕行: "abcdef" w=3 → 两行 abC/def;idx 5(行1 col2)↑ → idx 2
+    try t.expectEqual(@as(usize, 2), wrapMoveVertical("abcdef", 5, 3, -1));
 }
 
 test "emitComposer splits hard lines" {

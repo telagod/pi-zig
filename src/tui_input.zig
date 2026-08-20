@@ -5,6 +5,10 @@ const util = @import("core").util;
 const slash = @import("tui_slash.zig");
 const keys = @import("tui_keys.zig");
 const filesmod = @import("core").tools_files;
+const emit = @import("tui_emit.zig");
+const wrapRowCount = emit.wrapRowCount;
+const wrapCursor = emit.wrapCursor;
+const wrapMoveVertical = emit.wrapMoveVertical;
 
 const Tui = tui.Tui;
 pub const Action = union(enum) { none, quit, abort, detach, submit: []const u8, think, copy, sandbox, jobs, usage, redo, doctor, diff, log };
@@ -612,6 +616,22 @@ pub fn arrowOrWheel(self: *Tui, dir: WheelDir, bytes: []const u8, i: *usize, par
     if (slashOpen(self)) {
         moveSlash(self, if (dir == .up) -1 else 1);
         return;
+    }
+    // 多行草稿:先在同列行间移动,顶/底行再落历史。
+    const inner = tui.composerInnerWidth(self.width >= 8, self.width);
+    const rows = wrapRowCount(self.input.items, inner);
+    if (rows > 1) {
+        const cur = wrapCursor(self.input.items, self.cursor, inner);
+        if (dir == .up and cur.row > 0) {
+            self.cursor = wrapMoveVertical(self.input.items, self.cursor, inner, -1);
+            self.dirty.store(true, .release);
+            return;
+        }
+        if (dir == .down and cur.row + 1 < rows) {
+            self.cursor = wrapMoveVertical(self.input.items, self.cursor, inner, 1);
+            self.dirty.store(true, .release);
+            return;
+        }
     }
     if (dir == .up) self.historyPrev() else self.historyNext();
 }
