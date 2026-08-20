@@ -36,6 +36,7 @@ pub fn slashQuery(input: []const u8) ?[]const u8 {
     if (input.len == 0 or input[0] != '/') return null;
     const rest = input[1..];
     if (std.mem.indexOfScalar(u8, rest, ' ') != null) return null;
+    if (std.mem.indexOfScalar(u8, rest, '\n') != null) return null; // 多行草稿不补全
     return rest;
 }
 

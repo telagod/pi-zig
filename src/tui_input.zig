@@ -201,7 +201,32 @@ pub fn handleInput(self: *Tui, bytes: []const u8) !Action {
         const b = bytes[i];
         const streaming = self.streaming.load(.acquire);
 
+        // bracketed paste 进行中:原样收录到 ESC[201~;\r\n/\r 归一 \n。
+        if (self.paste_mode) {
+            if (b == 0x1b and i + 5 < bytes.len and bytes[i + 1] == '[' and bytes[i + 2] == '2' and bytes[i + 3] == '0' and bytes[i + 4] == '1' and bytes[i + 5] == '~') {
+                self.paste_mode = false;
+                i += 6;
+                continue;
+            }
+            if (b == '\r') { // \r\n 一并吞
+                try insertByte(self, '\n');
+                i += if (i + 1 < bytes.len and bytes[i + 1] == '\n') 2 else 1;
+                continue;
+            }
+            try insertByte(self, b);
+            i += 1;
+            continue;
+        }
+
         if (b == 0x1b) {
+            if (i + 1 < bytes.len and (bytes[i + 1] == '\r' or bytes[i + 1] == '\n')) {
+                // Alt+Enter:插入换行(多行草稿)。
+                self.disarmQuit();
+                self.esc_armed = false;
+                try insertByte(self, '\n');
+                i += 2;
+                continue;
+            }
             if (i + 1 < bytes.len and bytes[i + 1] == '[') {
                 i += 2;
                 var k = i;
@@ -212,6 +237,12 @@ pub fn handleInput(self: *Tui, bytes: []const u8) !Action {
                 const params = bytes[i..k];
                 const final = bytes[k];
                 i = k + 1;
+                // bracketed paste 起止标记
+                if (final == '~' and std.mem.eql(u8, params, "200")) {
+                    self.paste_mode = true;
+                    continue;
+                }
+                if (final == '~' and std.mem.eql(u8, params, "201")) continue; // 狐尾止符
                 if (applyMouseScroll(self, params, final, bytes, &i)) continue;
                 switch (classifyCsi(params, final)) {
                     .up => arrowOrWheel(self, .up, bytes, &i, params, final),

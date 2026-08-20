@@ -116,7 +116,7 @@ pub fn listWorkspaceFiles(alloc: std.mem.Allocator, root: []const u8, q: []const
 pub fn atQuery(input: []const u8) ?[]const u8 {
     if (input.len == 0) return null;
     var start: usize = 0;
-    if (std.mem.lastIndexOfAny(u8, input, " \t")) |sp| start = sp + 1;
+    if (std.mem.lastIndexOfAny(u8, input, " \t\n")) |sp| start = sp + 1;
     const tok = input[start..];
     if (tok.len == 0 or tok[0] != '@') return null;
     const rest = tok[1..];

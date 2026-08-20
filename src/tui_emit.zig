@@ -515,6 +515,12 @@ pub fn wrapRowCount(line: []const u8, width: usize) usize {
             i = next;
             continue;
         }
+        if (line[i] == '\n') { // 硬断:多行草稿(Alt+Enter/bracketed paste)
+            rows += 1;
+            cols = 0;
+            i += 1;
+            continue;
+        }
         const ch = charCols(line, i);
         if (cols > 0 and cols + ch.cols > w) {
             rows += 1;
@@ -662,6 +668,12 @@ pub fn wrapCursor(s: []const u8, cursor: usize, width: usize) struct { row: usiz
             i = next;
             continue;
         }
+        if (s[i] == '\n') { // 硬断;cursor 停在 \n 上 = 上一行尾,不往下推
+            row += 1;
+            cols = 0;
+            i += 1;
+            continue;
+        }
         const ch = charCols(s, i);
         if (cols > 0 and cols + ch.cols > w) {
             row += 1;
@@ -694,6 +706,18 @@ pub fn emitComposer(wr: *std.Io.Writer, input: []const u8, inner: usize, rows: u
         const next = skipAnsi(input, i);
         if (next != i) {
             i = next;
+            continue;
+        }
+        if (input[i] == '\n') { // 硬断:换行符本身不上屏,空行也占一行
+            if (row_i >= skip) {
+                try writeComposerRow(wr, if (row_i == 0) first else rest, input[row_from..i], if (inner > cols) inner - cols else 0);
+                emitted += 1;
+                if (emitted == rows) return;
+            }
+            row_i += 1;
+            i += 1;
+            row_from = i;
+            cols = 0;
             continue;
         }
         const ch = charCols(input, i);
@@ -751,4 +775,35 @@ test "styled markdown is cached per cell until text or theme changes" {
     attachTheme(&th);
     _ = styledCached(a, &cell);
     try t.expect(cell.md_fp != fp_before);
+}
+
+test "wrap hard-breaks on newline (multiline composer)" {
+    const t = std.testing;
+    try t.expectEqual(@as(usize, 2), wrapRowCount("ab\ncd", 80));
+    try t.expectEqual(@as(usize, 3), wrapRowCount("a\n\nb", 80)); // 空行也占行
+    try t.expectEqual(@as(usize, 2), wrapRowCount("ab\n", 80)); // 尾换行 = 新空行
+    const cur = wrapCursor("ab\ncd", 3, 80);
+    try t.expectEqual(@as(usize, 1), cur.row);
+    try t.expectEqual(@as(usize, 0), cur.col);
+    const on_nl = wrapCursor("ab\ncd", 2, 80);
+    try t.expectEqual(@as(usize, 0), on_nl.row); // 停在 \n 上 = 上行尾
+    try t.expectEqual(@as(usize, 2), on_nl.col);
+    // 窄宽硬断优先于软绕:"ab\ncdefgh" w=3 → ab / cde / fgh = 3
+    try t.expectEqual(@as(usize, 3), wrapRowCount("ab\ncdefgh", 3));
+}
+
+test "emitComposer splits hard lines" {
+    const t = std.testing;
+    var aw = std.Io.Writer.Allocating.init(t.allocator);
+    defer aw.deinit();
+    try emitComposer(&aw.writer, "l1\nl2", 20, 2, 0);
+    const out = aw.written();
+    try t.expect(std.mem.indexOf(u8, out, "l1") != null);
+    try t.expect(std.mem.indexOf(u8, out, "l2") != null);
+    // skip=1 只见第二行
+    var aw2 = std.Io.Writer.Allocating.init(t.allocator);
+    defer aw2.deinit();
+    try emitComposer(&aw2.writer, "l1\nl2", 20, 1, 1);
+    try t.expect(std.mem.indexOf(u8, aw2.written(), "l1") == null);
+    try t.expect(std.mem.indexOf(u8, aw2.written(), "l2") != null);
 }

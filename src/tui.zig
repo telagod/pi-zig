@@ -262,6 +262,8 @@ pub const Tui = struct {
     quit_arm_ns: i64 = 0,
     quit_arm_key: u8 = 0,
     esc_armed: bool = false,
+    /// bracketed paste(ESC[200~ ... ESC[201~)进行中:字节原样入草稿,\n 不提交。
+    paste_mode: bool = false,
     picker: ?Picker = null,
     scroll_off: usize = 0,
     search_q: []u8 = &.{},
@@ -398,7 +400,7 @@ pub const Tui = struct {
         try std.posix.tcsetattr(self.in_fd, .NOW, raw);
         self.raw = true;
         self.armEmergencyRestore();
-        try self.writeAll("\x1b[?1049h");
+        try self.writeAll("\x1b[?1049h\x1b[?2004h"); // 1049=备用屏,2004=bracketed paste
         try self.writeAll(ENTER_ALT_SCROLL);
         try self.querySize();
     }
@@ -406,7 +408,7 @@ pub const Tui = struct {
     pub fn restoreTerminal(self: *Tui) void {
         if (self.raw) {
             self.raw = false;
-            _ = self.writeAll(LEAVE_ALT_SCROLL ++ "\x1b[?1049l\x1b[0m") catch {};
+            _ = self.writeAll("\x1b[?2004l" ++ LEAVE_ALT_SCROLL ++ "\x1b[?1049l\x1b[0m") catch {};
             _ = std.posix.tcsetattr(self.in_fd, .NOW, self.orig_tio) catch {};
             emergency_tio = null;
         }
