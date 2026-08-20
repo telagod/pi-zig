@@ -84,7 +84,9 @@ pub const builtin_plugins = [_]Plugin{
     .{ .name = "command-canonicalization", .on_tool_before = hookmod.canonicalBlock },
     // artifact-store 已抽为内嵌 JS 扩展;空壳守名籍(默认开,gate 门控)。
     .{ .name = "artifact-store", .extracted = true },
-    .{ .name = "compact-resilience", .on_compact_failed = hookmod.compactFallback },
+    // compact-resilience 已废留名:现行密图折页(snapcompact)不调模型,「备用模型重试」无的放矢。
+    // 名籍守旧配置可开可关;钩与派发链已清(死码,原本就无调用点)。
+    .{ .name = "compact-resilience" },
     // concept-graph 已抽为内嵌 JS 扩展(compact 事件);空壳守名籍(默认开)。
     .{ .name = "concept-graph", .extracted = true },
     // usage-ledger 已抽为内嵌 JS 扩展;空壳守名籍(默认开,gate 门控)。
@@ -650,18 +652,6 @@ test "tool after chain can wrap inner rewrite" {
     var opt: [2]?*const fn (*AfterChain) ?[]const u8 = .{ S.outer, S.inner };
     var chain = AfterChain{ .ctx = null, .name = "bash", .content = "raw", .hooks = &opt };
     try t.expectEqualStrings("wrapped:inner", chain.next().?);
-}
-
-/// 压缩失败:返回备用模型名或 null。
-pub fn compactFallbackModel(ctx: ?*anyopaque) ?[]const u8 {
-    const set = setOfCtx(ctx);
-    for (&builtin_plugins, 0..) |p, i| {
-        if (!isEnabledIn(set, i)) continue;
-        if (p.on_compact_failed) |h| {
-            if (h(ctx)) |m| return m;
-        }
-    }
-    return null;
 }
 
 /// 压缩成功后调用(跨会话记忆等)。

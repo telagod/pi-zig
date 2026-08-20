@@ -50,8 +50,6 @@ pub const Plugin = struct {
     before_turn: ?*const fn (ctx: ?*anyopaque) void = null,
     /// 压缩成功后钩子(跨会话记忆等,复用摘要,零额外模型调用)。
     on_compact: ?*const fn (ctx: ?*anyopaque, summary: []const u8) void = null,
-    /// 压缩失败钩子:返回备用模型名(非 null 则用其重试一次)。
-    on_compact_failed: ?*const fn (ctx: ?*anyopaque) ?[]const u8 = null,
     /// 工具执行前(waterfall):不调 chain.next() 即短路。返回非 null 则拦截。
     on_tool_before: ?*const fn (chain: *BeforeChain) ?[]const u8 = null,
     /// 工具结果回写前(waterfall):不调 chain.next() 即短路。返回非 null 则替换。

@@ -91,12 +91,6 @@ pub fn canonicalBlock(chain: *BeforeChain) ?[]const u8 {
     return chain.next();
 }
 
-pub fn compactFallback(ctx: ?*anyopaque) ?[]const u8 {
-    const self: *agentmod.Agent = @ptrCast(@alignCast(ctx.?));
-    if (self.provider.models.len > 1) return self.provider.models[1];
-    return null;
-}
-
 test "command canonicalization blocks dangerous patterns" {
     const t = std.testing;
     try agentmod.util.testInit();

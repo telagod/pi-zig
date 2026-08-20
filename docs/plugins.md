@@ -28,7 +28,7 @@ piz 的插件是**编译期注册的 Zig 函数表**，不是运行时加载的�
 |------|--------|------|
 | `cross-session-memory` | `on_compact` | 压缩摘要落盘,跨会话注入(**已抽为内嵌 JS 扩展**,写侧在 JS;启动注入留核) |
 | `concept-graph` | `on_compact` | 从摘要提取概念(**已抽为内嵌 JS 扩展**) |
-| `compact-resilience` | `on_compact_failed` | 压缩失败时换备用模型重试 |
+| `compact-resilience` | — | **已废留名**:密图折页不调模型,备用模型重试无的放矢;名籍守旧配置 |
 | `command-canonicalization` | `on_tool_before` | 拦截危险 shell 命令 |
 | `artifact-store` | `on_tool_result` | 超大输出外置到文件(**已抽为内嵌 JS 扩展**,见下) |
 | `usage-ledger` | `after_turn` | 每轮 token 追加到 `~/.piz/usage.jsonl`(**已抽为内嵌 JS 扩展**,见 [抽离路线](plugin-extraction.md)) |
@@ -111,7 +111,7 @@ piz --no-plugin cross-session-memory  # 本次关闭（撤钩、撤工具、撤 
 
 ### compact-resilience
 
-压缩请求失败时（模型不可用、超限），若当前 provider 配了多个模型，用第二个模型重试一次。避免上下文爆了但压缩也失败的死局。
+**已废留名**(钩与派发已清):该件写于模型压缩时代;现行密图折页(snapcompact)纯本地不调模型,「压缩失败换备用模型重试」无的放矢,且钩从无调用点。名籍保留,旧配置开关不报错。
 
 ### command-canonicalization
 

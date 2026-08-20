@@ -13,7 +13,7 @@
 | `artifact-store` | `on_tool_result` | tool_result `{replace}` 改写 | ✅ **已抽**(改写桥随件落) |
 | `cross-session-memory` | `on_compact` | on_compact 事件(携 summary) | ⏳ 待桥 |
 | `concept-graph` | `on_compact` | 同上 | ⏳ 待桥 |
-| `compact-resilience` | `on_compact_failed` | on_compact_failed(可返备用模型名) | ⏳ 待桥 |
+| `compact-resilience` | ~~`on_compact_failed`~~ | — | ☠️ **废件留名**:钩从无调用点;且现行密图折页不调模型,「备用模型重试」无的放矢。死码(钩/派发/api 字段)已清,名籍守旧配置 |
 | `web-search` | tools + /web | fetch + safe 护栏 + 门控装载 | ✅ **已抽**(safe fetch + `{error}` 透传 + gate 三桥随件落) |
 | `skills` | tool + /skills | 宿主 API:skills index | ✅ **已抽**(`piz.listDir` 原语;pushGates 装了技能即开门) |
 | `context-budget` | tool + /context | 宿主 API:estTokens/窗口 | ✅ **已抽**(`piz.contextStats()` 快照,桥注人) |
@@ -63,8 +63,9 @@
 5. ✅ `context-budget`(`piz.contextStats()`;callTool/runCommand 携快照,互斥下无竞态;默认关保语义)
 6. ✅ `skills`(`piz.listDir`;搜索序与 toolSkill/loadSkillsIndex 同;名校验/error 文案 parity)
 7. ✅ `elicitation`(零桥)→ `todo`(sid 桶)→ `git-awareness`(`piz.exec`)
-8. 留核定案:`lsp`(长连 stdio)、`compact-resilience`(死件,接线另立差)、`command-canonicalization`/`vision-input`/子代理三家
-6. 留核:`command-canonicalization`(安全)、`vision-input`(二进制)、子代理三家(调度);`compact-resilience` 暂缓(见对账表)
+8. 留核定案:`lsp`(长连 stdio)、`compact-resilience`(废件留名,死码已清)、`command-canonicalization`/`vision-input`/子代理三家
+
+**抽离路线至此闭环:十件抽离、一件除役、四件留核,十五件全定案。**
 
 ## 验收标准(每件必过)
 
