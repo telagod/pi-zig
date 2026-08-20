@@ -17,6 +17,7 @@ const std = @import("std");
 const build_options = @import("build_options");
 const util = @import("util.zig");
 const toolsmod = @import("tools.zig");
+const httpc = @import("httpc.zig");
 const aimod = @import("ai.zig");
 
 pub const enabled = build_options.quickjs;
@@ -63,6 +64,7 @@ const PRELUDE =
     \\    writeFile(path, text) { return !!__piz_host_writeFile(String(path), String(text)); },
     \\    env(name) { return __piz_host_env(String(name)); },
     \\    cwd() { return __piz_host_cwd(); },
+    \\    fetch(url, opts) { return __piz_host_fetch(String(url), opts === undefined ? "" : JSON.stringify(opts)); },
     \\  };
     \\  Object.defineProperty(globalThis, "__piz", { value: {
     \\    emit(ev, json) {
@@ -144,6 +146,7 @@ var load_errors: usize = 0;
 var h_tool_call = false;
 var h_tool_result = false;
 var h_session_start = false;
+var h_agent_end = false;
 
 fn jsThrowToString(ctx_: *c.JSContext, arena: std.mem.Allocator) []const u8 {
     const ex = c.JS_GetException(ctx_);
@@ -243,6 +246,69 @@ fn hostCwd(ctx_: ?*c.JSContext, _: c.JSValue, _: c_int, _: [*c]c.JSValue) callco
     const p = std.process.currentPathAlloc(util.io, a) catch return jsNull();
     defer a.free(p);
     return c.JS_NewStringLen(cx, p.ptr, @intCast(p.len));
+}
+
+/// host 原语:__piz_host_fetch(url, optsJson) -> {status, ok, body}。同步阻塞(窄桥:
+/// 引擎全局互斥锁内完成,期间其他扩展调用排队);opts = {method?, headers?{}, body?}。
+/// 传输错 throw;HTTP 错状态不 throw(看 .status)。8MB 封顶。扩展是受信代码,不过权限闸。
+fn hostFetch(ctx_: ?*c.JSContext, _: c.JSValue, argc: c_int, argv: [*c]c.JSValue) callconv(.c) c.JSValue {
+    const cx = ctx_ orelse return jsNull();
+    if (argc < 1) return c.JS_ThrowInternalError(cx, "fetch(url, opts?)");
+    const url_c = c.JS_ToCString(cx, argv[0]);
+    defer if (url_c != null) c.JS_FreeCString(cx, url_c);
+    if (url_c == null) return jsNull();
+    const a = gpa orelse return jsNull();
+    var method: std.http.Method = .GET;
+    var body: []const u8 = "";
+    var headers = std.ArrayList(std.http.Header).empty;
+    if (argc > 1) {
+        const oj = c.JS_ToCString(cx, argv[1]);
+        defer if (oj != null) c.JS_FreeCString(cx, oj);
+        if (oj != null and std.mem.span(oj).len > 0) {
+            const v = std.json.parseFromSliceLeaky(std.json.Value, a, std.mem.span(oj), .{}) catch {
+                return c.JS_ThrowInternalError(cx, "fetch: bad opts json");
+            };
+            if (v == .object) {
+                if (v.object.get("method")) |m| {
+                    if (m == .string) {
+                        if (std.ascii.eqlIgnoreCase(m.string, "GET")) method = .GET;
+                        if (std.ascii.eqlIgnoreCase(m.string, "POST")) method = .POST;
+                        if (std.ascii.eqlIgnoreCase(m.string, "PUT")) method = .PUT;
+                        if (std.ascii.eqlIgnoreCase(m.string, "DELETE")) method = .DELETE;
+                        if (std.ascii.eqlIgnoreCase(m.string, "PATCH")) method = .PATCH;
+                        if (std.ascii.eqlIgnoreCase(m.string, "HEAD")) method = .HEAD;
+                    }
+                }
+                if (v.object.get("body")) |b| {
+                    if (b == .string) body = b.string;
+                }
+                if (v.object.get("headers")) |h| {
+                    if (h == .object) {
+                        var it = h.object.iterator();
+                        while (it.next()) |e| {
+                            if (e.value_ptr.* == .string)
+                                headers.append(a, .{ .name = e.key_ptr.*, .value = e.value_ptr.string }) catch {};
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if (body.len > MAX_FS_IO) return c.JS_ThrowInternalError(cx, "fetch: body too large");
+    const stream = httpc.Stream.initWith(a, std.mem.span(url_c), headers.items, body, method) catch |err| {
+        return c.JS_ThrowInternalError(cx, "fetch: %s", @errorName(err).ptr);
+    };
+    defer stream.deinit();
+    const rb = stream.readAll(MAX_FS_IO) catch |err| {
+        return c.JS_ThrowInternalError(cx, "fetch read: %s", @errorName(err).ptr);
+    };
+    defer a.free(rb);
+    const obj = c.JS_NewObject(cx);
+    _ = c.JS_SetPropertyStr(cx, obj, "status", mkVal(c.JS_TAG_INT, @intCast(stream.status())));
+    const st = stream.status();
+    _ = c.JS_SetPropertyStr(cx, obj, "ok", jsBool(st >= 200 and st < 300));
+    _ = c.JS_SetPropertyStr(cx, obj, "body", c.JS_NewStringLen(cx, rb.ptr, @intCast(rb.len)));
+    return obj;
 }
 
 /// host 原语:__piz_host_settle(promise) -> 落定值;拒绝则 throw;永不 pending 也 throw。
@@ -375,6 +441,8 @@ pub fn init(alloc: std.mem.Allocator) void {
     _ = c.JS_SetPropertyStr(ctx.?, global, "__piz_host_env", ef);
     const pf = c.JS_NewCFunction(ctx.?, hostCwd, "__piz_host_cwd", 0);
     _ = c.JS_SetPropertyStr(ctx.?, global, "__piz_host_cwd", pf);
+    const ff = c.JS_NewCFunction(ctx.?, hostFetch, "__piz_host_fetch", 2);
+    _ = c.JS_SetPropertyStr(ctx.?, global, "__piz_host_fetch", ff);
     // prelude
     const pv = c.JS_Eval(ctx.?, PRELUDE.ptr, PRELUDE.len, "<prelude>", c.JS_EVAL_TYPE_GLOBAL);
     if (c.JS_IsException(pv)) {
@@ -413,6 +481,7 @@ pub fn deinit() void {
     h_tool_call = false;
     h_tool_result = false;
     h_session_start = false;
+    h_agent_end = false;
     ts_ready = false;
     if (sucrase_z) |z| {
         if (gpa) |a| a.free(z);
@@ -657,6 +726,7 @@ fn refreshRegistry() void {
     h_tool_call = bridgeHas(arena, "tool_call");
     h_tool_result = bridgeHas(arena, "tool_result");
     h_session_start = bridgeHas(arena, "session_start");
+    h_agent_end = bridgeHas(arena, "agent_end");
 }
 
 fn bridgeHas(arena: std.mem.Allocator, ev: []const u8) bool {
@@ -790,6 +860,14 @@ pub fn emitToolResult(arena: std.mem.Allocator, name: []const u8, content: []con
 /// session_start 是否有人听(供调用方省 payload 构造)。
 pub fn wantsSessionStart() bool {
     return enabled and rt != null and h_session_start;
+}
+
+/// agent_end 事件:回合收口(text = 最后一条 assistant 正文,可空)。只发不收。
+pub fn emitAgentEnd(arena: std.mem.Allocator, text: []const u8) void {
+    if (!enabled or rt == null or !h_agent_end) return;
+    const clipped = if (text.len > 8192) text[0..8192] else text;
+    const payload = std.json.Stringify.valueAlloc(arena, .{ .text = clipped }, .{}) catch return;
+    _ = emit(arena, "agent_end", payload);
 }
 
 /// marker:JS 工具的 Tool.ctx_handler 占位 —— runToolSlot 凭它改走 runJsTool。
@@ -1058,4 +1136,25 @@ test "qjs fs primitives: readFile/writeFile/env/cwd" {
     const out = runCommand(arena_inst.allocator(), "fsprobe", "").?;
     try t.expect(std.mem.indexOf(u8, out, "true|fsok:") != null);
     try t.expect(std.mem.indexOf(u8, out, "|true|true") != null);
+}
+
+test "qjs agent_end: fires with last assistant text" {
+    if (!enabled) return error.SkipZigTest;
+    const t = std.testing;
+    const a = t.allocator;
+    deinit();
+    init(a);
+    defer deinit();
+    mu.lockUncancelable(util.io);
+    const src = "piz.on(\"agent_end\", (e) => piz.notify(\"AE:\" + e.text, \"info\"));";
+    const v = c.JS_Eval(ctx.?, src.ptr, src.len, "<test>", c.JS_EVAL_TYPE_GLOBAL);
+    try t.expect(!c.JS_IsException(v));
+    c.JS_FreeValue(ctx.?, v);
+    mu.unlock(util.io);
+    refreshRegistryLockedForTest();
+    var arena_inst = util.Arena.init(a);
+    defer arena_inst.deinit();
+    emitAgentEnd(arena_inst.allocator(), "回合正文");
+    try t.expect(last_notify != null);
+    try t.expectEqualStrings("[info] AE:回合正文", last_notify.?);
 }

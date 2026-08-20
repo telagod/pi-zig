@@ -781,6 +781,23 @@ pub const Agent = struct {
     fn emitTurnEnd(self: *Agent) !void {
         pluginsmod.runAfterTurn(@ptrCast(self));
         if (self.cbs.on_turn_end) |f| try f(self.cbs.ctx);
+        // JS 扩展 agent_end:最后一条 assistant 正文(可空)。scratch arena 即弃,
+        // 勿用 self.alloc(长寿 arena,每回合 8KB 起步会滚雪球)。
+        if (jsrt.enabled) {
+            var text: []const u8 = "";
+            var i = self.messages.items.len;
+            while (i > 0) {
+                i -= 1;
+                const m = self.messages.items[i];
+                if (std.mem.eql(u8, m.role, "assistant") and m.content.len > 0) {
+                    text = m.content;
+                    break;
+                }
+            }
+            var scratch = std.heap.ArenaAllocator.init(std.heap.c_allocator);
+            defer scratch.deinit();
+            jsrt.emitAgentEnd(scratch.allocator(), text);
+        }
     }
 
     pub fn send(self: *Agent, user_text: []const u8) !ai.RunResult {

@@ -45,7 +45,15 @@ piz.registerCommand("hellojs", {
 // 宿主交互
 piz.notify("msg", "info");   // print → stderr;TUI → transcript 行(TUI 起前暂存一条)
 piz.confirm("sure?");        // 未接管一律 false(安全默认)
+
+// 同步 fs/env(文本向,单发 8MB 封顶;相对路径 = 进程 cwd)
+piz.readFile("/abs/or/rel");     // 不在/出错 → null
+piz.writeFile("/tmp/x", "txt");  // 成 → true
+piz.env("HOME");                 // 未设 → null
+piz.cwd();                       // 进程 cwd 串
 ```
+
+扩展是**受信代码**(同插件/钩子同级信任):fs 原语不过权限闸,装前自己审。
 
 ## 约束(窄桥期)
 
