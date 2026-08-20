@@ -93,3 +93,9 @@ TUI `/reload` 除重灌配置外同刷 JS 扩展:重置 prelude 注册表(不重
 - `JS_EvalFunction` 对 JS_TAG_MODULE **吃掉**传入引用(内部 FreeValue,
   注释 refcount should be >= 2);模块 JSValue 到手后绝不再 free——模块
   refcount 到 0 直接 `abort()`(js_free_value_rt: never freed here)
+- **多线程入口必刷栈顶**:ng 栈深上限按 `stack_top` 地址差算,创建时按
+  主线程校准;工具回调在 agent worker 线程进 JS 不刷新就误报
+  `Maximum call stack size exceeded`(单测主线程全绿、真循环必炸)。
+  `callBridge` 入口已 `JS_UpdateStackTop`;新增 JS 入口路径须同例
+- `/reload` 热重载:`__piz` 的 defineProperty 必须 `configurable:true`,
+  且先重 eval prelude 清注册表再扫目,否则处理器双注册

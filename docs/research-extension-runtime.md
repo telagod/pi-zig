@@ -44,9 +44,13 @@ libunicode/quickjs,+quickjs-libc),strip 后引擎+musl 共 1.13 MB,
 
 ## 落地账（实证 2026-08-20）
 
-- 体积：4.85MB ↔ 5.97MB（-Dquickjs 开/关），+1.13MB 与探针预测一致；musl 仍零依赖
-- 四入口接线：CLI/TUI/web/print；357 测试绿
-- 雷：`JS_Eval` 词法器瞥 `input[len]`，必须 NUL 结尾缓冲（jsrt.zig evalFile 详注）
+- 体积：4.85MB ↔ 5.97MB（-Dquickjs 开/关）↔ 6.28MB（再开 -Djsts,内嵌 sucrase 295KB）;musl 仍零依赖
+- 四入口接线：CLI/TUI/web/print;web 装服务器启动目的项目扩展
+- 窄桥全齐:ESM `export default`、import 相对加载、async settle(microtask 链同步泵干)、TS 剥离、
+  fs/env/fetch 同步原语、session_start/tool_call/tool_result/agent_end 四事件、TUI `/reload` 热重载、
+  `/extensions` 可观测量;369 测试绿(含 mock provider + 真子进程的 jsrt e2e)
+- 雷:`JS_Eval` 词法器瞥 `input[len]`,必须 NUL 结尾缓冲;`JS_EvalFunction` 吃掉模块引用;
+  **多线程入口必 `JS_UpdateStackTop`**(worker 线程误报栈溢出,e2e 实擒)。详见 extensions-js.md 已知雷
 
 ## 判断
 
