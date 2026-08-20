@@ -166,7 +166,7 @@ pub fn runWebCmd(alloc: std.mem.Allocator, args: *std.process.Args.Iterator) voi
 }
 
 /// 会话池:每会话独立 Agent/Arena/worker(上限 4,对齐 task 工具)。
-const WebSession = struct {
+pub const WebSession = struct {
     name: []const u8,
     cwd: []const u8,
     qkey: []const u8,
@@ -208,7 +208,7 @@ fn setSessionApproval(ses: *WebSession, mode: cfgmod.ApprovalMode) void {
     ses.approval.store(@intFromEnum(mode), .release);
 }
 
-const SessionPool = struct {
+pub const SessionPool = struct {
     alloc: std.mem.Allocator,
     hub: *webui_mod.EventHub,
     cfg: *cfgmod.Config,
@@ -332,7 +332,7 @@ fn jw(comptime where: []const u8, result: anyerror!void) void {
     result catch |err| util.debugCatch(where, err);
 }
 
-fn writeHistoryRange(w: *std.Io.Writer, a: std.mem.Allocator, msgs: []const @import("core").ai.Message, start: usize, end: usize) void {
+pub fn writeHistoryRange(w: *std.Io.Writer, a: std.mem.Allocator, msgs: []const @import("core").ai.Message, start: usize, end: usize) void {
     jw("hist.ob", w.writeAll("["));
     var first = true;
     var i = start;
@@ -1192,7 +1192,7 @@ fn poolTitleHook(ctx: ?*anyopaque, cwd: []const u8, session: []const u8, title: 
     return ses.agent.title;
 }
 
-fn poolActionHook(ctx: ?*anyopaque, cwd: []const u8, session: []const u8, act: []const u8, name: ?[]const u8, count: usize) ?[]const u8 {
+pub fn poolActionHook(ctx: ?*anyopaque, cwd: []const u8, session: []const u8, act: []const u8, name: ?[]const u8, count: usize) ?[]const u8 {
     const pool: *SessionPool = @ptrCast(@alignCast(ctx.?));
     const alloc = pool.alloc;
     const cwd2 = if (cwd.len > 0) cwd else (if (pool.workspaces.items.len > 0) pool.workspaces.items[0] else "");
@@ -1458,77 +1458,7 @@ fn prepareWebChat(alloc: std.mem.Allocator, cwd: []const u8, text: []const u8) P
     return .{ .send = expanded };
 }
 
-test "web undo/compact are rejected while the worker turn is running" {
-    const t = std.testing;
-    try util.testInit();
-    var arena = util.Arena.init(t.allocator);
-    defer arena.deinit();
-    const a = arena.allocator();
-    var cfg = cfgmod.Config{ .arena = &arena };
-    var provs = [_]cfgmod.Provider{.{ .name = "mock", .api = .openai_completions, .base_url = "http://127.0.0.1:1", .api_key = "k" }};
-    cfg.providers = &provs;
-
-    var hub = webui_mod.EventHub.init(a);
-    var pool = SessionPool{ .alloc = a, .hub = &hub, .cfg = &cfg, .sessions = std.array_list.Managed(*WebSession).init(a), .workspaces = std.array_list.Managed([]const u8).init(a) };
-    const agent = try a.create(agentmod.Agent);
-    agent.* = try agentmod.Agent.init(a, &cfg, "mock", "m", "/tmp");
-    const ses_arena = try a.create(util.Arena);
-    ses_arena.* = util.Arena.init(a);
-    const sa = ses_arena.allocator();
-    const ses = try sa.create(WebSession);
-    ses.* = .{
-        .name = "s1",
-        .cwd = "/tmp",
-        .qkey = "q",
-        .agent = agent,
-        .hub = &hub,
-        .start_ns = 0,
-        .worker = undefined,
-        .arena = ses_arena,
-    };
-    try pool.sessions.append(ses);
-
-    ses.busy.store(1, .release);
-    const busy_undo = poolActionHook(&pool, "/tmp", "s1", "undo", null, 1) orelse return error.Fail;
-    try t.expect(std.mem.indexOf(u8, busy_undo, "\"error\":\"busy\"") != null);
-    const busy_compact = poolActionHook(&pool, "/tmp", "s1", "compact", null, 0) orelse return error.Fail;
-    try t.expect(std.mem.indexOf(u8, busy_compact, "\"error\":\"busy\"") != null);
-    const busy_fork = poolActionHook(&pool, "/tmp", "s1", "fork", null, 0) orelse return error.Fail;
-    try t.expect(std.mem.indexOf(u8, busy_fork, "\"error\":\"busy\"") != null);
-
-    ses.busy.store(0, .release);
-    const idle_undo = poolActionHook(&pool, "/tmp", "s1", "undo", null, 1) orelse return error.Fail;
-    try t.expect(std.mem.indexOf(u8, idle_undo, "\"error\":\"busy\"") == null);
-    ses.busy.store(2, .release);
-    const busy2 = poolActionHook(&pool, "/tmp", "s1", "undo", null, 1) orelse return error.Fail;
-    try t.expect(std.mem.indexOf(u8, busy2, "\"error\":\"busy\"") != null);
-    ses.busy.store(0, .release);
-
-    const tree = poolActionHook(&pool, "/tmp", "s1", "tree", null, 0) orelse return error.Fail;
-    try t.expect(std.mem.indexOf(u8, tree, "\"ok\":true") != null);
-    const q = poolActionHook(&pool, "/tmp", "s1", "queue", null, 0) orelse return error.Fail;
-    try t.expect(std.mem.indexOf(u8, q, "\"act\":\"queue\"") != null);
-    const copy_empty = poolActionHook(&pool, "/tmp", "s1", "copy", null, 0) orelse return error.Fail;
-    try t.expect(std.mem.indexOf(u8, copy_empty, "\"ok\":false") != null);
-}
-
-test "writeHistoryRange pages a slice" {
-    const t = std.testing;
-    const ai = @import("core").ai;
-    const msgs = [_]ai.Message{
-        .{ .role = "user", .content = "one" },
-        .{ .role = "assistant", .content = "two" },
-        .{ .role = "user", .content = "three" },
-        .{ .role = "assistant", .content = "four" },
-    };
-    var arena = std.heap.ArenaAllocator.init(t.allocator);
-    defer arena.deinit();
-    var stw = std.Io.Writer.Allocating.init(t.allocator);
-    defer stw.deinit();
-    writeHistoryRange(&stw.writer, arena.allocator(), &msgs, 1, 3);
-    const out = stw.written();
-    try t.expect(std.mem.indexOf(u8, out, "two") != null);
-    try t.expect(std.mem.indexOf(u8, out, "three") != null);
-    try t.expect(std.mem.indexOf(u8, out, "one") == null);
-    try t.expect(std.mem.indexOf(u8, out, "four") == null);
+test {
+    // 单测主体在 cmd_web_tests.zig(原 2 测试);引回以保持 zig test 收集。
+    _ = @import("cmd_web_tests.zig");
 }
