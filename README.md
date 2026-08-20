@@ -22,7 +22,7 @@
 | | |
 |---|---|
 | 工具 | 默认 8 个：`read` `write` `edit` `multi_edit` `grep` `find` `ls` `bash`。搜索认 `.gitignore`。`read` 带行号。写盘先 tmp 再 rename，且不得逃出工作区。其余 `--plugin` 才开 |
-| 扩展 | `pkg.json` 可声明工具与钩子。`piz --plugins` 列出 `[pkg]`。Web / TUI 可贴图，续会话从图文件回放 |
+| 扩展 | `pkg.json` 可声明工具与钩子；另有内嵌 QuickJS 运行时免编译加载 JS/TS 扩展（pi 式 `export default`，见下）。`piz --plugins` 列出 `[pkg]`。Web / TUI 可贴图，续会话从图文件回放 |
 | 子 agent | 8 线程 worker 池，闲着不占线程。顶层排队 32、嵌套 4。孩子默认不带 `task` / `spawn_agent` |
 | 缓存 | tools 写在 messages 前面，`prompt_cache_key` 用工作目录。快压优先动廉价尾 |
 | 依赖 | Zig 标准库 + vendored [stb](https://github.com/nothings/stb)（读图）。正则和 glob 是自己的 |
@@ -79,10 +79,29 @@ piz --plugin lsp          # 本次开启
 | [Web UI](docs/web-ui.md) | `piz web`、鉴权、HTTP |
 | [Plugins](docs/plugins.md) | 内置插件、钩子 |
 | [Packages](docs/packages.md) | 资源包、skills |
+| [JS 扩展](docs/extensions-js.md) | QuickJS 窄桥：ESM/import/TS/async、fs/fetch、热重载 |
 | [Sessions](docs/sessions.md) | 会话、分支、格式 |
 | [Architecture](docs/architecture.md) | 模块、主链路、并发、Zig 0.16 |
 
 改 piz 本身先读 Architecture。对照外部 harness 哲学看 [dsh-mapping](docs/dsh-mapping.md)。
+
+## JS 扩展(免编译)
+
+内嵌 QuickJS-ng(默认开,`-Dquickjs=false` 可关):`~/.piz/extensions/` 与项目
+`.piz/extensions/` 下的 `.js/.mjs/.ts` 启动即装,pi 式写法直接跑:
+
+```ts
+export default function(pi: any) {
+  pi.registerCommand("hello", { handler: (a: string) => "hi " + a });
+  pi.registerTool({ name: "rand", description: "随机数", schema: {},
+    execute: async () => String(Math.random()) });
+  pi.on("agent_end", (e: any) => console.log?.(e.text));
+}
+```
+
+ESM `import "./dep.mjs"`、TS 类型剥离(sucrase 内嵌)、async handler、
+`pi.readFile/writeFile/env/cwd/fetch` 同步原语;TUI `/reload` 秒级热重载。
+全部见 [docs/extensions-js.md](docs/extensions-js.md)。
 
 ## 与 pi 的关系
 

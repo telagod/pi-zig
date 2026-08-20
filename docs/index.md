@@ -42,6 +42,7 @@ export DEEPSEEK_API_KEY=sk-... # 或写入 ~/.piz/auth.json
 
 - [Plugins](plugins.md) — 内置插件清单、钩子契约、如何新增一个插件
 - [Packages](packages.md) — 资源包（skills / prompts / AGENTS.md）、事件扩展、包声明工具
+- [JS 扩展](extensions-js.md) — QuickJS 窄桥：加载位置、API、ESM/TS/async、fs/fetch 原语、热重载
 - [Web plugins](web-plugins.md) — 给 Web UI 注入前端 JS/CSS
 - [dsh 对照札](dsh-mapping.md) — DeepSeek Harness 插件哲学与本仓钩子对照（可摘 / 不可摘）
 
