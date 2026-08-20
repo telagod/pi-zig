@@ -120,9 +120,12 @@ pub const builtin_plugins = [_]Plugin{
     // ---- 默认启用:只挂钩子,不加工具 ----
     .{ .name = "cross-session-memory", .on_compact = hookmod.memoryAppend },
     .{ .name = "command-canonicalization", .on_tool_before = hookmod.canonicalBlock },
-    .{ .name = "artifact-store", .on_tool_result = hookmod.artifactStoreHook },
+    // artifact-store 已抽为内嵌 JS 扩展;空壳守名籍(默认开,gate 门控)。
+    .{ .name = "artifact-store", .extracted = true },
     .{ .name = "compact-resilience", .on_compact_failed = hookmod.compactFallback },
     .{ .name = "concept-graph", .on_compact = hookmod.conceptExtract },
+    // usage-ledger 已抽为内嵌 JS 扩展;空壳守名籍(默认开,gate 门控)。
+    .{ .name = "usage-ledger", .extracted = true },
     .{ .name = "vision-input", .enabled_by_default = false, .tools = &.{
         .{
             .name = "read_image",
@@ -293,7 +296,7 @@ pub const builtin_plugins = [_]Plugin{
     } },
 };
 
-/// 插件启用集的位掩码类型(14 个内置插件;usage-ledger 已抽为内嵌 JS 扩展,见 docs/plugin-extraction.md)。
+/// 插件启用集的位掩码类型(15 个内置插件;usage-ledger/web-search/artifact-store 已抽为空壳,见 docs/plugin-extraction.md)。
 pub const EnabledSet = u16;
 
 comptime {
@@ -1063,10 +1066,8 @@ test "read handler plus after-chain keeps file body" {
     try t.expect(result.content.len > 4096);
 
     try t.expect(runToolAfter(@ptrCast(&agent), "read", result.content) == null);
-
-    const bash_rw = runToolAfter(@ptrCast(&agent), "bash", "y" ** (8 * 1024));
-    try t.expect(bash_rw != null);
-    try t.expect(std.mem.indexOf(u8, bash_rw.?, "[Artifact stored:") != null);
+    // artifact 外置已抽为内嵌 JS 扩展(jsrt 层有 parity 测试);Zig after-chain 今无改写者
+    try t.expect(runToolAfter(@ptrCast(&agent), "bash", "y" ** (8 * 1024)) == null);
 }
 
 test "collectSlash lists todo when enabled" {

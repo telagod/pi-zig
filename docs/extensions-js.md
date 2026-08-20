@@ -27,7 +27,9 @@ piz.on("tool_call", (e) => {
   // e.toolName, e.inputRaw(参数 JSON 原文)
   if (e.toolName === "bash") return { block: true, reason: "no bash" };
 });
-piz.on("tool_result", (e) => { /* e.toolName, e.output(截 8KB) */ });
+piz.on("tool_result", (e) => {
+  // e.toolName, e.output(全文,不截);返 { replace: "..." } 即改写回写内容
+});
 piz.on("agent_end", (e) => { /* e.text = 回合最后 assistant 正文(截 8KB,可空);
      e.model/e.cwd/e.config_dir/e.ts;有用量时 e.usage = {in,out,cr,cw,usd},无则 null */ });
 
@@ -55,6 +57,7 @@ piz.writeFile("/tmp/x", "txt");  // 成 → true
 piz.appendFile("/tmp/x", "txt"); // 尾追加,不在则建(0600),父目须已在
 piz.env("HOME");                 // 未设 → null
 piz.cwd();                       // 进程 cwd 串
+piz.configDir();                 // 配置目(~/.piz 或 $PIZ_DIR),未装载 → null
 
 // 同步 HTTP(阻塞引擎互斥锁期间其他扩展调用排队;传输错 throw,HTTP 错状态看 .status)
 const r = piz.fetch("http://127.0.0.1:8873/x", {

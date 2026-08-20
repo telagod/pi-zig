@@ -174,7 +174,7 @@ pub fn runToolSlot(slot: *ToolSlot) void {
     seams.setFs(self.fs);
     defer toolsmod.clearRoot();
     defer toolsmod.clearSandbox();
-    // JS 扩展钩子:tool_call 可拦截(block),tool_result 旁路通知。
+    // JS 扩展钩子:tool_call 可拦截(block),tool_result 可改写({replace},如 artifact 外置)。
     // 桥全程互斥;无处理器时缓存旗标直接短路,不进 JS。
     var js_arena_inst = std.heap.ArenaAllocator.init(self.alloc);
     defer js_arena_inst.deinit();
@@ -193,7 +193,9 @@ pub fn runToolSlot(slot: *ToolSlot) void {
     } else {
         slot.result = t.handler(self.alloc, slot.call.args) catch |err| toolsmod.crashResult(self.alloc, slot.call.name, err);
     }
-    jsrt.emitToolResult(ja, slot.call.name, slot.result.content);
+    if (jsrt.emitToolResult(ja, slot.call.name, slot.result.content)) |repl| {
+        slot.result.content = self.alloc.dupe(u8, repl) catch slot.result.content;
+    }
 }
 /// 限流包装:等到有名额才执行,完成后归还。
 ///

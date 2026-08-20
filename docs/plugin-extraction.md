@@ -10,7 +10,7 @@
 |------|--------|----------|------|
 | `usage-ledger` | `after_turn` | agent_end 携 usage 载荷 + appendFile | ✅ **已抽**(内嵌层,见下) |
 | `command-canonicalization` | `on_tool_before` | tool_call 拦截 | 桥有,**但安全件留核**,不抽 |
-| `artifact-store` | `on_tool_result` | tool_result **改写**输出 | ⏳ 待桥:emitToolResult 今返 void |
+| `artifact-store` | `on_tool_result` | tool_result `{replace}` 改写 | ✅ **已抽**(改写桥随件落) |
 | `cross-session-memory` | `on_compact` | on_compact 事件(携 summary) | ⏳ 待桥 |
 | `concept-graph` | `on_compact` | 同上 | ⏳ 待桥 |
 | `compact-resilience` | `on_compact_failed` | on_compact_failed(可返备用模型名) | ⏳ 待桥 |
@@ -31,7 +31,7 @@
 3. ~~JS 工具 `{error}` 透传~~ ✅ 已落(prelude callTool)
 4. ~~`piz.fetch` safe 护栏~~ ✅ 已落(opts.safe → httpc.urlBlocked,SSRF 拦含 getent 回拦;护栏自 plugins/web.zig 迁入 httpc.zig)
 5. ~~内嵌档 gate 门控~~ ✅ 已落(bundled_exts.gate + plugins.pushGates/refreshExtracted;开关即重扫)
-6. `tool_result` 许改写:handler 返 `{replace: "..."}` 替换输出(artifact-store 所需)
+6. ~~`tool_result` 许改写~~ ✅ 已落(handler 返 `{replace}` 替换输出,全文不截;`piz.configDir()` 同落)
 7. 事件:`before_turn` / `on_user_message` / `on_compact(summary)` / `on_compact_failed`
 8. 宿主 API:`contextStats()`(est/窗口/压缩线)、`skillsIndex()`、`exec(argv)`(白名单?)
 
@@ -48,7 +48,8 @@
 (内嵌先记名,目录扫描命中同名则跳过对应内嵌件)。热重载 `/reload` 三档重扫,语义不变。
 
 默认关闭件抽后保开关语义:内嵌表项携 `gate = 插件名`,jsrt 仅当启用集含其名才装载
-(plugins.zig 留空壳行守名籍;开关走 pushGates/refreshExtracted 即重扫)。
+(plugins.zig 留空壳行守名籍;开关走 pushGates/refreshExtracted 即重扫)。**默认开件同理带 gate**
+(usage-ledger/artifact-store 皆然)——凡抽离件皆带 gate,名籍一律留壳。
 
 代价:`-Dquickjs=off` 的纯静态构建失去已抽件(usage-ledger 即记账,失之无碍;
 安全件正因如此留核)。每抽一件,此档与 [plugins.md](plugins.md) 清单同步改。
@@ -57,7 +58,8 @@
 
 1. ✅ `usage-ledger`(after_turn+记账,最小,验水道)
 2. ✅ `web-search`(默认关;gate 门控保开关语义,护栏迁 httpc 供 safe fetch)
-3. `artifact-store`(待桥 6)→ `cross-session-memory`/`concept-graph`/`compact-resilience`(待桥 7)
+3. ✅ `artifact-store`(默认开;`{replace}` 改写桥;read 系跳过/阈值/预览边界与原 Zig 版同则)
+4. `cross-session-memory`/`concept-graph`/`compact-resilience`(待桥 7:on_compact 系事件)
 4. 宿主 API 就绪后:`context-budget` → `skills` → `git-awareness`(exec)
 5. 留核:`command-canonicalization`(安全)、`vision-input`(二进制)、子代理三家(调度)
 

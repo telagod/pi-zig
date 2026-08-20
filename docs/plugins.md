@@ -30,7 +30,7 @@ piz 的插件是**编译期注册的 Zig 函数表**，不是运行时加载的�
 | `concept-graph` | `on_compact` | 从摘要提取概念 |
 | `compact-resilience` | `on_compact_failed` | 压缩失败时换备用模型重试 |
 | `command-canonicalization` | `on_tool_before` | 拦截危险 shell 命令 |
-| `artifact-store` | `on_tool_result` | 超大输出外置到文件 |
+| `artifact-store` | `on_tool_result` | 超大输出外置到文件(**已抽为内嵌 JS 扩展**,见下) |
 | `usage-ledger` | `after_turn` | 每轮 token 追加到 `~/.piz/usage.jsonl`(**已抽为内嵌 JS 扩展**,见 [抽离路线](plugin-extraction.md)) |
 
 ### 默认关闭
@@ -136,6 +136,8 @@ curl|wget … | sh/bash
 > **这是启发式黑名单，不是安全边界。** `rm -fr /` 仍绕得过。定位是防手滑，不是防恶意。真正的隔离：`/sandbox workspace`（bwrap，工作区外只读）或 `strict`（再断网），再加权限门（写文件、shell、出网、委派会问）。
 
 ### artifact-store
+
+> 已抽为内嵌 JS 扩展(`src/embedded/extensions/artifact-store.js`,tool_result `{replace}` 改写);开关语义不变。下行原文留作行为基准。
 
 工具输出超过 4KB 时写到 `<配置目录>/artifacts/`，模型拿到文件路径而非全文。`bash` 超过 16KB 时自己边跑边落全文（不丢头），回执已带 `[Artifact stored:]`，本插件不再二次外置。需要细节时用 `read` 按需取。
 

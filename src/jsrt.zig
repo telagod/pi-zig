@@ -65,6 +65,7 @@ const PRELUDE =
     \\    appendFile(path, text) { return !!__piz_host_appendFile(String(path), String(text)); },
     \\    env(name) { return __piz_host_env(String(name)); },
     \\    cwd() { return __piz_host_cwd(); },
+    \\    configDir() { return __piz_host_configDir(); },
     \\    fetch(url, opts) { return __piz_host_fetch(String(url), opts === undefined ? "" : JSON.stringify(opts)); },
     \\  };
     \\  Object.defineProperty(globalThis, "__piz", { value: {
@@ -226,11 +227,13 @@ fn hostWriteFile(ctx_: ?*c.JSContext, _: c.JSValue, argc: c_int, argv: [*c]c.JSV
     if (p == null or t == null) return jsBool(false);
     const text = std.mem.span(t);
     if (text.len > MAX_FS_IO) return jsBool(false);
-    std.Io.Dir.cwd().writeFile(util.io, .{ .sub_path = std.mem.span(p), .data = text }) catch return jsBool(false);
+    const path = std.mem.span(p);
+    if (std.fs.path.dirname(path)) |d| std.Io.Dir.cwd().createDirPath(util.io, d) catch {};
+    std.Io.Dir.cwd().writeFile(util.io, .{ .sub_path = path, .data = text }) catch return jsBool(false);
     return jsBool(true);
 }
 
-/// host 原语:__piz_host_appendFile(path, text) -> bool。尾追加,不存在则建(0600),父目须已在。
+/// host 原语:__piz_host_appendFile(path, text) -> bool。尾追加,不存在则建(0600)。
 fn hostAppendFile(ctx_: ?*c.JSContext, _: c.JSValue, argc: c_int, argv: [*c]c.JSValue) callconv(.c) c.JSValue {
     const cx = ctx_ orelse return jsBool(false);
     if (argc < 2) return jsBool(false);
@@ -242,6 +245,7 @@ fn hostAppendFile(ctx_: ?*c.JSContext, _: c.JSValue, argc: c_int, argv: [*c]c.JS
     const text = std.mem.span(t);
     if (text.len > MAX_FS_IO) return jsBool(false);
     const path = std.mem.span(p);
+    if (std.fs.path.dirname(path)) |d| std.Io.Dir.cwd().createDirPath(util.io, d) catch {};
     var f = std.Io.Dir.cwd().createFile(util.io, path, .{ .exclusive = true, .permissions = @enumFromInt(0o600) }) catch |err| switch (err) {
         error.PathAlreadyExists => std.Io.Dir.cwd().openFile(util.io, path, .{ .mode = .write_only }) catch return jsBool(false),
         else => return jsBool(false),
@@ -253,6 +257,13 @@ fn hostAppendFile(ctx_: ?*c.JSContext, _: c.JSValue, argc: c_int, argv: [*c]c.JS
     w.interface.writeAll(text) catch return jsBool(false);
     w.flush() catch return jsBool(false);
     return jsBool(true);
+}
+
+/// host 原语:__piz_host_configDir() -> string|null。值在 loadExtensions 存档。
+fn hostConfigDir(ctx_: ?*c.JSContext, _: c.JSValue, _: c_int, _: [*c]c.JSValue) callconv(.c) c.JSValue {
+    const cx = ctx_ orelse return jsNull();
+    const s = saved_cfg orelse return jsNull();
+    return c.JS_NewStringLen(cx, s.ptr, @intCast(s.len));
 }
 
 /// host 原语:__piz_host_env(name) -> string|null。
@@ -486,6 +497,8 @@ pub fn init(alloc: std.mem.Allocator) void {
     _ = c.JS_SetPropertyStr(ctx.?, global, "__piz_host_env", ef);
     const pf = c.JS_NewCFunction(ctx.?, hostCwd, "__piz_host_cwd", 0);
     _ = c.JS_SetPropertyStr(ctx.?, global, "__piz_host_cwd", pf);
+    const cdf = c.JS_NewCFunction(ctx.?, hostConfigDir, "__piz_host_configDir", 0);
+    _ = c.JS_SetPropertyStr(ctx.?, global, "__piz_host_configDir", cdf);
     const ff = c.JS_NewCFunction(ctx.?, hostFetch, "__piz_host_fetch", 2);
     _ = c.JS_SetPropertyStr(ctx.?, global, "__piz_host_fetch", ff);
     // prelude
@@ -703,8 +716,9 @@ fn evalModule(path_z: [*:0]const u8, src_z: [*:0]const u8, len: usize) bool {
 /// 内嵌出厂扩展:随二进制,先于目录档加载;用户/项目目有同名 basename 则让位(覆写)。
 /// gate 非空 = 抽离件:仅当插件启用集含其名才装载(开关语义与内置表一致,见 plugins.pushGates)。
 const bundled_exts = [_]struct { name: []const u8, gate: []const u8 = "", src: []const u8 }{
-    .{ .name = "usage-ledger.js", .src = @embedFile("embedded/extensions/usage-ledger.js") },
+    .{ .name = "usage-ledger.js", .gate = "usage-ledger", .src = @embedFile("embedded/extensions/usage-ledger.js") },
     .{ .name = "web-search.js", .gate = "web-search", .src = @embedFile("embedded/extensions/web-search.js") },
+    .{ .name = "artifact-store.js", .gate = "artifact-store", .src = @embedFile("embedded/extensions/artifact-store.js") },
 };
 
 var gate_names: []const []const u8 = &.{};
@@ -987,12 +1001,18 @@ pub fn emitToolCall(arena: std.mem.Allocator, name: []const u8, args_json: []con
     return "blocked by js extension";
 }
 
-/// tool_result 事件:只发不收。内容截 8KB(整段输出进 JSON 太贵)。
-pub fn emitToolResult(arena: std.mem.Allocator, name: []const u8, content: []const u8) void {
-    if (!enabled or rt == null or !h_tool_result) return;
-    const clipped = if (content.len > 8192) content[0..8192] else content;
-    const payload = std.json.Stringify.valueAlloc(arena, .{ .toolName = name, .output = clipped }, .{}) catch return;
-    _ = emit(arena, "tool_result", payload);
+/// tool_result 事件:handler 返 {replace} 则替换输出(artifact 外置等),多 handler 后者胜。
+/// 全文不截 —— 外置正是为大件;无 handler 时 h_tool_result 旗标短路,不进 JS。
+pub fn emitToolResult(arena: std.mem.Allocator, name: []const u8, content: []const u8) ?[]const u8 {
+    if (!enabled or rt == null or !h_tool_result) return null;
+    const payload = std.json.Stringify.valueAlloc(arena, .{ .toolName = name, .output = content }, .{}) catch return null;
+    const out = emit(arena, "tool_result", payload) orelse return null;
+    const parsed = std.json.parseFromSliceLeaky(std.json.Value, arena, out, .{}) catch return null;
+    if (parsed != .object) return null;
+    if (parsed.object.get("replace")) |v| {
+        if (v == .string) return v.string;
+    }
+    return null;
 }
 
 /// session_start 是否有人听(供调用方省 payload 构造)。
@@ -1355,8 +1375,9 @@ test "qjs bundled: usage-ledger 内嵌出厂,agent_end 携 usage 落账" {
     defer a.free(root);
     defer std.Io.Dir.cwd().deleteTree(util.io, root) catch {};
     try std.Io.Dir.cwd().createDirPath(util.io, root);
+    setGates(&.{"usage-ledger"});
     loadExtensions(root, "");
-    try t.expect(hasHandlers("agent_end")); // 内嵌件在场
+    try t.expect(hasHandlers("agent_end")); // 内嵌件在场(gate 已开)
     var arena_inst = util.Arena.init(a);
     defer arena_inst.deinit();
     emitAgentEnd(arena_inst.allocator(), .{
@@ -1401,6 +1422,7 @@ test "qjs bundled override: 同名文件顶替内嵌件" {
     const op = try std.fmt.allocPrint(a, "{s}/usage-ledger.js", .{ext_dir});
     defer a.free(op);
     try std.Io.Dir.cwd().writeFile(util.io, .{ .sub_path = op, .data = "piz.registerCommand(\"ovr\", { handler: () => \"OVR\" });\n" });
+    setGates(&.{"usage-ledger"}); // gate 开但同名文件在,内嵌让位
     loadExtensions(root, "");
     var arena_inst = util.Arena.init(a);
     defer arena_inst.deinit();
@@ -1448,9 +1470,10 @@ test "qjs bundled gate: web-search 默认关,setGates 开后装载" {
     try std.Io.Dir.cwd().createDirPath(util.io, root);
     loadExtensions(root, "");
     try t.expect(findTool("web_search") == null); // 门控默认关
-    try t.expect(hasHandlers("agent_end")); // usage-ledger 无门,仍在
-    setGates(&.{"web-search"});
+    try t.expect(!hasHandlers("agent_end")); // usage-ledger 亦带门,默认不在
+    setGates(&.{ "usage-ledger", "web-search" });
     reloadSaved();
+    try t.expect(hasHandlers("agent_end"));
     try t.expect(findTool("web_search") != null);
     try t.expect(findTool("fetch_url") != null);
     // 私网拦:safe fetch 拦 127.0.0.1,报错原文与原 Zig 工具一致
@@ -1475,6 +1498,45 @@ test "qjs bundled gate: web-search 默认关,setGates 开后装载" {
     var arena_inst = util.Arena.init(a);
     defer arena_inst.deinit();
     try t.expectEqualStrings("WOVR", runCommand(arena_inst.allocator(), "wovr", "").?);
+}
+
+test "qjs tool_result replace:artifact-store 外置大件,小件/read/已置不动" {
+    if (!enabled) return error.SkipZigTest;
+    const t = std.testing;
+    const a = t.allocator;
+    deinit();
+    init(a);
+    defer deinit();
+    const root = std.fmt.allocPrint(a, "/tmp/piz_jsrt_art_{d}", .{std.os.linux.getpid()}) catch return error.SkipZigTest;
+    defer a.free(root);
+    defer std.Io.Dir.cwd().deleteTree(util.io, root) catch {};
+    try std.Io.Dir.cwd().createDirPath(util.io, root);
+    setGates(&.{"artifact-store"});
+    loadExtensions(root, "");
+    try t.expect(hasHandlers("tool_result"));
+    var arena_inst = util.Arena.init(a);
+    defer arena_inst.deinit();
+    const ar = arena_inst.allocator();
+    // 小件不改写
+    try t.expect(emitToolResult(ar, "bash", "small") == null);
+    // read 系跳过
+    const big = try ar.dupe(u8, "x" ** (8 * 1024));
+    try t.expect(emitToolResult(ar, "read", big) == null);
+    // 大件外置:引用式替换 + 文件真在
+    const repl = emitToolResult(ar, "bash", big).?;
+    try t.expect(std.mem.indexOf(u8, repl, "[Artifact stored: ") != null);
+    try t.expect(std.mem.indexOf(u8, repl, "(8192 bytes)") != null);
+    try t.expect(std.mem.indexOf(u8, repl, "truncated; read the artifact file") != null);
+    const ps = std.mem.indexOf(u8, repl, "stored: ").? + 8;
+    const pe = std.mem.indexOfScalar(u8, repl[ps..], ' ').? + ps;
+    const stored = try std.Io.Dir.cwd().readFileAlloc(util.io, repl[ps..pe], ar, .limited(64 * 1024));
+    try t.expectEqualStrings(big, stored);
+    // 已含标记不重复外置
+    try t.expect(emitToolResult(ar, "bash", repl) == null);
+    // CJK 边界:预览退到字符边界,整链合法 UTF-8
+    const zh = try ar.dupe(u8, "x" ++ "// 中文注释行填充凑长\n" ** 300);
+    const zrepl = emitToolResult(ar, "bash", zh).?;
+    try t.expect(std.unicode.utf8ValidateSlice(zrepl));
 }
 
 test "qjs bundled web-search: 内部函数探针(整形/编码/HTML 抽文/状态)" {
