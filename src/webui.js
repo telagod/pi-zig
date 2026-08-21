@@ -1478,6 +1478,964 @@ function sseUp() {
 }
 
 };
+__modules["slash"] = function(module, exports, require) {
+"use strict";Object.defineProperty(exports, "__esModule", {value: true});// slash.ts —— 斜杠命令目录/菜单/bang 提示/@文件补全 + runSlash 全分发。
+// 自 webui.js 切出。聊天渲染/发送/模型态皆 main 之物,经 slashH 钩袋注入;
+// 别名包装使本体调用点一字不改(唯活读之 bare var 改 H.getX())。
+var _util = require('./util');
+var _state = require('./state');
+var _ui = require('./ui');
+var _sessions = require('./sessions');
+var _store = require('./store');
+
+ const slashH = {}; exports.slashH = slashH;
+const addUser = (...a) => exports.slashH.addUser(...a);
+const addAsst = (...a) => exports.slashH.addAsst(...a);
+const finishAsst = (...a) => exports.slashH.finishAsst(...a);
+const openSearch = (...a) => exports.slashH.openSearch(...a);
+const setApproval = (...a) => exports.slashH.setApproval(...a);
+const attachClipboardImage = (...a) => exports.slashH.attachClipboardImage(...a);
+const refreshSend = (...a) => exports.slashH.refreshSend(...a);
+const ensureActPoll = (...a) => exports.slashH.ensureActPoll(...a);
+const setSandbox = (...a) => exports.slashH.setSandbox(...a);
+const setThink = (...a) => exports.slashH.setThink(...a);
+const asstEl = (...a) => exports.slashH.asstEl(...a);
+const findInThread = (...a) => exports.slashH.findInThread(...a);
+const setScheme = (...a) => exports.slashH.setScheme(...a);
+const applySessionTitle = (...a) => exports.slashH.applySessionTitle(...a);
+const sendPlain = (...a) => exports.slashH.sendPlain(...a);
+const send = (...a) => exports.slashH.send(...a);
+const renderQueue = (...a) => exports.slashH.renderQueue(...a);
+const clipText = (...a) => exports.slashH.clipText(...a);
+
+ function findSlash(cmd) {
+  return SLASH.find((s) => s.name === cmd);
+} exports.findSlash = findSlash;
+ function applyHelpCatalog(j) {
+  if (j && Array.isArray(j.commands) && j.commands.length) {
+    SLASH = j.commands.map((c) => ({
+      name: c.name,
+      desc: c.desc,
+      accepts: !!c.accepts,
+    }));
+    (window ).HELP_KEYS = Array.isArray(j.keys) ? j.keys : (window ).HELP_KEYS || [];
+  }
+} exports.applyHelpCatalog = applyHelpCatalog;
+ function loadHelpCatalog() {
+  return fetch("/api/help?" + _state.wsp + "session=" + encodeURIComponent(_state.sess))
+    .then((r) => r.json())
+    .then(applyHelpCatalog)
+    .catch(() => _ui.showToast.call(void 0, "help catalog load failed"));
+} exports.loadHelpCatalog = loadHelpCatalog;
+let SLASH = [
+  { name: "/help", desc: "list commands" },
+  { name: "/login", desc: "save API key", accepts: true },
+  { name: "/new", desc: "新会话" },
+  { name: "/clear", desc: "清空并重开" },
+  { name: "/sessions", desc: "搜索会话" },
+  { name: "/resume", desc: "切到第 n 个会话", accepts: true },
+  { name: "/undo", desc: "撤销上一轮" },
+  { name: "/compact", desc: "压缩上下文" },
+  { name: "/fast-compress", desc: "快压状态" },
+  { name: "/fork", desc: "派生会话" },
+  { name: "/title", desc: "改会话标题", accepts: true },
+  { name: "/model", desc: "切换模型" },
+  { name: "/refresh", desc: "拉取 provider 模型列表" },
+  { name: "/think", desc: "思考等级", accepts: true },
+  { name: "/permissions", desc: "授权 yolo/ask/read-only", accepts: true },
+  { name: "/sandbox", desc: "bash 沙箱 off/workspace/strict", accepts: true },
+  { name: "/status", desc: "当前状态" },
+  { name: "/doctor", desc: "环境体检" },
+  { name: "/init", desc: "写 AGENTS.md（已有不覆盖）" },
+  { name: "/diff", desc: "git status + diffstat" },
+  { name: "/commit", desc: "提交已暂存（需说明）", accepts: true },
+  { name: "/log", desc: "git log --oneline", accepts: true },
+  { name: "/branch", desc: "当前与最近分支" },
+  { name: "/mcp", desc: "MCP server 列表" },
+  { name: "/reload", desc: "重读 settings.json" },
+  { name: "/theme", desc: "外观 light/dark/system", accepts: true },
+  { name: "/paste", desc: "从剪贴板附图" },
+  { name: "/usage", desc: "token 账本" },
+  { name: "/jobs", desc: "在跑 / 后台任务", accepts: true },
+  { name: "/find", desc: "搜对话", accepts: true },
+  { name: "/plan", desc: "写 PLAN.md 再执行", accepts: true },
+  { name: "/queue", desc: "清空输入队列" },
+  { name: "/memory", desc: "跨会话记忆", accepts: true },
+  { name: "/plugins", desc: "列出或开关插件", accepts: true },
+  { name: "/pkg", desc: "已装资源包" },
+  { name: "/tree", desc: "消息列表" },
+  { name: "/copy", desc: "复制最后一条回复" },
+  { name: "/export", desc: "导出 HTML" },
+  { name: "/dump", desc: "整段会话到剪贴板" },
+  { name: "/redo", desc: "重发上一次输入" },
+];
+(window ).HELP_KEYS = (window ).HELP_KEYS || [
+  { name: "@./path", desc: "embed a file" },
+  { name: "!cmd", desc: "run shell, send to model" },
+  { name: "!!cmd", desc: "run shell, show only" },
+  { name: "?", desc: "shortcut overlay when empty" },
+  { name: "c", desc: "copy last reply when empty" },
+  { name: "d", desc: "doctor when empty" },
+  { name: "g", desc: "git diff when empty" },
+  { name: "l", desc: "git log when empty" },
+  { name: "r", desc: "redo last input when empty" },
+  { name: "s", desc: "sandbox picker when empty" },
+  { name: "j", desc: "list jobs when empty" },
+  { name: "u", desc: "token ledger when empty" },
+  { name: "Esc", desc: "abort; empty again edits last" },
+  { name: "Ctrl+C", desc: "clear; empty again quits" },
+  { name: "Ctrl+D", desc: "empty again quits" },
+  { name: "Tab", desc: "queue input while busy" },
+  { name: "Ctrl+B", desc: "background while busy" },
+  { name: "Ctrl+T", desc: "fold thinking" },
+  { name: "Ctrl+O", desc: "fold tool output" },
+  { name: "PgUp/PgDn", desc: "scroll transcript" },
+  { name: "Ctrl+↑/↓", desc: "scroll a few lines" },
+  { name: "wheel", desc: "scroll transcript" },
+  { name: "Alt+,/.", desc: "think less / more" },
+  { name: "Shift+↑/↓", desc: "think less / more" },
+];
+let slashItems = [],
+  slashIdx = 0,
+  pickKind = "",
+  atTok = null,
+  fileTimer = 0;
+ function hideSlash() {
+  const m = _util.$.call(void 0, "slashMenu");
+  if (m) m.hidden = true;
+  slashItems = [];
+  pickKind = "";
+  atTok = null;
+  if (fileTimer) {
+    clearTimeout(fileTimer);
+    fileTimer = 0;
+  }
+} exports.hideSlash = hideSlash;
+ function slashOpen() {
+  const m = _util.$.call(void 0, "slashMenu");
+  return m && !m.hidden && slashItems.length > 0;
+} exports.slashOpen = slashOpen;
+ function renderSlash() {
+  const m = _util.$.call(void 0, "slashMenu");
+  if (!m) return;
+  if (!slashItems.length) {
+    m.hidden = true;
+    return;
+  }
+  m.hidden = false;
+  const file = pickKind === "file";
+  const foot = file
+    ? "<span>↑↓ 选择</span><span>Enter 填入</span><span>Tab 补全</span><span>Esc 关闭</span>"
+    : "<span>↑↓ 选择</span><span>Enter 执行</span><span>Tab 补全</span><span>Esc 关闭</span>";
+  m.innerHTML =
+    '<div class="slash-list">' +
+    slashItems
+      .map((it, i) => {
+        const name = file ? it.path || it.name : it.name;
+        const desc = file ? (it.dir ? "目录" : "文件") : it.desc;
+        const mark = file && it.dir ? '<span class="mark">/</span>' : "";
+        return (
+          '<div class="slash-item' +
+          (i === slashIdx ? " active" : "") +
+          '" data-i="' +
+          i +
+          '" role="option"><span class="slash-name">' +
+          (it.hlLen ? _util.hlSpan.call(void 0, name, it.hlFrom || 0, it.hlLen) : _util.esc.call(void 0, name)) +
+          '</span><span class="slash-desc">' +
+          _util.esc.call(void 0, desc || "") +
+          "</span>" +
+          mark +
+          "</div>"
+        );
+      })
+      .join("") +
+    '</div><div class="slash-foot">' +
+    foot +
+    "</div>";
+  const on = m.querySelector(".slash-item.active");
+  if (on) on.scrollIntoView({ block: "nearest" });
+} exports.renderSlash = renderSlash;
+ function updateSlashList(q) {
+  pickKind = "slash";
+  const ranked = _util.rankSlash.call(void 0, SLASH, q);
+  slashItems = ranked.map((r) =>
+    Object.assign({}, r.it, { hlFrom: r.hlFrom, hlLen: r.kind === 2 ? 0 : r.hlLen }),
+  );
+  if (slashIdx >= slashItems.length) slashIdx = 0;
+  renderSlash();
+} exports.updateSlashList = updateSlashList;
+ function atToken(v, caret) {
+  const left = v.slice(0, caret == null ? v.length : caret);
+  const m = /(^|[\s])(@(?:\.\/[^\s]*|\.?))$/.exec(left);
+  if (!m) return null;
+  const raw = m[2];
+  return { start: left.length - raw.length, raw, q: raw.startsWith("@./") ? raw.slice(3) : "" };
+} exports.atToken = atToken;
+ function scheduleFiles(tok) {
+  atTok = tok;
+  pickKind = "file";
+  if (fileTimer) clearTimeout(fileTimer);
+  fileTimer = setTimeout(async () => {
+    fileTimer = 0;
+    const cur = atToken((_util.$.call(void 0, "inp") ).value, (_util.$.call(void 0, "inp") ).selectionStart);
+    if (!cur) {
+      hideSlash();
+      return;
+    }
+    atTok = cur;
+    try {
+      const r = await fetch("/api/files?" + _state.wsp + "q=" + encodeURIComponent(cur.q));
+      const j = await r.json();
+      if (!j || !j.ok) {
+        slashItems = [];
+        renderSlash();
+        return;
+      }
+      slashItems = (j.items || []).map((it) =>
+        Object.assign({ desc: it.link ? "→ " + it.link : it.dir ? "目录" : "文件" }, it),
+      );
+      if (slashIdx >= slashItems.length) slashIdx = 0;
+      pickKind = "file";
+      renderSlash();
+    } catch (e2) {
+      hideSlash();
+    }
+  }, 60);
+} exports.scheduleFiles = scheduleFiles;
+ function insertFile() {
+  const it = slashItems[slashIdx];
+  const inp = _util.$.call(void 0, "inp") ;
+  const tok = atToken(inp.value, inp.selectionStart) || atTok;
+  if (!it || !tok) {
+    hideSlash();
+    return;
+  }
+  const prefix = inp.value.slice(0, tok.start);
+  const suffix = inp.value.slice(tok.start + tok.raw.length);
+  if (it.dir) {
+    const filled = prefix + "@./" + it.path + "/";
+    inp.value = filled + suffix;
+    inp.setSelectionRange(filled.length, filled.length);
+    hideSlash();
+    scheduleFiles(atToken(inp.value, filled.length));
+  } else {
+    const filled = prefix + "@./" + it.path + " ";
+    inp.value = filled + suffix;
+    inp.setSelectionRange(filled.length, filled.length);
+    hideSlash();
+  }
+  _store.autosizeInp.call(void 0, );
+  _store.saveDraft.call(void 0, );
+  refreshSend();
+} exports.insertFile = insertFile;
+ function hideBang() {
+  const el = _util.$.call(void 0, "cmpHint");
+  if (!el) return;
+  el.hidden = true;
+  el.innerHTML = "";
+} exports.hideBang = hideBang;
+ function showBang(v) {
+  const el = _util.$.call(void 0, "cmpHint");
+  if (!el) return;
+  const local = v.startsWith("!!");
+  const cmd = v.slice(local ? 2 : 1).trim();
+  el.hidden = false;
+  el.innerHTML = local
+    ? '<span class="bang-local">!! 只跑</span><b>' +
+      _util.esc.call(void 0, cmd || "…") +
+      "</b><span>结果留在本页，不送模型</span>"
+    : '<span class="bang-run">! 跑并送</span><b>' +
+      _util.esc.call(void 0, cmd || "…") +
+      "</b><span>输出会一并交给模型</span>";
+} exports.showBang = showBang;
+ function updateComposerChrome() {
+  const inp = _util.$.call(void 0, "inp") ;
+  const v = inp.value;
+  if (v.startsWith("/") && v.indexOf("\n") < 0 && v.indexOf(" ") < 0) {
+    hideBang();
+    updateSlashList(v.slice(1));
+    return;
+  }
+  if (v.startsWith("!")) {
+    hideSlash();
+    showBang(v);
+    return;
+  }
+  const tok = atToken(v, inp.selectionStart);
+  if (tok) {
+    hideBang();
+    scheduleFiles(tok);
+    return;
+  }
+  hideSlash();
+  hideBang();
+} exports.updateComposerChrome = updateComposerChrome;
+ function updateSlash() {
+  updateComposerChrome();
+} exports.updateSlash = updateSlash;
+ function slashMove(d) {
+  if (!slashItems.length) return;
+  slashIdx = (slashIdx + d + slashItems.length) % slashItems.length;
+  renderSlash();
+} exports.slashMove = slashMove;
+ function slashComplete() {
+  if (pickKind === "file") {
+    insertFile();
+    return;
+  }
+  const it = slashItems[slashIdx];
+  if (!it) return;
+  (_util.$.call(void 0, "inp") ).value = it.name + (it.accepts ? " " : "");
+  hideSlash();
+  _store.autosizeInp.call(void 0, );
+  _store.saveDraft.call(void 0, );
+} exports.slashComplete = slashComplete;
+ function slashPick() {
+  if (pickKind === "file") {
+    insertFile();
+    return;
+  }
+  const it = slashItems[slashIdx];
+  if (!it) return;
+  if (it.accepts) {
+    (_util.$.call(void 0, "inp") ).value = it.name + " ";
+    hideSlash();
+    _store.autosizeInp.call(void 0, );
+    return;
+  }
+  (_util.$.call(void 0, "inp") ).value = it.name;
+  hideSlash();
+  send();
+} exports.slashPick = slashPick;
+(_util.$.call(void 0, "slashMenu") ).onmousedown = (e) => {
+  const it = e.target.closest(".slash-item");
+  if (!it) return;
+  e.preventDefault();
+  slashIdx = +it.getAttribute("data-i") || 0;
+  slashPick();
+};
+ async function runSlash(item, arg) {
+  switch (item.name) {
+    case "/login": {
+      const parts = (arg || "").trim().split(/\s+/);
+      const name = parts[0] || "";
+      const key = parts.slice(1).join(" ").trim();
+      if (!name || !key) {
+        _ui.showToast.call(void 0, "usage: /login <provider> <api-key>");
+        break;
+      }
+      fetch("/api/config", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ setAuth: { name, key } }),
+      })
+        .then((r) => r.json())
+        .then((j) => _ui.showToast.call(void 0, j && j.ok ? "saved " + name : "login failed"))
+        .catch(() => _ui.showToast.call(void 0, "login failed"));
+      break;
+    }
+    case "/quit":
+      _ui.showToast.call(void 0, "close the tab to quit");
+      break;
+    case "/help":
+      addUser("/help");
+      const cmds = SLASH.map((s) => s.name.padEnd(16) + s.desc).join("\n");
+      const keys = ((window ).HELP_KEYS || [])
+        .map((s) => String(s.name || "").padEnd(16) + (s.desc || ""))
+        .join("\n");
+      addAsst(
+        cmds +
+          (keys ? "\n\n" + keys : "") +
+          "\n\n@./path 嵌文件 · !cmd 跑命令并送给模型 · !!cmd 只跑不送\nCtrl+K 搜会话 · 发送中再按 Enter 会接着发",
+      );
+      finishAsst();
+      break;
+    case "/sessions":
+      openSearch();
+      break;
+    case "/new":
+    case "/clear":
+      location.href = _state.sessUrl.call(void 0, Math.random().toString(36).slice(2, 8));
+      break;
+    case "/undo":
+      _sessions.act.call(void 0, { act: "undo" }, (j) =>
+        _ui.showToast.call(void 0, j && j.ok ? "已撤销" : "撤销失败"),
+      );
+      break;
+    case "/compact":
+      _sessions.act.call(void 0, { act: "compact" }, (j) =>
+        _ui.showToast.call(void 0, j && j.ok ? "压缩完成" : "压缩失败"),
+      );
+      break;
+    case "/fork": {
+      const n =
+        arg || (await _ui.askText.call(void 0, "派生会话", "", "新会话名，留空自动"));
+      if (n === null) return;
+      _sessions.act.call(void 0, { act: "fork", name: n || "" }, (j) => {
+        if (j && j.ok && j.name) location.href = _state.sessUrl.call(void 0, j.name);
+        else _ui.showToast.call(void 0, "派生失败");
+      });
+      break;
+    }
+    case "/title": {
+      const t = arg || (await _ui.askText.call(void 0, "会话标题", exports.slashH.getCurTitle() || "", ""));
+      if (t === null || !t) return;
+      await applySessionTitle(t, true);
+      break;
+    }
+    case "/refresh": {
+      addUser("/refresh");
+      try {
+        const r = await fetch("/api/config", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ refreshModels: true }),
+        });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok || j.ok === false) {
+          addAsst(j.error || "cannot refresh models");
+        } else {
+          addAsst("refreshed " + (j.refreshed || 0) + " provider(s), +" + (j.added || 0) + " models" +
+            (j.fail ? "\n" + j.fail + " provider(s) failed GET /models" : ""));
+        }
+      } catch (e3) {
+        addAsst("cannot refresh models");
+      }
+      finishAsst();
+      break;
+    }
+    case "/model":
+      (_util.$.call(void 0, "hModel") ).click();
+      break;
+    case "/permissions":
+    case "/approvals": {
+      const lv = (arg || "").trim();
+      if (!lv) {
+        (_util.$.call(void 0, "permPill") ).click();
+        break;
+      }
+      await setApproval(lv);
+      addUser("/permissions " + lv);
+      addAsst("授权 " + exports.slashH.approvalLabel());
+      finishAsst();
+      break;
+    }
+    case "/jobs": {
+      const raw = (arg || "").trim();
+      addUser(raw ? "/jobs " + raw : "/jobs");
+      try {
+        if (/^kill\s+\d+/.test(raw) || /^\d+$/.test(raw)) {
+          const pid = parseInt(raw.replace(/^kill\s+/, ""), 10);
+          const r = await fetch("/api/activity", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ kill: pid }),
+          });
+          const j = await r.json();
+          addAsst(j.ok ? "killed pid " + pid : "no tracked job with that pid");
+        } else {
+          const r = await fetch("/api/activity");
+          const list = await r.json();
+          if (!list || !list.length) addAsst("no running jobs");
+          else
+            addAsst(
+              list
+                .map((a) => {
+                  const sec = Math.round((a.ms || 0) / 1000);
+                  return (
+                    (a.detached ? "~ " : "* ") +
+                    (a.pid ? "pid " + a.pid + "  " : "") +
+                    (a.name || "job") +
+                    " " +
+                    sec +
+                    "s" +
+                    (a.detail ? "  " + a.detail : "")
+                  );
+                })
+                .join("\n"),
+            );
+        }
+        ensureActPoll();
+      } catch (e4) {
+        addAsst("cannot read activity");
+      }
+      finishAsst();
+      break;
+    }
+    case "/usage": {
+      addUser("/usage");
+      try {
+        const r = await fetch("/api/usage");
+        const j = await r.json();
+        const cost = j.usd > 0 ? "  $" + Number(j.usd).toFixed(4) : "";
+        const head = "usage  " + (j.lines || 0) + " turns  ↑" + _util.fmtTok.call(void 0, j.in || 0) + " ↓" + _util.fmtTok.call(void 0, j.out || 0) + cost;
+        addAsst(j.tail ? head + "\n" + j.tail : head);
+      } catch (e5) {
+        addAsst("cannot read usage.jsonl");
+      }
+      finishAsst();
+      break;
+    }
+    case "/sandbox": {
+      const lv = (arg || "").trim();
+      if (!lv) {
+        addUser("/sandbox");
+        addAsst("usage: /sandbox off|workspace|strict");
+        finishAsst();
+        break;
+      }
+      addUser("/sandbox " + lv);
+      await setSandbox(lv);
+      addAsst("sandbox " + exports.slashH.getSandboxMode());
+      finishAsst();
+      break;
+    }
+    case "/think": {
+      const lv = (arg || "").trim();
+      if (!lv) {
+        (_util.$.call(void 0, "hThink") ).click();
+        break;
+      }
+      addUser("/think " + lv);
+      await setThink(lv);
+      addAsst("思考 " + (exports.slashH.getThink() || lv));
+      finishAsst();
+      break;
+    }
+    case "/find": {
+      const q = (arg || "").trim();
+      addUser("/find" + (q ? " " + q : ""));
+      const e = asstEl().querySelector(".md");
+      if (!q && !exports.slashH.getWebFindQ()) e.textContent = "usage: /find <text>";
+      else if (findInThread(q || exports.slashH.getWebFindQ(), false)) e.textContent = "found: " + (q || exports.slashH.getWebFindQ());
+      else e.textContent = "no match";
+      finishAsst();
+      break;
+    }
+    case "/paste": {
+      addUser("/paste");
+      try {
+        if (await attachClipboardImage()) {
+          addAsst(exports.slashH.getVision() ? "image attached — enter to send" : "image attached — this model has no vision");
+        } else {
+          addAsst("no image on clipboard — use Ctrl+V");
+        }
+      } catch (e6) {
+        addAsst("no image on clipboard — use Ctrl+V");
+      }
+      finishAsst();
+      break;
+    }
+    case "/theme": {
+      const lv = (arg || "").trim().toLowerCase();
+      addUser(lv ? "/theme " + lv : "/theme");
+      if (!lv) {
+        addAsst("theme " + (_state.prefs.scheme || "dark") + "\nusage: /theme light|dark|system");
+      } else if (setScheme(lv)) {
+        addAsst("theme " + _state.prefs.scheme);
+      } else {
+        addAsst("usage: /theme light|dark|system");
+      }
+      finishAsst();
+      break;
+    }
+    case "/reload":
+      fetch("/api/slash?" + _state.wsp + "session=" + encodeURIComponent(_state.sess), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: "reload", args: "" }),
+      })
+        .then((r) => r.json())
+        .then((j) => {
+          const text = (j && j.text) || "reload failed";
+          String(text)
+            .split("\n")
+            .forEach((line) => {
+              const m = line.match(/^(theme|approval|sandbox|think)\s+(\S+)/);
+              if (!m) return;
+              if (m[1] === "theme") setScheme(m[2]);
+              if (m[1] === "approval") exports.slashH.setApprovalMode(m[2]);
+              if (m[1] === "sandbox") exports.slashH.applySandboxLevel(m[2]);
+              if (m[1] === "think") exports.slashH.applyThinkLevel(m[2]);
+            });
+          addUser("/reload");
+          addAsst(text);
+          finishAsst();
+        })
+        .catch(() => {
+          addUser("/reload");
+          addAsst("reload failed");
+          finishAsst();
+        });
+      break;
+    case "/mcp":
+      fetch("/api/slash?" + _state.wsp + "session=" + encodeURIComponent(_state.sess), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: "mcp", args: "" }),
+      })
+        .then((r) => r.json())
+        .then((j) => {
+          addUser("/mcp");
+          addAsst((j && j.text) || "mcp failed");
+          finishAsst();
+        })
+        .catch(() => {
+          addUser("/mcp");
+          addAsst("mcp failed");
+          finishAsst();
+        });
+      break;
+    case "/branch":
+      fetch("/api/slash?" + _state.wsp + "session=" + encodeURIComponent(_state.sess), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: "branch", args: "" }),
+      })
+        .then((r) => r.json())
+        .then((j) => {
+          addUser("/branch");
+          addAsst((j && j.text) || "branch failed");
+          finishAsst();
+        })
+        .catch(() => {
+          addUser("/branch");
+          addAsst("branch failed");
+          finishAsst();
+        });
+      break;
+    case "/log":
+      fetch("/api/slash?" + _state.wsp + "session=" + encodeURIComponent(_state.sess), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: "log", args: arg || "" }),
+      })
+        .then((r) => r.json())
+        .then((j) => {
+          addUser("/log" + (arg ? " " + arg : ""));
+          addAsst((j && j.text) || "log failed");
+          finishAsst();
+        })
+        .catch(() => {
+          addUser("/log");
+          addAsst("log failed");
+          finishAsst();
+        });
+      break;
+    case "/commit":
+      fetch("/api/slash?" + _state.wsp + "session=" + encodeURIComponent(_state.sess), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: "commit", args: arg || "" }),
+      })
+        .then((r) => r.json())
+        .then((j) => {
+          addUser("/commit" + (arg ? " " + arg : ""));
+          addAsst((j && j.text) || "commit failed");
+          finishAsst();
+        })
+        .catch(() => {
+          addUser("/commit");
+          addAsst("commit failed");
+          finishAsst();
+        });
+      break;
+    case "/diff":
+      fetch("/api/slash?" + _state.wsp + "session=" + encodeURIComponent(_state.sess), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: "diff", args: "" }),
+      })
+        .then((r) => r.json())
+        .then((j) => {
+          addUser("/diff");
+          addAsst((j && j.text) || "diff failed");
+          finishAsst();
+        })
+        .catch(() => {
+          addUser("/diff");
+          addAsst("diff failed");
+          finishAsst();
+        });
+      break;
+    case "/init":
+      fetch("/api/slash?" + _state.wsp + "session=" + encodeURIComponent(_state.sess), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: "init", args: "" }),
+      })
+        .then((r) => r.json())
+        .then((j) => {
+          addUser("/init");
+          addAsst((j && j.text) || "init failed");
+          finishAsst();
+        })
+        .catch(() => {
+          addUser("/init");
+          addAsst("init failed");
+          finishAsst();
+        });
+      break;
+    case "/doctor":
+      fetch("/api/slash?" + _state.wsp + "session=" + encodeURIComponent(_state.sess), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: "doctor", args: "" }),
+      })
+        .then((r) => r.json())
+        .then((j) => {
+          addUser("/doctor");
+          addAsst((j && j.text) || "doctor failed");
+          finishAsst();
+        })
+        .catch(() => {
+          addUser("/doctor");
+          addAsst("doctor failed");
+          finishAsst();
+        });
+      break;
+    case "/status":
+      fetch("/api/config")
+        .then((r) => r.json())
+        .then((cfg) => {
+          const on = (Array.isArray(cfg.plugins) ? cfg.plugins : [])
+            .filter((p) => p && p.enabled && p.optional)
+            .map((p) => p.name);
+          addUser("/status");
+          addAsst(
+            "模型 " +
+              (exports.slashH.getCurModel() || "?") +
+              " · 思考 " +
+              (exports.slashH.getThink() || "high") +
+              " · 会话 " +
+              _state.sess +
+              " · 项目 " +
+              (_state.ws || ".") +
+              (on.length ? " · 插件 " + on.join(" ") : ""),
+          );
+          finishAsst();
+        })
+        .catch(() => {
+          addUser("/status");
+          addAsst(
+            "模型 " +
+              (exports.slashH.getCurModel() || "?") +
+              " · 思考 " +
+              (exports.slashH.getThink() || "high") +
+              " · 会话 " +
+              _state.sess +
+              " · 项目 " +
+              (_state.ws || "."),
+          );
+          finishAsst();
+        });
+      break;
+    case "/resume": {
+      const n = parseInt(arg || "", 10);
+      if (!arg || !n) {
+        openSearch();
+        break;
+      }
+      if (n < 1 || n > _sessions.sessData.list.length) {
+        _ui.showToast.call(void 0, "没有第 " + n + " 个会话（/sessions）");
+        break;
+      }
+      location.href = _state.sessUrl.call(void 0, _sessions.sessData.list[n - 1].name);
+      break;
+    }
+    case "/plan": {
+      const goal =
+        (arg && arg.trim()) ||
+        (await _ui.askText.call(void 0, "计划目标", "", "要完成什么"));
+      if (!goal) return;
+      await sendPlain("/plan " + goal);
+      break;
+    }
+    case "/queue":
+      exports.slashH.clearPending();
+      renderQueue();
+      _sessions.act.call(void 0, { act: "queue" }, (j) => {
+        _ui.showToast.call(void 0, 
+          j && j.cleared
+            ? "已清空 " + j.cleared + " 条"
+            : "没有待发送的消息",
+        );
+      });
+      break;
+    case "/memory": {
+      const rest = (arg || "").trim();
+      if (rest === "clear") {
+        _sessions.act.call(void 0, { act: "memory-clear" }, (j) =>
+          _ui.showToast.call(void 0, j && j.ok ? "记忆已清空" : "清空失败"),
+        );
+        break;
+      }
+      if (rest.startsWith("set ")) {
+        const text = rest.slice(4).trim();
+        if (!text) {
+          _ui.showToast.call(void 0, "usage: /memory set <text>");
+          break;
+        }
+        _sessions.act.call(void 0, { act: "memory-set", name: text }, (j) =>
+          _ui.showToast.call(void 0, j && j.ok ? "记忆已写入" : "写入失败"),
+        );
+        break;
+      }
+      _sessions.act.call(void 0, { act: "memory" }, (j) => {
+        addUser("/memory");
+        addAsst(
+          (j && j.text) ||
+            "memory is empty — /memory set <text> to add",
+        );
+        finishAsst();
+      });
+      break;
+    }
+    case "/plugins": {
+      const rest = (arg || "").trim();
+      if (!rest) {
+        fetch("/api/config")
+          .then((r) => r.json())
+          .then((cfg) => {
+            const plugs = Array.isArray(cfg.plugins) ? cfg.plugins : [];
+            const lines = plugs.map(
+              (p) =>
+                "  [" +
+                (p.enabled ? "on " : "off") +
+                "] " +
+                p.name,
+            );
+            addUser("/plugins");
+            addAsst(
+              "plugins (next turn):\n" +
+                lines.join("\n") +
+                "\nusage: /plugins on <name> | /plugins off <name>",
+            );
+            finishAsst();
+          })
+          .catch(() => _ui.showToast.call(void 0, "plugins 读取失败"));
+        break;
+      }
+      const m = rest.match(/^(on|off)\s+(\S+)$/);
+      if (!m) {
+        _ui.showToast.call(void 0, "usage: /plugins on <name> | /plugins off <name>");
+        break;
+      }
+      const on = m[1] === "on";
+      fetch("/api/config", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ setPlugin: { name: m[2], enabled: on } }),
+      })
+        .then((r) => r.json())
+        .then((j) => {
+          if (j && j.ok === false) {
+            _ui.showToast.call(void 0, "插件开关失败");
+            return;
+          }
+          _ui.showToast.call(void 0, "plugin " + m[2] + (on ? " on" : " off") + " — next turn");
+          loadHelpCatalog();
+        })
+        .catch(() => _ui.showToast.call(void 0, "插件开关失败"));
+      break;
+    }
+    case "/pkg":
+      fetch("/api/packages?" + _state.wsp)
+        .then((r) => r.json())
+        .then((j) => {
+          function rows(arr, title) {
+            const xs = Array.isArray(arr) ? arr : [];
+            const body = xs.length
+              ? xs
+                  .map(
+                    (p) =>
+                      "  " +
+                      p.name +
+                      "  skills:" +
+                      (p.skills || 0) +
+                      " prompts:" +
+                      (p.prompts || 0),
+                  )
+                  .join("\n")
+              : "  (none)";
+            return title + " (" + xs.length + "):\n" + body;
+          }
+          addUser("/pkg");
+          addAsst(
+            rows(j.user, "user packages") +
+              "\n" +
+              rows(j.project, "project packages") +
+              "\ninstall: piz pkg install <path> [-l]",
+          );
+          finishAsst();
+        })
+        .catch(() => {
+          addUser("/pkg");
+          addAsst("packages 读取失败");
+          finishAsst();
+        });
+      break;
+    case "/tree":
+      _sessions.act.call(void 0, { act: "tree" }, (j) => {
+        addUser("/tree");
+        addAsst((j && j.text) || "no messages");
+        finishAsst();
+      });
+      break;
+    case "/copy":
+      _sessions.act.call(void 0, { act: "copy" }, (j) =>
+        clipText(j && j.text, "已复制最后回复", "还没有回复"),
+      );
+      break;
+    case "/export":
+      _sessions.act.call(void 0, { act: "export" }, (j) => {
+        if (j && j.text) {
+          _util.downloadText.call(void 0, "piz-export.html", j.text, "text/html");
+          _ui.showToast.call(void 0, "已导出");
+        } else _ui.showToast.call(void 0, "导出失败");
+      });
+      break;
+    case "/dump":
+      _sessions.act.call(void 0, { act: "dump" }, (j) =>
+        clipText(j && j.text, "会话已复制", "没有内容"),
+      );
+      break;
+    case "/fast-compress":
+      _sessions.act.call(void 0, { act: "fast-compress" }, (j) => {
+        addUser("/fast-compress");
+        addAsst((j && j.text) || "fast-compress: ?");
+        finishAsst();
+      });
+      break;
+    case "/redo":
+      if (!exports.slashH.getLastUser()) {
+        _ui.showToast.call(void 0, "没有可重发的输入");
+        break;
+      }
+      await sendPlain(exports.slashH.getLastUser());
+      break;
+    default: {
+      const stem = String(item.name || "").replace(/^\//, "");
+      fetch("/api/slash?" + _state.wsp + "session=" + encodeURIComponent(_state.sess), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: stem, args: arg || "" }),
+      })
+        .then((r) => r.json())
+        .then((j) => {
+          if (j && j.ok) {
+            addUser("/" + stem + (arg ? " " + arg : ""));
+            addAsst(j.text || "");
+            finishAsst();
+          } else _ui.showToast.call(void 0, (j && j.error) || "未知命令");
+        })
+        .catch(() => _ui.showToast.call(void 0, "未知命令"));
+      break;
+    }
+  }
+} exports.runSlash = runSlash;
+
+};
 __modules["main"] = function(module, exports, require) {
 "use strict"; function _interopRequireWildcard(obj) { if (obj && obj.__esModule) { return obj; } else { var newObj = {}; if (obj != null) { for (var key in obj) { if (Object.prototype.hasOwnProperty.call(obj, key)) { newObj[key] = obj[key]; } } } newObj.default = obj; return newObj; } } function _nullishCoalesce(lhs, rhsFn) { if (lhs != null) { return lhs; } else { return rhsFn(); } } function _optionalChain(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }      "use strict";
       var _state = require('./state');
@@ -1489,6 +2447,7 @@ __modules["main"] = function(module, exports, require) {
       var _store = require('./store');
       var _sessions = require('./sessions');
       var _stream = require('./stream');
+      var _slash = require('./slash');
       function setScheme(v) {
         const map = { auto: "system", light: "light", dark: "dark", system: "system" };
         const next = map[String(v || "").trim()];
@@ -2276,13 +3235,13 @@ __modules["main"] = function(module, exports, require) {
           };
           m.appendChild(d);
         };
-        mi("⧉ 复制最后回复", () => runSlash({ name: "/copy" }, ""));
-        mi("⎘ 导出 HTML", () => runSlash({ name: "/export" }, ""));
-        mi("☰ 消息列表", () => runSlash({ name: "/tree" }, ""));
-        mi("📋 复制全部", () => runSlash({ name: "/dump" }, ""));
+        mi("⧉ 复制最后回复", () => _slash.runSlash.call(void 0, { name: "/copy" }, ""));
+        mi("⎘ 导出 HTML", () => _slash.runSlash.call(void 0, { name: "/export" }, ""));
+        mi("☰ 消息列表", () => _slash.runSlash.call(void 0, { name: "/tree" }, ""));
+        mi("📋 复制全部", () => _slash.runSlash.call(void 0, { name: "/dump" }, ""));
         mi("✎ 计划", async () => {
           const g = await _ui.askText.call(void 0, "计划目标", "", "要完成什么");
-          if (g) runSlash({ name: "/plan" }, g);
+          if (g) _slash.runSlash.call(void 0, { name: "/plan" }, g);
         });
         mi("✎ 重命名", async () => {
           const t = await _ui.askText.call(void 0, "会话标题", curTitle || "", "");
@@ -3507,7 +4466,7 @@ __modules["main"] = function(module, exports, require) {
         }
       };
       // ---- 发送 ----
-      _util.$.call(void 0, "qClr").onclick = () => runSlash({ name: "/queue" }, "");
+      _util.$.call(void 0, "qClr").onclick = () => _slash.runSlash.call(void 0, { name: "/queue" }, "");
       _util.$.call(void 0, "send").onclick = () => {
         if (running && !_util.$.call(void 0, "inp").value.trim()) {
           fetch(
@@ -3516,938 +4475,8 @@ __modules["main"] = function(module, exports, require) {
           );
         } else send();
       };
-      function applyHelpCatalog(j) {
-        if (j && Array.isArray(j.commands) && j.commands.length) {
-          SLASH = j.commands.map((c) => ({
-            name: c.name,
-            desc: c.desc,
-            accepts: !!c.accepts,
-          }));
-          window.HELP_KEYS = Array.isArray(j.keys) ? j.keys : window.HELP_KEYS || [];
-        }
-      }
-      function loadHelpCatalog() {
-        return fetch("/api/help?" + _state.wsp + "session=" + encodeURIComponent(_state.sess))
-          .then((r) => r.json())
-          .then(applyHelpCatalog)
-          .catch(() => _ui.showToast.call(void 0, "help catalog load failed"));
-      }
-      let SLASH = [
-        { name: "/help", desc: "list commands" },
-        { name: "/login", desc: "save API key", accepts: true },
-        { name: "/new", desc: "新会话" },
-        { name: "/clear", desc: "清空并重开" },
-        { name: "/sessions", desc: "搜索会话" },
-        { name: "/resume", desc: "切到第 n 个会话", accepts: true },
-        { name: "/undo", desc: "撤销上一轮" },
-        { name: "/compact", desc: "压缩上下文" },
-        { name: "/fast-compress", desc: "快压状态" },
-        { name: "/fork", desc: "派生会话" },
-        { name: "/title", desc: "改会话标题", accepts: true },
-        { name: "/model", desc: "切换模型" },
-        { name: "/refresh", desc: "拉取 provider 模型列表" },
-        { name: "/think", desc: "思考等级", accepts: true },
-        { name: "/permissions", desc: "授权 yolo/ask/read-only", accepts: true },
-        { name: "/sandbox", desc: "bash 沙箱 off/workspace/strict", accepts: true },
-        { name: "/status", desc: "当前状态" },
-        { name: "/doctor", desc: "环境体检" },
-        { name: "/init", desc: "写 AGENTS.md（已有不覆盖）" },
-        { name: "/diff", desc: "git status + diffstat" },
-        { name: "/commit", desc: "提交已暂存（需说明）", accepts: true },
-        { name: "/log", desc: "git log --oneline", accepts: true },
-        { name: "/branch", desc: "当前与最近分支" },
-        { name: "/mcp", desc: "MCP server 列表" },
-        { name: "/reload", desc: "重读 settings.json" },
-        { name: "/theme", desc: "外观 light/dark/system", accepts: true },
-        { name: "/paste", desc: "从剪贴板附图" },
-        { name: "/usage", desc: "token 账本" },
-        { name: "/jobs", desc: "在跑 / 后台任务", accepts: true },
-        { name: "/find", desc: "搜对话", accepts: true },
-        { name: "/plan", desc: "写 PLAN.md 再执行", accepts: true },
-        { name: "/queue", desc: "清空输入队列" },
-        { name: "/memory", desc: "跨会话记忆", accepts: true },
-        { name: "/plugins", desc: "列出或开关插件", accepts: true },
-        { name: "/pkg", desc: "已装资源包" },
-        { name: "/tree", desc: "消息列表" },
-        { name: "/copy", desc: "复制最后一条回复" },
-        { name: "/export", desc: "导出 HTML" },
-        { name: "/dump", desc: "整段会话到剪贴板" },
-        { name: "/redo", desc: "重发上一次输入" },
-      ];
-      window.HELP_KEYS = window.HELP_KEYS || [
-        { name: "@./path", desc: "embed a file" },
-        { name: "!cmd", desc: "run shell, send to model" },
-        { name: "!!cmd", desc: "run shell, show only" },
-        { name: "?", desc: "shortcut overlay when empty" },
-        { name: "c", desc: "copy last reply when empty" },
-        { name: "d", desc: "doctor when empty" },
-        { name: "g", desc: "git diff when empty" },
-        { name: "l", desc: "git log when empty" },
-        { name: "r", desc: "redo last input when empty" },
-        { name: "s", desc: "sandbox picker when empty" },
-        { name: "j", desc: "list jobs when empty" },
-        { name: "u", desc: "token ledger when empty" },
-        { name: "Esc", desc: "abort; empty again edits last" },
-        { name: "Ctrl+C", desc: "clear; empty again quits" },
-        { name: "Ctrl+D", desc: "empty again quits" },
-        { name: "Tab", desc: "queue input while busy" },
-        { name: "Ctrl+B", desc: "background while busy" },
-        { name: "Ctrl+T", desc: "fold thinking" },
-        { name: "Ctrl+O", desc: "fold tool output" },
-        { name: "PgUp/PgDn", desc: "scroll transcript" },
-        { name: "Ctrl+↑/↓", desc: "scroll a few lines" },
-        { name: "wheel", desc: "scroll transcript" },
-        { name: "Alt+,/.", desc: "think less / more" },
-        { name: "Shift+↑/↓", desc: "think less / more" },
-      ];
-      let slashItems = [],
-        slashIdx = 0,
-        pickKind = "",
-        atTok = null,
-        fileTimer = 0;
-      function hideSlash() {
-        const m = _util.$.call(void 0, "slashMenu");
-        if (m) m.hidden = true;
-        slashItems = [];
-        pickKind = "";
-        atTok = null;
-        if (fileTimer) {
-          clearTimeout(fileTimer);
-          fileTimer = 0;
-        }
-      }
-      function slashOpen() {
-        const m = _util.$.call(void 0, "slashMenu");
-        return m && !m.hidden && slashItems.length > 0;
-      }
-      function renderSlash() {
-        const m = _util.$.call(void 0, "slashMenu");
-        if (!m) return;
-        if (!slashItems.length) {
-          m.hidden = true;
-          return;
-        }
-        m.hidden = false;
-        const file = pickKind === "file";
-        const foot = file
-          ? "<span>↑↓ 选择</span><span>Enter 填入</span><span>Tab 补全</span><span>Esc 关闭</span>"
-          : "<span>↑↓ 选择</span><span>Enter 执行</span><span>Tab 补全</span><span>Esc 关闭</span>";
-        m.innerHTML =
-          '<div class="slash-list">' +
-          slashItems
-            .map((it, i) => {
-              const name = file ? it.path || it.name : it.name;
-              const desc = file ? (it.dir ? "目录" : "文件") : it.desc;
-              const mark = file && it.dir ? '<span class="mark">/</span>' : "";
-              return (
-                '<div class="slash-item' +
-                (i === slashIdx ? " active" : "") +
-                '" data-i="' +
-                i +
-                '" role="option"><span class="slash-name">' +
-                (it.hlLen ? _util.hlSpan.call(void 0, name, it.hlFrom || 0, it.hlLen) : _util.esc.call(void 0, name)) +
-                '</span><span class="slash-desc">' +
-                _util.esc.call(void 0, desc || "") +
-                "</span>" +
-                mark +
-                "</div>"
-              );
-            })
-            .join("") +
-          '</div><div class="slash-foot">' +
-          foot +
-          "</div>";
-        const on = m.querySelector(".slash-item.active");
-        if (on) on.scrollIntoView({ block: "nearest" });
-      }
-      function updateSlashList(q) {
-        pickKind = "slash";
-        const ranked = _util.rankSlash.call(void 0, SLASH, q);
-        slashItems = ranked.map((r) =>
-          Object.assign({}, r.it, { hlFrom: r.hlFrom, hlLen: r.kind === 2 ? 0 : r.hlLen }),
-        );
-        if (slashIdx >= slashItems.length) slashIdx = 0;
-        renderSlash();
-      }
-      function atToken(v, caret) {
-        const left = v.slice(0, caret == null ? v.length : caret);
-        const m = /(^|[\s])(@(?:\.\/[^\s]*|\.?))$/.exec(left);
-        if (!m) return null;
-        const raw = m[2];
-        return { start: left.length - raw.length, raw, q: raw.startsWith("@./") ? raw.slice(3) : "" };
-      }
-      function scheduleFiles(tok) {
-        atTok = tok;
-        pickKind = "file";
-        if (fileTimer) clearTimeout(fileTimer);
-        fileTimer = setTimeout(async () => {
-          fileTimer = 0;
-          const cur = atToken(_util.$.call(void 0, "inp").value, _util.$.call(void 0, "inp").selectionStart);
-          if (!cur) {
-            hideSlash();
-            return;
-          }
-          atTok = cur;
-          try {
-            const r = await fetch("/api/files?" + _state.wsp + "q=" + encodeURIComponent(cur.q));
-            const j = await r.json();
-            if (!j || !j.ok) {
-              slashItems = [];
-              renderSlash();
-              return;
-            }
-            slashItems = (j.items || []).map((it) =>
-              Object.assign({ desc: it.link ? "→ " + it.link : it.dir ? "目录" : "文件" }, it),
-            );
-            if (slashIdx >= slashItems.length) slashIdx = 0;
-            pickKind = "file";
-            renderSlash();
-          } catch (e19) {
-            hideSlash();
-          }
-        }, 60);
-      }
-      function insertFile() {
-        const it = slashItems[slashIdx];
-        const inp = _util.$.call(void 0, "inp");
-        const tok = atToken(inp.value, inp.selectionStart) || atTok;
-        if (!it || !tok) {
-          hideSlash();
-          return;
-        }
-        const prefix = inp.value.slice(0, tok.start);
-        const suffix = inp.value.slice(tok.start + tok.raw.length);
-        if (it.dir) {
-          const filled = prefix + "@./" + it.path + "/";
-          inp.value = filled + suffix;
-          inp.setSelectionRange(filled.length, filled.length);
-          hideSlash();
-          scheduleFiles(atToken(inp.value, filled.length));
-        } else {
-          const filled = prefix + "@./" + it.path + " ";
-          inp.value = filled + suffix;
-          inp.setSelectionRange(filled.length, filled.length);
-          hideSlash();
-        }
-        _store.autosizeInp.call(void 0, );
-        _store.saveDraft.call(void 0, );
-        refreshSend();
-      }
-      function hideBang() {
-        const el = _util.$.call(void 0, "cmpHint");
-        if (!el) return;
-        el.hidden = true;
-        el.innerHTML = "";
-      }
-      function showBang(v) {
-        const el = _util.$.call(void 0, "cmpHint");
-        if (!el) return;
-        const local = v.startsWith("!!");
-        const cmd = v.slice(local ? 2 : 1).trim();
-        el.hidden = false;
-        el.innerHTML = local
-          ? '<span class="bang-local">!! 只跑</span><b>' +
-            _util.esc.call(void 0, cmd || "…") +
-            "</b><span>结果留在本页，不送模型</span>"
-          : '<span class="bang-run">! 跑并送</span><b>' +
-            _util.esc.call(void 0, cmd || "…") +
-            "</b><span>输出会一并交给模型</span>";
-      }
-      function updateComposerChrome() {
-        const inp = _util.$.call(void 0, "inp");
-        const v = inp.value;
-        if (v.startsWith("/") && v.indexOf("\n") < 0 && v.indexOf(" ") < 0) {
-          hideBang();
-          updateSlashList(v.slice(1));
-          return;
-        }
-        if (v.startsWith("!")) {
-          hideSlash();
-          showBang(v);
-          return;
-        }
-        const tok = atToken(v, inp.selectionStart);
-        if (tok) {
-          hideBang();
-          scheduleFiles(tok);
-          return;
-        }
-        hideSlash();
-        hideBang();
-      }
-      function updateSlash() {
-        updateComposerChrome();
-      }
-      function slashMove(d) {
-        if (!slashItems.length) return;
-        slashIdx = (slashIdx + d + slashItems.length) % slashItems.length;
-        renderSlash();
-      }
-      function slashComplete() {
-        if (pickKind === "file") {
-          insertFile();
-          return;
-        }
-        const it = slashItems[slashIdx];
-        if (!it) return;
-        _util.$.call(void 0, "inp").value = it.name + (it.accepts ? " " : "");
-        hideSlash();
-        _store.autosizeInp.call(void 0, );
-        _store.saveDraft.call(void 0, );
-      }
-      function slashPick() {
-        if (pickKind === "file") {
-          insertFile();
-          return;
-        }
-        const it = slashItems[slashIdx];
-        if (!it) return;
-        if (it.accepts) {
-          _util.$.call(void 0, "inp").value = it.name + " ";
-          hideSlash();
-          _store.autosizeInp.call(void 0, );
-          return;
-        }
-        _util.$.call(void 0, "inp").value = it.name;
-        hideSlash();
-        send();
-      }
-      _util.$.call(void 0, "slashMenu").onmousedown = (e) => {
-        const it = e.target.closest(".slash-item");
-        if (!it) return;
-        e.preventDefault();
-        slashIdx = +it.getAttribute("data-i") || 0;
-        slashPick();
-      };
-      async function runSlash(item, arg) {
-        switch (item.name) {
-          case "/login": {
-            const parts = (arg || "").trim().split(/\s+/);
-            const name = parts[0] || "";
-            const key = parts.slice(1).join(" ").trim();
-            if (!name || !key) {
-              _ui.showToast.call(void 0, "usage: /login <provider> <api-key>");
-              break;
-            }
-            fetch("/api/config", {
-              method: "POST",
-              headers: { "content-type": "application/json" },
-              body: JSON.stringify({ setAuth: { name, key } }),
-            })
-              .then((r) => r.json())
-              .then((j) => _ui.showToast.call(void 0, j && j.ok ? "saved " + name : "login failed"))
-              .catch(() => _ui.showToast.call(void 0, "login failed"));
-            break;
-          }
-          case "/quit":
-            _ui.showToast.call(void 0, "close the tab to quit");
-            break;
-          case "/help":
-            addUser("/help");
-            const cmds = SLASH.map((s) => s.name.padEnd(16) + s.desc).join("\n");
-            const keys = (window.HELP_KEYS || [])
-              .map((s) => String(s.name || "").padEnd(16) + (s.desc || ""))
-              .join("\n");
-            addAsst(
-              cmds +
-                (keys ? "\n\n" + keys : "") +
-                "\n\n@./path 嵌文件 · !cmd 跑命令并送给模型 · !!cmd 只跑不送\nCtrl+K 搜会话 · 发送中再按 Enter 会接着发",
-            );
-            finishAsst();
-            break;
-          case "/sessions":
-            openSearch();
-            break;
-          case "/new":
-          case "/clear":
-            location.href = _state.sessUrl.call(void 0, Math.random().toString(36).slice(2, 8));
-            break;
-          case "/undo":
-            _sessions.act.call(void 0, { act: "undo" }, (j) =>
-              _ui.showToast.call(void 0, j && j.ok ? "已撤销" : "撤销失败"),
-            );
-            break;
-          case "/compact":
-            _sessions.act.call(void 0, { act: "compact" }, (j) =>
-              _ui.showToast.call(void 0, j && j.ok ? "压缩完成" : "压缩失败"),
-            );
-            break;
-          case "/fork": {
-            const n =
-              arg || (await _ui.askText.call(void 0, "派生会话", "", "新会话名，留空自动"));
-            if (n === null) return;
-            _sessions.act.call(void 0, { act: "fork", name: n || "" }, (j) => {
-              if (j && j.ok && j.name) location.href = _state.sessUrl.call(void 0, j.name);
-              else _ui.showToast.call(void 0, "派生失败");
-            });
-            break;
-          }
-          case "/title": {
-            const t = arg || (await _ui.askText.call(void 0, "会话标题", curTitle || "", ""));
-            if (t === null || !t) return;
-            await applySessionTitle(t, true);
-            break;
-          }
-          case "/refresh": {
-            addUser("/refresh");
-            try {
-              const r = await fetch("/api/config", {
-                method: "POST",
-                headers: { "content-type": "application/json" },
-                body: JSON.stringify({ refreshModels: true }),
-              });
-              const j = await r.json().catch(() => ({}));
-              if (!r.ok || j.ok === false) {
-                addAsst(j.error || "cannot refresh models");
-              } else {
-                addAsst("refreshed " + (j.refreshed || 0) + " provider(s), +" + (j.added || 0) + " models" +
-                  (j.fail ? "\n" + j.fail + " provider(s) failed GET /models" : ""));
-              }
-            } catch (e20) {
-              addAsst("cannot refresh models");
-            }
-            finishAsst();
-            break;
-          }
-          case "/model":
-            _util.$.call(void 0, "hModel").click();
-            break;
-          case "/permissions":
-          case "/approvals": {
-            const lv = (arg || "").trim();
-            if (!lv) {
-              _util.$.call(void 0, "permPill").click();
-              break;
-            }
-            await setApproval(lv);
-            addUser("/permissions " + lv);
-            addAsst("授权 " + (APPROVALS.find((x) => x.id === approvalMode) || {}).label);
-            finishAsst();
-            break;
-          }
-          case "/jobs": {
-            const raw = (arg || "").trim();
-            addUser(raw ? "/jobs " + raw : "/jobs");
-            try {
-              if (/^kill\s+\d+/.test(raw) || /^\d+$/.test(raw)) {
-                const pid = parseInt(raw.replace(/^kill\s+/, ""), 10);
-                const r = await fetch("/api/activity", {
-                  method: "POST",
-                  headers: { "content-type": "application/json" },
-                  body: JSON.stringify({ kill: pid }),
-                });
-                const j = await r.json();
-                addAsst(j.ok ? "killed pid " + pid : "no tracked job with that pid");
-              } else {
-                const r = await fetch("/api/activity");
-                const list = await r.json();
-                if (!list || !list.length) addAsst("no running jobs");
-                else
-                  addAsst(
-                    list
-                      .map((a) => {
-                        const sec = Math.round((a.ms || 0) / 1000);
-                        return (
-                          (a.detached ? "~ " : "* ") +
-                          (a.pid ? "pid " + a.pid + "  " : "") +
-                          (a.name || "job") +
-                          " " +
-                          sec +
-                          "s" +
-                          (a.detail ? "  " + a.detail : "")
-                        );
-                      })
-                      .join("\n"),
-                  );
-              }
-              ensureActPoll();
-            } catch (e21) {
-              addAsst("cannot read activity");
-            }
-            finishAsst();
-            break;
-          }
-          case "/usage": {
-            addUser("/usage");
-            try {
-              const r = await fetch("/api/usage");
-              const j = await r.json();
-              const cost = j.usd > 0 ? "  $" + Number(j.usd).toFixed(4) : "";
-              const head = "usage  " + (j.lines || 0) + " turns  ↑" + _util.fmtTok.call(void 0, j.in || 0) + " ↓" + _util.fmtTok.call(void 0, j.out || 0) + cost;
-              addAsst(j.tail ? head + "\n" + j.tail : head);
-            } catch (e22) {
-              addAsst("cannot read usage.jsonl");
-            }
-            finishAsst();
-            break;
-          }
-          case "/sandbox": {
-            const lv = (arg || "").trim();
-            if (!lv) {
-              addUser("/sandbox");
-              addAsst("usage: /sandbox off|workspace|strict");
-              finishAsst();
-              break;
-            }
-            addUser("/sandbox " + lv);
-            await setSandbox(lv);
-            addAsst("sandbox " + sandboxMode);
-            finishAsst();
-            break;
-          }
-          case "/think": {
-            const lv = (arg || "").trim();
-            if (!lv) {
-              _util.$.call(void 0, "hThink").click();
-              break;
-            }
-            addUser("/think " + lv);
-            await setThink(lv);
-            addAsst("思考 " + (curThink || lv));
-            finishAsst();
-            break;
-          }
-          case "/find": {
-            const q = (arg || "").trim();
-            addUser("/find" + (q ? " " + q : ""));
-            const e = asstEl().querySelector(".md");
-            if (!q && !webFindQ) e.textContent = "usage: /find <text>";
-            else if (findInThread(q || webFindQ, false)) e.textContent = "found: " + (q || webFindQ);
-            else e.textContent = "no match";
-            finishAsst();
-            break;
-          }
-          case "/paste": {
-            addUser("/paste");
-            try {
-              if (await attachClipboardImage()) {
-                addAsst(curVision ? "image attached — enter to send" : "image attached — this model has no vision");
-              } else {
-                addAsst("no image on clipboard — use Ctrl+V");
-              }
-            } catch (e23) {
-              addAsst("no image on clipboard — use Ctrl+V");
-            }
-            finishAsst();
-            break;
-          }
-          case "/theme": {
-            const lv = (arg || "").trim().toLowerCase();
-            addUser(lv ? "/theme " + lv : "/theme");
-            if (!lv) {
-              addAsst("theme " + (_state.prefs.scheme || "dark") + "\nusage: /theme light|dark|system");
-            } else if (setScheme(lv)) {
-              addAsst("theme " + _state.prefs.scheme);
-            } else {
-              addAsst("usage: /theme light|dark|system");
-            }
-            finishAsst();
-            break;
-          }
-          case "/reload":
-            fetch("/api/slash?" + _state.wsp + "session=" + encodeURIComponent(_state.sess), {
-              method: "POST",
-              headers: { "content-type": "application/json" },
-              body: JSON.stringify({ name: "reload", args: "" }),
-            })
-              .then((r) => r.json())
-              .then((j) => {
-                const text = (j && j.text) || "reload failed";
-                String(text)
-                  .split("\n")
-                  .forEach((line) => {
-                    const m = line.match(/^(theme|approval|sandbox|think)\s+(\S+)/);
-                    if (!m) return;
-                    if (m[1] === "theme") setScheme(m[2]);
-                    if (m[1] === "approval") {
-                      approvalMode = m[2] === "read-only" ? "read-only" : m[2];
-                      setModeBtn();
-                    }
-                    if (m[1] === "sandbox") {
-                      sandboxMode = m[2];
-                      setSandboxBtn();
-                    }
-                    if (m[1] === "think") {
-                      curThink = m[2];
-                      renderThink();
-                    }
-                  });
-                addUser("/reload");
-                addAsst(text);
-                finishAsst();
-              })
-              .catch(() => {
-                addUser("/reload");
-                addAsst("reload failed");
-                finishAsst();
-              });
-            break;
-          case "/mcp":
-            fetch("/api/slash?" + _state.wsp + "session=" + encodeURIComponent(_state.sess), {
-              method: "POST",
-              headers: { "content-type": "application/json" },
-              body: JSON.stringify({ name: "mcp", args: "" }),
-            })
-              .then((r) => r.json())
-              .then((j) => {
-                addUser("/mcp");
-                addAsst((j && j.text) || "mcp failed");
-                finishAsst();
-              })
-              .catch(() => {
-                addUser("/mcp");
-                addAsst("mcp failed");
-                finishAsst();
-              });
-            break;
-          case "/branch":
-            fetch("/api/slash?" + _state.wsp + "session=" + encodeURIComponent(_state.sess), {
-              method: "POST",
-              headers: { "content-type": "application/json" },
-              body: JSON.stringify({ name: "branch", args: "" }),
-            })
-              .then((r) => r.json())
-              .then((j) => {
-                addUser("/branch");
-                addAsst((j && j.text) || "branch failed");
-                finishAsst();
-              })
-              .catch(() => {
-                addUser("/branch");
-                addAsst("branch failed");
-                finishAsst();
-              });
-            break;
-          case "/log":
-            fetch("/api/slash?" + _state.wsp + "session=" + encodeURIComponent(_state.sess), {
-              method: "POST",
-              headers: { "content-type": "application/json" },
-              body: JSON.stringify({ name: "log", args: arg || "" }),
-            })
-              .then((r) => r.json())
-              .then((j) => {
-                addUser("/log" + (arg ? " " + arg : ""));
-                addAsst((j && j.text) || "log failed");
-                finishAsst();
-              })
-              .catch(() => {
-                addUser("/log");
-                addAsst("log failed");
-                finishAsst();
-              });
-            break;
-          case "/commit":
-            fetch("/api/slash?" + _state.wsp + "session=" + encodeURIComponent(_state.sess), {
-              method: "POST",
-              headers: { "content-type": "application/json" },
-              body: JSON.stringify({ name: "commit", args: arg || "" }),
-            })
-              .then((r) => r.json())
-              .then((j) => {
-                addUser("/commit" + (arg ? " " + arg : ""));
-                addAsst((j && j.text) || "commit failed");
-                finishAsst();
-              })
-              .catch(() => {
-                addUser("/commit");
-                addAsst("commit failed");
-                finishAsst();
-              });
-            break;
-          case "/diff":
-            fetch("/api/slash?" + _state.wsp + "session=" + encodeURIComponent(_state.sess), {
-              method: "POST",
-              headers: { "content-type": "application/json" },
-              body: JSON.stringify({ name: "diff", args: "" }),
-            })
-              .then((r) => r.json())
-              .then((j) => {
-                addUser("/diff");
-                addAsst((j && j.text) || "diff failed");
-                finishAsst();
-              })
-              .catch(() => {
-                addUser("/diff");
-                addAsst("diff failed");
-                finishAsst();
-              });
-            break;
-          case "/init":
-            fetch("/api/slash?" + _state.wsp + "session=" + encodeURIComponent(_state.sess), {
-              method: "POST",
-              headers: { "content-type": "application/json" },
-              body: JSON.stringify({ name: "init", args: "" }),
-            })
-              .then((r) => r.json())
-              .then((j) => {
-                addUser("/init");
-                addAsst((j && j.text) || "init failed");
-                finishAsst();
-              })
-              .catch(() => {
-                addUser("/init");
-                addAsst("init failed");
-                finishAsst();
-              });
-            break;
-          case "/doctor":
-            fetch("/api/slash?" + _state.wsp + "session=" + encodeURIComponent(_state.sess), {
-              method: "POST",
-              headers: { "content-type": "application/json" },
-              body: JSON.stringify({ name: "doctor", args: "" }),
-            })
-              .then((r) => r.json())
-              .then((j) => {
-                addUser("/doctor");
-                addAsst((j && j.text) || "doctor failed");
-                finishAsst();
-              })
-              .catch(() => {
-                addUser("/doctor");
-                addAsst("doctor failed");
-                finishAsst();
-              });
-            break;
-          case "/status":
-            fetch("/api/config")
-              .then((r) => r.json())
-              .then((cfg) => {
-                const on = (Array.isArray(cfg.plugins) ? cfg.plugins : [])
-                  .filter((p) => p && p.enabled && p.optional)
-                  .map((p) => p.name);
-                addUser("/status");
-                addAsst(
-                  "模型 " +
-                    (curModel || "?") +
-                    " · 思考 " +
-                    (curThink || "high") +
-                    " · 会话 " +
-                    _state.sess +
-                    " · 项目 " +
-                    (_state.ws || ".") +
-                    (on.length ? " · 插件 " + on.join(" ") : ""),
-                );
-                finishAsst();
-              })
-              .catch(() => {
-                addUser("/status");
-                addAsst(
-                  "模型 " +
-                    (curModel || "?") +
-                    " · 思考 " +
-                    (curThink || "high") +
-                    " · 会话 " +
-                    _state.sess +
-                    " · 项目 " +
-                    (_state.ws || "."),
-                );
-                finishAsst();
-              });
-            break;
-          case "/resume": {
-            const n = parseInt(arg, 10);
-            if (!arg || !n) {
-              openSearch();
-              break;
-            }
-            if (n < 1 || n > _sessions.sessData.list.length) {
-              _ui.showToast.call(void 0, "没有第 " + n + " 个会话（/sessions）");
-              break;
-            }
-            location.href = _state.sessUrl.call(void 0, _sessions.sessData.list[n - 1].name);
-            break;
-          }
-          case "/plan": {
-            const goal =
-              (arg && arg.trim()) ||
-              (await _ui.askText.call(void 0, "计划目标", "", "要完成什么"));
-            if (!goal) return;
-            await sendPlain("/plan " + goal);
-            break;
-          }
-          case "/queue":
-            pending = [];
-            renderQueue();
-            _sessions.act.call(void 0, { act: "queue" }, (j) => {
-              _ui.showToast.call(void 0, 
-                j && j.cleared
-                  ? "已清空 " + j.cleared + " 条"
-                  : "没有待发送的消息",
-              );
-            });
-            break;
-          case "/memory": {
-            const rest = (arg || "").trim();
-            if (rest === "clear") {
-              _sessions.act.call(void 0, { act: "memory-clear" }, (j) =>
-                _ui.showToast.call(void 0, j && j.ok ? "记忆已清空" : "清空失败"),
-              );
-              break;
-            }
-            if (rest.startsWith("set ")) {
-              const text = rest.slice(4).trim();
-              if (!text) {
-                _ui.showToast.call(void 0, "usage: /memory set <text>");
-                break;
-              }
-              _sessions.act.call(void 0, { act: "memory-set", name: text }, (j) =>
-                _ui.showToast.call(void 0, j && j.ok ? "记忆已写入" : "写入失败"),
-              );
-              break;
-            }
-            _sessions.act.call(void 0, { act: "memory" }, (j) => {
-              addUser("/memory");
-              addAsst(
-                (j && j.text) ||
-                  "memory is empty — /memory set <text> to add",
-              );
-              finishAsst();
-            });
-            break;
-          }
-          case "/plugins": {
-            const rest = (arg || "").trim();
-            if (!rest) {
-              fetch("/api/config")
-                .then((r) => r.json())
-                .then((cfg) => {
-                  const plugs = Array.isArray(cfg.plugins) ? cfg.plugins : [];
-                  const lines = plugs.map(
-                    (p) =>
-                      "  [" +
-                      (p.enabled ? "on " : "off") +
-                      "] " +
-                      p.name,
-                  );
-                  addUser("/plugins");
-                  addAsst(
-                    "plugins (next turn):\n" +
-                      lines.join("\n") +
-                      "\nusage: /plugins on <name> | /plugins off <name>",
-                  );
-                  finishAsst();
-                })
-                .catch(() => _ui.showToast.call(void 0, "plugins 读取失败"));
-              break;
-            }
-            const m = rest.match(/^(on|off)\s+(\S+)$/);
-            if (!m) {
-              _ui.showToast.call(void 0, "usage: /plugins on <name> | /plugins off <name>");
-              break;
-            }
-            const on = m[1] === "on";
-            fetch("/api/config", {
-              method: "POST",
-              headers: { "content-type": "application/json" },
-              body: JSON.stringify({ setPlugin: { name: m[2], enabled: on } }),
-            })
-              .then((r) => r.json())
-              .then((j) => {
-                if (j && j.ok === false) {
-                  _ui.showToast.call(void 0, "插件开关失败");
-                  return;
-                }
-                _ui.showToast.call(void 0, "plugin " + m[2] + (on ? " on" : " off") + " — next turn");
-                loadHelpCatalog();
-              })
-              .catch(() => _ui.showToast.call(void 0, "插件开关失败"));
-            break;
-          }
-          case "/pkg":
-            fetch("/api/packages?" + _state.wsp)
-              .then((r) => r.json())
-              .then((j) => {
-                function rows(arr, title) {
-                  const xs = Array.isArray(arr) ? arr : [];
-                  const body = xs.length
-                    ? xs
-                        .map(
-                          (p) =>
-                            "  " +
-                            p.name +
-                            "  skills:" +
-                            (p.skills || 0) +
-                            " prompts:" +
-                            (p.prompts || 0),
-                        )
-                        .join("\n")
-                    : "  (none)";
-                  return title + " (" + xs.length + "):\n" + body;
-                }
-                addUser("/pkg");
-                addAsst(
-                  rows(j.user, "user packages") +
-                    "\n" +
-                    rows(j.project, "project packages") +
-                    "\ninstall: piz pkg install <path> [-l]",
-                );
-                finishAsst();
-              })
-              .catch(() => {
-                addUser("/pkg");
-                addAsst("packages 读取失败");
-                finishAsst();
-              });
-            break;
-          case "/tree":
-            _sessions.act.call(void 0, { act: "tree" }, (j) => {
-              addUser("/tree");
-              addAsst((j && j.text) || "no messages");
-              finishAsst();
-            });
-            break;
-          case "/copy":
-            _sessions.act.call(void 0, { act: "copy" }, (j) =>
-              clipText(j && j.text, "已复制最后回复", "还没有回复"),
-            );
-            break;
-          case "/export":
-            _sessions.act.call(void 0, { act: "export" }, (j) => {
-              if (j && j.text) {
-                _util.downloadText.call(void 0, "piz-export.html", j.text, "text/html");
-                _ui.showToast.call(void 0, "已导出");
-              } else _ui.showToast.call(void 0, "导出失败");
-            });
-            break;
-          case "/dump":
-            _sessions.act.call(void 0, { act: "dump" }, (j) =>
-              clipText(j && j.text, "会话已复制", "没有内容"),
-            );
-            break;
-          case "/fast-compress":
-            _sessions.act.call(void 0, { act: "fast-compress" }, (j) => {
-              addUser("/fast-compress");
-              addAsst((j && j.text) || "fast-compress: ?");
-              finishAsst();
-            });
-            break;
-          case "/redo":
-            if (!lastUser) {
-              _ui.showToast.call(void 0, "没有可重发的输入");
-              break;
-            }
-            await sendPlain(lastUser);
-            break;
-          default: {
-            const stem = String(item.name || "").replace(/^\//, "");
-            fetch("/api/slash?" + _state.wsp + "session=" + encodeURIComponent(_state.sess), {
-              method: "POST",
-              headers: { "content-type": "application/json" },
-              body: JSON.stringify({ name: stem, args: arg || "" }),
-            })
-              .then((r) => r.json())
-              .then((j) => {
-                if (j && j.ok) {
-                  addUser("/" + stem + (arg ? " " + arg : ""));
-                  addAsst(j.text || "");
-                  finishAsst();
-                } else _ui.showToast.call(void 0, (j && j.error) || "未知命令");
-              })
-              .catch(() => _ui.showToast.call(void 0, "未知命令"));
-            break;
-          }
-        }
-      }
+      // ---- 斜杠目录/菜单/runSlash 已迁 slash.ts ----
+      // ---- runSlash 已迁 slash.ts ----
       function toggleKeysHint() {
         const el = _util.$.call(void 0, "keysHint");
         if (!el) return;
@@ -4470,48 +4499,48 @@ __modules["main"] = function(module, exports, require) {
           !e.metaKey &&
           !e.altKey &&
           !_util.$.call(void 0, "inp").value &&
-          !slashOpen()
+          !_slash.slashOpen.call(void 0, )
         ) {
           if (e.key === "u" || e.key === "U") {
             e.preventDefault();
-            runSlash({ name: "/usage" }, "");
+            _slash.runSlash.call(void 0, { name: "/usage" }, "");
             return;
           }
           if (e.key === "j" || e.key === "J") {
             e.preventDefault();
-            runSlash({ name: "/jobs" }, "");
+            _slash.runSlash.call(void 0, { name: "/jobs" }, "");
             return;
           }
           if (e.key === "d" || e.key === "D") {
             e.preventDefault();
-            runSlash({ name: "/doctor" }, "");
+            _slash.runSlash.call(void 0, { name: "/doctor" }, "");
             return;
           }
           if (e.key === "g" || e.key === "G") {
             e.preventDefault();
-            runSlash({ name: "/diff" }, "");
+            _slash.runSlash.call(void 0, { name: "/diff" }, "");
             return;
           }
           if (e.key === "l" || e.key === "L") {
             e.preventDefault();
-            runSlash({ name: "/log" }, "");
+            _slash.runSlash.call(void 0, { name: "/log" }, "");
             return;
           }
           if (e.key === "r" || e.key === "R") {
             e.preventDefault();
-            runSlash({ name: "/redo" }, "");
+            _slash.runSlash.call(void 0, { name: "/redo" }, "");
             return;
           }
           if (e.key === "c" || e.key === "C") {
             e.preventDefault();
-            runSlash({ name: "/copy" }, "");
+            _slash.runSlash.call(void 0, { name: "/copy" }, "");
             return;
           }
           if (e.key === "s" || e.key === "S") {
             e.preventDefault();
             const p = _util.$.call(void 0, "sbPill");
             if (p) p.click();
-            else runSlash({ name: "/sandbox" }, "");
+            else _slash.runSlash.call(void 0, { name: "/sandbox" }, "");
             return;
           }
           if (e.key === "?") {
@@ -4520,30 +4549,30 @@ __modules["main"] = function(module, exports, require) {
             return;
           }
         }
-        if (slashOpen()) {
+        if (_slash.slashOpen.call(void 0, )) {
           if (e.key === "ArrowDown") {
             e.preventDefault();
-            slashMove(1);
+            _slash.slashMove.call(void 0, 1);
             return;
           }
           if (e.key === "ArrowUp") {
             e.preventDefault();
-            slashMove(-1);
+            _slash.slashMove.call(void 0, -1);
             return;
           }
           if (e.key === "Tab") {
             e.preventDefault();
-            slashComplete();
+            _slash.slashComplete.call(void 0, );
             return;
           }
           if (e.key === "Enter") {
             e.preventDefault();
-            slashPick();
+            _slash.slashPick.call(void 0, );
             return;
           }
           if (e.key === "Escape") {
             e.preventDefault();
-            hideSlash();
+            _slash.hideSlash.call(void 0, );
             return;
           }
         }
@@ -4580,7 +4609,7 @@ __modules["main"] = function(module, exports, require) {
         }
         _store.autosizeInp.call(void 0, );
         _store.saveDraft.call(void 0, );
-        updateSlash();
+        _slash.updateSlash.call(void 0, );
         refreshSend();
       });
       let pendingImg = null;
@@ -4636,7 +4665,7 @@ __modules["main"] = function(module, exports, require) {
               paintImgChip();
               return true;
             }
-          } catch (e24) {}
+          } catch (e19) {}
         }
         return false;
       }
@@ -4651,7 +4680,7 @@ __modules["main"] = function(module, exports, require) {
             try {
               pendingImg = await blobToChatImage(blob);
               paintImgChip();
-            } catch (e25) {}
+            } catch (e20) {}
             return;
           }
         }
@@ -4691,7 +4720,7 @@ __modules["main"] = function(module, exports, require) {
           if (!r.ok || j.ok === false) {
             _ui.showToast.call(void 0, j.error || "send failed");
           } else ok = true;
-        } catch (e26) {
+        } catch (e21) {
           _ui.showToast.call(void 0, "send failed");
         }
         if (!ok) {
@@ -4710,23 +4739,23 @@ __modules["main"] = function(module, exports, require) {
         return ok;
       }
       async function send() {
-        hideSlash();
-        hideBang();
+        _slash.hideSlash.call(void 0, );
+        _slash.hideBang.call(void 0, );
         const t = _util.$.call(void 0, "inp").value.trim();
         if (!t && !pendingImg) return;
         if (t.startsWith("/")) {
           const space = t.indexOf(" ");
           const cmd = space < 0 ? t : t.slice(0, space);
           const arg = space < 0 ? "" : t.slice(space + 1);
-          const item = SLASH.find((s) => s.name === cmd);
+          const item = _slash.findSlash.call(void 0, cmd);
           if (item) {
             _util.$.call(void 0, "inp").value = "";
             _util.$.call(void 0, "inp").style.height = "auto";
             _store.clearDraft.call(void 0, );
-            hideSlash();
+            _slash.hideSlash.call(void 0, );
             refreshSend();
             _store.pushHist.call(void 0, t);
-            await runSlash(item, arg);
+            await _slash.runSlash.call(void 0, item, arg);
             return;
           }
         }
@@ -4734,7 +4763,7 @@ __modules["main"] = function(module, exports, require) {
         _util.$.call(void 0, "inp").style.height = "auto";
         _store.clearDraft.call(void 0, );
         _store.pushHist.call(void 0, t);
-        hideSlash();
+        _slash.hideSlash.call(void 0, );
         refreshSend();
         await sendPlain(t);
         // 桌面端发完回焦,接着打下一行;触屏不弹键盘。
@@ -4792,13 +4821,13 @@ __modules["main"] = function(module, exports, require) {
         document.body.classList.add("collapsed");
         try {
           localStorage.setItem("piz.sidebar", "1");
-        } catch (e27) {}
+        } catch (e22) {}
       };
       _util.$.call(void 0, "expBtn").onclick = () => {
         document.body.classList.remove("collapsed");
         try {
           localStorage.setItem("piz.sidebar", "0");
-        } catch (e28) {}
+        } catch (e23) {}
       };
       _util.$.call(void 0, "setBtn").onclick = () => openSettings();
       document.querySelector(".ch-brand").onclick = (e) => {
@@ -4916,7 +4945,7 @@ __modules["main"] = function(module, exports, require) {
                   "piz.plugin." + meta.id + "." + key,
                 );
                 return v === null ? fb : JSON.parse(v);
-              } catch (e29) {
+              } catch (e24) {
                 return fb;
               }
             },
@@ -4933,7 +4962,7 @@ __modules["main"] = function(module, exports, require) {
           while (owned.length) {
             try {
               owned.pop()();
-            } catch (e30) {}
+            } catch (e25) {}
           }
         };
         return Object.freeze(api);
@@ -4995,7 +5024,7 @@ __modules["main"] = function(module, exports, require) {
         while (pluginCleanups.length) {
           try {
             pluginCleanups.pop()();
-          } catch (e31) {}
+          } catch (e26) {}
         }
       });
       // ---- 初始化 ----
@@ -5060,7 +5089,7 @@ __modules["main"] = function(module, exports, require) {
           setSandboxBtn();
         })
         .catch(() => _ui.showToast.call(void 0, "config load failed"));
-      loadHelpCatalog();
+      _slash.loadHelpCatalog.call(void 0, );
       const welcome = document.createElement("div");
       welcome.id = "welcome";
       welcome.className = "empty-hint";
@@ -5087,8 +5116,8 @@ __modules["main"] = function(module, exports, require) {
       }
       // ui/net 解缠钩:对话框开场收菜单/补全;登录成功续 boot
       _ui.dlgHooks.closeMenus = _sessions.closeMenus;
-      _ui.dlgHooks.hideSlash = hideSlash;
-      _ui.dlgHooks.hideBang = hideBang;
+      _ui.dlgHooks.hideSlash = _slash.hideSlash;
+      _ui.dlgHooks.hideBang = _slash.hideBang;
       _net.setOnAuthed.call(void 0, boot);
       // sessions 解缠钩:点当前会话行 → 应其 mode/auto 并收 sheet
       _sessions.sessHooks.applySessionMeta = (s) => {
@@ -5098,6 +5127,25 @@ __modules["main"] = function(module, exports, require) {
         }
         closeSheet();
       };
+      // slash 解缠钩:聊天渲染/发送/模型态皆以箭函迟取,调用时方触
+      Object.assign(_slash.slashH, {
+        addUser, addAsst, finishAsst, openSearch, setApproval,
+        attachClipboardImage, refreshSend, ensureActPoll, setSandbox, setThink,
+        asstEl, findInThread, setScheme, applySessionTitle, sendPlain, send,
+        renderQueue, clipText,
+        getSandboxMode: () => sandboxMode,
+        getThink: () => curThink,
+        getWebFindQ: () => webFindQ,
+        getCurModel: () => curModel,
+        getCurTitle: () => curTitle,
+        getVision: () => curVision,
+        getLastUser: () => lastUser,
+        approvalLabel: () => (APPROVALS.find((x) => x.id === approvalMode) || {}).label,
+        setApprovalMode: (v) => { approvalMode = v === "read-only" ? "read-only" : v; setModeBtn(); },
+        applySandboxLevel: (v) => { sandboxMode = v; setSandboxBtn(); },
+        applyThinkLevel: (v) => { curThink = v; renderThink(); },
+        clearPending: () => { pending = []; },
+      });
       _net.initServerAuth.call(void 0, );
       const probe = _net.rawFetch.call(void 0, "/api/state?" + _state.wsp + "session=" + encodeURIComponent(_state.sess), {
         headers: _net.getCredential.call(void 0, ) ? { Authorization: "Bearer " + _net.getCredential.call(void 0, ) } : {},
