@@ -1,6 +1,7 @@
 // ui.ts —— toast / 对话框 / seg 与 auth 面板 DOM 绑定。
 // 自 webui.js 切出。openDlg 开场要收菜单与补全 —— 彼在 main,经 dlgHooks 迟绑注入(解循环)。
 import { $, esc } from "./util";
+import { prefs, savePrefs } from "./state";
 
 // ---- toast ----
 const toastEl = $("toast")!;
@@ -21,6 +22,9 @@ export const dlgHooks: { closeMenus: (() => void) | null; hideSlash: (() => void
 
 let dlgOnok: any = null,
   dlgOncancel: any = null;
+export function dlgCancel() {
+  if (dlgOncancel) dlgOncancel();
+}
 let dlgPrevFocus: any = null;
 export function closeDlg() {
   const ov = $("overlay")!;
@@ -242,4 +246,41 @@ export function bindAuthPanel() {
         }
       };
   });
+}
+
+// ---- 外观方案(配色/强调色/密度/宽屏/字号):自 main 迁入 ----
+export function setScheme(v: string) {
+  const map: any = { auto: "system", light: "light", dark: "dark", system: "system" };
+  const next = map[String(v || "").trim()];
+  if (!next) return false;
+  prefs.scheme = next;
+  savePrefs();
+  applyScheme();
+  return true;
+}
+export function applyScheme() {
+  const root = document.documentElement;
+  root.dataset.colorScheme = prefs.scheme || "dark";
+  root.dataset.accent = prefs.accent || "mono";
+  root.dataset.density = prefs.density || "cozy";
+  root.dataset.wide = prefs.wide ? "1" : "";
+  const fs = (prefs.uiFont || 14) + "px";
+  root.style.setProperty("--ui-font-size", fs);
+  root.style.setProperty("--text-base", fs);
+  const dark =
+    prefs.scheme === "dark" ||
+    (prefs.scheme === "system" &&
+      window.matchMedia &&
+      window.matchMedia("(prefers-color-scheme: dark)").matches);
+  const tm = document.querySelector('meta[name="theme-color"]');
+  if (tm) tm.setAttribute("content", dark ? "#151517" : "#ffffff");
+}
+applyScheme();
+if (window.matchMedia) {
+  try {
+    (window.matchMedia("(prefers-color-scheme: dark)") as any).addEventListener(
+      "change",
+      applyScheme,
+    );
+  } catch {}
 }

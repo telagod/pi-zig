@@ -15,6 +15,10 @@ import {
   addUser, addAsst, finishAsst, addRsn, finishRsn, addTool, toolDone,
   addSub, addPerm, addNotice, finishWork, stampTurn, noteTurn,
 } from "./chat";
+import {
+  applyThink, applyTitle, renderModel, setCost, setCtx, setTurnMeta, getVision,
+} from "./model";
+import { pluginEmit } from "./plugins";
 
 export const compH: any = {};
 
@@ -121,8 +125,8 @@ ev.onmessage = (e) => {
     return;
   }
   if (evt.session && evt.session !== sess) return;
-  compH.pluginEmit("event", evt);
-  compH.pluginEmit(evt.type, evt);
+  pluginEmit("event", evt);
+  pluginEmit(evt.type, evt);
   switch (evt.type) {
     case "user_message":
       lastUser = evt.text || lastUser;
@@ -138,7 +142,7 @@ ev.onmessage = (e) => {
       break;
     case "title":
       if (evt.title) {
-        compH.applyTitle(evt.title);
+        applyTitle(evt.title);
         if ($("hSes") && sess !== "default") $("hSes")!.textContent = evt.title;
         if ($("tbSe") && sess !== "default") $("tbSe")!.textContent = evt.title;
         loadSessions();
@@ -206,13 +210,13 @@ ev.onmessage = (e) => {
       }
       break;
     case "status":
-      if (evt.cost !== undefined) compH.setCost(evt.cost);
+      if (evt.cost !== undefined) setCost(evt.cost);
       if (evt.pct !== undefined || evt.used !== undefined) {
-        compH.setCtx(evt.pct, evt.used, evt.window);
+        setCtx(evt.pct, evt.used, evt.window);
       }
-      compH.setTurnMeta(evt);
-      if (evt.model) compH.renderModel();
-      if (evt.think) compH.applyThink(evt.think);
+      setTurnMeta(evt);
+      if (evt.model) renderModel();
+      if (evt.think) applyThink(evt.think);
       break;
   }
 };
@@ -441,7 +445,7 @@ export async function sendPlain(t: string) {
   let img = pendingImg;
   lastImgUrl = img || null;
   pendingImg = null;
-  if (img && !compH.getVision()) {
+  if (img && !getVision()) {
     addNotice("image dropped: model has no vision");
     img = null;
     if (!t) {

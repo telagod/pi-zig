@@ -11,14 +11,18 @@
 | `md.ts` | 极简 markdown / ansi / diff / todo 渲染(字符串→HTML) |
 | `render.ts` | 设置面板 HTML 构造器(seg/auth/资源包/插件行) |
 | `net.ts` | 服务器凭证、fetch 全局包装(Bearer/401)、登录页;`setOnAuthed` 迟绑 boot 解循环 |
-| `ui.ts` | toast、对话框(openDlg/askText/askYes)、seg/auth 绑定;`dlgHooks` 迟绑收菜单钩 |
+| `ui.ts` | toast、对话框(openDlg/askText/askYes/dlgCancel)、seg/auth 绑定、外观方案(setScheme/applyScheme);`dlgHooks` 迟绑收菜单钩 |
 | `store.ts` | composer 草稿与历史(localStorage,按会话分键) |
 | `sessions.ts` | 菜单助手/项目/会话列/act;`sessHooks` 注入 mode 应用,`sessData` 活引用外供 |
-| `stream.ts` | SSE(fetch+ReadableStream、断线横幅、退避重连);`ev.onmessage` 由 main 指派 |
-| `slash.ts` | 斜杠目录/菜单/bang/@文件/runSlash 全分发;`slashH` 钩袋 |
-| `chat.ts` | 线程渲染核心:滚动贴底、搜索、历史重放、消息流、work/Flow 卡、工具卡/inspect、审批;`chatH` 钩袋 |
-| `composer.ts` | 发送生命周期:运行态/队列/活动条、ev.onmessage 路由、键盘簇、图片、sendPlain/send;`compH` 钩袋(模型簇/插件) |
-| `main.ts` | 余:设置/搜索、模型/授权/沙箱/思考簇、sheet、插件 SDK、boot(~1300 行) |
+| `stream.ts` | SSE(fetch+ReadableStream、断线横幅、退避重连);`ev.onmessage` 由 composer 指派 |
+| `slash.ts` | 斜杠目录/菜单/bang/@文件/runSlash 全分发;`slashH` 钩袋(模型态已直引 model.ts) |
+| `chat.ts` | 线程渲染核心:滚动贴底、搜索、历史重放、消息流、work/Flow 卡、工具卡/inspect、审批;`chatH` 钩袋(仅余发送/lastUser) |
+| `composer.ts` | 发送生命周期:运行态/队列/活动条、ev.onmessage 路由、键盘簇、图片、sendPlain/send |
+| `model.ts` | 模型/思考档/授权/沙箱/cost/ctx/turnMeta/头部渲染/kebab;`modelH.runSlash` 一钩(环禁) |
+| `settings.ts` | openSettings/openSearch/全局键;setBtn 自 wired(避 sheet↔settings 环) |
+| `sheet.ts` | 移动 sheet/侧栏折叠/顶栏钮/hideWelcome |
+| `plugins.ts` | 插件 SDK v1:总线/pluginApi/loadPlugins/window.piz;`pluginsH` 注 getRunning/sendPlain(避环) |
+| `main.ts` | 余:boot 门(splash/探活/auth)、welcome 英雄位、三家钩袋总成(~150 行) |
 
 ## 构建
 
@@ -38,7 +42,7 @@ piz build-web            # 同上手写
 
 ## 余缝
 
-main 余 ~1300 行,四簇可待:`settings.ts`(openSettings/openSearch,~370 行)、`model.ts`(模型/思考/授权/沙箱/cost/hdr,~460 行——拆后三家钩袋可拆账)、`sheet.ts`(~70 行)、`plugins.ts`(SDK+loadPlugins,~190 行)。拆法同前:别名包装保调用点,活读/活写改 H.getX()/H.setX(),边界写以 setter 越。
+尽徙矣。main 唯余 boot 与钩袋总成(~150 行)。铁律:build-web 以 DFS 拓扑排模块,**循环 import 即拒**(piz build-web 静默退出,唯 zig build web 见败);跨界调用先思方向,逆向者以钩袋迟取(modelH.runSlash、pluginsH.{getRunning,sendPlain} 即此遗痕)。chatH/slashH 尚余数钩(sendPlain/getLastUser 等),皆 composer↔chat↔slash 环之逆边,留之。
 
 ## 候拆缝(模块地图)
 

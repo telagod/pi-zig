@@ -10,11 +10,11 @@ import { md, ansiHtml, diffHtml, todoHtml, renderMd } from "./md";
 import { sess, wsp } from "./state";
 import { showToast, clipText } from "./ui";
 import { act } from "./sessions";
+import { setApproval } from "./model";
+import { hideWelcome } from "./sheet";
+import { pluginEmit, getToolRenderer } from "./plugins";
 
 export const chatH: any = {};
-const hideWelcome = () => chatH.hideWelcome();
-const pluginEmit = (...a: any[]) => chatH.pluginEmit(...a);
-const setApproval = (...a: any[]) => chatH.setApproval(...a);
 const sendPlain = (...a: any[]) => chatH.sendPlain(...a);
 
 // ---- 渲染 ----
@@ -182,6 +182,11 @@ export async function loadOlder() {
 let curAsst: any = null,
   rsnEl: any = null,
   undoBtn: any = null;
+// 重载后流之续:以末条 a-turn 为活泡。
+export function resumeAsst() {
+  const la = th.querySelector(".a-turn:last-child");
+  if (la) curAsst = la;
+}
 let workEl: any = null;
 let workCounts: any = { read: 0, search: 0, edit: 0, bash: 0, web: 0, mcp: 0, todo: 0, agent: 0, other: 0 };
 let turnAt = 0;
@@ -814,7 +819,7 @@ export async function fillTool(d: any) {
   }
   const bd = d.querySelector(".bb-pad")!;
   const card = cards[d.id];
-  const custom = card && chatH.getToolRenderer(card.name);
+  const custom = card && getToolRenderer(card.name);
   if (custom) {
     try {
       const node = custom({

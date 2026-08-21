@@ -6,22 +6,23 @@ import { sess, ws, wsp, sessUrl, prefs } from "./state";
 import { showToast, askText } from "./ui";
 import { act, sessData } from "./sessions";
 import { autosizeInp, saveDraft } from "./store";
+import {
+  setApproval, setSandbox, setThink, applySessionTitle,
+  getCurModel, getCurTitle, getThink, getVision, getSandboxMode,
+  approvalLabel, setApprovalMode, applySandboxLevel, applyThink,
+} from "./model";
+import { setScheme } from "./ui";
 
 export const slashH: any = {};
 const addUser = (...a: any[]) => slashH.addUser(...a);
 const addAsst = (...a: any[]) => slashH.addAsst(...a);
 const finishAsst = (...a: any[]) => slashH.finishAsst(...a);
 const openSearch = (...a: any[]) => slashH.openSearch(...a);
-const setApproval = (...a: any[]) => slashH.setApproval(...a);
 const attachClipboardImage = (...a: any[]) => slashH.attachClipboardImage(...a);
 const refreshSend = (...a: any[]) => slashH.refreshSend(...a);
 const ensureActPoll = (...a: any[]) => slashH.ensureActPoll(...a);
-const setSandbox = (...a: any[]) => slashH.setSandbox(...a);
-const setThink = (...a: any[]) => slashH.setThink(...a);
 const asstEl = (...a: any[]) => slashH.asstEl(...a);
 const findInThread = (...a: any[]) => slashH.findInThread(...a);
-const setScheme = (...a: any[]) => slashH.setScheme(...a);
-const applySessionTitle = (...a: any[]) => slashH.applySessionTitle(...a);
 const sendPlain = (...a: any[]) => slashH.sendPlain(...a);
 const send = (...a: any[]) => slashH.send(...a);
 const renderQueue = (...a: any[]) => slashH.renderQueue(...a);
@@ -397,7 +398,7 @@ export async function runSlash(item: any, arg?: string) {
       break;
     }
     case "/title": {
-      const t = arg || (await askText("会话标题", slashH.getCurTitle() || "", ""));
+      const t = arg || (await askText("会话标题", getCurTitle() || "", ""));
       if (t === null || !t) return;
       await applySessionTitle(t, true);
       break;
@@ -435,7 +436,7 @@ export async function runSlash(item: any, arg?: string) {
       }
       await setApproval(lv);
       addUser("/permissions " + lv);
-      addAsst("授权 " + slashH.approvalLabel());
+      addAsst("授权 " + approvalLabel());
       finishAsst();
       break;
     }
@@ -505,7 +506,7 @@ export async function runSlash(item: any, arg?: string) {
       }
       addUser("/sandbox " + lv);
       await setSandbox(lv);
-      addAsst("sandbox " + slashH.getSandboxMode());
+      addAsst("sandbox " + getSandboxMode());
       finishAsst();
       break;
     }
@@ -517,7 +518,7 @@ export async function runSlash(item: any, arg?: string) {
       }
       addUser("/think " + lv);
       await setThink(lv);
-      addAsst("思考 " + (slashH.getThink() || lv));
+      addAsst("思考 " + (getThink() || lv));
       finishAsst();
       break;
     }
@@ -535,7 +536,7 @@ export async function runSlash(item: any, arg?: string) {
       addUser("/paste");
       try {
         if (await attachClipboardImage()) {
-          addAsst(slashH.getVision() ? "image attached — enter to send" : "image attached — this model has no vision");
+          addAsst(getVision() ? "image attached — enter to send" : "image attached — this model has no vision");
         } else {
           addAsst("no image on clipboard — use Ctrl+V");
         }
@@ -573,9 +574,9 @@ export async function runSlash(item: any, arg?: string) {
               const m = line.match(/^(theme|approval|sandbox|think)\s+(\S+)/);
               if (!m) return;
               if (m[1] === "theme") setScheme(m[2]);
-              if (m[1] === "approval") slashH.setApprovalMode(m[2]);
-              if (m[1] === "sandbox") slashH.applySandboxLevel(m[2]);
-              if (m[1] === "think") slashH.applyThinkLevel(m[2]);
+              if (m[1] === "approval") setApprovalMode(m[2]);
+              if (m[1] === "sandbox") applySandboxLevel(m[2]);
+              if (m[1] === "think") applyThink(m[2]);
             });
           addUser("/reload");
           addAsst(text);
@@ -723,9 +724,9 @@ export async function runSlash(item: any, arg?: string) {
           addUser("/status");
           addAsst(
             "模型 " +
-              (slashH.getCurModel() || "?") +
+              (getCurModel() || "?") +
               " · 思考 " +
-              (slashH.getThink() || "high") +
+              (getThink() || "high") +
               " · 会话 " +
               sess +
               " · 项目 " +
@@ -738,9 +739,9 @@ export async function runSlash(item: any, arg?: string) {
           addUser("/status");
           addAsst(
             "模型 " +
-              (slashH.getCurModel() || "?") +
+              (getCurModel() || "?") +
               " · 思考 " +
-              (slashH.getThink() || "high") +
+              (getThink() || "high") +
               " · 会话 " +
               sess +
               " · 项目 " +
