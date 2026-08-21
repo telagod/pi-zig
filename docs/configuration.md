@@ -202,7 +202,7 @@ effort 字符串走该模型的 `thinkingLevelMap`。pi 给 sonnet-4-6 显式 `m
 
 内置 DeepSeek 只收 pi `packages/ai/scripts/generate-models.ts` 的 `deepseekV4Models` 两条：`deepseek-v4-flash`、`deepseek-v4-pro`（`contextWindow` 1000000、`maxTokens` 384000、`input` `["text"]`、`reasoning` true）。没有 `deepseek-chat` / `deepseek-reasoner`。
 
-不请求 `GET /models`：pi 也不跑这个；OpenAI 形列表通常只有 `id`。窗口写在发版目录或 `models.json` 对象里。
+~~不请求 `GET /models`~~ **今启动即同步**:TUI 与 `piz web` 起后,bg 线程对每个有 key 的 provider 打 `GET /models`,新 id 并入内存表(不落盘,仅补未知 meta;主线程合账,不阻启动)。手动再拉:TUI `/refresh`,web `POST /api/config {refreshModels:true}`。窗口写在发版目录或 `models.json` 对象里——同步只补 id,不覆手写 meta。
 
 以前 piz 缺省是 `128*1024=131072`，状态栏就显示成 131k。那不是 API 来的。
 

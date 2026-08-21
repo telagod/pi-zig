@@ -991,7 +991,18 @@ fn parseTools(parse_arena: std.mem.Allocator, json: []const u8) void {
         var schema: []const u8 = "";
         if (item.object.get("schema")) |v| {
             if (v == .object) {
-                schema = std.json.Stringify.valueAlloc(a, v, .{}) catch "";
+                if (v.object.get("type") == null) {
+                    // 无 type 之 schema(parameters:{} 之类)deepseek 直拒:
+                    // "schema must be a JSON Schema of 'type: object', got 'type: null'"。补之。
+                    var m: std.json.ObjectMap = .empty;
+                    defer m.deinit(a); // stringify 后即弃,勿泄
+                    m.put(a, "type", .{ .string = "object" }) catch {};
+                    var it = v.object.iterator();
+                    while (it.next()) |e| m.put(a, e.key_ptr.*, e.value_ptr.*) catch {};
+                    schema = std.json.Stringify.valueAlloc(a, std.json.Value{ .object = m }, .{}) catch "";
+                } else {
+                    schema = std.json.Stringify.valueAlloc(a, v, .{}) catch "";
+                }
             }
         }
         list.append(.{
@@ -1324,6 +1335,29 @@ test "qjs bridge: load, events, tools, commands" {
     _ = emit(arena, "session_start", "{\"cwd\":\"/tmp\"}");
     try t.expect(last_notify != null);
     try t.expect(std.mem.indexOf(u8, last_notify.?, "hi /tmp") != null);
+    deinit();
+}
+
+test "qjs tool: parameters:{} 自动补 type:object(deepseek 拒无 type 之 schema)" {
+    if (!enabled) return error.SkipZigTest;
+    const t = std.testing;
+    const a = t.allocator;
+    deinit();
+    init(a);
+    try t.expect(rt != null);
+    mu.lockUncancelable(util.io);
+    const src =
+        \\piz.registerTool({ name: "bare", description: "d", parameters: {}, execute: () => "x" });
+        \\piz.registerTool({ name: "typed", description: "d", schema: { type: "object", properties: {} }, execute: () => "y" });
+    ;
+    const v = c.JS_Eval(ctx.?, src.ptr, src.len, "<test>", c.JS_EVAL_TYPE_GLOBAL);
+    try t.expect(!c.JS_IsException(v));
+    c.JS_FreeValue(ctx.?, v);
+    mu.unlock(util.io);
+    refreshRegistryLockedForTest();
+    try t.expectEqual(@as(usize, 2), jsTools().len);
+    try t.expect(std.mem.indexOf(u8, jsTools()[0].schema, "\"type\":\"object\"") != null);
+    try t.expect(std.mem.indexOf(u8, jsTools()[1].schema, "\"type\":\"object\"") != null);
     deinit();
 }
 

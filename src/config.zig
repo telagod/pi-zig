@@ -426,27 +426,26 @@ pub const RefreshModelsResult = struct {
     added: usize = 0,
 };
 
+/// 单 provider 纯取:GET /models 并解析,不动 provider 本体(后台线程安全;
+/// 合并须回主线程走 mergeDiscovered)。key 不在即 error.NoApiKey。
+pub fn fetchDiscovered(alloc: std.mem.Allocator, p: *const Provider) ![]Discovered {
+    const key = p.api_key orelse return error.NoApiKey;
+    const url = try modelsEndpoint(alloc, p.base_url);
+    defer alloc.free(url);
+    var auth_buf: [256]u8 = undefined;
+    const auth = try std.fmt.bufPrint(&auth_buf, "Bearer {s}", .{key});
+    const headers = [_]httpc.Header{.{ .name = "Authorization", .value = auth }};
+    const body = try httpc.getBytes(alloc, url, &headers);
+    defer alloc.free(body);
+    return parseModelsList(alloc, body);
+}
+
 /// 对每个有 key 的 provider 打 GET /models,并入内存表。不落盘。
 pub fn refreshProviders(alloc: std.mem.Allocator, providers: []Provider) RefreshModelsResult {
     var r = RefreshModelsResult{};
     for (providers) |*p| {
-        const key = p.api_key orelse continue;
-        const url = modelsEndpoint(alloc, p.base_url) catch {
-            r.fail += 1;
-            continue;
-        };
-        var auth_buf: [256]u8 = undefined;
-        const auth = std.fmt.bufPrint(&auth_buf, "Bearer {s}", .{key}) catch {
-            r.fail += 1;
-            continue;
-        };
-        const headers = [_]httpc.Header{.{ .name = "Authorization", .value = auth }};
-        const body = httpc.getBytes(alloc, url, &headers) catch {
-            r.fail += 1;
-            continue;
-        };
-        const found = parseModelsList(alloc, body) catch {
-            r.fail += 1;
+        const found = fetchDiscovered(alloc, p) catch {
+            if (p.api_key != null) r.fail += 1;
             continue;
         };
         const n = mergeDiscovered(p, alloc, found) catch {

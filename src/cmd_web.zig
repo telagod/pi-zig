@@ -151,13 +151,15 @@ pub fn runWebCmd(alloc: std.mem.Allocator, args: *std.process.Args.Iterator) voi
     ws.auth_save_hook = poolAuthSave;
     ws.auth_save_ctx = &pool;
     // JS 扩展运行时:全局目 + 服务器启动目的 .piz/extensions 一并装入。
-    // 引擎单例,扩展全体会话共享;按 workspace 分装后置(见 docs/research-extension-runtime.md)。
+    // 引擎单例,扩展全体会话共享;按 workspace 分装后置。
     jsrt.init(alloc);
     if (util.configDir(alloc)) |cd| {
         defer alloc.free(cd);
         pluginsmod.pushGates(alloc, pluginsmod.defaultSet());
         jsrt.loadExtensions(cd, abs_cwd);
     } else |_| {}
+    // 启动即同步模型表:bg 纯取(GET /models),合账持 pool.mutex;无阻 listen。
+    if (std.Thread.spawn(.{ .stack_size = 1 << 20 }, webModelsSyncThread, .{ pool.alloc, &cfg, &pool }) catch null) |th| th.detach();
     ws.run() catch |err| util.warn("web server stopped: {s}", .{@errorName(err)});
     webui_mod.ChatQueue.shutdown();
     for (pool.sessions.items) |ses| {
@@ -207,6 +209,47 @@ fn sessionIsYolo(ses: *const WebSession) bool {
 
 fn setSessionApproval(ses: *WebSession, mode: cfgmod.ApprovalMode) void {
     ses.approval.store(@intFromEnum(mode), .release);
+}
+
+/// web 启动模型表同步:bg 逐 provider 取(GET /models,独立 arena,快照名/址/钥——
+/// upsertProvider 可 append 重排 providers,持指针穿越 HTTP 是 UAF),合账持 pool.mutex
+/// 并按名重找。无阻 listen;败者静默计数,末了一行 stderr。
+fn webModelsSyncThread(alloc: std.mem.Allocator, cfg: *cfgmod.Config, pool: *SessionPool) void {
+    var arena = util.Arena.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const Snap = struct { name: []const u8, base: []const u8, key: []const u8 };
+    var snaps = std.array_list.Managed(Snap).init(a);
+    pool.mutex.lock(util.io) catch {};
+    for (cfg.providers) |*p| {
+        const key = p.api_key orelse continue;
+        snaps.append(.{
+            .name = a.dupe(u8, p.name) catch continue,
+            .base = a.dupe(u8, p.base_url) catch continue,
+            .key = a.dupe(u8, key) catch continue,
+        }) catch {};
+    }
+    pool.mutex.unlock(util.io);
+    var ok: usize = 0;
+    var added: usize = 0;
+    var fail: usize = 0;
+    for (snaps.items) |s| {
+        const stub = cfgmod.Provider{ .name = s.name, .api = .openai_completions, .base_url = s.base, .api_key = s.key };
+        const found = cfgmod.fetchDiscovered(a, &stub) catch {
+            fail += 1;
+            continue;
+        };
+        pool.mutex.lock(util.io) catch {};
+        for (cfg.providers) |*p| {
+            if (!std.mem.eql(u8, p.name, s.name)) continue;
+            added += cfgmod.mergeDiscovered(p, alloc, found) catch 0;
+            break;
+        }
+        pool.mutex.unlock(util.io);
+        ok += 1;
+    }
+    if (ok + fail > 0)
+        std.debug.print("piz web: 模型表已同步 {d} 供应商,+{d} 模型,{d} 取败\n", .{ ok, added, fail });
 }
 
 pub const SessionPool = struct {

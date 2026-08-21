@@ -71,6 +71,8 @@ const formatHelp = cmd_help.formatHelp;
 
 // ---------- 交互模式 ----------
 
+const ModelSyncItem = struct { prov: *cfgmod.Provider, found: []cfgmod.Discovered };
+
 pub const App = struct {
     alloc: std.mem.Allocator,
     tui: *tui_mod.Tui,
@@ -128,6 +130,15 @@ pub const App = struct {
     /// (std 的 append 先加 len 后写数据,读侧撞上半写消息会 segfault ——
     /// web 侧实测过同一机制)。worker 与主线程只经这个原子交换。
     est_ctx: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
+    /// 启动模型表同步:bg 线程纯取(cfgmod.fetchDiscovered,独立 arena——
+    /// app.alloc 非线程安全),主线程 on_paint 合账。同 worker 隔离律。
+    models_sync: struct {
+        done: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+        mu: std.Io.Mutex = .init,
+        arena: ?*util.Arena = null,
+        items: []ModelSyncItem = &.{},
+        fail: usize = 0,
+    } = .{},
     /// 会话起始时刻(ns,状态栏 t/s)
     start_ns: i128,
 
@@ -416,7 +427,58 @@ fn tuiOnToolEnd(ctx: ?*anyopaque, name: []const u8, is_error: bool, summary: []c
 
 fn tuiOnPaint(ctx: ?*anyopaque) void {
     const app: *App = @ptrCast(@alignCast(ctx orelse return));
+    if (app.models_sync.done.load(.acquire)) mergeModelsSync(app);
     app.refreshFooter();
+}
+
+/// 启动模型表同步的 bg 线程:只取不合(合账归主线程,见 mergeModelsSync)。
+fn modelsSyncThread(app: *App) void {
+    const slot = std.heap.page_allocator.create(util.Arena) catch return;
+    slot.* = util.Arena.init(std.heap.page_allocator);
+    const a = slot.allocator();
+    var items = std.array_list.Managed(ModelSyncItem).init(a);
+    var fail: usize = 0;
+    for (app.cfg.providers) |*p| {
+        if (p.api_key == null) continue;
+        const found = cfgmod.fetchDiscovered(a, p) catch {
+            fail += 1;
+            continue;
+        };
+        items.append(.{ .prov = p, .found = found }) catch {};
+    }
+    app.models_sync.mu.lock(util.io) catch {};
+    app.models_sync.arena = slot;
+    app.models_sync.items = items.toOwnedSlice() catch &.{};
+    app.models_sync.fail = fail;
+    app.models_sync.mu.unlock(util.io);
+    app.models_sync.done.store(true, .release);
+    app.tui.dirty.store(true, .release); // 戳主循环 on_paint
+}
+
+/// 主线程合账:mergeDiscovered 进 provider,释 bg arena,加新才报。
+fn mergeModelsSync(app: *App) void {
+    app.models_sync.done.store(false, .release);
+    app.models_sync.mu.lock(util.io) catch {};
+    const items = app.models_sync.items;
+    const fail = app.models_sync.fail;
+    const slot = app.models_sync.arena;
+    app.models_sync.items = &.{};
+    app.models_sync.fail = 0;
+    app.models_sync.arena = null;
+    app.models_sync.mu.unlock(util.io);
+    var added: usize = 0;
+    for (items) |it| {
+        added += cfgmod.mergeDiscovered(it.prov, app.alloc, it.found) catch 0;
+    }
+    if (slot) |s| {
+        s.deinit();
+        std.heap.page_allocator.destroy(s);
+    }
+    if (added > 0 or fail > 0) {
+        const msg = std.fmt.allocPrint(app.alloc, "模型表已同步: +{d}{s}", .{ added, if (fail > 0) "(有供应商取败)" else "" }) catch return;
+        defer app.alloc.free(msg);
+        tuiNote(app, "\x1b[2m", msg);
+    }
 }
 
 fn tuiOnThink(ctx: ?*anyopaque) void {
@@ -663,6 +725,21 @@ pub fn runInteractive(alloc: std.mem.Allocator, cfg: *cfgmod.Config, cwd: []cons
         .on_abort = tuiOnAbort,
     };
     app.perm.always.store(app.approval == .yolo, .release);
+
+    // 启动即同步模型表:bg 线程纯取(GET /models),主线程 on_paint 合账;
+    // 无阻启动(0.63ms 不可毁),无 key 供应商自跳。
+    {
+        var any_key = false;
+        for (cfg.providers) |*p| {
+            if (p.api_key != null) {
+                any_key = true;
+                break;
+            }
+        }
+        if (any_key) {
+            if (std.Thread.spawn(.{ .stack_size = 1 << 20 }, modelsSyncThread, .{&app}) catch null) |th| th.detach();
+        }
+    }
 
     showWelcome(&app, loaded.len);
     replayTranscript(&tui, loaded);
