@@ -1825,11 +1825,11 @@ test "qjs bundled elicitation/todo: ask_user 文案 + todo 往返与 sid 隔离(
     const s1 = "{\"sid\":1}";
     const w = try runJsTool(a, "todo_write", "{\"items\":[{\"content\":\"scan repo\",\"status\":\"completed\"},{\"content\":\"fix bug\",\"status\":\"in_progress\",\"bind\":\"n2\"},{\"content\":\"run tests\"}]}", s1);
     defer a.free(w.content);
-    try t.expectEqualStrings("[x] scan repo\n[>] fix bug  @n2\n[ ] run tests\n(1/3 done)", w.content);
+    try t.expectEqualStrings("[x] #t1 scan repo\n[>] #t2 fix bug  @n2\n[ ] #t3 run tests\n(1/3 done)", w.content);
     // merge:按 id 补丁 + 新条目自动 id 取 max+1
     const m = try runJsTool(a, "todo_write", "{\"mode\":\"merge\",\"items\":[{\"id\":\"t2\",\"status\":\"completed\"},{\"content\":\"deploy\"}]}", s1);
     defer a.free(m.content);
-    try t.expectEqualStrings("[x] scan repo\n[x] fix bug  @n2\n[ ] run tests\n[ ] deploy\n(2/4 done)", m.content);
+    try t.expectEqualStrings("[x] #t1 scan repo\n[x] #t2 fix bug  @n2\n[ ] #t3 run tests\n[ ] #t4 deploy\n(2/4 done)", m.content);
     // 错:new 缺 content / 坏 status / 重复 id / 坏 mode
     const e1 = try runJsTool(a, "todo_write", "{\"mode\":\"merge\",\"items\":[{\"id\":\"zzz\"}]}", s1);
     defer a.free(e1.content);
@@ -1846,15 +1846,16 @@ test "qjs bundled elicitation/todo: ask_user 文案 + todo 往返与 sid 隔离(
     // sid 隔离:sid=2 读空;sid=1 读回四条
     const r2 = try runJsTool(a, "todo_read", "{}", "{\"sid\":2}");
     defer a.free(r2.content);
-    try t.expectEqualStrings("todo list is empty", r2.content);
+    try t.expectEqualStrings("no todos yet — ask the agent to add some", r2.content);
     const r1 = try runJsTool(a, "todo_read", "{}", s1);
     defer a.free(r1.content);
     try t.expect(std.mem.indexOf(u8, r1.content, "(2/4 done)") != null);
-    // /todo 命令同源
+    // /todo 命令同源(面板形态:框线头 + 完成计数 + 条目)
     var arena_inst = util.Arena.init(a);
     defer arena_inst.deinit();
     const out = runCommand(arena_inst.allocator(), "todo", "", s1).?;
-    try t.expectEqualStrings(r1.content, out);
+    try t.expect(std.mem.indexOf(u8, out, "2/4 completed") != null);
+    try t.expect(std.mem.indexOf(u8, out, "#t2 fix bug  @n2") != null);
 }
 
 test "qjs bundled git-awareness: 仓内取状" {

@@ -654,7 +654,8 @@ pub const Tui = struct {
         }
         tm.body.clearRetainingCapacity();
         try tm.body.appendSlice(body);
-        tm.folded = true;
+        // todo 卡默认展开:列表短,折叠先遮内容(与 web 端 todo-view 一致)
+        tm.folded = !(std.mem.eql(u8, name, "todo_write") or std.mem.eql(u8, name, "todo_read"));
         self.dirty.store(true, .release);
     }
 
@@ -931,6 +932,9 @@ pub const Tui = struct {
         total_vis += composer_block;
         // composer+footer 跟消息同一份文档,整屏可滚。
         const pin = if (total_vis > scroll_h) total_vis - scroll_h else 0;
+        // pi 式:文档短于窗口时,顶部留白、composer/footer 貼底(而非顶置)。
+        // 用户上滚(scroll_off>0)时不加留白,保持原顶置滚动语义。
+        const top_gap: usize = if (self.scroll_off == 0 and total_vis < scroll_h) scroll_h - total_vis else 0;
         if (self.scroll_off > pin) self.scroll_off = pin;
         self.last_pin = pin;
         var skip = pin - self.scroll_off;
@@ -962,7 +966,7 @@ pub const Tui = struct {
         const composer_doc = nvis_doc + prefix_rows;
         const doc_skip = pin - self.scroll_off;
         self.composer_screen_row = if (composer_doc >= doc_skip) row_blk: {
-            const row = composer_doc - doc_skip + 1;
+            const row = composer_doc - doc_skip + top_gap + 1;
             break :row_blk if (row > 0 and row <= scroll_h) row else 0;
         } else 0;
 
@@ -1048,6 +1052,10 @@ pub const Tui = struct {
         }
         var out_e: usize = 0;
         var cell_skip: usize = 0;
+        for (0..top_gap) |_| {
+            try fw.writer.writeAll("\x1b[K\r\n");
+            out_e += 1;
+        }
         try emitDocLines(&fw.writer, cell_aw.written(), &cell_skip, &out_e, scroll_h);
         try emitDocLines(&fw.writer, block_aw.written(), &skip, &out_e, scroll_h);
         while (out_e < scroll_h) : (out_e += 1) {

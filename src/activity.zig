@@ -32,8 +32,8 @@ pub const Kind = enum(u8) {
     subagent,
 };
 
-const NAME_CAP = 24; // 最长工具名 get_context_remaining = 21
-const DETAIL_CAP = 72;
+pub const NAME_CAP = 24; // 最长工具名 get_context_remaining = 21
+pub const DETAIL_CAP = 72;
 
 const Slot = struct {
     /// 槽位已被占用(写内容**前**置位,防两个线程抢同一槽)。
@@ -98,11 +98,14 @@ pub const Handle = struct {
     }
 
     /// 覆盖详情文字(阶段变化,如「retrying in 2s」)。
+    /// 按 UTF-8 边界截断:曾硬切 DETAIL_CAP 字节,把 CJK 切在序列中间,
+    /// 渲染端出「调�」坏字。
     pub fn detail(self: Handle, text: []const u8) void {
         if (self.idx >= MAX_SLOTS) return;
         const s = &slots[self.idx];
-        const n = @min(text.len, DETAIL_CAP);
-        @memcpy(s.detail_buf[0..n], text[0..n]);
+        const raw = std.mem.trim(u8, text, " \t\r");
+        const n = util.clampUtf8(raw, DETAIL_CAP).len;
+        @memcpy(s.detail_buf[0..n], raw[0..n]);
         s.detail_len.store(@intCast(n), .release);
     }
 
@@ -157,16 +160,17 @@ pub const Handle = struct {
 /// 抢不到槽位时返回一个**无槽句柄**:显示类方法变空操作,但取消与耗时
 /// 照常工作。以前这里返回 `Handle.none`,于是溢出的活动既不响应 Ctrl+C
 /// 也报告 0 耗时 —— 并发一旦超过 MAX_SLOTS 就成了正确性问题。
-pub fn begin(kind: Kind, name: []const u8, det: []const u8, limit_ms: i64) Handle {
+pub fn begin(kind: Kind, name: []const u8, det_in: []const u8, limit_ms: i64) Handle {
     const started = nowMs();
     const g = cancel_gen.load(.acquire);
     for (&slots, 0..) |*s, i| {
         // `claimed` 只做占位:CAS 成功即独占这个槽,但此刻内容还是上一次的残留。
         if (s.claimed.cmpxchgStrong(false, true, .acq_rel, .acquire) != null) continue;
-        const nn = @min(name.len, NAME_CAP);
+        const nn = util.clampUtf8(name, NAME_CAP).len;
         @memcpy(s.name_buf[0..nn], name[0..nn]);
         s.name_len.store(@intCast(nn), .monotonic);
-        const dn = @min(det.len, DETAIL_CAP);
+        const det = std.mem.trim(u8, det_in, " \t\r");
+        const dn = util.clampUtf8(det, DETAIL_CAP).len;
         @memcpy(s.detail_buf[0..dn], det[0..dn]);
         s.detail_len.store(@intCast(dn), .monotonic);
         s.kind.store(@intFromEnum(kind), .monotonic);

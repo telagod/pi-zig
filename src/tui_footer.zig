@@ -347,13 +347,14 @@ pub fn formatTok(buf: *[16]u8, n: u64) []const u8 {
 }
 
 /// Context occupancy. `window == 0` means the model window is unknown.
+/// 百分比一位小数(pi 式 `0.8%`):0.79% 曾被整数除法截成 0%,「百分比不显示」
 pub fn formatCtx(buf: *[48]u8, used: usize, window: usize, with_abs: bool) []const u8 {
     if (window == 0) return "ctx —";
-    const pct = used * 100 / window;
-    if (!with_abs) return std.fmt.bufPrint(buf, "ctx {d}%", .{pct}) catch "ctx —";
+    const pct: f64 = @as(f64, @floatFromInt(used)) * 100.0 / @as(f64, @floatFromInt(window));
+    if (!with_abs) return std.fmt.bufPrint(buf, "ctx {d:.1}%", .{pct}) catch "ctx —";
     var ub: [16]u8 = undefined;
     var wb: [16]u8 = undefined;
-    return std.fmt.bufPrint(buf, "ctx {s}/{s} {d}%", .{
+    return std.fmt.bufPrint(buf, "ctx {s}/{s} {d:.1}%", .{
         formatTok(&ub, used),
         formatTok(&wb, window),
         pct,

@@ -1,6 +1,7 @@
 // tui_draw.zig — 截断写入、选择器、活动行。从 tui.zig 拆出绘制层。
 const std = @import("std");
 const activity = @import("core").activity;
+const util = @import("core").util;
 const slash = @import("tui_slash.zig");
 const measure = @import("tui_measure.zig");
 
@@ -147,9 +148,41 @@ pub fn writePicker(wr: *std.Io.Writer, p: *Picker, height: usize, width: usize) 
     }
 }
 
+const SAN_CAP = 96;
+/// 摘要行防御:换行/制表/控制符折叠为单行空格(activity detail 输入可能带 \n,
+/// 直接写出会把一行撑成两行并挤乱底部布局)。完整剥离 ANSI 转义序列
+/// (含 \x1b[2m 这类:仅剥 0x1b 会留下字面 "[2m")。UTF-8 边界安全。
+fn inlineSan(buf: *[SAN_CAP]u8, s: []const u8) []const u8 {
+    var n: usize = 0;
+    var esc = false;
+    for (s) |c| {
+        if (esc) {
+            if (c == 0x1b) continue;
+            if (c >= 0x40 and c <= 0x7E) esc = false;
+            continue;
+        }
+        if (c == 0x1b) {
+            esc = true;
+            continue;
+        }
+        const ch: u8 = switch (c) {
+            '\n', '\r', '\t' => ' ',
+            else => c,
+        };
+        if (ch == ' ') {
+            if (n == 0 or buf[n - 1] == ' ') continue;
+        }
+        if (n >= SAN_CAP - 3) break;
+        buf[n] = ch;
+        n += 1;
+    }
+    return buf[0..util.utf8SafeEnd(buf[0..n])];
+}
+
 pub fn writeStatusIndicator(wr: *std.Io.Writer, views: []const activity.View, streaming: bool, frame_ms: i64, width: usize, max_rows: usize) !void {
     _ = streaming;
     if (max_rows == 0) return;
+    var san_buf: [SAN_CAP]u8 = undefined;
     // pi 式单行状态:⠋ Working · 12s · esc to interrupt(全 muted,无详情子行)
     var elapsed: i64 = 0;
     var retry_n: u32 = 0;
@@ -185,12 +218,14 @@ pub fn writeStatusIndicator(wr: *std.Io.Writer, views: []const activity.View, st
         if (shown >= sub_cap) break;
         try wr.writeAll(ANSI_DIM ++ "● " ++ ANSI_RESET);
         var used: usize = 2;
-        try writeTrunc(wr, v.name, if (width > used) width - used else 0);
-        used += visibleCols(v.name);
+        const name_c = inlineSan(&san_buf, v.name);
+        try writeTrunc(wr, name_c, if (width > used) width - used else 0);
+        used += visibleCols(name_c);
         if (v.detail.len > 0 and used + 3 < width) {
+            const det_c = inlineSan(&san_buf, v.detail);
             try wr.writeAll(ANSI_DIM ++ " · ");
             used += 3;
-            try writeTrunc(wr, v.detail, width - used);
+            try writeTrunc(wr, det_c, width - used);
         }
         const eln = activity.formatElapsed(&eb, v.elapsed_ms);
         if (used + 1 + eln.len < width) {

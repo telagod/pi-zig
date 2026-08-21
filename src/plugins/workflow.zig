@@ -383,7 +383,12 @@ pub fn toolWorkflow(ctx: ?*anyopaque, arena: std.mem.Allocator, args: []const u8
                 .read_only = nodes[i].read_only,
                 .plugins = nodes[i].plugins,
                 .tools = tools,
+                // i 即 ready_idx 的元素(DAG 下标):曾误写 ready_idx[i] 二次寻址,
+                // 沃内下标>节点数时读出垃圾(实测 118),名/idx/事件全错位。
                 .idx = i + 1,
+                .name = nodes[i].id,
+                // 摘要用节点原始任务;desc 带 role 模板(大段英语说明曾占满摘要行)
+                .brief = nodes[i].task,
             };
         }
 
@@ -397,15 +402,15 @@ pub fn toolWorkflow(ctx: ?*anyopaque, arena: std.mem.Allocator, args: []const u8
         switch (ran) {
             .fail => |msg| return .{ .content = msg, .is_error = true },
             .done => |outs| {
-                for (ready_idx[0..rn], outs) |i, o| {
-                    nodes[i].output = o.output;
-                    nodes[i].err = o.err;
-                    nodes[i].elapsed_ms = o.elapsed_ms;
-                    nodes[i].status = if (o.failed) .failed else .ok;
+                for (ready_idx[0..rn], outs) |ni, o| {
+                    nodes[ni].output = o.output;
+                    nodes[ni].err = o.err;
+                    nodes[ni].elapsed_ms = o.elapsed_ms;
+                    nodes[ni].status = if (o.failed) .failed else .ok;
                     if (o.failed) wave_failed = true;
                     remaining -= 1;
                     if (self.cbs.on_subagent) |cb| {
-                        cb(self.cbs.ctx, i + 1, .finished, nodes[i].id) catch {};
+                        cb(self.cbs.ctx, ni + 1, .finished, nodes[ni].id) catch {};
                     }
                 }
             },

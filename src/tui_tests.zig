@@ -893,9 +893,12 @@ test "footer format includes ctx occupancy and cache when usage is set" {
     var kb: [32]u8 = undefined;
     try t.expectEqualStrings("1.2k", formatTok(&ub, 1200));
     try t.expectEqualStrings("128k", formatTok(&ub, 128_000));
-    try t.expectEqualStrings("ctx 12k/128k 9%", formatCtx(&cb, 12_000, 128_000, true));
-    try t.expectEqualStrings("ctx 9%", formatCtx(&cb, 12_000, 128_000, false));
+    try t.expectEqualStrings("ctx 12k/128k 9.4%", formatCtx(&cb, 12_000, 128_000, true));
+    try t.expectEqualStrings("ctx 9.4%", formatCtx(&cb, 12_000, 128_000, false));
     try t.expectEqualStrings("ctx —", formatCtx(&cb, 0, 0, true));
+    // 0.79% 曾截成 0%(整数除法)->"百分比不显示";现一位小数
+    try t.expectEqualStrings("ctx 0.8%", formatCtx(&cb, 7_900, 1_000_000, false));
+    try t.expectEqualStrings("ctx 7.9k/1M 0.8%", formatCtx(&cb, 7_900, 1_000_000, true));
     try t.expectEqualStrings("cache 62%", formatCache(&kb, 7_440, 12_000, true));
     try t.expectEqualStrings("cached 8.1k", formatCache(&kb, 8100, null, true));
     try t.expectEqualStrings("cache —", formatCache(&kb, null, 100, true));

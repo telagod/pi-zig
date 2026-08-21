@@ -584,11 +584,29 @@ pub fn estTokensUtf8(text: []const u8) usize {
 /// 中文每字 3 字节,盲切几乎必然踩中。
 pub fn clampUtf8(s: []const u8, max_bytes: usize) []const u8 {
     if (s.len <= max_bytes) return s;
-    var end = max_bytes;
-    // 退到序列首字节(跳过 10xxxxxx 的 continuation byte)。停在这里就等于
-    // 丢掉那个跨界的序列,不用再算它的宽度。
-    while (end > 0 and s[end] & 0xC0 == 0x80) end -= 1;
-    return s[0..end];
+    return s[0..utf8SafeEnd(s[0..max_bytes])];
+}
+
+/// 从后往前找最后一个完整 UTF-8 序列边界:切点若停在多字节序列中间,
+/// 整个序列丢弃(保留前一个完整字符)。
+/// 旧实现只看 s[end] 是否 continuation;当调用方传入的切片后是未定义字节
+/// (栈 buf)时,判断失效,曾输出「评�」式坏字节。
+pub fn utf8SafeEnd(s: []const u8) usize {
+    var e: usize = s.len;
+    while (e > 0) {
+        const b = s[e - 1];
+        if (b < 0x80) return e; // ASCII 独立:此处即安全边界
+        if (b < 0xC0) { // continuation:往前找 lead
+            e -= 1;
+            continue;
+        }
+        // lead byte:期望长度
+        const need: usize = if (b < 0xE0) 2 else if (b < 0xF0) 3 else 4;
+        const avail: usize = s.len - (e - 1);
+        if (avail >= need) return s.len; // 完整的最后一个字符:全长安全
+        return e - 1; // 不完整:丢到 lead 之前
+    }
+    return 0;
 }
 
 pub fn eqlIgnoreCase(a: []const u8, b: []const u8) bool {

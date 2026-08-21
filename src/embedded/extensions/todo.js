@@ -36,14 +36,32 @@ function parseIncoming(e) {
   return { ok: { id, content, status, bind } };
 }
 function render(items) {
-  if (!items.length) return { content: "todo list is empty" };
+  if (!items.length) return { content: "no todos yet — ask the agent to add some" };
   let done = 0, out = "";
   for (const it of items) {
     if (it.status === "completed") done++;
-    out += glyph(it.status) + " " + it.content + (it.bind ? "  @" + it.bind : "") + "\n";
+    // 保留 [ ]/[x]/[>] 前缀(web todoHtml 依赖);#id 与 @bind 与 pi 例同形
+    out += glyph(it.status) + " " + (it.id ? "#" + it.id : "") + (it.id ? " " : "") + it.content + (it.bind ? "  @" + it.bind : "") + "\n";
   }
   out += "(" + done + "/" + items.length + " done)";
   return { content: out };
+}
+
+// /todo:pi TodoListComponent 之文本形(两端安全:纯文本,行宽由显示端截断)
+function panel() {
+  const items = list();
+  let done = 0;
+  for (const it of items) if (it.status === "completed") done++;
+  let out = "── Todo ─────────────────────────\n\n  " + done + "/" + items.length + " completed\n\n";
+  if (!items.length) {
+    out += "  No todos yet. Ask the agent to add some!\n";
+  } else {
+    for (const it of items) {
+      out += "  " + glyph(it.status) + " " + (it.id ? "#" + it.id + " " : "") + it.content +
+        (it.bind ? "  @" + it.bind : "") + "\n";
+    }
+  }
+  return out;
 }
 
 function write(args) {
@@ -123,5 +141,5 @@ piz.registerTool({
 
 piz.registerCommand("todo", {
   description: "list session todos",
-  handler() { const r = render(list()); return r.content; },
+  handler() { return panel(); },
 });

@@ -2,6 +2,7 @@
 const std = @import("std");
 const agentmod = @import("../agent.zig");
 const activity = @import("../activity.zig");
+const util = @import("../util.zig");
 const toolsmod = @import("../tools.zig");
 const limits = @import("limits.zig");
 const jsonx = @import("jsonx.zig");
@@ -65,7 +66,10 @@ const TaskSlot = struct {
     cwd: []const u8,
     /// 本槽的序号(1 起),事件转发时告诉父 agent 是哪个子任务
     idx: usize = 0,
-    read_only: bool = false,
+    /// 活动名(workflow 传节点 id;空则 "task N")
+    name: []const u8 = "",
+    /// 摘要源(workflow 传节点 task;空则用 desc 首段)
+    brief: []const u8 = "",    read_only: bool = false,
     child_plugins: u16 = 0,
     tool_allow: []const []const u8 = &.{},
 
@@ -90,6 +94,7 @@ const TaskSlot = struct {
 const ForwardCtx = struct {
     slot: *TaskSlot,
     parent: *agentmod.Agent,
+    act: activity.Handle = .none,
 
     fn emit(self: *ForwardCtx, kind: agentmod.SubagentEvent, text: []const u8) void {
         const f = self.parent.cbs.on_subagent orelse return;
@@ -106,15 +111,18 @@ const ForwardCtx = struct {
     fn onToolStart(ctx: ?*anyopaque, name: []const u8, args: []const u8) anyerror!void {
         const self: *ForwardCtx = @ptrCast(@alignCast(ctx.?));
         _ = args;
+        self.act.detail(name);
         self.emit(.tool_start, name);
     }
     fn onToolEnd(ctx: ?*anyopaque, name: []const u8, is_error: bool, summary: []const u8) anyerror!void {
         const self: *ForwardCtx = @ptrCast(@alignCast(ctx.?));
         _ = summary;
+        self.act.detail("");
         self.emit(if (is_error) .tool_failed else .tool_done, name);
     }
     fn onNotice(ctx: ?*anyopaque, text: []const u8) anyerror!void {
         const self: *ForwardCtx = @ptrCast(@alignCast(ctx.?));
+        self.act.detail(text);
         self.emit(.notice, text);
     }
     /// subagent 跟着父 agent 一起被 Ctrl+C 中断
@@ -131,11 +139,39 @@ fn firstLine(text: []const u8) []const u8 {
     return t[0..nl];
 }
 
+/// 详情用:整段任务描述里的换行与控制符都会打乱摘要行(实测断行+乱码),
+/// 折成一行空格。
+fn oneLineOf(s: []const u8) []const u8 {
+    const t = std.mem.trim(u8, s, " \t\r\n");
+    var buf: [activity.DETAIL_CAP]u8 = undefined;
+    var n: usize = 0;
+    for (t) |c| {
+        if (c == '\n' or c == '\r' or c == '\t') {
+            if (n == 0 or buf[n - 1] == ' ') continue;
+            buf[n] = ' ';
+            n += 1;
+        } else if (c >= 0x20) {
+            buf[n] = c;
+            n += 1;
+        }
+        if (n >= activity.DETAIL_CAP - 1) break;
+    }
+    return agentmod.util.clampUtf8(buf[0..n], activity.DETAIL_CAP);
+}
+
 /// 跑一个委托槽。有 `parent` 就走进程内,否则 spawn 子进程。
 fn runTaskSlot(slot: *TaskSlot) void {
     // 登记活动:委派原先是最长 10 分钟的纯黑盒,父 agent join() 干等,
     // 界面一动不动。登记后 TUI 能显示每个子 agent 的耗时与已回传字节。
-    const act = activity.begin(.subagent, "task", slot.desc, TASK_TIMEOUT_MS);
+    // 名用节点/序号,detail 用首行折叠(整段 desc 曾带换行+长文,摘要行断行乱码)
+    var namebuf: [24]u8 = undefined;
+    const name = if (slot.name.len > 0)
+        slot.name
+    else blk: {
+        const s = std.fmt.bufPrint(&namebuf, "task {d}", .{slot.idx}) catch "task";
+        break :blk s;
+    };
+    const act = activity.begin(.subagent, name, oneLineOf(if (slot.brief.len > 0) slot.brief else slot.desc), TASK_TIMEOUT_MS);
     defer {
         slot.elapsed_ms = act.elapsedMs();
         act.release();
@@ -167,7 +203,7 @@ fn runTaskInProcess(slot: *TaskSlot, parent: *agentmod.Agent, act: activity.Hand
     defer arena.deinit();
     const a = arena.allocator();
 
-    var fwd = ForwardCtx{ .slot = slot, .parent = parent };
+    var fwd = ForwardCtx{ .slot = slot, .parent = parent, .act = act };
 
     // 继承 provider / model / cwd / 启用集与只读位;深度 +1。
     // read_only 只能加不能减 —— 只读父 agent 的 subagent 必然只读,
@@ -520,6 +556,10 @@ pub const Spec = struct {
     tools: ?[]const []const u8 = null,
     /// 0 = 按本批序号。workflow 传入 DAG 下标 + 1,好让前端把事件对上节点。
     idx: usize = 0,
+    /// 活动名(UI 摘要行显示;workflow 传节点 id)
+    name: []const u8 = "",
+    /// 摘要文字(UI 详情;workflow 传节点 task 原文,省略 role 模板)
+    brief: []const u8 = "",
 };
 
 pub const RunOut = struct {
@@ -563,6 +603,8 @@ pub fn runSpecs(self: *agentmod.Agent, arena: std.mem.Allocator, specs: []const 
             .alloc = sa.allocator(),
             .cwd = self.cwd,
             .idx = if (spec.idx > 0) spec.idx else i,
+            .name = spec.name,
+            .brief = spec.brief,
             .read_only = spec.read_only,
             .child_plugins = child_plugins,
             .tool_allow = raw_tools,

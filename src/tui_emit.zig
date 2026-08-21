@@ -20,6 +20,8 @@ const ANSI_RESET = "\x1b[0m";
 const ANSI_BOLD = "\x1b[1m";
 const ANSI_DIM = "\x1b[2m";
 const ANSI_ITALIC = "\x1b[3m";
+const ANSI_YELLOW = "\x1b[33m";
+const ANSI_CYAN = "\x1b[36m";
 
 var theme_ptr: ?*const theme_mod.Theme = null;
 // 主题代数:applyTheme → attachTheme 时递增,让 md 缓存跨主题切换失效。
@@ -180,6 +182,67 @@ fn isWorkflowTool(meta: ToolMeta) bool {
     return std.mem.eql(u8, meta.name, "workflow");
 }
 
+fn isTodoTool(meta: ToolMeta) bool {
+    return std.mem.eql(u8, meta.name, "todo_write") or std.mem.eql(u8, meta.name, "todo_read");
+}
+
+/// todo 工具卡行分型(web 端 todoHtml 的 TUI 等价物)。
+/// `[x] #id text @bind` → `✓ #id text @bind`(完成 dim);`[>]`→`▶`;`[ ]`→`○`;
+/// `(N/M done)` 页脚 dim。JS 输出保持 [ ]/[x] 前缀(web 正则依赖),此处仅换色换字。
+const SAN_TODO = 160;
+fn todoLine(input: []const u8, out: *[SAN_TODO]u8) []const u8 {
+    var n: usize = 0;
+    var start: usize = 0;
+    var ink: []const u8 = "";
+    var glyph: []const u8 = "";
+    if (std.mem.startsWith(u8, input, "[x] ")) {
+        start = 4;
+        ink = ANSI_DIM;
+        glyph = "\u{2713}";
+    } else if (std.mem.startsWith(u8, input, "[>] ")) {
+        start = 4;
+        ink = ANSI_YELLOW;
+        glyph = "\u{25B6}";
+    } else if (std.mem.startsWith(u8, input, "[ ] ")) {
+        start = 4;
+        ink = ANSI_DIM;
+        glyph = "\u{25CB}";
+    }
+    for (ink) |c| {
+        out[n] = c;
+        n += 1;
+    }
+    for (glyph) |c| {
+        out[n] = c;
+        n += 1;
+    }
+    if (start > 0) {
+        out[n] = ' ';
+        n += 1;
+    }
+    // 主体:扫到尾部 @bind(JS 输出 "  @id")则其后转青色
+    var cy: usize = 0;
+    for (input[start..]) |c| {
+        if (n >= SAN_TODO - 12) break;
+        if (cy == 0 and c == '@') {
+            for (ANSI_CYAN) |x| {
+                out[n] = x;
+                n += 1;
+            }
+            cy = 1;
+        }
+        out[n] = c;
+        n += 1;
+    }
+    out[n] = 0x1b;
+    n += 1;
+    out[n] = '0';
+    n += 1;
+    out[n] = 'm';
+    n += 1;
+    return out[0..n];
+}
+
 pub fn toolRowCount(meta: ToolMeta, width: usize) usize {
     if (isWorkflowTool(meta)) {
         var rows: usize = 1;
@@ -328,11 +391,14 @@ fn emitTool(wr: *std.Io.Writer, meta: ToolMeta, width: usize, skip: usize, limit
             const nlines = countContentLines(view);
             var it = std.mem.splitScalar(u8, view, '\n');
             const body_ink: []const u8 = if (meta.status == .err) theme().fg_err else theme().fg_output;
+            const todo = isTodoTool(meta);
             var i: usize = 0;
             while (it.next()) |part| {
                 i += 1;
                 const first = if (i == nlines) TOOL_BODY_LAST else TOOL_BODY_FIRST;
-                try emitPrefixed(wr, first, TOOL_BODY_REST, part, inner, &skipped, &emitted, limit, body_ink);
+                var tb2: [SAN_TODO]u8 = undefined;
+                const line: []const u8 = if (todo) todoLine(part, &tb2) else part;
+                try emitPrefixed(wr, first, TOOL_BODY_REST, line, inner, &skipped, &emitted, limit, body_ink);
             }
         }
     }
