@@ -140,6 +140,19 @@ export function askYes(title: string, msg: string): Promise<boolean> {
     });
   });
 }
+// 剪贴板 + toast
+export function clipText(text: string, ok?: string, fail?: string) {
+  if (!text) {
+    showToast(fail || "没有内容");
+    return;
+  }
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard
+      .writeText(text)
+      .then(() => showToast(ok || "已复制"))
+      .catch(() => showToast(fail || "复制失败"));
+  } else showToast(fail || "复制失败");
+}
 export function bindSeg(name: string, fn: (v: string | null) => void) {
   const box = document.querySelector('[data-seg="' + name + '"]') as HTMLElement | null;
   if (!box) return;

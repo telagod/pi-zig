@@ -16,7 +16,8 @@
 | `sessions.ts` | 菜单助手/项目/会话列/act;`sessHooks` 注入 mode 应用,`sessData` 活引用外供 |
 | `stream.ts` | SSE(fetch+ReadableStream、断线横幅、退避重连);`ev.onmessage` 由 main 指派 |
 | `slash.ts` | 斜杠目录/菜单/bang/@文件/runSlash 全分发;`slashH` 钩袋注入聊天与模型态(别名包装,活读改 H.getX()) |
-| `main.ts` | 其余:聊天渲染/发送/队列、设置、搜索、模型簇、插件页(尚余 ~2700 行) |
+| `chat.ts` | 线程渲染核心:滚动贴底、搜索、历史重放、消息流、work/Flow 卡、工具卡/inspect、审批;`chatH` 钩袋 |
+| `main.ts` | 余:发送/队列/图片、设置、搜索、模型簇、插件 SDK、boot(尚余 ~1790 行) |
 
 ## 构建
 
