@@ -3436,6 +3436,530 @@ function agentHtml(out, args) {
 } exports.toolBody = toolBody;
 
 };
+__modules["composer"] = function(module, exports, require) {
+"use strict";Object.defineProperty(exports, "__esModule", {value: true});// composer.ts —— 发送生命周期:运行态/队列/活动条、SSE 事件路由(ev.onmessage)、
+// 输入框键盘与草稿、图片黏附、sendPlain/send。
+// 自 webui.js 切出。模型簇与插件之属 main,经 compH 钩袋注入;聊天渲染直引 chat.ts(无环)。
+var _util = require('./util');
+var _state = require('./state');
+var _ui = require('./ui');
+var _sessions = require('./sessions');
+var _store = require('./store');
+var _stream = require('./stream');
+
+
+
+var _slash = require('./slash');
+
+
+
+var _chat = require('./chat');
+
+ const compH = {}; exports.compH = compH;
+
+let running = false;
+let lastUser = "";
+let lastImgUrl = null;
+let pending = [];
+ const getRunning = () => running; exports.getRunning = getRunning;
+ const getLastUser = () => lastUser; exports.getLastUser = getLastUser;
+ const setLastUser = (v) => { lastUser = v; }; exports.setLastUser = setLastUser;
+ const clearPending = () => { pending = []; }; exports.clearPending = clearPending;
+ function refreshSend() {
+  const t = (_util.$.call(void 0, "inp") ).value.trim();
+  const stop = running && !t;
+  _util.$.call(void 0, "send").textContent = stop ? "■" : "➤";
+  _util.$.call(void 0, "send").classList.toggle("stop", stop);
+  _util.$.call(void 0, "send").title = stop ? "停止" : running ? "接着发" : "发送";
+  const inp = _util.$.call(void 0, "inp") ;
+  if (inp) {
+    inp.placeholder = running
+      ? "接着发…"
+      : inp.dataset.ph || inp.placeholder;
+  }
+} exports.refreshSend = refreshSend;
+ function setRun(r) {
+  running = r;
+  refreshSend();
+  if (r) ensureActPoll();
+} exports.setRun = setRun;
+let actTimer = 0;
+function fmtActChip(a) {
+  const sec = a.ms < 10000 ? (a.ms / 1000).toFixed(1) : String(Math.round(a.ms / 1000));
+  const lim = a.limit_ms && !a.detached ? "/" + Math.round(a.limit_ms / 1000) + "s" : "";
+  const by = a.bytes ? " · " + _util.fmtTok.call(void 0, a.bytes) : "";
+  return (
+    '<span class="act-chip' +
+    (a.detached ? " bg" : "") +
+    '">' +
+    _util.esc.call(void 0, a.name || "job") +
+    " " +
+    sec +
+    "s" +
+    lim +
+    by +
+    (a.detached ? " · bg" : "") +
+    "</span>"
+  );
+}
+async function tickActivity() {
+  const el = _util.$.call(void 0, "actStrip");
+  if (!el) return 0;
+  try {
+    const r = await fetch("/api/activity");
+    const list = await r.json();
+    if (!list || !list.length) {
+      el.hidden = true;
+      el.innerHTML = "";
+      return 0;
+    }
+    el.hidden = false;
+    el.innerHTML = list.map(fmtActChip).join("");
+    return list.length;
+  } catch (e2) {
+    return 0;
+  }
+}
+ function ensureActPoll() {
+  if (actTimer) return;
+  actTimer = setInterval(async () => {
+    const n = await tickActivity();
+    if (!n && !running) {
+      clearInterval(actTimer);
+      actTimer = 0;
+    }
+  }, 400);
+} exports.ensureActPoll = ensureActPoll;
+ function renderQueue() {
+  const box = _util.$.call(void 0, "qbox"),
+    items = _util.$.call(void 0, "qItems"),
+    count = _util.$.call(void 0, "qCount");
+  if (!box || !items) return;
+  if (!pending.length) {
+    box.hidden = true;
+    items.innerHTML = "";
+    return;
+  }
+  box.hidden = false;
+  count.textContent = pending.length === 1 ? "待发" : pending.length + " 条待发";
+  items.innerHTML = pending
+    .map((t) => '<div class="q-item">' + _util.esc.call(void 0, t) + "</div>")
+    .join("");
+} exports.renderQueue = renderQueue;
+ function dropPending(text) {
+  const i = pending.indexOf(text);
+  if (i >= 0) pending.splice(i, 1);
+  else if (pending.length) pending.shift();
+  renderQueue();
+} exports.dropPending = dropPending;
+_stream.ev.onmessage = (e) => {
+  let evt;
+  try {
+    evt = JSON.parse(e.data);
+  } catch (e3) {
+    return;
+  }
+  if (evt.session && evt.session !== _state.sess) return;
+  exports.compH.pluginEmit("event", evt);
+  exports.compH.pluginEmit(evt.type, evt);
+  switch (evt.type) {
+    case "user_message":
+      lastUser = evt.text || lastUser;
+      dropPending(evt.text);
+      _chat.addUser.call(void 0, evt.has_image && !evt.text ? "[image]" : evt.has_image ? (evt.text || "") + "  [image]" : (evt.text || ""), evt.image_file ? "/api/image?name=" + encodeURIComponent(evt.image_file) : evt.has_image ? lastImgUrl : null);
+      lastImgUrl = null;
+      _chat.noteTurn.call(void 0, );
+      setRun(true);
+      break;
+    case "queued":
+      if (evt.text && pending.indexOf(evt.text) < 0) pending.push(evt.text);
+      renderQueue();
+      break;
+    case "title":
+      if (evt.title) {
+        exports.compH.applyTitle(evt.title);
+        if (_util.$.call(void 0, "hSes") && _state.sess !== "default") _util.$.call(void 0, "hSes").textContent = evt.title;
+        if (_util.$.call(void 0, "tbSe") && _state.sess !== "default") _util.$.call(void 0, "tbSe").textContent = evt.title;
+        _sessions.loadSessions.call(void 0, );
+      }
+      break;
+    case "notice":
+      _chat.addNotice.call(void 0, evt.text);
+      break;
+    case "reasoning":
+      setRun(true);
+      _chat.addRsn.call(void 0, evt.text);
+      break;
+    case "message":
+      setRun(true);
+      _chat.addAsst.call(void 0, evt.text);
+      break;
+    case "tool_call":
+      _chat.addTool.call(void 0, evt.name, evt.args);
+      break;
+    case "tool_result":
+      _chat.toolDone.call(void 0, evt.name, evt.error, evt.summary);
+      break;
+    case "subagent":
+      _chat.addSub.call(void 0, evt.idx, evt.kind, evt.text);
+      break;
+    case "permission":
+      _chat.addPerm.call(void 0, evt.id, evt.name, evt.args);
+      break;
+    case "permission_result":
+      {
+        const pc = document.querySelector(
+          '.pc[data-pid="' + evt.id + '"]',
+        );
+        if (pc) pc.remove();
+      }
+      break;
+    case "turn_end":
+      _chat.finishAsst.call(void 0, );
+      _chat.finishRsn.call(void 0, );
+      _chat.finishWork.call(void 0, );
+      _chat.stampTurn.call(void 0, );
+      setRun(false);
+      if (
+        _state.prefs.notify &&
+        window.Notification &&
+        Notification.permission === "granted"
+      ) {
+        try {
+          new Notification("piz", { body: "本轮已完成" });
+        } catch (e4) {}
+      }
+      if (_state.prefs.sound) {
+        try {
+          const AC = (window ).AudioContext || (window ).webkitAudioContext;
+          const ac = new AC();
+          const o = ac.createOscillator();
+          const g = ac.createGain();
+          o.frequency.value = 880;
+          g.gain.value = 0.04;
+          o.connect(g);
+          g.connect(ac.destination);
+          o.start();
+          o.stop(ac.currentTime + 0.08);
+        } catch (e5) {}
+      }
+      break;
+    case "status":
+      if (evt.cost !== undefined) exports.compH.setCost(evt.cost);
+      if (evt.pct !== undefined || evt.used !== undefined) {
+        exports.compH.setCtx(evt.pct, evt.used, evt.window);
+      }
+      exports.compH.setTurnMeta(evt);
+      if (evt.model) exports.compH.renderModel();
+      if (evt.think) exports.compH.applyThink(evt.think);
+      break;
+  }
+};
+// ---- 发送 ----
+(_util.$.call(void 0, "qClr") ).onclick = () => _slash.runSlash.call(void 0, { name: "/queue" }, "");
+(_util.$.call(void 0, "send") ).onclick = () => {
+  if (running && !(_util.$.call(void 0, "inp") ).value.trim()) {
+    fetch(
+      "/api/interrupt?" + _state.wsp + "session=" + encodeURIComponent(_state.sess),
+      { method: "POST" },
+    );
+  } else send();
+};
+ function toggleKeysHint() {
+  const el = _util.$.call(void 0, "keysHint");
+  if (!el) return;
+  if (!el.hidden) {
+    el.hidden = true;
+    el.innerHTML = "";
+    return;
+  }
+  el.hidden = false;
+  el.innerHTML =
+    "<div><kbd>/</kbd> 命令 · <kbd>@./</kbd> 文件 · <kbd>!</kbd> 本页命令</div>" +
+    "<div><kbd>j</kbd> 任务 · <kbd>u</kbd> 用量 · <kbd>g</kbd> 差异 · <kbd>l</kbd> 日志 · <kbd>c</kbd> 复制 · <kbd>s</kbd> 沙箱 · <kbd>?</kbd> 本卡</div>" +
+    "<div><kbd>Ctrl</kbd><kbd>K</kbd> 搜会话 · <kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>C</kbd> 复制回复</div>" +
+    "<div><kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>R</kbd> 重发 · <kbd>Ctrl</kbd><kbd>V</kbd> 贴图 · <kbd>Esc</kbd> 关</div>";
+} exports.toggleKeysHint = toggleKeysHint;
+(_util.$.call(void 0, "inp") ).addEventListener("keydown", (e) => {
+  if (
+    !e.isComposing &&
+    !e.ctrlKey &&
+    !e.metaKey &&
+    !e.altKey &&
+    !(_util.$.call(void 0, "inp") ).value &&
+    !_slash.slashOpen.call(void 0, )
+  ) {
+    if (e.key === "u" || e.key === "U") {
+      e.preventDefault();
+      _slash.runSlash.call(void 0, { name: "/usage" }, "");
+      return;
+    }
+    if (e.key === "j" || e.key === "J") {
+      e.preventDefault();
+      _slash.runSlash.call(void 0, { name: "/jobs" }, "");
+      return;
+    }
+    if (e.key === "d" || e.key === "D") {
+      e.preventDefault();
+      _slash.runSlash.call(void 0, { name: "/doctor" }, "");
+      return;
+    }
+    if (e.key === "g" || e.key === "G") {
+      e.preventDefault();
+      _slash.runSlash.call(void 0, { name: "/diff" }, "");
+      return;
+    }
+    if (e.key === "l" || e.key === "L") {
+      e.preventDefault();
+      _slash.runSlash.call(void 0, { name: "/log" }, "");
+      return;
+    }
+    if (e.key === "r" || e.key === "R") {
+      e.preventDefault();
+      _slash.runSlash.call(void 0, { name: "/redo" }, "");
+      return;
+    }
+    if (e.key === "c" || e.key === "C") {
+      e.preventDefault();
+      _slash.runSlash.call(void 0, { name: "/copy" }, "");
+      return;
+    }
+    if (e.key === "s" || e.key === "S") {
+      e.preventDefault();
+      const p = _util.$.call(void 0, "sbPill");
+      if (p) p.click();
+      else _slash.runSlash.call(void 0, { name: "/sandbox" }, "");
+      return;
+    }
+    if (e.key === "?") {
+      e.preventDefault();
+      toggleKeysHint();
+      return;
+    }
+  }
+  if (_slash.slashOpen.call(void 0, )) {
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      _slash.slashMove.call(void 0, 1);
+      return;
+    }
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      _slash.slashMove.call(void 0, -1);
+      return;
+    }
+    if (e.key === "Tab") {
+      e.preventDefault();
+      _slash.slashComplete.call(void 0, );
+      return;
+    }
+    if (e.key === "Enter") {
+      e.preventDefault();
+      _slash.slashPick.call(void 0, );
+      return;
+    }
+    if (e.key === "Escape") {
+      e.preventDefault();
+      _slash.hideSlash.call(void 0, );
+      return;
+    }
+  }
+  const inpEl = _util.$.call(void 0, "inp") ;
+  if (
+    e.key === "ArrowUp" &&
+    !e.shiftKey &&
+    inpEl.selectionStart === 0 &&
+    inpEl.value.indexOf("\n") < 0
+  ) {
+    e.preventDefault();
+    _store.histPrev.call(void 0, );
+    return;
+  }
+  if (
+    e.key === "ArrowDown" &&
+    !e.shiftKey &&
+    inpEl.selectionStart === inpEl.value.length &&
+    inpEl.value.indexOf("\n") < 0
+  ) {
+    e.preventDefault();
+    _store.histNext.call(void 0, );
+    return;
+  }
+  if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault();
+    send();
+  }
+});
+(_util.$.call(void 0, "inp") ).addEventListener("input", () => {
+  const kh = _util.$.call(void 0, "keysHint");
+  if (kh && !kh.hidden && (_util.$.call(void 0, "inp") ).value) {
+    kh.hidden = true;
+    kh.innerHTML = "";
+  }
+  _store.autosizeInp.call(void 0, );
+  _store.saveDraft.call(void 0, );
+  _slash.updateSlash.call(void 0, );
+  refreshSend();
+});
+let pendingImg = null;
+ function paintImgChip() {
+  let c = _util.$.call(void 0, "img-chip") ;
+  if (!c) {
+    c = document.createElement("div");
+    c.id = "img-chip";
+    c.className = "img-chip";
+    const box = _util.$.call(void 0, "inp").parentNode;
+    if (box) box.insertBefore(c, _util.$.call(void 0, "inp"));
+  }
+  if (!pendingImg) {
+    c.hidden = true;
+    c.innerHTML = "";
+    return;
+  }
+  c.hidden = false;
+  c.innerHTML = "<img alt=\"\" /><span>image</span><button type=button>✕</button>";
+  (c.querySelector("img") ).src = "data:" + pendingImg.mime + ";base64," + pendingImg.b64;
+  (c.querySelector("button") ).onclick = () => {
+    pendingImg = null;
+    paintImgChip();
+  };
+} exports.paintImgChip = paintImgChip;
+ async function blobToChatImage(blob) {
+  const bmp = await createImageBitmap(blob);
+  const max = 1600;
+  let w = bmp.width,
+    h = bmp.height;
+  if (w > max || h > max) {
+    const s = max / Math.max(w, h);
+    w = Math.round(w * s);
+    h = Math.round(h * s);
+  }
+  const cv = document.createElement("canvas");
+  cv.width = w;
+  cv.height = h;
+  cv.getContext("2d").drawImage(bmp, 0, 0, w, h);
+  const url = cv.toDataURL("image/jpeg", 0.85);
+  const i = url.indexOf(",");
+  return { mime: "image/jpeg", b64: url.slice(i + 1) };
+} exports.blobToChatImage = blobToChatImage;
+ async function attachClipboardImage() {
+  if (navigator.clipboard && (navigator.clipboard ).read) {
+    try {
+      const items = await (navigator.clipboard ).read();
+      for (const it of items) {
+        const type = (it.types || []).find((t) => String(t).indexOf("image/") === 0);
+        if (!type) continue;
+        const blob = await it.getType(type);
+        pendingImg = await blobToChatImage(blob);
+        paintImgChip();
+        return true;
+      }
+    } catch (e6) {}
+  }
+  return false;
+} exports.attachClipboardImage = attachClipboardImage;
+document.addEventListener("paste", async (ev) => {
+  const items = ev.clipboardData && ev.clipboardData.items;
+  if (!items) return;
+  for (const it of items) {
+    if (it.type && it.type.indexOf("image/") === 0) {
+      ev.preventDefault();
+      const blob = it.getAsFile();
+      if (!blob) return;
+      try {
+        pendingImg = await blobToChatImage(blob);
+        paintImgChip();
+      } catch (e7) {}
+      return;
+    }
+  }
+});
+ async function sendPlain(t) {
+  if (!t && !pendingImg) return;
+  lastUser = t || "(image)";
+  let img = pendingImg;
+  lastImgUrl = img || null;
+  pendingImg = null;
+  if (img && !exports.compH.getVision()) {
+    _chat.addNotice.call(void 0, "image dropped: model has no vision");
+    img = null;
+    if (!t) {
+      paintImgChip();
+      return false;
+    }
+  }
+  paintImgChip();
+  setRun(true);
+  let ok = false;
+  try {
+    const body = { text: t || "" };
+    if (img) {
+      body.image = img.b64;
+      body.mime = img.mime;
+    }
+    const r = await fetch(
+      "/api/chat?" + _state.wsp + "session=" + encodeURIComponent(_state.sess),
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      },
+    );
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || j.ok === false) {
+      _ui.showToast.call(void 0, j.error || "send failed");
+    } else ok = true;
+  } catch (e8) {
+    _ui.showToast.call(void 0, "send failed");
+  }
+  if (!ok) {
+    // 失败不吞草稿:文本塞回输入框,图也还回 pending。
+    setRun(false);
+    if (t && _util.$.call(void 0, "inp")) {
+      (_util.$.call(void 0, "inp") ).value = t;
+      _store.autosizeInp.call(void 0, );
+      refreshSend();
+    }
+    if (img && !pendingImg) {
+      pendingImg = img;
+      paintImgChip();
+    }
+  }
+  return ok;
+} exports.sendPlain = sendPlain;
+ async function send() {
+  _slash.hideSlash.call(void 0, );
+  _slash.hideBang.call(void 0, );
+  const t = (_util.$.call(void 0, "inp") ).value.trim();
+  if (!t && !pendingImg) return;
+  if (t.startsWith("/")) {
+    const space = t.indexOf(" ");
+    const cmd = space < 0 ? t : t.slice(0, space);
+    const arg = space < 0 ? "" : t.slice(space + 1);
+    const item = _slash.findSlash.call(void 0, cmd);
+    if (item) {
+      (_util.$.call(void 0, "inp") ).value = "";
+      (_util.$.call(void 0, "inp") ).style.height = "auto";
+      _store.clearDraft.call(void 0, );
+      _slash.hideSlash.call(void 0, );
+      refreshSend();
+      _store.pushHist.call(void 0, t);
+      await _slash.runSlash.call(void 0, item, arg);
+      return;
+    }
+  }
+  (_util.$.call(void 0, "inp") ).value = "";
+  (_util.$.call(void 0, "inp") ).style.height = "auto";
+  _store.clearDraft.call(void 0, );
+  _store.pushHist.call(void 0, t);
+  _slash.hideSlash.call(void 0, );
+  refreshSend();
+  await sendPlain(t);
+  // 桌面端发完回焦,接着打下一行;触屏不弹键盘。
+  if (window.matchMedia("(hover: hover)").matches) _util.$.call(void 0, "inp").focus();
+} exports.send = send;
+
+};
 __modules["main"] = function(module, exports, require) {
 "use strict"; function _interopRequireWildcard(obj) { if (obj && obj.__esModule) { return obj; } else { var newObj = {}; if (obj != null) { for (var key in obj) { if (Object.prototype.hasOwnProperty.call(obj, key)) { newObj[key] = obj[key]; } } } newObj.default = obj; return newObj; } } function _optionalChain(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }      "use strict";
       var _state = require('./state');
@@ -3449,6 +3973,7 @@ __modules["main"] = function(module, exports, require) {
       var _stream = require('./stream');
       var _slash = require('./slash');
       var _chat = require('./chat');
+      var _composer = require('./composer');
       function setScheme(v) {
         const map = { auto: "system", light: "light", dark: "dark", system: "system" };
         const next = map[String(v || "").trim()];
@@ -3803,7 +4328,7 @@ __modules["main"] = function(module, exports, require) {
         }
         if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "r") {
           e.preventDefault();
-          if (lastUser) sendPlain(lastUser);
+          if (_composer.getLastUser.call(void 0, )) _composer.sendPlain.call(void 0, _composer.getLastUser.call(void 0, ));
           else _ui.showToast.call(void 0, "没有可重发的输入");
           return;
         }
@@ -4320,507 +4845,9 @@ __modules["main"] = function(module, exports, require) {
       // ---- 渲染核心已迁 chat.ts ----
 
       // ---- SSE 已迁 stream.ts(ev.onmessage 于下方指派) ----
-      let running = false;
-      let lastUser = "";
-      let lastImgUrl = null;
-      let pending = [];
-      function refreshSend() {
-        const t = _util.$.call(void 0, "inp").value.trim();
-        const stop = running && !t;
-        _util.$.call(void 0, "send").textContent = stop ? "■" : "➤";
-        _util.$.call(void 0, "send").classList.toggle("stop", stop);
-        _util.$.call(void 0, "send").title = stop ? "停止" : running ? "接着发" : "发送";
-        const inp = _util.$.call(void 0, "inp");
-        if (inp) {
-          inp.placeholder = running
-            ? "接着发…"
-            : inp.dataset.ph || inp.placeholder;
-        }
-      }
-      function setRun(r) {
-        running = r;
-        refreshSend();
-        if (r) ensureActPoll();
-      }
-      let actTimer = 0;
-      function fmtActChip(a) {
-        const sec = a.ms < 10000 ? (a.ms / 1000).toFixed(1) : String(Math.round(a.ms / 1000));
-        const lim = a.limit_ms && !a.detached ? "/" + Math.round(a.limit_ms / 1000) + "s" : "";
-        const by = a.bytes ? " · " + _util.fmtTok.call(void 0, a.bytes) : "";
-        return (
-          '<span class="act-chip' +
-          (a.detached ? " bg" : "") +
-          '">' +
-          _util.esc.call(void 0, a.name || "job") +
-          " " +
-          sec +
-          "s" +
-          lim +
-          by +
-          (a.detached ? " · bg" : "") +
-          "</span>"
-        );
-      }
-      async function tickActivity() {
-        const el = _util.$.call(void 0, "actStrip");
-        if (!el) return 0;
-        try {
-          const r = await fetch("/api/activity");
-          const list = await r.json();
-          if (!list || !list.length) {
-            el.hidden = true;
-            el.innerHTML = "";
-            return 0;
-          }
-          el.hidden = false;
-          el.innerHTML = list.map(fmtActChip).join("");
-          return list.length;
-        } catch (e12) {
-          return 0;
-        }
-      }
-      function ensureActPoll() {
-        if (actTimer) return;
-        actTimer = setInterval(async () => {
-          const n = await tickActivity();
-          if (!n && !running) {
-            clearInterval(actTimer);
-            actTimer = 0;
-          }
-        }, 400);
-      }
-      function renderQueue() {
-        const box = _util.$.call(void 0, "qbox"),
-          items = _util.$.call(void 0, "qItems"),
-          count = _util.$.call(void 0, "qCount");
-        if (!box || !items) return;
-        if (!pending.length) {
-          box.hidden = true;
-          items.innerHTML = "";
-          return;
-        }
-        box.hidden = false;
-        count.textContent = pending.length === 1 ? "待发" : pending.length + " 条待发";
-        items.innerHTML = pending
-          .map((t) => '<div class="q-item">' + _util.esc.call(void 0, t) + "</div>")
-          .join("");
-      }
-      function dropPending(text) {
-        const i = pending.indexOf(text);
-        if (i >= 0) pending.splice(i, 1);
-        else if (pending.length) pending.shift();
-        renderQueue();
-      }
-      _stream.ev.onmessage = (e) => {
-        let evt;
-        try {
-          evt = JSON.parse(e.data);
-        } catch (e13) {
-          return;
-        }
-        if (evt.session && evt.session !== _state.sess) return;
-        pluginEmit("event", evt);
-        pluginEmit(evt.type, evt);
-        switch (evt.type) {
-          case "user_message":
-            lastUser = evt.text || lastUser;
-            dropPending(evt.text);
-            _chat.addUser.call(void 0, evt.has_image && !evt.text ? "[image]" : evt.has_image ? (evt.text || "") + "  [image]" : (evt.text || ""), evt.image_file ? "/api/image?name=" + encodeURIComponent(evt.image_file) : evt.has_image ? lastImgUrl : null);
-            lastImgUrl = null;
-            _chat.noteTurn.call(void 0, );
-            setRun(true);
-            break;
-          case "queued":
-            if (evt.text && pending.indexOf(evt.text) < 0) pending.push(evt.text);
-            renderQueue();
-            break;
-          case "title":
-            if (evt.title) {
-              curTitle = evt.title;
-              if (_util.$.call(void 0, "hSes") && _state.sess !== "default") _util.$.call(void 0, "hSes").textContent = evt.title;
-              if (_util.$.call(void 0, "tbSe") && _state.sess !== "default") _util.$.call(void 0, "tbSe").textContent = evt.title;
-              _sessions.loadSessions.call(void 0, );
-            }
-            break;
-          case "notice":
-            _chat.addNotice.call(void 0, evt.text);
-            break;
-          case "reasoning":
-            setRun(true);
-            _chat.addRsn.call(void 0, evt.text);
-            break;
-          case "message":
-            setRun(true);
-            _chat.addAsst.call(void 0, evt.text);
-            break;
-          case "tool_call":
-            _chat.addTool.call(void 0, evt.name, evt.args);
-            break;
-          case "tool_result":
-            _chat.toolDone.call(void 0, evt.name, evt.error, evt.summary);
-            break;
-          case "subagent":
-            addSub(evt.idx, evt.kind, evt.text);
-            break;
-          case "permission":
-            _chat.addPerm.call(void 0, evt.id, evt.name, evt.args);
-            break;
-          case "permission_result":
-            {
-              const pc = document.querySelector(
-                '.pc[data-pid="' + evt.id + '"]',
-              );
-              if (pc) pc.remove();
-            }
-            break;
-          case "turn_end":
-            _chat.finishAsst.call(void 0, );
-            _chat.finishRsn.call(void 0, );
-            _chat.finishWork.call(void 0, );
-            _chat.stampTurn.call(void 0, );
-            setRun(false);
-            if (
-              _state.prefs.notify &&
-              window.Notification &&
-              Notification.permission === "granted"
-            ) {
-              try {
-                new Notification("piz", { body: "本轮已完成" });
-              } catch (e14) {}
-            }
-            if (_state.prefs.sound) {
-              try {
-                const AC = window.AudioContext || window.webkitAudioContext;
-                const ac = new AC();
-                const o = ac.createOscillator();
-                const g = ac.createGain();
-                o.frequency.value = 880;
-                g.gain.value = 0.04;
-                o.connect(g);
-                g.connect(ac.destination);
-                o.start();
-                o.stop(ac.currentTime + 0.08);
-              } catch (e15) {}
-            }
-            break;
-          case "status":
-            if (evt.cost !== undefined) setCost(evt.cost);
-            if (evt.pct !== undefined || evt.used !== undefined) {
-              setCtx(evt.pct, evt.used, evt.window);
-            }
-            setTurnMeta(evt);
-            if (evt.model) renderModel();
-            if (evt.think) {
-              curThink = evt.think;
-              renderThink();
-            }
-            break;
-        }
-      };
-      // ---- 发送 ----
-      _util.$.call(void 0, "qClr").onclick = () => _slash.runSlash.call(void 0, { name: "/queue" }, "");
-      _util.$.call(void 0, "send").onclick = () => {
-        if (running && !_util.$.call(void 0, "inp").value.trim()) {
-          fetch(
-            "/api/interrupt?" + _state.wsp + "session=" + encodeURIComponent(_state.sess),
-            { method: "POST" },
-          );
-        } else send();
-      };
+      // ---- 发送态/SSE 路由/键盘/图片/send 已迁 composer.ts ----
       // ---- 斜杠目录/菜单/runSlash 已迁 slash.ts ----
       // ---- runSlash 已迁 slash.ts ----
-      function toggleKeysHint() {
-        const el = _util.$.call(void 0, "keysHint");
-        if (!el) return;
-        if (!el.hidden) {
-          el.hidden = true;
-          el.innerHTML = "";
-          return;
-        }
-        el.hidden = false;
-        el.innerHTML =
-          "<div><kbd>/</kbd> 命令 · <kbd>@./</kbd> 文件 · <kbd>!</kbd> 本页命令</div>" +
-          "<div><kbd>j</kbd> 任务 · <kbd>u</kbd> 用量 · <kbd>g</kbd> 差异 · <kbd>l</kbd> 日志 · <kbd>c</kbd> 复制 · <kbd>s</kbd> 沙箱 · <kbd>?</kbd> 本卡</div>" +
-          "<div><kbd>Ctrl</kbd><kbd>K</kbd> 搜会话 · <kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>C</kbd> 复制回复</div>" +
-          "<div><kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>R</kbd> 重发 · <kbd>Ctrl</kbd><kbd>V</kbd> 贴图 · <kbd>Esc</kbd> 关</div>";
-      }
-      _util.$.call(void 0, "inp").addEventListener("keydown", (e) => {
-        if (
-          !e.isComposing &&
-          !e.ctrlKey &&
-          !e.metaKey &&
-          !e.altKey &&
-          !_util.$.call(void 0, "inp").value &&
-          !_slash.slashOpen.call(void 0, )
-        ) {
-          if (e.key === "u" || e.key === "U") {
-            e.preventDefault();
-            _slash.runSlash.call(void 0, { name: "/usage" }, "");
-            return;
-          }
-          if (e.key === "j" || e.key === "J") {
-            e.preventDefault();
-            _slash.runSlash.call(void 0, { name: "/jobs" }, "");
-            return;
-          }
-          if (e.key === "d" || e.key === "D") {
-            e.preventDefault();
-            _slash.runSlash.call(void 0, { name: "/doctor" }, "");
-            return;
-          }
-          if (e.key === "g" || e.key === "G") {
-            e.preventDefault();
-            _slash.runSlash.call(void 0, { name: "/diff" }, "");
-            return;
-          }
-          if (e.key === "l" || e.key === "L") {
-            e.preventDefault();
-            _slash.runSlash.call(void 0, { name: "/log" }, "");
-            return;
-          }
-          if (e.key === "r" || e.key === "R") {
-            e.preventDefault();
-            _slash.runSlash.call(void 0, { name: "/redo" }, "");
-            return;
-          }
-          if (e.key === "c" || e.key === "C") {
-            e.preventDefault();
-            _slash.runSlash.call(void 0, { name: "/copy" }, "");
-            return;
-          }
-          if (e.key === "s" || e.key === "S") {
-            e.preventDefault();
-            const p = _util.$.call(void 0, "sbPill");
-            if (p) p.click();
-            else _slash.runSlash.call(void 0, { name: "/sandbox" }, "");
-            return;
-          }
-          if (e.key === "?") {
-            e.preventDefault();
-            toggleKeysHint();
-            return;
-          }
-        }
-        if (_slash.slashOpen.call(void 0, )) {
-          if (e.key === "ArrowDown") {
-            e.preventDefault();
-            _slash.slashMove.call(void 0, 1);
-            return;
-          }
-          if (e.key === "ArrowUp") {
-            e.preventDefault();
-            _slash.slashMove.call(void 0, -1);
-            return;
-          }
-          if (e.key === "Tab") {
-            e.preventDefault();
-            _slash.slashComplete.call(void 0, );
-            return;
-          }
-          if (e.key === "Enter") {
-            e.preventDefault();
-            _slash.slashPick.call(void 0, );
-            return;
-          }
-          if (e.key === "Escape") {
-            e.preventDefault();
-            _slash.hideSlash.call(void 0, );
-            return;
-          }
-        }
-        if (
-          e.key === "ArrowUp" &&
-          !e.shiftKey &&
-          _util.$.call(void 0, "inp").selectionStart === 0 &&
-          _util.$.call(void 0, "inp").value.indexOf("\n") < 0
-        ) {
-          e.preventDefault();
-          _store.histPrev.call(void 0, );
-          return;
-        }
-        if (
-          e.key === "ArrowDown" &&
-          !e.shiftKey &&
-          _util.$.call(void 0, "inp").selectionStart === _util.$.call(void 0, "inp").value.length &&
-          _util.$.call(void 0, "inp").value.indexOf("\n") < 0
-        ) {
-          e.preventDefault();
-          _store.histNext.call(void 0, );
-          return;
-        }
-        if (e.key === "Enter" && !e.shiftKey) {
-          e.preventDefault();
-          send();
-        }
-      });
-      _util.$.call(void 0, "inp").addEventListener("input", () => {
-        const kh = _util.$.call(void 0, "keysHint");
-        if (kh && !kh.hidden && _util.$.call(void 0, "inp").value) {
-          kh.hidden = true;
-          kh.innerHTML = "";
-        }
-        _store.autosizeInp.call(void 0, );
-        _store.saveDraft.call(void 0, );
-        _slash.updateSlash.call(void 0, );
-        refreshSend();
-      });
-      let pendingImg = null;
-      function paintImgChip() {
-        let c = _util.$.call(void 0, "img-chip");
-        if (!c) {
-          c = document.createElement("div");
-          c.id = "img-chip";
-          c.className = "img-chip";
-          const box = _util.$.call(void 0, "inp").parentNode;
-          if (box) box.insertBefore(c, _util.$.call(void 0, "inp"));
-        }
-        if (!pendingImg) {
-          c.hidden = true;
-          c.innerHTML = "";
-          return;
-        }
-        c.hidden = false;
-        c.innerHTML = "<img alt=\"\" /><span>image</span><button type=button>✕</button>";
-        c.querySelector("img").src = "data:" + pendingImg.mime + ";base64," + pendingImg.b64;
-        c.querySelector("button").onclick = () => {
-          pendingImg = null;
-          paintImgChip();
-        };
-      }
-      async function blobToChatImage(blob) {
-        const bmp = await createImageBitmap(blob);
-        const max = 1600;
-        let w = bmp.width,
-          h = bmp.height;
-        if (w > max || h > max) {
-          const s = max / Math.max(w, h);
-          w = Math.round(w * s);
-          h = Math.round(h * s);
-        }
-        const cv = document.createElement("canvas");
-        cv.width = w;
-        cv.height = h;
-        cv.getContext("2d").drawImage(bmp, 0, 0, w, h);
-        const url = cv.toDataURL("image/jpeg", 0.85);
-        const i = url.indexOf(",");
-        return { mime: "image/jpeg", b64: url.slice(i + 1) };
-      }
-      async function attachClipboardImage() {
-        if (navigator.clipboard && navigator.clipboard.read) {
-          try {
-            const items = await navigator.clipboard.read();
-            for (const it of items) {
-              const type = (it.types || []).find((t) => String(t).indexOf("image/") === 0);
-              if (!type) continue;
-              const blob = await it.getType(type);
-              pendingImg = await blobToChatImage(blob);
-              paintImgChip();
-              return true;
-            }
-          } catch (e16) {}
-        }
-        return false;
-      }
-      document.addEventListener("paste", async (ev) => {
-        const items = ev.clipboardData && ev.clipboardData.items;
-        if (!items) return;
-        for (const it of items) {
-          if (it.type && it.type.indexOf("image/") === 0) {
-            ev.preventDefault();
-            const blob = it.getAsFile();
-            if (!blob) return;
-            try {
-              pendingImg = await blobToChatImage(blob);
-              paintImgChip();
-            } catch (e17) {}
-            return;
-          }
-        }
-      });
-      async function sendPlain(t) {
-        if (!t && !pendingImg) return;
-        lastUser = t || "(image)";
-        let img = pendingImg;
-        lastImgUrl = img || null;
-        pendingImg = null;
-        if (img && !curVision) {
-          _chat.addNotice.call(void 0, "image dropped: model has no vision");
-          img = null;
-          if (!t) {
-            paintImgChip();
-            return;
-          }
-        }
-        paintImgChip();
-        setRun(true);
-        let ok = false;
-        try {
-          const body = { text: t || "" };
-          if (img) {
-            body.image = img.b64;
-            body.mime = img.mime;
-          }
-          const r = await fetch(
-            "/api/chat?" + _state.wsp + "session=" + encodeURIComponent(_state.sess),
-            {
-              method: "POST",
-              headers: { "content-type": "application/json" },
-              body: JSON.stringify(body),
-            },
-          );
-          const j = await r.json().catch(() => ({}));
-          if (!r.ok || j.ok === false) {
-            _ui.showToast.call(void 0, j.error || "send failed");
-          } else ok = true;
-        } catch (e18) {
-          _ui.showToast.call(void 0, "send failed");
-        }
-        if (!ok) {
-          // 失败不吞草稿:文本塞回输入框,图也还回 pending。
-          setRun(false);
-          if (t && _util.$.call(void 0, "inp")) {
-            _util.$.call(void 0, "inp").value = t;
-            _store.autosizeInp.call(void 0, );
-            refreshSend();
-          }
-          if (img && !pendingImg) {
-            pendingImg = img;
-            paintImgChip();
-          }
-        }
-        return ok;
-      }
-      async function send() {
-        _slash.hideSlash.call(void 0, );
-        _slash.hideBang.call(void 0, );
-        const t = _util.$.call(void 0, "inp").value.trim();
-        if (!t && !pendingImg) return;
-        if (t.startsWith("/")) {
-          const space = t.indexOf(" ");
-          const cmd = space < 0 ? t : t.slice(0, space);
-          const arg = space < 0 ? "" : t.slice(space + 1);
-          const item = _slash.findSlash.call(void 0, cmd);
-          if (item) {
-            _util.$.call(void 0, "inp").value = "";
-            _util.$.call(void 0, "inp").style.height = "auto";
-            _store.clearDraft.call(void 0, );
-            _slash.hideSlash.call(void 0, );
-            refreshSend();
-            _store.pushHist.call(void 0, t);
-            await _slash.runSlash.call(void 0, item, arg);
-            return;
-          }
-        }
-        _util.$.call(void 0, "inp").value = "";
-        _util.$.call(void 0, "inp").style.height = "auto";
-        _store.clearDraft.call(void 0, );
-        _store.pushHist.call(void 0, t);
-        _slash.hideSlash.call(void 0, );
-        refreshSend();
-        await sendPlain(t);
-        // 桌面端发完回焦,接着打下一行;触屏不弹键盘。
-        if (window.matchMedia("(hover: hover)").matches) _util.$.call(void 0, "inp").focus();
-      }
       // ---- 移动 sheet ----
       const sheet = _util.$.call(void 0, "sheet");
       function openSheet() {
@@ -4873,13 +4900,13 @@ __modules["main"] = function(module, exports, require) {
         document.body.classList.add("collapsed");
         try {
           localStorage.setItem("piz.sidebar", "1");
-        } catch (e19) {}
+        } catch (e12) {}
       };
       _util.$.call(void 0, "expBtn").onclick = () => {
         document.body.classList.remove("collapsed");
         try {
           localStorage.setItem("piz.sidebar", "0");
-        } catch (e20) {}
+        } catch (e13) {}
       };
       _util.$.call(void 0, "setBtn").onclick = () => openSettings();
       document.querySelector(".ch-brand").onclick = (e) => {
@@ -4944,8 +4971,8 @@ __modules["main"] = function(module, exports, require) {
             return fetch(u, opts);
           },
           send: (text) => {
-            if (running) return false;
-            sendPlain(String(text));
+            if (_composer.getRunning.call(void 0, )) return false;
+            _composer.sendPlain.call(void 0, String(text));
             return true;
           },
           ui: {
@@ -4997,7 +5024,7 @@ __modules["main"] = function(module, exports, require) {
                   "piz.plugin." + meta.id + "." + key,
                 );
                 return v === null ? fb : JSON.parse(v);
-              } catch (e21) {
+              } catch (e14) {
                 return fb;
               }
             },
@@ -5014,7 +5041,7 @@ __modules["main"] = function(module, exports, require) {
           while (owned.length) {
             try {
               owned.pop()();
-            } catch (e22) {}
+            } catch (e15) {}
           }
         };
         return Object.freeze(api);
@@ -5076,7 +5103,7 @@ __modules["main"] = function(module, exports, require) {
         while (pluginCleanups.length) {
           try {
             pluginCleanups.pop()();
-          } catch (e23) {}
+          } catch (e16) {}
         }
       });
       // ---- 初始化 ----
@@ -5110,7 +5137,7 @@ __modules["main"] = function(module, exports, require) {
           } else _chat.paintHistMore.call(void 0, );
           if (s.cost !== undefined) setCost(s.cost);
           if (s.pct !== undefined || s.used !== undefined) setCtx(s.pct, s.used, s.window);
-          if (s.running) setRun(true);
+          if (s.running) _composer.setRun.call(void 0, true);
           if (s.model) {
             curModel = s.model;
             renderModel();
@@ -5181,28 +5208,34 @@ __modules["main"] = function(module, exports, require) {
       // slash 解缠钩:聊天渲染/发送/模型态皆以箭函迟取,调用时方触
       Object.assign(_slash.slashH, {
         addUser: _chat.addUser, addAsst: _chat.addAsst, finishAsst: _chat.finishAsst, openSearch, setApproval,
-        attachClipboardImage, refreshSend, ensureActPoll, setSandbox, setThink,
-        asstEl: _chat.asstEl, findInThread: _chat.findInThread, setScheme, applySessionTitle, sendPlain, send,
-        renderQueue, clipText: _ui.clipText,
+        attachClipboardImage: _composer.attachClipboardImage, refreshSend: _composer.refreshSend, ensureActPoll: _composer.ensureActPoll, setSandbox, setThink,
+        asstEl: _chat.asstEl, findInThread: _chat.findInThread, setScheme, applySessionTitle, sendPlain: _composer.sendPlain, send: _composer.send,
+        renderQueue: _composer.renderQueue, clipText: _ui.clipText,
         getSandboxMode: () => sandboxMode,
         getThink: () => curThink,
         getWebFindQ: _chat.getWebFindQ,
         getCurModel: () => curModel,
         getCurTitle: () => curTitle,
         getVision: () => curVision,
-        getLastUser: () => lastUser,
+        getLastUser: _composer.getLastUser,
         approvalLabel: () => (APPROVALS.find((x) => x.id === approvalMode) || {}).label,
         setApprovalMode: (v) => { approvalMode = v === "read-only" ? "read-only" : v; setModeBtn(); },
         applySandboxLevel: (v) => { sandboxMode = v; setSandboxBtn(); },
         applyThinkLevel: (v) => { curThink = v; renderThink(); },
-        clearPending: () => { pending = []; },
+        clearPending: _composer.clearPending,
       });
       // chat 解缠钩:欢迎页/插件/授权/发送皆以箭函迟取
       Object.assign(_chat.chatH, {
-        hideWelcome, pluginEmit, setApproval, sendPlain,
-        getLastUser: () => lastUser,
-        setLastUser: (v) => { lastUser = v; },
+        hideWelcome, pluginEmit, setApproval, sendPlain: _composer.sendPlain,
+        getLastUser: _composer.getLastUser, setLastUser: _composer.setLastUser,
         getToolRenderer: (n) => toolRenderers.get(n),
+      });
+      // composer 解缠钩:模型簇与插件
+      Object.assign(_composer.compH, {
+        pluginEmit, setCost, setCtx, setTurnMeta, renderModel,
+        applyThink: (t) => { curThink = t; renderThink(); },
+        applyTitle: (t) => { curTitle = t; },
+        getVision: () => curVision,
       });
       _net.initServerAuth.call(void 0, );
       const probe = _net.rawFetch.call(void 0, "/api/state?" + _state.wsp + "session=" + encodeURIComponent(_state.sess), {
