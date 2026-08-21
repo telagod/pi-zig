@@ -295,7 +295,7 @@ var _util = require('./util');
     m;
   while ((m = re.exec(raw)) !== null) {
     if (m.index > last) out.push(mdInline(raw.slice(last, m.index)));
-    out.push("<pre><code>" + _util.esc.call(void 0, m[2]) + "</code></pre>");
+    out.push('<pre><button class="pre-cp" type="button" title="复制">⧉</button><code>' + _util.esc.call(void 0, m[2]) + "</code></pre>");
     last = m.index + m[0].length;
   }
   if (last < raw.length) out.push(mdInline(raw.slice(last)));
@@ -423,7 +423,7 @@ const AC = {
   let m;
   while ((m = re.exec(text))) {
     if (m.index > last) html += mdBlocks(text.slice(last, m.index));
-    html += "<pre><code>" + _util.esc.call(void 0, m[2].replace(/\n$/, "")) + "</code></pre>";
+    html += '<pre><button class="pre-cp" type="button" title="复制">⧉</button><code>' + _util.esc.call(void 0, m[2].replace(/\n$/, "")) + "</code></pre>";
     last = m.index + m[0].length;
   }
   if (last < text.length) html += mdBlocks(text.slice(last));
@@ -1159,7 +1159,7 @@ __modules["main"] = function(module, exports, require) {
             _render.segHtml.call(void 0, "scheme", [{ v: "light", l: "浅色" }, { v: "dark", l: "深色" }, { v: "system", l: "系统" }], _state.prefs.scheme) +
             "</div>" +
             '<div class="set-row"><div class="set-lab">强调色</div>' +
-            _render.segHtml.call(void 0, "accent", [{ v: "mono", l: "墨" }, { v: "blue", l: "蓝" }], _state.prefs.accent) +
+            _render.segHtml.call(void 0, "accent", [{ v: "mono", l: "墨" }, { v: "blue", l: "蓝" }, { v: "green", l: "苔" }, { v: "amber", l: "赭" }], _state.prefs.accent) +
             "</div>" +
             '<div class="set-row"><div class="set-lab">界面字号</div><input id="setFont" class="num-in" type="number" min="12" max="20" value="' +
             (_state.prefs.uiFont || 14) +
@@ -2255,13 +2255,36 @@ __modules["main"] = function(module, exports, require) {
       // ---- 渲染 ----
       const th = _util.$.call(void 0, "thread");
       let stick = true;
+      // 代码块复制:一次性委托(钮随 md.ts 的 <pre> 渲染;inspect 窗格同沾)
+      document.addEventListener("click", (e) => {
+        const b = e.target && e.target.closest ? e.target.closest(".pre-cp") : null;
+        if (!b) return;
+        const pre = b.parentElement;
+        const code = pre && pre.querySelector("code");
+        clipText(code ? code.textContent || "" : "", "已复制", "复制失败");
+      });
+      // 回到底部:非贴底且有溢出时现身
+      const toB = _util.$.call(void 0, "toBottom");
+      function updToBottom() {
+        const p = _util.$.call(void 0, "panes");
+        const overflow = p.scrollHeight - p.clientHeight > 40;
+        toB.hidden = stick || !overflow;
+      }
+      toB.onclick = () => {
+        const p = _util.$.call(void 0, "panes");
+        stick = true;
+        p.scrollTop = p.scrollHeight;
+        updToBottom();
+      };
       _util.$.call(void 0, "panes").addEventListener("scroll", () => {
         const p = _util.$.call(void 0, "panes");
         stick = p.scrollHeight - p.scrollTop - p.clientHeight < 80;
+        updToBottom();
       });
       function scrl() {
         if (replayQuiet) return;
         if (stick) _util.$.call(void 0, "panes").scrollTop = _util.$.call(void 0, "panes").scrollHeight;
+        updToBottom();
       }
       let replayQuiet = false;
       let webFindQ = "",

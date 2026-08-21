@@ -10,7 +10,7 @@ export function md(raw: string) {
     m;
   while ((m = re.exec(raw)) !== null) {
     if (m.index > last) out.push(mdInline(raw.slice(last, m.index)));
-    out.push("<pre><code>" + esc(m[2]) + "</code></pre>");
+    out.push('<pre><button class="pre-cp" type="button" title="复制">⧉</button><code>' + esc(m[2]) + "</code></pre>");
     last = m.index + m[0].length;
   }
   if (last < raw.length) out.push(mdInline(raw.slice(last)));
@@ -138,7 +138,7 @@ export function renderMd(src: string) {
   let m;
   while ((m = re.exec(text))) {
     if (m.index > last) html += mdBlocks(text.slice(last, m.index));
-    html += "<pre><code>" + esc(m[2].replace(/\n$/, "")) + "</code></pre>";
+    html += '<pre><button class="pre-cp" type="button" title="复制">⧉</button><code>' + esc(m[2].replace(/\n$/, "")) + "</code></pre>";
     last = m.index + m[0].length;
   }
   if (last < text.length) html += mdBlocks(text.slice(last));

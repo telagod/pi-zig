@@ -888,6 +888,31 @@
         overscroll-behavior: contain;
         position: relative;
       }
+      /* 回到底部:sticky 于滚动容器尾,非贴底时现身 */
+      #toBottom {
+        position: sticky;
+        bottom: 12px;
+        display: block;
+        margin: 6px auto 12px;
+        width: 34px;
+        height: 34px;
+        border-radius: 50%;
+        border: 1px solid var(--color-line);
+        background: var(--color-surface-raised);
+        color: var(--color-text-muted);
+        font-size: 15px;
+        line-height: 1;
+        cursor: pointer;
+        box-shadow: var(--shadow-md);
+        z-index: 5;
+      }
+      #toBottom:hover {
+        color: var(--color-accent);
+        border-color: var(--color-accent-bd);
+      }
+      #toBottom[hidden] {
+        display: none;
+      }
       #inspect[hidden] {
         display: none !important;
       }
@@ -1449,6 +1474,35 @@
         margin: 8px 0;
         white-space: pre-wrap;
         word-break: break-word;
+        position: relative;
+      }
+      /* 代码块复制钮:悬停/聚焦方现 */
+      .pre-cp {
+        position: absolute;
+        top: 6px;
+        right: 6px;
+        border: 1px solid var(--color-line);
+        border-radius: 6px;
+        background: var(--color-surface-raised);
+        color: var(--color-text-muted);
+        font-size: 11px;
+        line-height: 1.4;
+        padding: 2px 6px;
+        cursor: pointer;
+        opacity: 0;
+        transition: opacity 0.12s;
+      }
+      .a-msg pre:hover .pre-cp,
+      .insp-md pre:hover .pre-cp,
+      .pre-cp:focus-visible {
+        opacity: 1;
+      }
+      .insp-md pre {
+        position: relative;
+      }
+      .pre-cp:hover {
+        color: var(--color-accent);
+        border-color: var(--color-accent-bd);
       }
       .a-msg code {
         font: 12.5px var(--mono);
@@ -2562,6 +2616,88 @@
           --bd: #444c56;
           --logo: #e8eaed;
         }
+        html[data-color-scheme="system"][data-accent="blue"] {
+          --accent-primary: #8b9bb4;
+          --color-accent: #8b9bb4;
+          --color-accent-hover: #a8b4c8;
+          --color-accent-soft: #1c1e22;
+          --color-accent-bd: #3a4250;
+          --blue: #8b9bb4;
+          --blue2: #a8b4c8;
+          --soft: #1c1e22;
+          --bd: #3a4250;
+          --color-text-on-accent: #141414;
+        }
+        html[data-color-scheme="system"][data-accent="green"] {
+          --accent-primary: #8aa892;
+          --color-accent: #8aa892;
+          --color-accent-hover: #a3bda9;
+          --color-accent-soft: #1d221f;
+          --color-accent-bd: #3b4a41;
+          --blue: #8aa892;
+          --blue2: #a3bda9;
+          --soft: #1d221f;
+          --bd: #3b4a41;
+          --color-text-on-accent: #141414;
+        }
+        html[data-color-scheme="system"][data-accent="amber"] {
+          --accent-primary: #c2a06e;
+          --color-accent: #c2a06e;
+          --color-accent-hover: #d5bb8d;
+          --color-accent-soft: #22201a;
+          --color-accent-bd: #4d4331;
+          --blue: #c2a06e;
+          --blue2: #d5bb8d;
+          --soft: #22201a;
+          --bd: #4d4331;
+          --color-text-on-accent: #141414;
+        }
+      }
+      html[data-accent="green"] {
+        --accent-primary: #5d7a63;
+        --color-accent: #5d7a63;
+        --color-accent-hover: #77927d;
+        --color-accent-soft: #edf1ee;
+        --color-accent-bd: #c3cfc6;
+        --blue: #5d7a63;
+        --blue2: #77927d;
+        --soft: #edf1ee;
+        --bd: #c3cfc6;
+      }
+      html[data-color-scheme="dark"][data-accent="green"] {
+        --accent-primary: #8aa892;
+        --color-accent: #8aa892;
+        --color-accent-hover: #a3bda9;
+        --color-accent-soft: #1d221f;
+        --color-accent-bd: #3b4a41;
+        --blue: #8aa892;
+        --blue2: #a3bda9;
+        --soft: #1d221f;
+        --bd: #3b4a41;
+        --color-text-on-accent: #141414;
+      }
+      html[data-accent="amber"] {
+        --accent-primary: #a5855a;
+        --color-accent: #a5855a;
+        --color-accent-hover: #bfa077;
+        --color-accent-soft: #f4efe7;
+        --color-accent-bd: #ddd0ba;
+        --blue: #a5855a;
+        --blue2: #bfa077;
+        --soft: #f4efe7;
+        --bd: #ddd0ba;
+      }
+      html[data-color-scheme="dark"][data-accent="amber"] {
+        --accent-primary: #c2a06e;
+        --color-accent: #c2a06e;
+        --color-accent-hover: #d5bb8d;
+        --color-accent-soft: #22201a;
+        --color-accent-bd: #4d4331;
+        --blue: #c2a06e;
+        --blue2: #d5bb8d;
+        --soft: #22201a;
+        --bd: #4d4331;
+        --color-text-on-accent: #141414;
       }
       #overlay {
         display: none;

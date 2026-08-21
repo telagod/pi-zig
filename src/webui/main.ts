@@ -115,7 +115,7 @@
             segHtml("scheme", [{ v: "light", l: "浅色" }, { v: "dark", l: "深色" }, { v: "system", l: "系统" }], prefs.scheme) +
             "</div>" +
             '<div class="set-row"><div class="set-lab">强调色</div>' +
-            segHtml("accent", [{ v: "mono", l: "墨" }, { v: "blue", l: "蓝" }], prefs.accent) +
+            segHtml("accent", [{ v: "mono", l: "墨" }, { v: "blue", l: "蓝" }, { v: "green", l: "苔" }, { v: "amber", l: "赭" }], prefs.accent) +
             "</div>" +
             '<div class="set-row"><div class="set-lab">界面字号</div><input id="setFont" class="num-in" type="number" min="12" max="20" value="' +
             (prefs.uiFont || 14) +
@@ -1211,13 +1211,36 @@
       // ---- 渲染 ----
       const th = $("thread");
       let stick = true;
+      // 代码块复制:一次性委托(钮随 md.ts 的 <pre> 渲染;inspect 窗格同沾)
+      document.addEventListener("click", (e) => {
+        const b = e.target && e.target.closest ? e.target.closest(".pre-cp") : null;
+        if (!b) return;
+        const pre = b.parentElement;
+        const code = pre && pre.querySelector("code");
+        clipText(code ? code.textContent || "" : "", "已复制", "复制失败");
+      });
+      // 回到底部:非贴底且有溢出时现身
+      const toB = $("toBottom");
+      function updToBottom() {
+        const p = $("panes");
+        const overflow = p.scrollHeight - p.clientHeight > 40;
+        toB.hidden = stick || !overflow;
+      }
+      toB.onclick = () => {
+        const p = $("panes");
+        stick = true;
+        p.scrollTop = p.scrollHeight;
+        updToBottom();
+      };
       $("panes").addEventListener("scroll", () => {
         const p = $("panes");
         stick = p.scrollHeight - p.scrollTop - p.clientHeight < 80;
+        updToBottom();
       });
       function scrl() {
         if (replayQuiet) return;
         if (stick) $("panes").scrollTop = $("panes").scrollHeight;
+        updToBottom();
       }
       let replayQuiet = false;
       let webFindQ = "",
