@@ -1263,6 +1263,26 @@
         flex-direction: column;
         gap: 16px;
       }
+      /* 密度:紧凑 */
+      html[data-density="compact"] #thread {
+        gap: 9px;
+      }
+      html[data-density="compact"] .a-msg {
+        line-height: 1.55;
+      }
+      html[data-density="compact"] .u-bub {
+        padding: 6px 12px;
+      }
+      html[data-density="compact"] .tcall .bh {
+        padding: 4px 8px;
+      }
+      html[data-density="compact"] .think {
+        font-size: 12px;
+      }
+      /* 宽屏:内容列加宽 */
+      html[data-wide="1"] {
+        --p-content-max: 1080px;
+      }
       .hist-more {
         display: block;
         align-self: center;

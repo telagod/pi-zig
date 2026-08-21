@@ -22,6 +22,8 @@ __modules["state"] = function(module, exports, require) {
 
 
 
+
+
  const qp = new URLSearchParams(location.search); exports.qp = qp;
  const sess = exports.qp.get("session") || "default"; exports.sess = sess;
  const ws = decodeURIComponent(exports.qp.get("ws") || ""); exports.ws = ws;
@@ -34,6 +36,8 @@ const PREF_KEY = "piz.prefs";
   accent: "mono",
   accentPicked: false,
   uiFont: 14,
+  density: "cozy",
+  wide: false,
   notify: false,
   sound: false,
 }; exports.prefs = prefs;
@@ -2461,6 +2465,8 @@ __modules["main"] = function(module, exports, require) {
         const root = document.documentElement;
         root.dataset.colorScheme = _state.prefs.scheme || "dark";
         root.dataset.accent = _state.prefs.accent || "mono";
+        root.dataset.density = _state.prefs.density || "cozy";
+        root.dataset.wide = _state.prefs.wide ? "1" : "";
         const fs = (_state.prefs.uiFont || 14) + "px";
         root.style.setProperty("--ui-font-size", fs);
         root.style.setProperty("--text-base", fs);
@@ -2559,6 +2565,12 @@ __modules["main"] = function(module, exports, require) {
             '<div class="set-row"><div class="set-lab">强调色</div>' +
             _render.segHtml.call(void 0, "accent", [{ v: "mono", l: "墨" }, { v: "blue", l: "蓝" }, { v: "green", l: "苔" }, { v: "amber", l: "赭" }], _state.prefs.accent) +
             "</div>" +
+            '<div class="set-row"><div class="set-lab">密度</div>' +
+            _render.segHtml.call(void 0, "density", [{ v: "cozy", l: "舒适" }, { v: "compact", l: "紧凑" }], _state.prefs.density || "cozy") +
+            "</div>" +
+            '<div class="set-row"><div class="set-lab">宽屏<span class="set-hint">内容列加宽</span></div>' +
+            _render.segHtml.call(void 0, "wide", [{ v: "0", l: "窄" }, { v: "1", l: "宽" }], _state.prefs.wide ? "1" : "0") +
+            "</div>" +
             '<div class="set-row"><div class="set-lab">界面字号</div><input id="setFont" class="num-in" type="number" min="12" max="20" value="' +
             (_state.prefs.uiFont || 14) +
             '"></div></div>' +
@@ -2620,6 +2632,16 @@ __modules["main"] = function(module, exports, require) {
           _state.savePrefs.call(void 0, );
           applyScheme();
         };
+        _ui.bindSeg.call(void 0, "density", (v) => {
+          _state.prefs.density = v || "cozy";
+          _state.savePrefs.call(void 0, );
+          applyScheme();
+        });
+        _ui.bindSeg.call(void 0, "wide", (v) => {
+          _state.prefs.wide = v === "1";
+          _state.savePrefs.call(void 0, );
+          applyScheme();
+        });
         if (_util.$.call(void 0, "setSessModel"))
           _util.$.call(void 0, "setSessModel").onchange = async () => {
             await applySessionModel(_util.$.call(void 0, "setSessModel").value);

@@ -5,6 +5,8 @@ export interface Prefs {
   accent: string;
   accentPicked: boolean;
   uiFont: number;
+  density: string;
+  wide: boolean;
   notify: boolean;
   sound: boolean;
 }
@@ -21,6 +23,8 @@ export const prefs: Prefs = {
   accent: "mono",
   accentPicked: false,
   uiFont: 14,
+  density: "cozy",
+  wide: false,
   notify: false,
   sound: false,
 };

@@ -22,6 +22,8 @@
         const root = document.documentElement;
         root.dataset.colorScheme = prefs.scheme || "dark";
         root.dataset.accent = prefs.accent || "mono";
+        root.dataset.density = prefs.density || "cozy";
+        root.dataset.wide = prefs.wide ? "1" : "";
         const fs = (prefs.uiFont || 14) + "px";
         root.style.setProperty("--ui-font-size", fs);
         root.style.setProperty("--text-base", fs);
@@ -120,6 +122,12 @@
             '<div class="set-row"><div class="set-lab">强调色</div>' +
             segHtml("accent", [{ v: "mono", l: "墨" }, { v: "blue", l: "蓝" }, { v: "green", l: "苔" }, { v: "amber", l: "赭" }], prefs.accent) +
             "</div>" +
+            '<div class="set-row"><div class="set-lab">密度</div>' +
+            segHtml("density", [{ v: "cozy", l: "舒适" }, { v: "compact", l: "紧凑" }], prefs.density || "cozy") +
+            "</div>" +
+            '<div class="set-row"><div class="set-lab">宽屏<span class="set-hint">内容列加宽</span></div>' +
+            segHtml("wide", [{ v: "0", l: "窄" }, { v: "1", l: "宽" }], prefs.wide ? "1" : "0") +
+            "</div>" +
             '<div class="set-row"><div class="set-lab">界面字号</div><input id="setFont" class="num-in" type="number" min="12" max="20" value="' +
             (prefs.uiFont || 14) +
             '"></div></div>' +
@@ -181,6 +189,16 @@
           savePrefs();
           applyScheme();
         };
+        bindSeg("density", (v) => {
+          prefs.density = v || "cozy";
+          savePrefs();
+          applyScheme();
+        });
+        bindSeg("wide", (v) => {
+          prefs.wide = v === "1";
+          savePrefs();
+          applyScheme();
+        });
         if ($("setSessModel"))
           $("setSessModel").onchange = async () => {
             await applySessionModel($("setSessModel").value);
