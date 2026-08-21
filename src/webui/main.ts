@@ -7,6 +7,7 @@
       import { showToast, closeDlg, openDlg, askText, askYes, bindSeg, bindAuthPanel, dlgHooks } from "./ui";
       import { autosizeInp, saveDraft, restoreDraft, clearDraft, pushHist, histPrev, histNext } from "./store";
       import { closeMenus, openAt, loadWorkspaces, renderWsName, addProject, openWsMenu, sessionRow, openSessionMenu, loadSessions, act, sessData, sessHooks } from "./sessions";
+      import { ev, connectSSE } from "./stream";
       function setScheme(v) {
         const map = { auto: "system", light: "light", dark: "dark", system: "system" };
         const next = map[String(v || "").trim()];
@@ -1826,69 +1827,7 @@
         pre.textContent = text.length > 32000 ? text.slice(0, 32000) + "\n…" : text;
         return pre;
       }
-      // ---- SSE ----
-      // SSE:EventSource 无法带 Bearer header → fetch + ReadableStream 解析(kimi ws.ts 等价)
-      const ev = { onmessage: null };
-      let sseRetry = 0;
-      function handleSSELine(line) {
-        if (!line.startsWith("data: ")) return;
-        try {
-          ev.onmessage({ data: line.slice(6) });
-        } catch {}
-      }
-      async function connectSSE() {
-        try {
-          const res = await fetch("/api/events" + (wsp ? "?" + wsp : ""), {
-            headers: { accept: "text/event-stream" },
-          });
-          if (!res.ok || !res.body) {
-            sseDown();
-            sseRetry = Math.min(sseRetry + 1, 8);
-            setTimeout(connectSSE, 1000 * sseRetry);
-            return;
-          }
-          sseRetry = 0;
-          sseUp();
-          const reader = res.body.getReader();
-          const dec = new TextDecoder();
-          let buf = "";
-          for (;;) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            buf += dec.decode(value, { stream: true });
-            let idx;
-            while ((idx = buf.indexOf("\n\n")) !== -1) {
-              const chunk = buf.slice(0, idx);
-              buf = buf.slice(idx + 2);
-              for (const line of chunk.split("\n")) handleSSELine(line);
-            }
-          }
-        } catch {}
-        sseDown();
-        setTimeout(connectSSE, sseDelay());
-      }
-      // 断线反馈:横幅 + 指数退避(1.5s→3s→6s→10s 封顶),连上即复位。
-      let sseFails = 0;
-      function sseDelay() {
-        return Math.min(10000, 1500 * Math.pow(2, sseFails++));
-      }
-      function sseDown() {
-        let b = $("ssebar");
-        if (!b) {
-          b = document.createElement("div");
-          b.id = "ssebar";
-          b.textContent = "连接断开,重连中…";
-          document.body.appendChild(b);
-        }
-        b.classList.add("on");
-      }
-      function sseUp() {
-        if (sseFails || $("ssebar")) {
-          sseFails = 0;
-          const b = $("ssebar");
-          if (b) b.classList.remove("on");
-        }
-      }
+      // ---- SSE 已迁 stream.ts(ev.onmessage 于下方指派) ----
       let running = false;
       let lastUser = "";
       let lastImgUrl = null;

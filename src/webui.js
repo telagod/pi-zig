@@ -1409,6 +1409,75 @@ exports.searchQ.id = "searchQ";
 } exports.act = act;
 
 };
+__modules["stream"] = function(module, exports, require) {
+"use strict";Object.defineProperty(exports, "__esModule", {value: true}); function _optionalChain(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }// stream.ts —— SSE:fetch + ReadableStream 解析(EventSource 不能带 Bearer),断线横幅 + 指数退避重连。
+// 自 webui.js 切出;ev.onmessage 由 main 指派(消息路由属聊天层)。
+var _util = require('./util');
+var _state = require('./state');
+
+ const ev = { onmessage: null }; exports.ev = ev;
+let sseRetry = 0;
+ function handleSSELine(line) {
+  if (!line.startsWith("data: ")) return;
+  try {
+    _optionalChain([exports.ev, 'access', _ => _.onmessage, 'optionalCall', _2 => _2({ data: line.slice(6) })]);
+  } catch (e) {}
+} exports.handleSSELine = handleSSELine;
+ async function connectSSE() {
+  try {
+    const res = await fetch("/api/events" + (_state.wsp ? "?" + _state.wsp : ""), {
+      headers: { accept: "text/event-stream" },
+    });
+    if (!res.ok || !res.body) {
+      sseDown();
+      sseRetry = Math.min(sseRetry + 1, 8);
+      setTimeout(connectSSE, 1000 * sseRetry);
+      return;
+    }
+    sseRetry = 0;
+    sseUp();
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let idx;
+      while ((idx = buf.indexOf("\n\n")) !== -1) {
+        const chunk = buf.slice(0, idx);
+        buf = buf.slice(idx + 2);
+        for (const line of chunk.split("\n")) handleSSELine(line);
+      }
+    }
+  } catch (e2) {}
+  sseDown();
+  setTimeout(connectSSE, sseDelay());
+} exports.connectSSE = connectSSE;
+// 断线反馈:横幅 + 指数退避(1.5s→3s→6s→10s 封顶),连上即复位。
+let sseFails = 0;
+function sseDelay() {
+  return Math.min(10000, 1500 * Math.pow(2, sseFails++));
+}
+function sseDown() {
+  let b = _util.$.call(void 0, "ssebar");
+  if (!b) {
+    b = document.createElement("div");
+    b.id = "ssebar";
+    b.textContent = "连接断开,重连中…";
+    document.body.appendChild(b);
+  }
+  b.classList.add("on");
+}
+function sseUp() {
+  if (sseFails || _util.$.call(void 0, "ssebar")) {
+    sseFails = 0;
+    const b = _util.$.call(void 0, "ssebar");
+    if (b) b.classList.remove("on");
+  }
+}
+
+};
 __modules["main"] = function(module, exports, require) {
 "use strict"; function _interopRequireWildcard(obj) { if (obj && obj.__esModule) { return obj; } else { var newObj = {}; if (obj != null) { for (var key in obj) { if (Object.prototype.hasOwnProperty.call(obj, key)) { newObj[key] = obj[key]; } } } newObj.default = obj; return newObj; } } function _nullishCoalesce(lhs, rhsFn) { if (lhs != null) { return lhs; } else { return rhsFn(); } } function _optionalChain(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }      "use strict";
       var _state = require('./state');
@@ -1419,6 +1488,7 @@ __modules["main"] = function(module, exports, require) {
       var _ui = require('./ui');
       var _store = require('./store');
       var _sessions = require('./sessions');
+      var _stream = require('./stream');
       function setScheme(v) {
         const map = { auto: "system", light: "light", dark: "dark", system: "system" };
         const next = map[String(v || "").trim()];
@@ -3238,69 +3308,7 @@ __modules["main"] = function(module, exports, require) {
         pre.textContent = text.length > 32000 ? text.slice(0, 32000) + "\n…" : text;
         return pre;
       }
-      // ---- SSE ----
-      // SSE:EventSource 无法带 Bearer header → fetch + ReadableStream 解析(kimi ws.ts 等价)
-      const ev = { onmessage: null };
-      let sseRetry = 0;
-      function handleSSELine(line) {
-        if (!line.startsWith("data: ")) return;
-        try {
-          ev.onmessage({ data: line.slice(6) });
-        } catch (e15) {}
-      }
-      async function connectSSE() {
-        try {
-          const res = await fetch("/api/events" + (_state.wsp ? "?" + _state.wsp : ""), {
-            headers: { accept: "text/event-stream" },
-          });
-          if (!res.ok || !res.body) {
-            sseDown();
-            sseRetry = Math.min(sseRetry + 1, 8);
-            setTimeout(connectSSE, 1000 * sseRetry);
-            return;
-          }
-          sseRetry = 0;
-          sseUp();
-          const reader = res.body.getReader();
-          const dec = new TextDecoder();
-          let buf = "";
-          for (;;) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            buf += dec.decode(value, { stream: true });
-            let idx;
-            while ((idx = buf.indexOf("\n\n")) !== -1) {
-              const chunk = buf.slice(0, idx);
-              buf = buf.slice(idx + 2);
-              for (const line of chunk.split("\n")) handleSSELine(line);
-            }
-          }
-        } catch (e16) {}
-        sseDown();
-        setTimeout(connectSSE, sseDelay());
-      }
-      // 断线反馈:横幅 + 指数退避(1.5s→3s→6s→10s 封顶),连上即复位。
-      let sseFails = 0;
-      function sseDelay() {
-        return Math.min(10000, 1500 * Math.pow(2, sseFails++));
-      }
-      function sseDown() {
-        let b = _util.$.call(void 0, "ssebar");
-        if (!b) {
-          b = document.createElement("div");
-          b.id = "ssebar";
-          b.textContent = "连接断开,重连中…";
-          document.body.appendChild(b);
-        }
-        b.classList.add("on");
-      }
-      function sseUp() {
-        if (sseFails || _util.$.call(void 0, "ssebar")) {
-          sseFails = 0;
-          const b = _util.$.call(void 0, "ssebar");
-          if (b) b.classList.remove("on");
-        }
-      }
+      // ---- SSE 已迁 stream.ts(ev.onmessage 于下方指派) ----
       let running = false;
       let lastUser = "";
       let lastImgUrl = null;
@@ -3356,7 +3364,7 @@ __modules["main"] = function(module, exports, require) {
           el.hidden = false;
           el.innerHTML = list.map(fmtActChip).join("");
           return list.length;
-        } catch (e17) {
+        } catch (e15) {
           return 0;
         }
       }
@@ -3392,11 +3400,11 @@ __modules["main"] = function(module, exports, require) {
         else if (pending.length) pending.shift();
         renderQueue();
       }
-      ev.onmessage = (e) => {
+      _stream.ev.onmessage = (e) => {
         let evt;
         try {
           evt = JSON.parse(e.data);
-        } catch (e18) {
+        } catch (e16) {
           return;
         }
         if (evt.session && evt.session !== _state.sess) return;
@@ -3467,7 +3475,7 @@ __modules["main"] = function(module, exports, require) {
             ) {
               try {
                 new Notification("piz", { body: "本轮已完成" });
-              } catch (e19) {}
+              } catch (e17) {}
             }
             if (_state.prefs.sound) {
               try {
@@ -3481,7 +3489,7 @@ __modules["main"] = function(module, exports, require) {
                 g.connect(ac.destination);
                 o.start();
                 o.stop(ac.currentTime + 0.08);
-              } catch (e20) {}
+              } catch (e18) {}
             }
             break;
           case "status":
@@ -3694,7 +3702,7 @@ __modules["main"] = function(module, exports, require) {
             if (slashIdx >= slashItems.length) slashIdx = 0;
             pickKind = "file";
             renderSlash();
-          } catch (e21) {
+          } catch (e19) {
             hideSlash();
           }
         }, 60);
@@ -3895,7 +3903,7 @@ __modules["main"] = function(module, exports, require) {
                 addAsst("refreshed " + (j.refreshed || 0) + " provider(s), +" + (j.added || 0) + " models" +
                   (j.fail ? "\n" + j.fail + " provider(s) failed GET /models" : ""));
               }
-            } catch (e22) {
+            } catch (e20) {
               addAsst("cannot refresh models");
             }
             finishAsst();
@@ -3953,7 +3961,7 @@ __modules["main"] = function(module, exports, require) {
                   );
               }
               ensureActPoll();
-            } catch (e23) {
+            } catch (e21) {
               addAsst("cannot read activity");
             }
             finishAsst();
@@ -3967,7 +3975,7 @@ __modules["main"] = function(module, exports, require) {
               const cost = j.usd > 0 ? "  $" + Number(j.usd).toFixed(4) : "";
               const head = "usage  " + (j.lines || 0) + " turns  ↑" + _util.fmtTok.call(void 0, j.in || 0) + " ↓" + _util.fmtTok.call(void 0, j.out || 0) + cost;
               addAsst(j.tail ? head + "\n" + j.tail : head);
-            } catch (e24) {
+            } catch (e22) {
               addAsst("cannot read usage.jsonl");
             }
             finishAsst();
@@ -4017,7 +4025,7 @@ __modules["main"] = function(module, exports, require) {
               } else {
                 addAsst("no image on clipboard — use Ctrl+V");
               }
-            } catch (e25) {
+            } catch (e23) {
               addAsst("no image on clipboard — use Ctrl+V");
             }
             finishAsst();
@@ -4628,7 +4636,7 @@ __modules["main"] = function(module, exports, require) {
               paintImgChip();
               return true;
             }
-          } catch (e26) {}
+          } catch (e24) {}
         }
         return false;
       }
@@ -4643,7 +4651,7 @@ __modules["main"] = function(module, exports, require) {
             try {
               pendingImg = await blobToChatImage(blob);
               paintImgChip();
-            } catch (e27) {}
+            } catch (e25) {}
             return;
           }
         }
@@ -4683,7 +4691,7 @@ __modules["main"] = function(module, exports, require) {
           if (!r.ok || j.ok === false) {
             _ui.showToast.call(void 0, j.error || "send failed");
           } else ok = true;
-        } catch (e28) {
+        } catch (e26) {
           _ui.showToast.call(void 0, "send failed");
         }
         if (!ok) {
@@ -4784,13 +4792,13 @@ __modules["main"] = function(module, exports, require) {
         document.body.classList.add("collapsed");
         try {
           localStorage.setItem("piz.sidebar", "1");
-        } catch (e29) {}
+        } catch (e27) {}
       };
       _util.$.call(void 0, "expBtn").onclick = () => {
         document.body.classList.remove("collapsed");
         try {
           localStorage.setItem("piz.sidebar", "0");
-        } catch (e30) {}
+        } catch (e28) {}
       };
       _util.$.call(void 0, "setBtn").onclick = () => openSettings();
       document.querySelector(".ch-brand").onclick = (e) => {
@@ -4908,7 +4916,7 @@ __modules["main"] = function(module, exports, require) {
                   "piz.plugin." + meta.id + "." + key,
                 );
                 return v === null ? fb : JSON.parse(v);
-              } catch (e31) {
+              } catch (e29) {
                 return fb;
               }
             },
@@ -4925,7 +4933,7 @@ __modules["main"] = function(module, exports, require) {
           while (owned.length) {
             try {
               owned.pop()();
-            } catch (e32) {}
+            } catch (e30) {}
           }
         };
         return Object.freeze(api);
@@ -4987,7 +4995,7 @@ __modules["main"] = function(module, exports, require) {
         while (pluginCleanups.length) {
           try {
             pluginCleanups.pop()();
-          } catch (e33) {}
+          } catch (e31) {}
         }
       });
       // ---- 初始化 ----
@@ -5007,7 +5015,7 @@ __modules["main"] = function(module, exports, require) {
           _optionalChain([_util.$.call(void 0, "splash"), 'optionalAccess', _4 => _4.classList, 'access', _5 => _5.add, 'call', _6 => _6("hide")]);
           setTimeout(() => _optionalChain([_util.$.call(void 0, "splash"), 'optionalAccess', _7 => _7.remove, 'call', _8 => _8()]), 350);
         }, wait);
-        connectSSE();
+        _stream.connectSSE.call(void 0, );
         fetch("/api/state?" + _state.wsp + "session=" + encodeURIComponent(_state.sess))
         .then((r) => r.json())
         .then((s) => {
