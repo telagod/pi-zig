@@ -121,12 +121,17 @@ pub fn footerNeedsTwoRows(ident: FooterIdent, hint: ?[]const u8, width: usize) b
     return width >= 50;
 }
 
-/// pi 式双行:行 1 `cwd (branch)` muted,hint 右端 dimmest;
+/// pi 式双行:行 1 `cwd (branch) · session` muted,hint 右端 dimmest;
 /// 行 2 左 stats(ctx% 随占用变色、R cache),右 `model · think`。
 fn formatFooterPi(alloc: std.mem.Allocator, ident: FooterIdent, hint: ?[]const u8, width: usize) !FooterRows {
     const mu = theme().muted();
-    const place = if (ident.branch.len > 0)
+    // pi 式:`pwd (branch) • session`;session 非空才挂在 cwd 后
+    const place = if (ident.branch.len > 0 and ident.session.len > 0)
+        try std.fmt.allocPrint(alloc, "  {s}{s}{s} {s}({s}){s} · {s}{s}{s}", .{ ANSI_DIM, ident.cwd, ANSI_RESET, mu, ident.branch, ANSI_RESET, ANSI_DIM, ident.session, ANSI_RESET })
+    else if (ident.branch.len > 0)
         try std.fmt.allocPrint(alloc, "  {s}{s}{s} {s}({s}){s}", .{ ANSI_DIM, ident.cwd, ANSI_RESET, mu, ident.branch, ANSI_RESET })
+    else if (ident.session.len > 0)
+        try std.fmt.allocPrint(alloc, "  {s}{s}{s} · {s}{s}{s}", .{ ANSI_DIM, ident.cwd, ANSI_RESET, ANSI_DIM, ident.session, ANSI_RESET })
     else
         try std.fmt.allocPrint(alloc, "  {s}{s}{s}", .{ ANSI_DIM, ident.cwd, ANSI_RESET });
     defer alloc.free(place);
@@ -175,13 +180,17 @@ fn formatFooterPi(alloc: std.mem.Allocator, ident: FooterIdent, hint: ?[]const u
         cost_s = try std.fmt.allocPrint(alloc, " ${d:.3}{s}", .{ ident.cost orelse 0, sub_suffix });
     }
     const sep = ANSI_DIM ++ "  ·  " ++ ANSI_RESET;
+    // cache+CH 与 cost 分仓:降级时 cache/CH 先弃,cost 留到最后一级
+    var cache_ch = std.ArrayList(u8).empty;
+    defer cache_ch.deinit(alloc);
+    if (cache) |c| try cache_ch.appendSlice(alloc, std.mem.trimStart(u8, c, " "));
+    if (ch) |c| {
+        if (cache_ch.items.len > 0) try cache_ch.append(alloc, ' ');
+        try cache_ch.appendSlice(alloc, std.mem.trimStart(u8, c, " "));
+    }
     var econ = std.ArrayList(u8).empty;
     defer econ.deinit(alloc);
-    if (cache) |c| try econ.appendSlice(alloc, std.mem.trimStart(u8, c, " "));
-    if (ch) |c| {
-        if (econ.items.len > 0) try econ.append(alloc, ' ');
-        try econ.appendSlice(alloc, std.mem.trimStart(u8, c, " "));
-    }
+    if (cache_ch.items.len > 0) try econ.appendSlice(alloc, cache_ch.items);
     if (cost_s) |c| {
         if (econ.items.len > 0) try econ.append(alloc, ' ');
         try econ.appendSlice(alloc, std.mem.trimStart(u8, c, " "));
@@ -198,7 +207,7 @@ fn formatFooterPi(alloc: std.mem.Allocator, ident: FooterIdent, hint: ?[]const u
     }
     if (econ.items.len > 0) {
         if (need_sep) try stats_b.appendSlice(alloc, sep);
-        try stats_b.appendSlice(alloc, mu);
+        try stats_b.appendSlice(alloc, ANSI_DIM);
         try stats_b.appendSlice(alloc, econ.items);
         try stats_b.appendSlice(alloc, ANSI_RESET);
         need_sep = true;
@@ -208,33 +217,53 @@ fn formatFooterPi(alloc: std.mem.Allocator, ident: FooterIdent, hint: ?[]const u
     const stats = try stats_b.toOwnedSlice(alloc);
     defer alloc.free(stats);
     const right = if (ident.think.len > 0 and ident.sandbox.len > 0)
-        try std.fmt.allocPrint(alloc, "{s}{s}{s}{s} · {s} · {s}", .{ ANSI_BOLD, ident.model, ANSI_RESET, ANSI_DIM, ident.think, ident.sandbox })
+        try std.fmt.allocPrint(alloc, "{s}{s}{s}{s} · {s} · {s}", .{ ANSI_DIM, ident.model, ANSI_RESET, ANSI_DIM, ident.think, ident.sandbox })
     else if (ident.think.len > 0)
-        try std.fmt.allocPrint(alloc, "{s}{s}{s}{s} · {s}", .{ ANSI_BOLD, ident.model, ANSI_RESET, ANSI_DIM, ident.think })
+        try std.fmt.allocPrint(alloc, "{s}{s}{s}{s} · {s}", .{ ANSI_DIM, ident.model, ANSI_RESET, ANSI_DIM, ident.think })
     else if (ident.sandbox.len > 0)
-        try std.fmt.allocPrint(alloc, "{s}{s}{s}{s} · {s}", .{ ANSI_BOLD, ident.model, ANSI_RESET, ANSI_DIM, ident.sandbox })
+        try std.fmt.allocPrint(alloc, "{s}{s}{s}{s} · {s}", .{ ANSI_DIM, ident.model, ANSI_RESET, ANSI_DIM, ident.sandbox })
     else
-        try std.fmt.allocPrint(alloc, "{s}{s}{s}", .{ ANSI_BOLD, ident.model, ANSI_RESET });
+        try std.fmt.allocPrint(alloc, "{s}{s}{s}", .{ ANSI_DIM, ident.model, ANSI_RESET });
     defer alloc.free(right);
-    // 溢出降级:宁可丢 usage 明细(flow/cache/cost),不可丢模型名——
-    // 模型名是「我在跟说话」的唯一凭据,stats 长了它先没,客遂疑切换未生效。
+    // 溢出降级:模型名永不丢,usage 明细按 cache/CH → flow → cost 顺序弃——
+    // 曾一刀切丢 econ 全段,客之 $ 花费随 cache 俱没。
     var stats_use = stats;
-    // slim 串须活到 layoutFooter 之后:if 块内 defer 块尾即焚,曾致 UAF 乱码($e[2m)
+    // 降级串须活到 layoutFooter 之后:if 块内 defer 块尾即焚,曾致 UAF 乱码($e[2m)
     var slim_keep: ?[]u8 = null;
     defer if (slim_keep) |s| alloc.free(s);
-    if (visibleCols(stats) + 2 + visibleCols(right) > width and econ.items.len > 0) {
+    if (visibleCols(stats) + 2 + visibleCols(right) > width) {
         var slim = std.ArrayList(u8).empty;
         defer slim.deinit(alloc);
+        const need_sep0 = flow != null or cost_s != null;
         try slim.appendSlice(alloc, "  ");
-        if (flow) |f| {
-            try slim.appendSlice(alloc, f);
-            try slim.appendSlice(alloc, sep);
+        if (flow) |f| try slim.appendSlice(alloc, f);
+        // 第 1 级:去 cache/CH,保 cost 与 flow
+        if (cost_s) |c| {
+            if (flow != null) try slim.appendSlice(alloc, sep);
+            try slim.appendSlice(alloc, ANSI_DIM);
+            try slim.appendSlice(alloc, std.mem.trimStart(u8, c, " "));
+            try slim.appendSlice(alloc, ANSI_RESET);
         }
+        if (need_sep0) try slim.appendSlice(alloc, sep);
         try slim.appendSlice(alloc, ctx_s);
         slim_keep = try slim.toOwnedSlice(alloc);
-        if (visibleCols(slim_keep.?) + 2 + visibleCols(right) > width) {
-            stats_use = ctx_s; // 仍溢:只留 ctx
-        } else stats_use = slim_keep.?;
+        stats_use = slim_keep.?;
+        if (visibleCols(stats_use) + 2 + visibleCols(right) > width and flow != null) {
+            // 第 2 级:再去 flow,保 cost
+            slim.clearRetainingCapacity();
+            try slim.appendSlice(alloc, "  ");
+            if (cost_s) |c| {
+                try slim.appendSlice(alloc, ANSI_DIM);
+                try slim.appendSlice(alloc, std.mem.trimStart(u8, c, " "));
+                try slim.appendSlice(alloc, ANSI_RESET);
+                try slim.appendSlice(alloc, sep);
+            }
+            try slim.appendSlice(alloc, ctx_s);
+            alloc.free(slim_keep.?);
+            slim_keep = try slim.toOwnedSlice(alloc);
+            stats_use = slim_keep.?;
+        }
+        if (visibleCols(stats_use) + 2 + visibleCols(right) > width) stats_use = ctx_s;
     }
     const row2 = try layoutFooter(alloc, stats_use, right, width);
     return .{ .primary = row1, .secondary = row2 };
@@ -254,7 +283,8 @@ pub fn formatFooterRows(alloc: std.mem.Allocator, ident: FooterIdent, hint: ?[]c
     const model_s = if (ident.model.len == 0)
         try alloc.dupe(u8, "")
     else
-        try std.fmt.allocPrint(alloc, "{s}{s}{s}", .{ ANSI_BOLD, ident.model, ANSI_RESET });
+        // pi 式:footer 一色全 dim,model 不另加粗(识别凭据靠位置,不靠色)
+        try std.fmt.allocPrint(alloc, "{s}{s}{s}", .{ ANSI_DIM, ident.model, ANSI_RESET });
     defer alloc.free(model_s);
     const think_s = if (ident.think.len == 0)
         try alloc.dupe(u8, "")

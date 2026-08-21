@@ -19,6 +19,7 @@ import {
   applyThink, applyTitle, renderModel, setCost, setCtx, setTurnMeta, getVision,
 } from "./model";
 import { pluginEmit } from "./plugins";
+import { refreshJobs } from "./jobs";
 
 
 let running = false;
@@ -68,10 +69,11 @@ function fmtActChip(a: any) {
 }
 async function tickActivity() {
   const el = $("actStrip");
-  if (!el) return 0;
   try {
     const r = await fetch("/api/activity");
     const list = await r.json();
+    refreshJobs(list);
+    if (!el) return 0;
     if (!list || !list.length) {
       el.hidden = true;
       el.innerHTML = "";

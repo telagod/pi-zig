@@ -866,6 +866,12 @@
         background: var(--color-surface-sunken);
         color: var(--color-text);
       }
+      /* display:flex 的类会压过 UA 的 [hidden],这里显式还原 */
+      .ib[hidden],
+      .act-strip[hidden],
+      .jobs-badge[hidden] {
+        display: none;
+      }
       /* ==== 聊天区 ==== */
       #stage {
         flex: 1;
@@ -1179,40 +1185,6 @@
         font: 14px/1.55 var(--sans);
         color: var(--color-text);
         margin-bottom: 12px;
-      }
-      .sub-log {
-        margin: 8px 0 4px;
-        padding: 4px 0 4px 2px;
-      }
-      .sub-i {
-        display: flex;
-        align-items: baseline;
-        gap: 8px;
-        font: 12px/1.45 var(--sans);
-        color: var(--color-text-faint);
-        padding: 2px 0;
-      }
-      .sub-idx {
-        flex: none;
-        min-width: 1.2em;
-        color: var(--color-text-muted);
-        font-variant-numeric: tabular-nums;
-      }
-      .sub-k {
-        flex: none;
-        color: var(--color-text-muted);
-      }
-      .sub-i.tool_failed .sub-k {
-        color: var(--color-danger);
-      }
-      .sub-i.finished .sub-k {
-        color: var(--color-success);
-      }
-      .sub-t {
-        min-width: 0;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
       }
       #inspBd .insp-wait {
         flex: 1;
@@ -2318,6 +2290,72 @@
       }
       .mi:hover {
         background: var(--color-surface-sunken);
+      }
+      /* 后台活动触发钮+弹层(借 dsh ui-jobs 之形) */
+      .jobs-badge {
+        position: absolute;
+        top: -2px;
+        right: -4px;
+        min-width: 14px;
+        height: 14px;
+        padding: 0 3px;
+        border-radius: 7px;
+        background: var(--color-accent, #4d6bfe);
+        color: #fff;
+        font-size: 10px;
+        line-height: 14px;
+        text-align: center;
+        font-variant-numeric: tabular-nums;
+      }
+      #hJobs {
+        position: relative;
+      }
+      .jobs-pop {
+        top: 46px;
+        right: 12px;
+        width: min(320px, calc(100vw - 24px));
+        max-height: 60vh;
+        overflow: auto;
+        font-size: 12px;
+      }
+      .jr {
+        display: flex;
+        align-items: baseline;
+        gap: 7px;
+        padding: 5px 8px;
+        border-radius: var(--radius-sm);
+        color: var(--color-text);
+      }
+      .jr:hover {
+        background: var(--color-surface-sunken);
+      }
+      .jr.bg {
+        opacity: 0.65;
+      }
+      .jr-g {
+        flex: none;
+        color: var(--color-accent, #4d6bfe);
+        font-size: 11px;
+      }
+      .jr-n {
+        flex: none;
+        max-width: 34%;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .jr-d {
+        min-width: 0;
+        flex: 1;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        color: var(--color-text-muted);
+      }
+      .jr-t {
+        flex: none;
+        color: var(--color-text-faint);
+        font-variant-numeric: tabular-nums;
       }
       .mi.danger {
         color: var(--color-danger);

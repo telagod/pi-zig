@@ -141,6 +141,14 @@ pub const App = struct {
     } = .{},
     /// 会话起始时刻(ns,状态栏 t/s)
     start_ns: i128,
+    /// !cmd / !!cmd:bash 在独立线程跑,完成投槽,主循环 on_tick 消费——
+    /// 主线程不再同步等 bash(sleep 12 曾把 TUI 冻住秒级)。
+    bang: struct {
+        done: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+        /// 待发「!cmd + Output」消息(page_allocator 所有,主循环消费后 free)
+        msg: ?[]const u8 = null,
+        mutex: std.Io.Mutex = .init,
+    } = .{},
 
     /// 队列消息入队(主线程调用)。失败须告诉用户,否则排队消息会无声消失。
     pub fn enqueue(self: *App, line: []const u8) bool {
@@ -496,7 +504,8 @@ fn mergeModelsSync(app: *App) void {
     if (added > 0 or fail > 0) {
         const msg = std.fmt.allocPrint(app.alloc, "模型表已同步: +{d}{s}", .{ added, if (fail > 0) "(有供应商取败)" else "" }) catch return;
         defer app.alloc.free(msg);
-        tuiNote(app, "\x1b[2m", msg);
+        // 极简:同步是内部事务,打 stderr 不入 transcript(pi 式:启动细则 console) 
+        std.debug.print("{s}\n", .{msg});
     }
 }
 
@@ -574,7 +583,9 @@ fn tuiOnSubagent(ctx: ?*anyopaque, idx: usize, kind: agentmod.SubagentEvent, tex
         else => {},
     }
     const app: *App = @ptrCast(@alignCast(ctx.?));
-    const flow_kind = switch (kind) {
+    // 情报归卡(workflow 折叠卡内有 sub 进度),不再刷 transcript 行——
+    // 【pi-subagents 插件式】活动收敛到 Working 区摘要行,对话流保持纯净。
+    const flow_kind: []const u8 = switch (kind) {
         .tool_start => "tool_start",
         .tool_done => "tool_done",
         .tool_failed => "tool_failed",
@@ -582,28 +593,16 @@ fn tuiOnSubagent(ctx: ?*anyopaque, idx: usize, kind: agentmod.SubagentEvent, tex
         .finished => "finished",
         else => "",
     };
-    if (flow_kind.len > 0 and app.tui.applyFlowEvent(idx, flow_kind, text)) return;
-    const tag = switch (kind) {
-        .tool_start => "tool",
-        .tool_done => "ok",
-        .tool_failed => "err",
-        .notice => "piz",
-        .finished => "done",
-        else => "-",
-    };
-    // 栈缓冲而非 app.alloc:32 路 subagent 并发调这个回调,而 app.alloc 是
-    // ArenaAllocator —— 它不是线程安全的。clampUtf8 保证不切断多字节字符。
-    const clipped = util.clampUtf8(text, 100);
-    var line: [224]u8 = undefined;
-    const s = std.fmt.bufPrint(&line, "[sub {d}] {s} {s}", .{ idx, tag, clipped }) catch return;
-    const color = if (kind == .tool_failed) "\x1b[31m" else "\x1b[2m";
-    // appendLine 自己有锁(tui.zig),行不会交错
-    tuiNote(app, color, s);
+    if (flow_kind.len > 0) {
+        // text 仅服务 flow 卡;未入卡则随 activity 详情行落账,不刷转录
+        _ = app.tui.applyFlowEvent(idx, flow_kind, text);
+    }
 }
 
 // worker/权限/提交群已拆 app_worker.zig(评审 P2 末刀);再导出保接线零改。
 const tuiOnRequirePermission = app_worker.tuiOnRequirePermission;
 const tuiOnPermKey = app_worker.tuiOnPermKey;
+const tuiOnTick = app_worker.tuiOnTick;
 const onSubmit = app_worker.onSubmit;
 pub const spawnWorker = app_worker.spawnWorker;
 const onAbort = app_worker.onAbort;
@@ -763,12 +762,12 @@ pub fn runInteractive(alloc: std.mem.Allocator, cfg: *cfgmod.Config, cwd: []cons
     showWelcome(&app, loaded.len);
     replayTranscript(&tui, loaded);
     if (loaded.len == 0 and opts.session_id == null and !opts.continue_session) {
-        // 新会话起手若有旧事可续,注一行引路——「上回会话不见」之惑多起于默认新开
+        // 新会话起手若有旧事可续,注一行引路(pi 极简:一句 dim,不摊两行)
         if (sessionmod.Session.findLatest(alloc, abs_cwd) catch null) |prev| {
             var p = prev;
             defer p.deinit();
             if (!std.mem.eql(u8, p.path, sess.path)) {
-                tuiNote(&app, "\x1b[2m", "new session · piz -c 续载上次,/sessions 拣选");
+                tuiNote(&app, "\x1b[2m", "new session · piz -c 续载上次");
             }
         }
     }
@@ -780,6 +779,7 @@ pub fn runInteractive(alloc: std.mem.Allocator, cfg: *cfgmod.Config, cwd: []cons
         .on_detach = onDetach,
         .on_perm = tuiOnPermKey,
         .on_paint = tuiOnPaint,
+        .on_tick = tuiOnTick,
         .on_think = tuiOnThink,
         .on_copy = tuiOnCopy,
         .on_sandbox = tuiOnSandbox,

@@ -118,7 +118,7 @@ fn toolElapsedMs(meta: ToolMeta, now_ms: i64) i64 {
     return meta.elapsed_ms;
 }
 
-fn formatToolStatus(buf: []u8, meta: ToolMeta, now_ms: i64) []const u8 {
+fn formatToolStatus(buf: []u8, meta: ToolMeta, now_ms: i64, frame_ms: i64) []const u8 {
     const outcome: []const u8 = switch (meta.status) {
         .running => "running",
         .ok => "ok",
@@ -129,7 +129,8 @@ fn formatToolStatus(buf: []u8, meta: ToolMeta, now_ms: i64) []const u8 {
     const ink = theme().fgStatus(paintStatus(meta.status));
     const ink_end: []const u8 = if (ink.len > 0) ANSI_RESET else "";
     if (meta.status == .running) {
-        return std.fmt.bufPrint(buf, "{s} {s}", .{ outcome, et }) catch outcome;
+        // pi 式:卡内转圈(⠋ Running...);帧取 now_ms 同参,与活动区同速
+        return std.fmt.bufPrint(buf, "{s}{s} {s}", .{ activity.spinnerFrame(frame_ms), outcome, et }) catch outcome;
     }
     return std.fmt.bufPrint(buf, "{s}{s}{s} {s} {d}ln", .{ ink, outcome, ink_end, et, meta.lines }) catch outcome;
 }
@@ -153,7 +154,7 @@ pub fn flowGoalPreview(args: []const u8) []const u8 {
 
 fn toolTitle(meta: ToolMeta, buf: []u8, now_ms: i64) []const u8 {
     var sb: [64]u8 = undefined;
-    const status = formatToolStatus(&sb, meta, now_ms);
+    const status = formatToolStatus(&sb, meta, now_ms, now_ms);
     if (meta.preview.len == 0) {
         return std.fmt.bufPrint(buf, "{s}{s}{s}  {s}", .{
             ANSI_BOLD, meta.name, ANSI_RESET, status,
@@ -865,4 +866,27 @@ test "emitComposer splits hard lines" {
     try emitComposer(&aw2.writer, "l1\nl2", 20, 1, 1);
     try t.expect(std.mem.indexOf(u8, aw2.written(), "l1") == null);
     try t.expect(std.mem.indexOf(u8, aw2.written(), "l2") != null);
+}
+
+test "formatToolStatus: running spinner vs settled" {
+    const t = std.testing;
+    const el: []u8 = &.{};
+    const body = std.array_list.Managed(u8).init(t.allocator);
+    defer body.deinit();
+    const running = ToolMeta{ .name = el, .preview = el, .status = .running, .start_ms = 123000, .bytes = 0, .lines = 0, .elapsed_ms = 0, .folded = true, .body = body };
+    var b1: [64]u8 = undefined;
+    // 同一毫秒戳 → 同一帧;不同戳 → 帧在变(⠋ 族)
+    const s1 = formatToolStatus(&b1, running, 123900, 123900);
+    try t.expect(std.mem.indexOf(u8, s1, "running") != null);
+    try t.expect(std.mem.indexOf(u8, s1, "0.9s") != null);
+    const frame1 = s1[0..3];
+    var b2: [64]u8 = undefined;
+    const s2 = formatToolStatus(&b2, running, 124000, 124000);
+    try t.expect(!std.mem.eql(u8, frame1, s2[0..3]));
+    const settled = ToolMeta{ .name = el, .preview = el, .status = .ok, .bytes = 0, .lines = 5, .elapsed_ms = 100, .folded = true, .body = body };
+    var b3: [64]u8 = undefined;
+    const s3 = formatToolStatus(&b3, settled, 0, 0);
+    try t.expect(std.mem.indexOf(u8, s3, "ok") != null);
+    try t.expect(std.mem.indexOf(u8, s3, "0.1s") != null);
+    try t.expect(std.mem.indexOf(u8, s3, "5ln") != null);
 }

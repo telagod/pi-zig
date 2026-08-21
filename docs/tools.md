@@ -440,7 +440,7 @@ spawn 的进程一起收掉（子进程同样起成独立进程组）。
 
 子 agent 跑在本进程的 **8 线程 worker 池**里，不再每人一条 OS 线程，也不再默认 spawn 独立 piz 进程。两个收益：
 
-**中间过程可见。** 子 agent 的每次工具调用、每条引擎告知都通过 `on_subagent` 回调实时转发给父 agent。`workflow` 在 TUI / WebUI 是一截节点轨，事件写进对应节点；独立 `task` 仍显示成 `[sub 3] ⚙ bash`。`-o jsonl` 输出 `{"type":"subagent","task":"3","kind":"tool_start","text":"bash"}`。子进程路径下委派是纯黑盒：父 agent `join()` 干等，只能在结束时拿到一坨文本。实测 3 路委派进程内给出 9 条事件，子进程 0 条。
+**中间过程可见。** 子 agent 的每次工具调用、每条引擎告知都通过 `on_subagent` 回调实时转发给父 agent。`workflow` 在 TUI / WebUI 是一截节点轨，事件写进对应节点；独立 `task` 不再刷 `[sub N]` 行——按 pi-subagents 插件式做法收敛为输入框上方 Working 区的一行摘要（`● 名字 · 工具 · 12s`），对话流保持纯净；活动同时落入 `/jobs` 与 webui 活动条。`-o jsonl` 输出 `{"type":"subagent","task":"3","kind":"tool_start","text":"bash"}`。子进程路径下委派是纯黑盒：父 agent `join()` 干等，只能在结束时拿到一坨文本。实测 3 路委派进程内给出 9 条事件，子进程 0 条。
 
 **委派开销降一半。** 省掉进程启动、配置重读、连接池重建。实测（零延迟 mock，只剩 piz 自身开销）：
 
@@ -491,7 +491,7 @@ spawn 的进程一起收掉（子进程同样起成独立进程组）。
 
 `plugins` / `tools` 与 `task` 相同：默认去掉委派工具，可用白名单再收紧。长驻 agent 空闲时不占线程，32 个打开的槽位共享 8 个 worker。
 
-**两个读者，两条通道。** `read_agent` 只返回终态（`turn_done` / `failed` / `notice`），逐条工具调用被过滤掉 —— 那对父 agent 的决策没有价值，进上下文只是烧 token。进度仍然收着，走 `on_subagent` 回调显示给**人**看（`workflow` 进节点轨，独立 `task` 仍是 `[sub 1] ⚙ bash`）。codex 也是这样分的：它的细粒度事件只进 UI 与 rollout，进父 agent 模型上下文的唯一东西是子 agent 终止时的一条摘要（`session_prefix.rs`，上限 1000 token）。
+**两个读者，两条通道。** `read_agent` 只返回终态（`turn_done` / `failed` / `notice`），逐条工具调用被过滤掉 —— 那对父 agent 的决策没有价值，进上下文只是烧 token。进度仍然收着，走 `on_subagent` 回调显示给**人**看（`workflow` 进节点轨，独立 `task` 则入 Working 区摘要行与活动条；TUI/WebUI 均不刷对话流）。codex 也是这样分的：它的细粒度事件只进 UI 与 rollout，进父 agent 模型上下文的唯一东西是子 agent 终止时的一条摘要（`session_prefix.rs`，上限 1000 token）。
 
 **同时打开上限 32 个，跑完不等于释放** —— 完成的 agent 仍占槽位直到 `close_agent`。这是有意的：父 agent 可能还要 `send_agent` 让它继续，提前回收就丢了上下文。
 

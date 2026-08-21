@@ -54,6 +54,8 @@ const MailCtx = struct {
     reg: *agentsmod.Registry,
     entry: *agentsmod.Entry,
     parent_cbs: agentmod.AgentCallbacks,
+    /// 本轮的 activity 句柄(pi-subagents 式「agent · running · tool xxx · 12s」实时详情)
+    act: activity.Handle = .none,
 
     fn toHuman(self: *MailCtx, kind: agentmod.SubagentEvent, text: []const u8) void {
         const f = self.parent_cbs.on_subagent orelse return;
@@ -64,17 +66,20 @@ const MailCtx = struct {
         const self: *MailCtx = @ptrCast(@alignCast(ctx.?));
         _ = args;
         self.reg.post(self.entry, .progress, name);
+        self.act.detail(name);
         self.toHuman(.tool_start, name);
     }
     fn onToolEnd(ctx: ?*anyopaque, name: []const u8, is_error: bool, summary: []const u8) anyerror!void {
         const self: *MailCtx = @ptrCast(@alignCast(ctx.?));
         _ = summary;
         if (is_error) self.reg.post(self.entry, .progress, name);
+        self.act.detail("");
         self.toHuman(if (is_error) .tool_failed else .tool_done, name);
     }
     fn onNotice(ctx: ?*anyopaque, text: []const u8) anyerror!void {
         const self: *MailCtx = @ptrCast(@alignCast(ctx.?));
         self.reg.post(self.entry, .notice, text);
+        self.act.detail(text);
         self.toHuman(.notice, text);
     }
     fn onAbort(ctx: ?*anyopaque) bool {
@@ -117,7 +122,8 @@ fn runTurn(entry: *agentsmod.Entry) void {
     reg.setStatus(entry, .running);
     entry.agent.aborted.store(false, .release);
 
-    const act = activity.begin(.subagent, "agent", text, TASK_TIMEOUT_MS);
+    const act = activity.begin(.subagent, entry.name, text, TASK_TIMEOUT_MS);
+    mail.act = act;
     const result = entry.agent.send(text) catch |e| {
         act.release();
         if (!entry.stopping.load(.acquire)) {

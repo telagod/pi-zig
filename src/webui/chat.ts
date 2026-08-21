@@ -443,40 +443,8 @@ export function isWorkflow(name: string, args?: string, out?: string) {
 }
 export function addSub(idx: number, kind: string, text: string) {
   if (Flow.event(idx, kind, text)) return;
-  const w = workEl && workEl.isConnected ? workEl : ensureWork();
-  let log = w.querySelector(".sub-log");
-  if (!log) {
-    log = document.createElement("div");
-    log.className = "sub-log";
-    w.appendChild(log);
-  }
-  const row = document.createElement("div");
-  row.className = "sub-i " + String(kind || "");
-  const tag =
-    kind === "tool_start"
-      ? "tool"
-      : kind === "tool_done"
-        ? "ok"
-        : kind === "tool_failed"
-          ? "err"
-          : kind === "finished"
-            ? "done"
-            : kind === "notice"
-              ? "piz"
-              : String(kind || "-");
-  const ix = document.createElement("span");
-  ix.className = "sub-idx";
-  ix.textContent = String(idx);
-  const k = document.createElement("span");
-  k.className = "sub-k";
-  k.textContent = tag;
-  const tx = document.createElement("span");
-  tx.className = "sub-t";
-  tx.textContent = text || "";
-  row.append(ix, k, tx);
-  log.appendChild(row);
-  while (log.children.length > 48) log.removeChild(log.firstChild);
-  scrl();
+  // 其余 subagent 事件不再刷对话流(对齐 dsh:活动收进 jobs/活动条,不染 transcript);
+  // SSE 的 subagent 活动仍由 /api/activity 轮询条呈现。
 }
 export function finishWork() {
   if (!workEl) return;

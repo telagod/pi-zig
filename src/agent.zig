@@ -1466,6 +1466,12 @@ pub const Agent = struct {
         }
         // 压缩审计落 sidecar(借 dsh compaction/* 仅日志事件之意):折因有据,回放不染。
         sessionmod.Session.logCompaction(self.alloc, self.cwd, cut, keep.items.len, self.compacts, w, self.estTokens(), fold.summary);
+        // pi/dsh 式:压缩成功给一行通知(对话流唯一痕迹;点开摘要仍进历史)
+        if (self.cbs.on_notice) |f| {
+            var nb: [128]u8 = undefined;
+            const msg = std.fmt.bufPrint(&nb, "context compacted · kept {d} tok · {d} msgs folded", .{ self.estTokens(), cut }) catch "context compacted";
+            f(self.cbs.ctx, msg) catch |err| util.debugCatch("on_notice.compact_ok", err);
+        }
         return fold.summary;
     }
 };

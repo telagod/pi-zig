@@ -150,31 +150,64 @@ pub fn writePicker(wr: *std.Io.Writer, p: *Picker, height: usize, width: usize) 
 pub fn writeStatusIndicator(wr: *std.Io.Writer, views: []const activity.View, streaming: bool, frame_ms: i64, width: usize, max_rows: usize) !void {
     _ = streaming;
     if (max_rows == 0) return;
+    // pi 式单行状态:⠋ Working · 12s · esc to interrupt(全 muted,无详情子行)
     var elapsed: i64 = 0;
+    var retry_n: u32 = 0;
     for (views) |v| {
-        if (!v.detached and v.elapsed_ms > elapsed) elapsed = v.elapsed_ms;
+        if (v.detached) continue;
+        if (v.elapsed_ms > elapsed) elapsed = v.elapsed_ms;
+        if (v.attempt > retry_n) retry_n = v.attempt;
     }
     var eb: [24]u8 = undefined;
     const el = activity.formatElapsed(&eb, elapsed);
     try wr.writeAll(ANSI_DIM);
     try wr.writeAll(activity.spinnerFrame(frame_ms));
-    try wr.writeAll(ANSI_RESET ++ " Working " ++ ANSI_DIM ++ "(");
+    try wr.writeAll(" Working · ");
     try wr.writeAll(el);
-    try wr.writeAll(" • esc to interrupt)" ++ ANSI_RESET ++ "\x1b[K\r\n");
+    if (retry_n > 1) {
+        var rb: [16]u8 = undefined;
+        const rs = std.fmt.bufPrint(&rb, " · retry {d}", .{retry_n - 1}) catch "";
+        try wr.writeAll(rs);
+    }
+    try wr.writeAll(" · esc to interrupt");
+    try wr.writeAll(ANSI_RESET ++ "\x1b[K\r\n");
     if (max_rows == 1) return;
-    const cap = @min(views.len, @min(@as(usize, 2), max_rows - 1));
-    var i: usize = 0;
-    while (i < cap) : (i += 1) {
-        const v = views[i];
-        try wr.writeAll(ANSI_DIM ++ " └ " ++ ANSI_RESET);
-        var used: usize = 3;
+    // pi-subagents 插件式摘要行:● agent · tool bash · 12s,最多 2 行;
+    // 超出折叠为「… +N more」(查看走 j /jobs)。工具/http 不单列(卡里已见)。
+    var sub_total: usize = 0;
+    for (views) |v| {
+        if (v.kind == .subagent) sub_total += 1;
+    }
+    const sub_cap = @min(sub_total, 2);
+    var shown: usize = 0;
+    for (views) |v| {
+        if (v.kind != .subagent) continue;
+        if (shown >= sub_cap) break;
+        try wr.writeAll(ANSI_DIM ++ "● " ++ ANSI_RESET);
+        var used: usize = 2;
         try writeTrunc(wr, v.name, if (width > used) width - used else 0);
         used += visibleCols(v.name);
         if (v.detail.len > 0 and used + 3 < width) {
-            try wr.writeAll(ANSI_DIM ++ "  ");
-            used += 2;
+            try wr.writeAll(ANSI_DIM ++ " · ");
+            used += 3;
             try writeTrunc(wr, v.detail, width - used);
         }
+        const eln = activity.formatElapsed(&eb, v.elapsed_ms);
+        if (used + 1 + eln.len < width) {
+            try wr.writeAll(ANSI_DIM ++ " · ");
+            try wr.writeAll(eln);
+            try wr.writeAll(ANSI_RESET);
+        } else {
+            try wr.writeAll(ANSI_RESET);
+        }
+        try wr.writeAll("\x1b[K\r\n");
+        shown += 1;
+    }
+    if (sub_total > shown) {
+        var nb: [48]u8 = undefined;
+        const more = std.fmt.bufPrint(&nb, "  … +{d} more · j 查看", .{sub_total - shown}) catch "  … more";
+        try wr.writeAll(ANSI_DIM);
+        try writeTrunc(wr, more, width);
         try wr.writeAll(ANSI_RESET ++ "\x1b[K\r\n");
     }
 }
@@ -221,7 +254,8 @@ pub fn writeActivityLine(wr: *std.Io.Writer, v: activity.View, frame_ms: i64, wi
     const label: []const u8 = switch (v.kind) {
         .tool => v.name,
         .http => "model",
-        .subagent => "agent",
+        // subagent 的 name 已是真名(entry.name),不再写死 "agent"
+        .subagent => v.name,
     };
     try wr.writeAll(label);
     used += label.len;

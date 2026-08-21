@@ -3618,40 +3618,8 @@ function ensureWork() {
 } exports.isWorkflow = isWorkflow;
  function addSub(idx, kind, text) {
   if (exports.Flow.event(idx, kind, text)) return;
-  const w = workEl && workEl.isConnected ? workEl : ensureWork();
-  let log = w.querySelector(".sub-log");
-  if (!log) {
-    log = document.createElement("div");
-    log.className = "sub-log";
-    w.appendChild(log);
-  }
-  const row = document.createElement("div");
-  row.className = "sub-i " + String(kind || "");
-  const tag =
-    kind === "tool_start"
-      ? "tool"
-      : kind === "tool_done"
-        ? "ok"
-        : kind === "tool_failed"
-          ? "err"
-          : kind === "finished"
-            ? "done"
-            : kind === "notice"
-              ? "piz"
-              : String(kind || "-");
-  const ix = document.createElement("span");
-  ix.className = "sub-idx";
-  ix.textContent = String(idx);
-  const k = document.createElement("span");
-  k.className = "sub-k";
-  k.textContent = tag;
-  const tx = document.createElement("span");
-  tx.className = "sub-t";
-  tx.textContent = text || "";
-  row.append(ix, k, tx);
-  log.appendChild(row);
-  while (log.children.length > 48) log.removeChild(log.firstChild);
-  scrl();
+  // 其余 subagent 事件不再刷对话流(对齐 dsh:活动收进 jobs/活动条,不染 transcript);
+  // SSE 的 subagent 活动仍由 /api/activity 轮询条呈现。
 } exports.addSub = addSub;
  function finishWork() {
   if (!workEl) return;
@@ -4160,6 +4128,97 @@ function agentHtml(out, args) {
 } exports.toolBody = toolBody;
 
 };
+__modules["jobs"] = function(module, exports, require) {
+"use strict";Object.defineProperty(exports, "__esModule", {value: true}); function _nullishCoalesce(lhs, rhsFn) { if (lhs != null) { return lhs; } else { return rhsFn(); } } function _optionalChain(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }// jobs.ts —— 后台活动触发钮 + 弹层(借 dsh ui-jobs 之形)。
+// header 一颗 ⠿ 钮,活动时带计数 badge;点开平铺列表,esc/点外关。
+// 数据同 composer 活动条(/api/activity 轮询),本模块只做容器与渲染,无轮询。
+// opens 状态以 DOM(.menu.open)为准:closeMenus(其它菜单触发)会摘掉 open,
+// 本模块 tick 时自纠,不会残留假开态。
+var _util = require('./util');
+
+let lastList = [];
+
+function isOpen() {
+  return _nullishCoalesce(_optionalChain([_util.$.call(void 0, "jobsPop"), 'optionalAccess', _ => _.classList, 'access', _2 => _2.contains, 'call', _3 => _3("open")]), () => ( false));
+}
+
+ function setupJobs() {
+  const btn = _util.$.call(void 0, "hJobs");
+  if (!btn) return;
+  btn.onclick = (e) => {
+    e.stopPropagation();
+    toggleJobs();
+  };
+  document.addEventListener("click", (e) => {
+    if (!isOpen()) return;
+    const t = e.target ;
+    if (_optionalChain([t, 'access', _4 => _4.closest, 'optionalCall', _5 => _5("#jobsPop,#hJobs")])) return;
+    closeJobs();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && isOpen()) closeJobs();
+  });
+} exports.setupJobs = setupJobs;
+
+ function closeJobs() {
+  _optionalChain([_util.$.call(void 0, "jobsPop"), 'optionalAccess', _6 => _6.classList, 'access', _7 => _7.remove, 'call', _8 => _8("open")]);
+  _optionalChain([_util.$.call(void 0, "hJobs"), 'optionalAccess', _9 => _9.classList, 'access', _10 => _10.remove, 'call', _11 => _11("open")]);
+} exports.closeJobs = closeJobs;
+
+ function toggleJobs() {
+  if (isOpen()) {
+    closeJobs();
+    return;
+  }
+  const p = _util.$.call(void 0, "jobsPop");
+  if (p) p.classList.add("open");
+  _optionalChain([_util.$.call(void 0, "hJobs"), 'optionalAccess', _12 => _12.classList, 'access', _13 => _13.add, 'call', _14 => _14("open")]);
+  refreshJobs(lastList);
+} exports.toggleJobs = toggleJobs;
+
+function fmtRow(a) {
+  const sec = a.ms < 10000 ? (a.ms / 1000).toFixed(1) : String(Math.round(a.ms / 1000));
+  const lim = a.limit_ms && !a.detached ? "/" + Math.round(a.limit_ms / 1000) + "s" : "";
+  const by = a.bytes ? " · " + _util.fmtTok.call(void 0, a.bytes) : "";
+  const retry = a.attempt > 1 ? " · retry " + (a.attempt - 1) : "";
+  const glyph = a.detached ? "~" : a.kind === "subagent" ? "●" : a.kind === "http" ? "↻" : "▸";
+  const det = a.detail ? '<span class="jr-d">' + _util.esc.call(void 0, a.detail) + "</span>" : "";
+  return (
+    '<div class="jr' + (a.detached ? " bg" : "") + '">' +
+    '<span class="jr-g">' + glyph + "</span>" +
+    '<span class="jr-n">' + _util.esc.call(void 0, a.name || "job") + "</span>" +
+    det +
+    '<span class="jr-t">' + sec + "s" + lim + by + retry + "</span>" +
+    "</div>"
+  );
+}
+
+ function refreshJobs(list) {
+  lastList = list;
+  const n = list.length;
+  const btn = _util.$.call(void 0, "hJobs");
+  if (btn) btn.hidden = n === 0;
+  const badge = _util.$.call(void 0, "hJobsBadge");
+  if (badge) {
+    badge.hidden = n === 0;
+    badge.textContent = String(n);
+  }
+  if (!isOpen()) {
+    // 其它菜单路径(closeMenus)摘了 open,顺带复位按钮样式
+    const hb = _util.$.call(void 0, "hJobs");
+    if (_optionalChain([hb, 'optionalAccess', _15 => _15.classList, 'access', _16 => _16.contains, 'call', _17 => _17("open")])) hb.classList.remove("open");
+    return;
+  }
+  const p = _util.$.call(void 0, "jobsPop");
+  if (!p) return;
+  if (!n) {
+    closeJobs();
+    return;
+  }
+  p.innerHTML = list.map(fmtRow).join("");
+} exports.refreshJobs = refreshJobs;
+
+};
 __modules["composer"] = function(module, exports, require) {
 "use strict";Object.defineProperty(exports, "__esModule", {value: true});// composer.ts —— 发送生命周期:运行态/队列/活动条、SSE 事件路由(ev.onmessage)、
 // 输入框键盘与草稿、图片黏附、sendPlain/send。
@@ -4182,6 +4241,7 @@ var _chat = require('./chat');
 
 var _model = require('./model');
 var _plugins = require('./plugins');
+var _jobs = require('./jobs');
 
 
 let running = false;
@@ -4231,10 +4291,11 @@ function fmtActChip(a) {
 }
 async function tickActivity() {
   const el = _util.$.call(void 0, "actStrip");
-  if (!el) return 0;
   try {
     const r = await fetch("/api/activity");
     const list = await r.json();
+    _jobs.refreshJobs.call(void 0, list);
+    if (!el) return 0;
     if (!list || !list.length) {
       el.hidden = true;
       el.innerHTML = "";
@@ -5214,6 +5275,7 @@ __modules["main"] = function(module, exports, require) {
       var _settings = require('./settings');
       var _sheet = require('./sheet');
       var _plugins = require('./plugins');
+      var _jobs = require('./jobs');
       // 侧栏折叠态(piz.sidebar=1 则预合)
       try {
         if (localStorage.getItem("piz.sidebar") === "1")
@@ -5279,6 +5341,7 @@ __modules["main"] = function(module, exports, require) {
       _sessions.renderWsName.call(void 0, );
       _sessions.loadSessions.call(void 0, );
       _plugins.loadPlugins.call(void 0, );
+      _jobs.setupJobs.call(void 0, );
       _store.restoreDraft.call(void 0, );
       }
       // ui/net 解缠钩:对话框开场收菜单/补全;登录成功续 boot

@@ -151,10 +151,21 @@ pub fn scrollSkip(off: usize, total: usize, view: usize) usize {
     return pin - o;
 }
 
-/// Working 行数:关=0,开=1 状态 + ≤2 详情。
-pub fn workingRows(nact: usize, streaming: bool) usize {
+/// Working 行数:关=0,开=1 状态行 + ≤2 行 subagent 摘要 + 溢出 1 行折叠(pi-subagents 插件式)。
+/// 工具/http 活动不占行(卡里已见);subagent 无卡,才在此报。
+pub fn workingRows(nact: usize, streaming: bool, subagents: usize) usize {
     if (nact == 0 and !streaming) return 0;
-    return 1 + @min(nact, 2);
+    const rows: usize = 1 + @min(subagents, 2);
+    const extra: usize = if (subagents > 2) 1 else 0;
+    return rows + extra;
+}
+
+pub fn subagentCount(views: []const activity.View) usize {
+    var n: usize = 0;
+    for (views) |v| {
+        if (v.kind == .subagent) n += 1;
+    }
+    return n;
 }
 
 /// Composer box display width. Terminals with auto-margin wrap a glyph
@@ -790,7 +801,7 @@ pub const Tui = struct {
         return false;
     }
 
-    pub fn measureBottom(self: *Tui, nact: usize, streaming: bool) BottomPane {
+    pub fn measureBottom(self: *Tui, nact: usize, streaming: bool, views: []const activity.View) BottomPane {
         const w = self.width;
         const h = self.height;
         var perm_rows: usize = 0;
@@ -813,7 +824,7 @@ pub const Tui = struct {
         const cap = @max(1, h / 4);
         var comp_inner: usize = if (boxed) @max(1, @min(cap, wrap_n)) else 1;
         const min_inner: usize = 1;
-        var working = workingRows(nact, streaming);
+        var working = workingRows(nact, streaming, subagentCount(views));
         const help_rows: usize = if (self.shortcuts_open) 2 else 0;
         const ident = FooterIdent{
             .model = self.footer_model.items,
@@ -900,7 +911,7 @@ pub const Tui = struct {
         var views: [activity.MAX_SLOTS]activity.View = undefined;
         const nact = activity.snapshot(&views);
         const streaming = self.streaming.load(.acquire);
-        const bottom = self.measureBottom(nact, streaming);
+        const bottom = self.measureBottom(nact, streaming, views[0..nact]);
         const composer_block = bottom.height();
         const scroll_h = if (h > 0) h else 1;
 
@@ -1064,6 +1075,8 @@ pub const Tui = struct {
         on_detach: ?*const fn (ctx: ?*anyopaque) void = null,
         on_perm: ?*const fn (ctx: ?*anyopaque, key: u8) void = null,
         on_paint: ?*const fn (ctx: ?*anyopaque) void = null,
+        /// 每轮 poll 后无条件回调(50ms):后台完成件在此消费,不依赖 dirty 渲染
+        on_tick: ?*const fn (ctx: ?*anyopaque) void = null,
         on_think: ?*const fn (ctx: ?*anyopaque) void = null,
         on_copy: ?*const fn (ctx: ?*anyopaque) void = null,
         on_sandbox: ?*const fn (ctx: ?*anyopaque) void = null,
@@ -1084,6 +1097,7 @@ pub const Tui = struct {
         const on_detach = h.on_detach;
         const on_perm = h.on_perm;
         const on_paint = h.on_paint;
+        const on_tick = h.on_tick;
         const on_think = h.on_think;
         const on_copy = h.on_copy;
         const on_sandbox = h.on_sandbox;
@@ -1174,6 +1188,7 @@ pub const Tui = struct {
                 }
             }
             const busy = activity.count() > 0 or self.streaming.load(.acquire);
+            if (on_tick) |f| f(ctx);
             if (self.dirty.load(.acquire) or busy) {
                 if (on_paint) |f| f(ctx);
                 try self.renderFrame();

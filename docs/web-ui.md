@@ -58,6 +58,7 @@ piz web: http://127.0.0.1:5494/#token=0cbc72149b1492b0e5e8ddd11b95fb33  (Ctrl+C 
 |------|------|
 | 流式对话 | SSE 推送文本与推理内容 |
 | 活动条 | 输入框上方显示在跑工具/后台 bash 的耗时与字节；`/jobs` 同表 |
+| 后台活动钮 | 会话头 `⠿` 钮带活动计数 badge（借 dsh ui-jobs 之形），点开弹层平铺列表：字元 ●子代理 / ↻模型 / ▸工具、名称、详情、时长；esc 或点外关闭 |
 | 贴图 | Ctrl+V 或 `/paste` 从剪贴板附图 |
 | 工具卡片 | 可折叠，按工具类型分类渲染（终端输出走 ANSI 着色，`write`/`edit` 走 diff 着色） |
 | Workflow 轨道 | `workflow` 在对话里是一截节点轨，与 Thought / 工具摘要同级。回放与再跑同一 goal 写进同一截，不叠第二块。点节点展开该步报告 |
@@ -233,6 +234,7 @@ Origin 校验挡的是浏览器发起的跨源请求，挡不住直接构造的 
 | `stream.ts` | SSE(fetch+ReadableStream、断线横幅、退避重连);`ev.onmessage` 由 composer 指派 |
 | `slash.ts` | 斜杠目录/菜单/bang/@文件/runSlash 全分发;`slashH` 钩袋(模型态已直引 model.ts) |
 | `chat.ts` | 线程渲染核心:滚动贴底、搜索、历史重放、消息流、work/Flow 卡、工具卡/inspect、审批;`chatH` 钩袋(仅余发送/lastUser) |
+| `jobs.ts` | 会话头后台活动钮+badge+弹层(借 dsh ui-jobs 之形);数据走 composer 轮询的 refreshJobs,无自轮询 |
 | `composer.ts` | 发送生命周期:运行态/队列/活动条、ev.onmessage 路由、键盘簇、图片、sendPlain/send |
 | `model.ts` | 模型/思考档/授权/沙箱/cost/ctx/turnMeta/头部渲染/kebab;`modelH.runSlash` 一钩(环禁) |
 | `settings.ts` | openSettings/openSearch/全局键;setBtn 自 wired(避 sheet↔settings 环) |

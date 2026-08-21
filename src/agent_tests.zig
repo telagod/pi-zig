@@ -45,14 +45,28 @@ test "compaction triggers after hard line" {
     cfg.providers = &provs;
     var agent = try Agent.init(a, &cfg, "mock", "m", "/tmp");
 
-    // 2 条 250KB 摘要占位 + 1 条 user → 500KB+ ≈ 125K token > 85%×128K
+    // 2 条 250KB 正文(可折) + 1 条 user → 500KB+ ≈ 125K token > 85%×128K
     for (0..2) |_| {
-        try agent.messages.append(.{ .role = "system", .content = "(Conversation compacted. Summary:)\n" ++ ("s" ** (250 * 1024)) });
+        try agent.messages.append(.{ .role = "assistant", .content = "s" ** (250 * 1024) });
     }
     try agent.messages.append(.{ .role = "user", .content = "continue" });
     const w = @as(usize, provs[0].context_window);
     // 入培不定形 system;仍超硬线 → 回合首须 compact
     try t.expect(agent.estTokens() > w * CTX_HARD_PERCENT / 100);
+
+    // compact 成功 → on_notice 一行(上下文有内容可折)
+    const Hook = struct {
+        var noticed: bool = false;
+        fn notice(_: ?*anyopaque, text: []const u8) anyerror!void {
+            if (std.mem.indexOf(u8, text, "context compacted") != null) noticed = true;
+        }
+    };
+    Hook.noticed = false;
+    agent.cbs = .{ .on_notice = Hook.notice };
+    const _out = try agent.compact();
+    _ = _out;
+    try t.expect(Hook.noticed);
+    try t.expect(agent.compacts == 1);
 }
 
 test "token estimate does not underreport CJK text" {

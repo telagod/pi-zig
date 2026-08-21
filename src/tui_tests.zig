@@ -523,7 +523,7 @@ test "footer identity has hierarchy and never drops model" {
     // pi 式:$ 三位小数 + CH 命中率(7440/12000)
     try t.expect(std.mem.indexOf(u8, secondary, "$0.009") != null);
     try t.expect(std.mem.indexOf(u8, secondary, "CH62%") != null);
-    try t.expect(std.mem.indexOf(u8, rows.secondary, ANSI_BOLD ++ "deepseek/v4-flash") != null);
+    try t.expect(std.mem.indexOf(u8, rows.secondary, ANSI_DIM ++ "deepseek/v4-flash") != null);
     // 宽 >= 50 恒双行,窄端单行
     try t.expect(footerNeedsTwoRows(ident, "? for shortcuts", 80));
     try t.expect(footerNeedsTwoRows(ident, "? for shortcuts", 120));
@@ -613,7 +613,7 @@ test "footer pi-style: place row 1, stats/model row 2; narrow packs" {
     for (widths) |cols| {
         ui.width = cols;
         ui.height = 24;
-        const bottom = ui.measureBottom(0, false);
+        const bottom = ui.measureBottom(0, false, &.{});
         try t.expect(bottom.composer_rows >= 3);
         try t.expectEqual(composerBoxWidth(cols), if (cols > 1) cols - 1 else cols);
         try t.expectEqual(@as(usize, 2), bottom.footer_ident_rows);
@@ -660,6 +660,19 @@ test "footer overflow keeps model and never leaks raw ANSI" {
             }
         }
     }
+    // 降级顺序:cache/CH 先弃,cost 留到最后(客之 $ 花费不得随 cache 俱没)
+    const r1 = try formatFooterRows(t.allocator, ident, "? for shortcuts", 78, true);
+    defer r1.deinit(t.allocator);
+    const p1 = try stripForTest(t.allocator, r1.secondary);
+    defer t.allocator.free(p1);
+    try t.expect(std.mem.indexOf(u8, p1, "$0.000") != null); // 第 1 级:保 cost
+    try t.expect(std.mem.indexOf(u8, p1, "R4.8k") == null); // cache 已弃
+    const r2 = try formatFooterRows(t.allocator, ident, "? for shortcuts", 64, true);
+    defer r2.deinit(t.allocator);
+    const p2 = try stripForTest(t.allocator, r2.secondary);
+    defer t.allocator.free(p2);
+    try t.expect(std.mem.indexOf(u8, p2, "$0.000") != null); // 第 2 级:flow 弃而 cost 仍在
+    try t.expect(std.mem.indexOf(u8, p2, "↑4.9k") == null);
 }
 
 test "session card renders at paint width" {
@@ -743,26 +756,29 @@ test "session card renders at paint width" {
     try t.expect(std.mem.indexOf(u8, plain, "yolo") != null);
     try t.expect(std.mem.indexOf(u8, plain, "SECRET_BODY") == null);
 
-    const idle = ui.measureBottom(0, false);
+    const idle = ui.measureBottom(0, false, &.{});
     try t.expect(idle.composer_rows >= 3);
     try t.expect(idle.footer_rows >= 1);
     try t.expect(idle.height() < 24);
     try t.expectEqual(@as(usize, 1), composerTopRow(0, idle));
     try t.expectEqual(@as(usize, 0), idle.working_rows);
     ui.toggleTools();
-    const still = ui.measureBottom(2, true);
-    try t.expectEqual(@as(usize, 3), still.working_rows);
+    const still = ui.measureBottom(2, true, &.{});
+    try t.expectEqual(@as(usize, 1), still.working_rows);
     try t.expectEqual(idle.composer_rows, still.composer_rows);
     try t.expectEqual(idle.footer_rows, still.footer_rows);
 }
 
-test "working rows are one status plus at most two details" {
+test "working rows are one status plus at most two subagent details" {
     const t = std.testing;
-    try t.expectEqual(@as(usize, 0), workingRows(0, false));
-    try t.expectEqual(@as(usize, 1), workingRows(0, true));
-    try t.expectEqual(@as(usize, 2), workingRows(1, false));
-    try t.expectEqual(@as(usize, 3), workingRows(2, true));
-    try t.expectEqual(@as(usize, 3), workingRows(8, true));
+    try t.expectEqual(@as(usize, 0), workingRows(0, false, 0));
+    try t.expectEqual(@as(usize, 1), workingRows(0, true, 0));
+    try t.expectEqual(@as(usize, 1), workingRows(1, false, 0));
+    try t.expectEqual(@as(usize, 2), workingRows(2, true, 1));
+    try t.expectEqual(@as(usize, 3), workingRows(8, true, 2));
+    // 溢出折叠行:3 个子代理 = 状态 + 2 行 + 1 行 more
+    try t.expectEqual(@as(usize, 4), workingRows(8, true, 3));
+    try t.expectEqual(@as(usize, 4), workingRows(8, true, 5));
 }
 
 test "wrapCursor follows soft-wrapped composer rows" {
@@ -829,7 +845,7 @@ test "bottom pane is reserved before transcript" {
     defer ui.deinit();
     ui.width = 80;
     ui.height = 24;
-    const idle = ui.measureBottom(0, false);
+    const idle = ui.measureBottom(0, false, &.{});
     try t.expectEqual(@as(usize, 0), idle.working_rows);
     try t.expectEqual(@as(usize, 3), idle.composer_rows);
     // pi 式:宽 >= 50 恒双行
@@ -837,12 +853,12 @@ test "bottom pane is reserved before transcript" {
     try t.expectEqual(@as(usize, 2), idle.footer_ident_rows);
     try t.expect(idle.composer_rows >= 3);
     try t.expect(idle.height() < 24);
-    const busy = ui.measureBottom(5, true);
-    try t.expectEqual(@as(usize, 3), busy.working_rows);
+    const busy = ui.measureBottom(5, true, &.{});
+    try t.expectEqual(@as(usize, 1), busy.working_rows);
     try t.expect(busy.height() > idle.height());
     try t.expect(busy.composer_rows >= 3);
     ui.shortcuts_open = true;
-    const help = ui.measureBottom(0, false);
+    const help = ui.measureBottom(0, false, &.{});
     try t.expectEqual(@as(usize, 4), help.footer_rows);
     try t.expectEqual(@as(usize, 2), help.footer_ident_rows);
     ui.shortcuts_open = false;
@@ -860,13 +876,13 @@ test "bottom pane is reserved before transcript" {
         .tok_cache_r = 7_440,
         .pct = 9,
     });
-    const split = ui.measureBottom(0, false);
+    const split = ui.measureBottom(0, false, &.{});
     try t.expectEqual(@as(usize, 2), split.footer_ident_rows);
     ui.width = 120;
-    const wide = ui.measureBottom(0, false);
+    const wide = ui.measureBottom(0, false, &.{});
     try t.expectEqual(@as(usize, 2), wide.footer_ident_rows);
     ui.width = 40;
-    const narrow = ui.measureBottom(0, false);
+    const narrow = ui.measureBottom(0, false, &.{});
     try t.expectEqual(@as(usize, 1), narrow.footer_ident_rows);
 }
 
@@ -1000,7 +1016,7 @@ test "slash empty query lists names and descriptions" {
     try ui.input.append('/');
     ui.width = 80;
     ui.height = 24;
-    const bottom = ui.measureBottom(0, false);
+    const bottom = ui.measureBottom(0, false, &.{});
     try t.expect(bottom.slash_rows >= 2);
 }
 
@@ -1027,7 +1043,7 @@ test "measureBottom keeps a 3-row composer above the footer" {
         ui.width = cols;
         ui.height = 24;
         try ui.setFooterIdentity(ident);
-        const idle = ui.measureBottom(0, false);
+        const idle = ui.measureBottom(0, false, &.{});
         try t.expect(idle.composer_rows >= 3);
         try t.expect(idle.boxed);
         try t.expect(idle.height() <= 24);
@@ -1035,7 +1051,7 @@ test "measureBottom keeps a 3-row composer above the footer" {
         try t.expectEqual(@as(usize, 1), top);
         try t.expect(idle.footer_rows >= 1);
 
-        const busy = ui.measureBottom(5, true);
+        const busy = ui.measureBottom(5, true, &.{});
         try t.expect(busy.composer_rows >= 3);
         try t.expect(busy.height() <= 24);
         const busy_top = composerTopRow(0, busy);
@@ -1079,7 +1095,7 @@ test "composer box closes and cursor stays on the inner row" {
             .cwd = "~/桌面",
             .session = "1786748577703",
         });
-        const idle = ui.measureBottom(0, false);
+        const idle = ui.measureBottom(0, false, &.{});
         const cur = wrapCursor(ui.input.items, ui.cursor, idle.input_inner);
         const top = composerTopRow(0, idle);
         const row = composerInputRow(top, idle, cur.row);
@@ -1089,7 +1105,7 @@ test "composer box closes and cursor stays on the inner row" {
 
         try ui.input.appendSlice(&long_buf);
         ui.cursor = ui.input.items.len;
-        const grown = ui.measureBottom(0, false);
+        const grown = ui.measureBottom(0, false, &.{});
         const cur2 = wrapCursor(ui.input.items, ui.cursor, grown.input_inner);
         const top2 = composerTopRow(0, grown);
         const row2 = composerInputRow(top2, grown, cur2.row);
@@ -1278,4 +1294,39 @@ test "tui prunes old cells and keeps session header" {
     try t.expect(ui.find_log.items.len > 0);
     const hit = try ui.findNext("x", false);
     try t.expect(hit);
+}
+
+test "status indicator: retry mark and subagent overflow fold" {
+    const t = std.testing;
+    const activity = @import("core").activity;
+    var views: [5]activity.View = undefined;
+    // 3 个 subagent:2 行 + 1 行折叠;attempt=3 的 http 应标 retry 2
+    views[0] = .{ .kind = .http, .name = "model", .detail = "", .elapsed_ms = 5000, .bytes = 0, .attempt = 3, .limit_ms = 0, .detached = false };
+    views[1] = .{ .kind = .subagent, .name = "worker1", .detail = "bash", .elapsed_ms = 4200, .bytes = 0, .attempt = 0, .limit_ms = 0, .detached = false };
+    views[2] = .{ .kind = .subagent, .name = "worker2", .detail = "", .elapsed_ms = 3100, .bytes = 0, .attempt = 0, .limit_ms = 0, .detached = false };
+    views[3] = .{ .kind = .subagent, .name = "worker3", .detail = "", .elapsed_ms = 2000, .bytes = 0, .attempt = 0, .limit_ms = 0, .detached = false };
+    var fw = std.Io.Writer.Allocating.init(t.allocator);
+    defer fw.deinit();
+    try draw.writeStatusIndicator(&fw.writer, views[0..4], false, 0, 100, 4);
+    const out = fw.written();
+    try t.expect(std.mem.indexOf(u8, out, "retry 2") != null);
+    try t.expect(std.mem.indexOf(u8, out, "worker1") != null);
+    try t.expect(std.mem.indexOf(u8, out, "worker2") != null);
+    try t.expect(std.mem.indexOf(u8, out, "+1 more") != null);
+    try t.expect(std.mem.indexOf(u8, out, "· 4.2s") != null);
+    try t.expect(std.mem.indexOf(u8, out, "worker3") == null);
+    // 2 个 subagent(rows=3):无折叠行
+    var fw2 = std.Io.Writer.Allocating.init(t.allocator);
+    defer fw2.deinit();
+    try draw.writeStatusIndicator(&fw2.writer, views[1..3], false, 0, 100, 3);
+    const out2 = fw2.written();
+    try t.expect(std.mem.indexOf(u8, out2, "+1 more") == null);
+    try t.expect(std.mem.indexOf(u8, out2, "worker2") != null);
+    // writeActivityLine(/jobs 行):subagent 显示真名,不写死 "agent"
+    var fw3 = std.Io.Writer.Allocating.init(t.allocator);
+    defer fw3.deinit();
+    try draw.writeActivityLine(&fw3.writer, views[1], 0, 100);
+    const out3 = fw3.written();
+    try t.expect(std.mem.indexOf(u8, out3, "worker1") != null);
+    try t.expect(std.mem.indexOf(u8, out3, "agent") == null);
 }

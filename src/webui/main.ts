@@ -13,6 +13,7 @@
       import { openSearch } from "./settings";
       import { closeSheet } from "./sheet";
       import { loadPlugins, pluginsH } from "./plugins";
+      import { setupJobs } from "./jobs";
       // 侧栏折叠态(piz.sidebar=1 则预合)
       try {
         if (localStorage.getItem("piz.sidebar") === "1")
@@ -78,6 +79,7 @@
       renderWsName();
       loadSessions();
       loadPlugins();
+      setupJobs();
       restoreDraft();
       }
       // ui/net 解缠钩:对话框开场收菜单/补全;登录成功续 boot
