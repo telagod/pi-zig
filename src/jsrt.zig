@@ -19,6 +19,7 @@ const util = @import("util.zig");
 const toolsmod = @import("tools.zig");
 const httpc = @import("httpc.zig");
 const aimod = @import("ai.zig");
+const pkgsmod = @import("pkgs.zig");
 
 pub const enabled = build_options.quickjs;
 /// TS 类型剥离(-Djsts,默认随 quickjs):.ts/.mts 扩展先经 sucrase 剥皮再 eval。
@@ -924,14 +925,40 @@ pub fn loadExtensions(cfg_dir: []const u8, cwd: []const u8) void {
     defer if (user_dir) |p| a.free(p);
     const proj_dir = if (cwd.len > 0) (util.joinPath(a, cwd, ".piz/extensions") catch null) else null;
     defer if (proj_dir) |p| a.free(p);
-    // 内嵌档先行;gate 未开或同名见于用户/项目目则跳过。
+    // 包内 extensions/ 亦载(生态闭环:一包全三面——skills/prompts/web/JS 钩子)。
+    // 同名 basename 照样顶替内嵌件(与用户/项目目同级覆写语义)。
+    const pkg_dirs = pkgsmod.allPkgDirs(a, cwd) catch &.{};
+    defer {
+        for (pkg_dirs) |pd| a.free(pd);
+        if (pkg_dirs.len > 0) a.free(pkg_dirs);
+    }
+    var pkg_ext = std.array_list.Managed([]const u8).init(a);
+    defer {
+        for (pkg_ext.items) |pd| a.free(pd);
+        pkg_ext.deinit();
+    }
+    for (pkg_dirs) |pd| {
+        const ext = util.joinPath(a, pd, "extensions") catch continue;
+        if (util.dirExists(ext)) {
+            pkg_ext.append(ext) catch a.free(ext);
+        } else a.free(ext);
+    }
+    // 内嵌档先行;gate 未开或同名见于用户/项目/包目则跳过。
     for (bundled_exts) |b| {
         if (b.gate.len > 0 and !gateOn(b.gate)) continue;
-        if (dirHasFile(user_dir, b.name) or dirHasFile(proj_dir, b.name)) continue;
+        var overridden = dirHasFile(user_dir, b.name) or dirHasFile(proj_dir, b.name);
+        if (!overridden) for (pkg_ext.items) |pd| {
+            if (dirHasFile(pd, b.name)) {
+                overridden = true;
+                break;
+            }
+        };
+        if (overridden) continue;
         if (evalBundled(b.name, b.src)) loaded_files += 1 else load_errors += 1;
     }
     if (user_dir) |p| loadDir(p);
     if (proj_dir) |p| loadDir(p);
+    for (pkg_ext.items) |pd| loadDir(pd);
     refreshRegistry();
 }
 
@@ -1105,9 +1132,10 @@ pub fn emitToolCall(arena: std.mem.Allocator, name: []const u8, args_json: []con
 
 /// tool_result 事件:handler 返 {replace} 则替换输出(artifact 外置等),多 handler 后者胜。
 /// 全文不截 —— 外置正是为大件;无 handler 时 h_tool_result 旗标短路,不进 JS。
-pub fn emitToolResult(arena: std.mem.Allocator, name: []const u8, content: []const u8) ?[]const u8 {
+/// 载荷 {toolName, output, isError} —— isError 供台账/告警类钩子免猜文本。
+pub fn emitToolResult(arena: std.mem.Allocator, name: []const u8, content: []const u8, is_error: bool) ?[]const u8 {
     if (!enabled or rt == null or !h_tool_result) return null;
-    const payload = std.json.Stringify.valueAlloc(arena, .{ .toolName = name, .output = content }, .{}) catch return null;
+    const payload = std.json.Stringify.valueAlloc(arena, .{ .toolName = name, .output = content, .isError = is_error }, .{}) catch return null;
     const out = emit(arena, "tool_result", payload) orelse return null;
     const parsed = std.json.parseFromSliceLeaky(std.json.Value, arena, out, .{}) catch return null;
     if (parsed != .object) return null;
@@ -1749,12 +1777,12 @@ test "qjs tool_result replace:artifact-store 外置大件,小件/read/已置不�
     defer arena_inst.deinit();
     const ar = arena_inst.allocator();
     // 小件不改写
-    try t.expect(emitToolResult(ar, "bash", "small") == null);
+    try t.expect(emitToolResult(ar, "bash", "small", false) == null);
     // read 系跳过
     const big = try ar.dupe(u8, "x" ** (8 * 1024));
-    try t.expect(emitToolResult(ar, "read", big) == null);
+    try t.expect(emitToolResult(ar, "read", big, false) == null);
     // 大件外置:引用式替换 + 文件真在
-    const repl = emitToolResult(ar, "bash", big).?;
+    const repl = emitToolResult(ar, "bash", big, false).?;
     try t.expect(std.mem.indexOf(u8, repl, "[Artifact stored: ") != null);
     try t.expect(std.mem.indexOf(u8, repl, "(8192 bytes)") != null);
     try t.expect(std.mem.indexOf(u8, repl, "truncated; read the artifact file") != null);
@@ -1763,10 +1791,10 @@ test "qjs tool_result replace:artifact-store 外置大件,小件/read/已置不�
     const stored = try std.Io.Dir.cwd().readFileAlloc(util.io, repl[ps..pe], ar, .limited(64 * 1024));
     try t.expectEqualStrings(big, stored);
     // 已含标记不重复外置
-    try t.expect(emitToolResult(ar, "bash", repl) == null);
+    try t.expect(emitToolResult(ar, "bash", repl, false) == null);
     // CJK 边界:预览退到字符边界,整链合法 UTF-8
     const zh = try ar.dupe(u8, "x" ++ "// 中文注释行填充凑长\n" ** 300);
-    const zrepl = emitToolResult(ar, "bash", zh).?;
+    const zrepl = emitToolResult(ar, "bash", zh, true).?;
     try t.expect(std.unicode.utf8ValidateSlice(zrepl));
 }
 

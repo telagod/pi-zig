@@ -196,7 +196,7 @@ pub fn runToolSlot(slot: *ToolSlot) void {
     } else {
         slot.result = t.handler(self.alloc, slot.call.args) catch |err| toolsmod.crashResult(self.alloc, slot.call.name, err);
     }
-    if (jsrt.emitToolResult(ja, slot.call.name, slot.result.content)) |repl| {
+    if (jsrt.emitToolResult(ja, slot.call.name, slot.result.content, slot.result.is_error)) |repl| {
         slot.result.content = self.alloc.dupe(u8, repl) catch slot.result.content;
     }
 }

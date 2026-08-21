@@ -431,6 +431,9 @@ pub const Session = struct {
     /// 会话树:消息计数与最后落盘消息 id(saveMessage 维护,loadMessages 恢复)
     seq: u64 = 0,
     last_id: ?[]const u8 = null,
+    /// meta 首行已落盘?惰性写盘:fresh 只定径不写首行,首条消息/setTitle/fork 方落——
+    /// 开而未言即退者不留空壳(findLatest/list 本也不见无 meta 之档)。
+    meta_written: bool = false,
 
     pub fn deinit(self: *Session) void {
         self.alloc.free(self.path);
@@ -492,7 +495,6 @@ pub const Session = struct {
             self.deinit();
         }
         if (title) |t| self.title = try alloc.dupe(u8, t);
-        try self.writeMeta();
         return self;
     }
 
@@ -512,6 +514,7 @@ pub const Session = struct {
             .alloc = alloc,
             .path = try alloc.dupe(u8, path),
             .cwd = try alloc.dupe(u8, meta_cwd),
+            .meta_written = true,
         };
         if (m.object.get("title")) |v| {
             if (v == .string and v.string.len > 0) self.title = try alloc.dupe(u8, v.string);
@@ -523,7 +526,19 @@ pub const Session = struct {
     pub fn findLatest(alloc: std.mem.Allocator, cwd: []const u8) !?Session {
         const all = try list(alloc, cwd);
         if (all.len == 0) return null;
+        // 空会话(仅首行 meta、无消息——例如开而未言即退)不作续载目标,
+        // 否则裸 piz 落在一页白屏上。顺延至最近有消息者;皆空则回最新空者。
+        for (all) |s| {
+            if (hasMessages(alloc, s.path)) return s;
+        }
         return all[0];
+    }
+
+    /// 文件内有消息行({"role":...)即非空。首行 meta 之外一条消息即算。
+    fn hasMessages(alloc: std.mem.Allocator, path: []const u8) bool {
+        const raw = std.Io.Dir.cwd().readFileAlloc(util.io, path, alloc, .limited(1024 * 1024)) catch return false;
+        defer alloc.free(raw);
+        return std.mem.indexOf(u8, raw, "\"role\":") != null;
     }
 
     /// 列出 cwd 的全部会话(sessions/<slug> 子目录,与 pi 布局互通),按 mtime 降序(最新在前)。
@@ -576,6 +591,7 @@ pub const Session = struct {
         const line = try ww.toOwnedSlice();
         defer self.alloc.free(line);
         try self.append(line);
+        self.meta_written = true;
     }
 
     /// 设置标题:重写首行元信息。
@@ -583,6 +599,13 @@ pub const Session = struct {
     /// 就保证磁盘上不会出现无界标题,读回来的也一定是安全值。
     pub fn setTitle(self: *Session, raw_title: []const u8) !void {
         const title = util.clampUtf8(raw_title, MAX_TITLE_BYTES);
+        if (!self.meta_written) {
+            // 档未落盘:首行写出时自携 title,此刻只记账
+            const old = self.title;
+            self.title = if (title.len > 0) try self.alloc.dupe(u8, title) else null;
+            if (old) |o| self.alloc.free(o);
+            return;
+        }
         const content = std.Io.Dir.cwd().readFileAlloc(util.io, self.path, self.alloc, .limited(256 * 1024)) catch return error.InvalidSession;
         defer self.alloc.free(content);
         var lines = std.mem.splitScalar(u8, content, '\n');
@@ -674,6 +697,7 @@ pub const Session = struct {
 
     /// 追加一条消息(带会话树 id/parent_id)。
     pub fn saveMessage(self: *Session, msg: *const ai.Message) !void {
+        if (!self.meta_written) try self.writeMeta();
         var ww = std.Io.Writer.Allocating.init(self.alloc);
         defer ww.deinit();
         try ww.writer.writeByte('{');
@@ -965,6 +989,7 @@ pub const Session = struct {
             .alloc = self.alloc,
             .path = new_path,
             .cwd = try self.alloc.dupe(u8, self.cwd),
+            .meta_written = true, // fork 拷贝含新 meta 首行
         };
         // 轻量恢复 seq/last_id:只解析行数与每行 id,不构建消息
         if (std.Io.Dir.cwd().readFileAlloc(util.io, new_path, self.alloc, .limited(16 * 1024 * 1024))) |nc| {

@@ -154,7 +154,7 @@ test "session title + list + setTitle" {
     }
     try s1.saveMessage(&.{ .role = "user", .content = "hi" });
     _ = std.Io.sleep(util.io, .{ .nanoseconds = 20 * std.time.ns_per_ms }, .awake) catch {};
-    const s2 = try Session.fresh(a, "/tmp");
+    var s2 = try Session.fresh(a, "/tmp");
     defer {
         std.Io.Dir.cwd().deleteFile(util.io, s2.path) catch {};
     }
@@ -162,6 +162,11 @@ test "session title + list + setTitle" {
     // open 读回 title
     const opened = try Session.open(a, s1.path);
     try t.expectEqualStrings("my title", opened.title.?);
+    // 惰性写盘:s2 未言,档无 meta——findLatest/list 皆不见
+    try t.expectEqual(@as(usize, 1), (try Session.list(a, "/tmp")).len);
+    try t.expectEqualStrings(s1.path, (try Session.findLatest(a, "/tmp")).?.path);
+    // s2 发言后入场,为最新
+    try s2.saveMessage(&.{ .role = "user", .content = "s2 hi" });
     // findLatest 返回最新
     const latest = (try Session.findLatest(a, "/tmp")).?;
     try t.expectEqualStrings(s2.path, latest.path);
@@ -182,8 +187,7 @@ test "session title + list + setTitle" {
     // 中文不能切在多字节序列中间 —— 那样读回来是非法 UTF-8,JSON 也就坏了
     try s1.setTitle("标题" ** 500);
     const zh = (try Session.open(a, s1.path)).title.?;
-    try t.expect(zh.len <= MAX_TITLE_BYTES);
-    try t.expect(std.unicode.utf8ValidateSlice(zh));
+    try t.expect(zh.len <= MAX_TITLE_BYTES);    try t.expect(std.unicode.utf8ValidateSlice(zh));
 
     // 上限内原样保留
     try s1.setTitle("正常标题");

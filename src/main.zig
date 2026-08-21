@@ -743,6 +743,16 @@ pub fn runInteractive(alloc: std.mem.Allocator, cfg: *cfgmod.Config, cwd: []cons
 
     showWelcome(&app, loaded.len);
     replayTranscript(&tui, loaded);
+    if (loaded.len == 0 and opts.session_id == null and !opts.continue_session) {
+        // 新会话起手若有旧事可续,注一行引路——「上回会话不见」之惑多起于默认新开
+        if (sessionmod.Session.findLatest(alloc, abs_cwd) catch null) |prev| {
+            var p = prev;
+            defer p.deinit();
+            if (!std.mem.eql(u8, p.path, sess.path)) {
+                tuiNote(&app, "\x1b[2m", "new session · piz -c 续载上次,/sessions 拣选");
+            }
+        }
+    }
 
     try tui.run(.{
         .on_submit = onSubmit,

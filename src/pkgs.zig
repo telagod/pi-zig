@@ -12,11 +12,13 @@ pub fn rootDir(alloc: std.mem.Allocator, scope: Scope, project_cwd: ?[]const u8)
     return switch (scope) {
         .user => blk: {
             const cfg_dir = try util.configDir(alloc);
+            defer alloc.free(cfg_dir);
             break :blk try util.joinPath(alloc, cfg_dir, "packages");
         },
         .project => blk: {
             const cwd = project_cwd orelse ".";
             const dot_piz = try util.joinPath(alloc, cwd, util.PROJECT_DIR);
+            defer alloc.free(dot_piz);
             break :blk try util.joinPath(alloc, dot_piz, "packages");
         },
     };
@@ -503,6 +505,7 @@ pub fn remove(alloc: std.mem.Allocator, name: []const u8, scope: Scope, project_
 pub fn allPkgDirs(alloc: std.mem.Allocator, project_cwd: ?[]const u8) ![][]const u8 {
     var out = std.array_list.Managed([]const u8).init(alloc);
     const user_root = try rootDir(alloc, .user, null);
+    defer alloc.free(user_root);
     if (std.Io.Dir.cwd().openDir(util.io, user_root, .{ .iterate = true })) |dir| {
         defer dir.close(util.io);
         var it = dir.iterate();
@@ -513,6 +516,7 @@ pub fn allPkgDirs(alloc: std.mem.Allocator, project_cwd: ?[]const u8) ![][]const
         }
     } else |_| {}
     const proj_root = try rootDir(alloc, .project, project_cwd);
+    defer alloc.free(proj_root);
     if (std.Io.Dir.cwd().openDir(util.io, proj_root, .{ .iterate = true })) |dir| {
         defer dir.close(util.io);
         var it = dir.iterate();

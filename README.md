@@ -61,8 +61,8 @@ zig build                 # 默认 ReleaseFast;调试传 -Doptimize=Debug
 
 ```bash
 cd ~/your-project
-piz                       # 交互,续载该目录最近一次会话
-piz -n                    # 新会话
+piz                       # 交互,默认新会话
+piz -c                    # 续载该目录最近一次会话
 piz -p "解释构建流程"     # 一次性问答
 echo "总结这个文件" | piz -p
 piz web                   # 本地 Web UI

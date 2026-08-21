@@ -233,6 +233,7 @@ pub fn configDir(alloc: std.mem.Allocator) ![]u8 {
         if (d.len > 0) return alloc.dupe(u8, d);
     }
     const home = try homeDir(alloc);
+    defer alloc.free(home);
     return joinPath(alloc, home, ".piz");
 }
 
