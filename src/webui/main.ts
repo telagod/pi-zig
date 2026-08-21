@@ -61,12 +61,15 @@
       welcome.id = "welcome";
       welcome.className = "empty-hint";
       welcome.innerHTML =
+        '<div class="hero-card">' +
         '<div class="empty-headline">' +
         '<svg class="empty-logo" viewBox="0 0 24 18" fill="currentColor" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M2.4 1.8h17.2a1.7 1.7 0 0 1 0 3.4H10l10 8.2A1.8 1.8 0 0 1 18.65 16.45H3.2a1.7 1.7 0 0 1 0-3.4h9.4L2.7 4.9A1.8 1.8 0 0 1 4.1 1.8z"/></svg>' +
         '<span class="empty-hint-title">piz</span></div>' +
         '<button type="button" class="ws-chip" id="heroWs"><span class="ws-chip-ic">⌂</span><span id="heroWsLbl">项目</span><span class="ws-chip-chev">▾</span></button>' +
+        '<button type="button" class="hero-start" id="heroStart">＋ 开始对话</button>' +
         '<div class="empty-hint-text">读、改、跑。工具默认先问你。</div>' +
-        '<div class="empty-keys"><span><kbd>/</kbd> 命令</span><span><kbd>j</kbd> 任务</span><span><kbd>u</kbd> 用量</span><span><kbd>s</kbd> 沙箱</span><span><kbd>?</kbd> 快捷键</span></div>';
+        '<div class="empty-keys"><span><kbd>/</kbd> 命令</span><span><kbd>j</kbd> 任务</span><span><kbd>u</kbd> 用量</span><span><kbd>s</kbd> 沙箱</span><span><kbd>?</kbd> 快捷键</span></div>' +
+        '</div>';
       const wrap = $("wrap");
       if (!th.children.length) {
         wrap.prepend(welcome);
@@ -75,6 +78,7 @@
           e.stopPropagation();
           openWsMenu(e.currentTarget);
         };
+        $("heroStart").onclick = () => $("newBtn").click();
       }
       renderWsName();
       loadSessions();

@@ -185,7 +185,10 @@ let curAsst: any = null,
 // 重载后流之续:以末条 a-turn 为活泡。
 export function resumeAsst() {
   const la = th.querySelector(".a-turn:last-child");
-  if (la) curAsst = la;
+  if (la) {
+    curAsst = la;
+    curAsst.classList.add("gen");
+  }
 }
 let workEl: any = null;
 let workCounts: any = { read: 0, search: 0, edit: 0, bash: 0, web: 0, mcp: 0, todo: 0, agent: 0, other: 0 };
@@ -509,6 +512,19 @@ export function addUser(txt: string, imgSrc?: string | null) {
     const s = document.createElement("span");
     s.textContent = shown;
     bub.appendChild(s);
+    // 折叠阈值:长文本且多行,收为 7 行内 + 展开钮(dsh 用户消息折叠开头同法)
+    const tlines = shown.split("\n");
+    const long = shown.length > 340 && (tlines.length > 7 || shown.length > 900);
+    if (long) {
+      bub.classList.add("folded");
+      const more = document.createElement("button");
+      more.type = "button";
+      more.className = "fold-more";
+      more.textContent = "展开 ▾";
+      more.onclick = () => bub.classList.remove("folded");
+      bub.appendChild(document.createElement("br"));
+      bub.appendChild(more);
+    }
   } else if (!imgSrc) {
     bub.textContent = txt || "";
   }
@@ -520,6 +536,11 @@ export function addUser(txt: string, imgSrc?: string | null) {
       setTimeout(() => location.reload(), 400);
     });
   };
+  // 轮首时间戳(dsh 用户消息行 12px 灰):每次用户消息记录发问时刻
+  const ts = document.createElement("div");
+  ts.className = "turn-ts";
+  ts.textContent = new Date().toTimeString().slice(0, 5);
+  th.appendChild(ts);
   th.appendChild(t);
   scrl();
   curAsst = null;
@@ -548,7 +569,9 @@ export function paintAsst(final?: boolean) {
 }
 export function addAsst(txt: string) {
   if (!txt) return;
-  const e = asstEl().querySelector(".md");
+  const el = asstEl();
+  el.classList.add("gen");
+  const e = el.querySelector(".md");
   e.dataset.raw = (e.dataset.raw || "") + txt;
   if (!mdTimer) {
     // 自适应节流:回复越长全量重排越贵,间隔跟着涨(80→160→280ms)。
@@ -572,6 +595,7 @@ export function finishAsst() {
     e.dataset.raw = raw;
     e.dataset.painted = String(raw.length);
     e.innerHTML = md(raw);
+    curAsst.classList.remove("gen");
     if (!curAsst.querySelector(".a-ops")) {
       const ops = document.createElement("div");
       ops.className = "a-ops";
@@ -767,7 +791,16 @@ export function addTool(name: string, args?: string) {
   scrl();
   cards[id] = { el: d, name, ty, args: args || "", out: "", done: false };
   (pendingByName[name] || (pendingByName[name] = [])).push(id);
-  curAsst = null;
+  // 工具打断流式回复:前缀文本若已吐出即收尾(修 gen 悬挂——旧 turn 永久带
+  // 生成光标的病),空的话直接丢弃空壳。
+  if (curAsst) {
+    const e = curAsst.querySelector(".md");
+    if (e && (e.dataset.raw || "").length > 0) finishAsst();
+    else {
+      curAsst.classList.remove("gen");
+      curAsst = null;
+    }
+  } else curAsst = null;
   return id;
 }
 export async function fillTool(d: any) {

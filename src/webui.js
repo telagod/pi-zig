@@ -3360,7 +3360,10 @@ let curAsst = null,
 // 重载后流之续:以末条 a-turn 为活泡。
  function resumeAsst() {
   const la = exports.th.querySelector(".a-turn:last-child");
-  if (la) curAsst = la;
+  if (la) {
+    curAsst = la;
+    curAsst.classList.add("gen");
+  }
 } exports.resumeAsst = resumeAsst;
 let workEl = null;
 let workCounts = { read: 0, search: 0, edit: 0, bash: 0, web: 0, mcp: 0, todo: 0, agent: 0, other: 0 };
@@ -3684,6 +3687,19 @@ function pruneTranscript() {
     const s = document.createElement("span");
     s.textContent = shown;
     bub.appendChild(s);
+    // 折叠阈值:长文本且多行,收为 7 行内 + 展开钮(dsh 用户消息折叠开头同法)
+    const tlines = shown.split("\n");
+    const long = shown.length > 340 && (tlines.length > 7 || shown.length > 900);
+    if (long) {
+      bub.classList.add("folded");
+      const more = document.createElement("button");
+      more.type = "button";
+      more.className = "fold-more";
+      more.textContent = "展开 ▾";
+      more.onclick = () => bub.classList.remove("folded");
+      bub.appendChild(document.createElement("br"));
+      bub.appendChild(more);
+    }
   } else if (!imgSrc) {
     bub.textContent = txt || "";
   }
@@ -3695,6 +3711,11 @@ function pruneTranscript() {
       setTimeout(() => location.reload(), 400);
     });
   };
+  // 轮首时间戳(dsh 用户消息行 12px 灰):每次用户消息记录发问时刻
+  const ts = document.createElement("div");
+  ts.className = "turn-ts";
+  ts.textContent = new Date().toTimeString().slice(0, 5);
+  exports.th.appendChild(ts);
   exports.th.appendChild(t);
   scrl();
   curAsst = null;
@@ -3723,7 +3744,9 @@ let mdTimer = 0;
 } exports.paintAsst = paintAsst;
  function addAsst(txt) {
   if (!txt) return;
-  const e = asstEl().querySelector(".md");
+  const el = asstEl();
+  el.classList.add("gen");
+  const e = el.querySelector(".md");
   e.dataset.raw = (e.dataset.raw || "") + txt;
   if (!mdTimer) {
     // 自适应节流:回复越长全量重排越贵,间隔跟着涨(80→160→280ms)。
@@ -3747,6 +3770,7 @@ let mdTimer = 0;
     e.dataset.raw = raw;
     e.dataset.painted = String(raw.length);
     e.innerHTML = _md.md.call(void 0, raw);
+    curAsst.classList.remove("gen");
     if (!curAsst.querySelector(".a-ops")) {
       const ops = document.createElement("div");
       ops.className = "a-ops";
@@ -3942,7 +3966,16 @@ const pendingByName = {};
   scrl();
   cards[id] = { el: d, name, ty, args: args || "", out: "", done: false };
   (pendingByName[name] || (pendingByName[name] = [])).push(id);
-  curAsst = null;
+  // 工具打断流式回复:前缀文本若已吐出即收尾(修 gen 悬挂——旧 turn 永久带
+  // 生成光标的病),空的话直接丢弃空壳。
+  if (curAsst) {
+    const e = curAsst.querySelector(".md");
+    if (e && (e.dataset.raw || "").length > 0) finishAsst();
+    else {
+      curAsst.classList.remove("gen");
+      curAsst = null;
+    }
+  } else curAsst = null;
   return id;
 } exports.addTool = addTool;
  async function fillTool(d) {
@@ -5323,12 +5356,15 @@ __modules["main"] = function(module, exports, require) {
       welcome.id = "welcome";
       welcome.className = "empty-hint";
       welcome.innerHTML =
+        '<div class="hero-card">' +
         '<div class="empty-headline">' +
         '<svg class="empty-logo" viewBox="0 0 24 18" fill="currentColor" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M2.4 1.8h17.2a1.7 1.7 0 0 1 0 3.4H10l10 8.2A1.8 1.8 0 0 1 18.65 16.45H3.2a1.7 1.7 0 0 1 0-3.4h9.4L2.7 4.9A1.8 1.8 0 0 1 4.1 1.8z"/></svg>' +
         '<span class="empty-hint-title">piz</span></div>' +
         '<button type="button" class="ws-chip" id="heroWs"><span class="ws-chip-ic">⌂</span><span id="heroWsLbl">项目</span><span class="ws-chip-chev">▾</span></button>' +
+        '<button type="button" class="hero-start" id="heroStart">＋ 开始对话</button>' +
         '<div class="empty-hint-text">读、改、跑。工具默认先问你。</div>' +
-        '<div class="empty-keys"><span><kbd>/</kbd> 命令</span><span><kbd>j</kbd> 任务</span><span><kbd>u</kbd> 用量</span><span><kbd>s</kbd> 沙箱</span><span><kbd>?</kbd> 快捷键</span></div>';
+        '<div class="empty-keys"><span><kbd>/</kbd> 命令</span><span><kbd>j</kbd> 任务</span><span><kbd>u</kbd> 用量</span><span><kbd>s</kbd> 沙箱</span><span><kbd>?</kbd> 快捷键</span></div>' +
+        '</div>';
       const wrap = _util.$.call(void 0, "wrap");
       if (!_chat.th.children.length) {
         wrap.prepend(welcome);
@@ -5337,6 +5373,7 @@ __modules["main"] = function(module, exports, require) {
           e.stopPropagation();
           _sessions.openWsMenu.call(void 0, e.currentTarget);
         };
+        _util.$.call(void 0, "heroStart").onclick = () => _util.$.call(void 0, "newBtn").click();
       }
       _sessions.renderWsName.call(void 0, );
       _sessions.loadSessions.call(void 0, );
