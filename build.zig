@@ -100,6 +100,13 @@ pub fn build(b: *std.Build) void {
     const run_step = b.step("run", "Run piz");
     run_step.dependOn(&run_cmd.step);
 
+    // ---- webui TS 构建:zig build web → piz build-web(src/webui/*.ts → src/webui.js) ----
+    const web_run = b.addRunArtifact(exe);
+    web_run.step.dependOn(b.getInstallStep());
+    web_run.addArg("build-web");
+    const web_step = b.step("web", "Rebuild src/webui.js from src/webui/*.ts");
+    web_step.dependOn(&web_run.step);
+
     // ---- 测试(独立 Debug 模块;zig test 只收集根模块测试,故 core 与 app 各一目标) ----
     const test_core = b.createModule(.{
         .root_source_file = b.path("src/core.zig"),

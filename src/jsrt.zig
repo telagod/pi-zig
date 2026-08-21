@@ -694,8 +694,8 @@ fn ensureTs() bool {
     return true;
 }
 
-/// sucrase transform(src, {transforms:["typescript"]}) → JS 源(dupe 到 a,调用方 free)。
-fn tsStrip(a: std.mem.Allocator, src: []const u8) ?[]const u8 {
+/// sucrase transform(src, {transforms:[...]}) → JS 源(dupe 到 a,调用方 free)。
+fn tsStripWith(a: std.mem.Allocator, src: []const u8, opt_src: []const u8) ?[]const u8 {
     if (!ensureTs()) return null;
     const ctx_ = ctx orelse return null;
     const global = c.JS_GetGlobalObject(ctx_);
@@ -707,8 +707,9 @@ fn tsStrip(a: std.mem.Allocator, src: []const u8) ?[]const u8 {
     defer c.JS_FreeValue(ctx_, tr);
     const arg0 = c.JS_NewStringLen(ctx_, src.ptr, @intCast(src.len));
     defer c.JS_FreeValue(ctx_, arg0);
-    const opt_src = "({transforms:['typescript']})";
-    const opt = c.JS_Eval(ctx_, opt_src.ptr, opt_src.len, "<opt>", c.JS_EVAL_TYPE_GLOBAL);
+    const opt_z = a.dupeZ(u8, opt_src) catch return null;
+    defer a.free(opt_z);
+    const opt = c.JS_Eval(ctx_, opt_z.ptr, opt_z.len, "<opt>", c.JS_EVAL_TYPE_GLOBAL);
     defer c.JS_FreeValue(ctx_, opt);
     var argv = [_]c.JSValue{ arg0, opt };
     const r = c.JS_Call(ctx_, tr, s, 2, &argv);
@@ -720,6 +721,16 @@ fn tsStrip(a: std.mem.Allocator, src: []const u8) ?[]const u8 {
     const code = c.JS_GetPropertyStr(ctx_, r, "code");
     defer c.JS_FreeValue(ctx_, code);
     return jsRetToString(a, ctx_, code);
+}
+
+fn tsStrip(a: std.mem.Allocator, src: []const u8) ?[]const u8 {
+    return tsStripWith(a, src, "({transforms:['typescript']})");
+}
+
+/// build-web 拼合用:TS 剥皮 + ESM→CJS(imports 变换,出 require/exports)。
+/// 须先 jsrt.init(引擎在场);剥离败返 null。
+pub fn transpileModule(a: std.mem.Allocator, src: []const u8) ?[]const u8 {
+    return tsStripWith(a, src, "({transforms:['typescript','imports']})");
 }
 
 /// 取异常并打 stderr(模块/classic 共用)。
@@ -1463,6 +1474,21 @@ test "qjs fs primitives: readFile/writeFile/env/cwd" {
     const out = runCommand(arena_inst.allocator(), "fsprobe", "", null).?;
     try t.expect(std.mem.indexOf(u8, out, "true|fsok:") != null);
     try t.expect(std.mem.indexOf(u8, out, "|true|true") != null);
+}
+
+test "sucrase transpileModule: typescript+imports 双变换出 CJS(build-web 赖以拼合)" {
+    if (!enabled) return error.SkipZigTest;
+    const t = std.testing;
+    const a = t.allocator;
+    deinit();
+    init(a);
+    defer deinit();
+    const out = transpileModule(a, "import { x } from \"./dep\";\nexport const y: number = x + 1;\n") orelse return error.TestUnexpectedResult;
+    defer a.free(out);
+    try t.expect(std.mem.indexOf(u8, out, "require('./dep')") != null or std.mem.indexOf(u8, out, "require(\"./dep\")") != null);
+    try t.expect(std.mem.indexOf(u8, out, "exports.y") != null);
+    // 类型已剥:不见 ": number"
+    try t.expect(std.mem.indexOf(u8, out, ": number") == null);
 }
 
 test "qjs events: pre_turn 改写/拦 + request_error 救援(借 dsh pre-step/request-error)" {

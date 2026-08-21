@@ -964,6 +964,15 @@ pub fn main(init: std.process.Init) !void {
             std.debug.print("{s}", .{text});
             if (text.len == 0 or text[text.len - 1] != '\n') std.debug.print("\n", .{});
             std.process.exit(0);
+        } else if (std.mem.eql(u8, arg, "build-web")) {
+            // webui TS 构建:piz build-web [src_dir] [out] → sucrase 转译拼合出 webui.js
+            const src_dir = args.next() orelse "src/webui";
+            const out_path = args.next() orelse "src/webui.js";
+            const n = @import("build_web.zig").run(alloc, src_dir, out_path) catch {
+                std.process.exit(1);
+            };
+            std.debug.print("build-web: {s} → {s} ({d} bytes)\n", .{ src_dir, out_path, n });
+            std.process.exit(0);
         } else if (std.mem.eql(u8, arg, "memory")) {
             const mem_path = util.configDir(alloc) catch {
                 std.debug.print("piz: no config dir\n", .{});
@@ -1186,6 +1195,7 @@ test {
     _ = @import("cmd_init.zig");
     _ = @import("cmd_diff.zig");
     _ = @import("cmd_commit.zig");
+    _ = @import("build_web.zig");
     _ = cmd_print;
     _ = cmd_login;
     _ = cmd_pkg;
