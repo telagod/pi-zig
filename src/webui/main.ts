@@ -6,6 +6,7 @@
       import { initServerAuth, showAuthPage, hideAuthPage, setCredential, clearCredential, getCredential, rawFetch, setOnAuthed } from "./net";
       import { showToast, closeDlg, openDlg, askText, askYes, bindSeg, bindAuthPanel, dlgHooks } from "./ui";
       import { autosizeInp, saveDraft, restoreDraft, clearDraft, pushHist, histPrev, histNext } from "./store";
+      import { closeMenus, openAt, loadWorkspaces, renderWsName, addProject, openWsMenu, sessionRow, openSessionMenu, loadSessions, act, sessData, sessHooks } from "./sessions";
       function setScheme(v) {
         const map = { auto: "system", light: "light", dark: "dark", system: "system" };
         const next = map[String(v || "").trim()];
@@ -245,7 +246,7 @@
         };
       }
       function openSearch() {
-        const hits = sessList.slice();
+        const hits = sessData.list.slice();
         let sel = 0;
         openDlg({
           cls: "wide",
@@ -396,360 +397,8 @@
         }
       });
       // ---- 菜单助手 ----
-      let openMenu = null;
-      function closeMenus() {
-        for (const m of document.querySelectorAll(".menu.open"))
-          m.classList.remove("open");
-        openMenu = null;
-      }
-      function openAt(id, btn) {
-        closeMenus();
-        const m = $(id);
-        m.classList.add("open");
-        const r = btn.getBoundingClientRect();
-        const mw = m.offsetWidth,
-          mh = m.offsetHeight;
-        m.style.left = Math.min(r.right - mw, innerWidth - mw - 8) + "px";
-        m.style.top = Math.min(r.bottom + 4, innerHeight - mh - 8) + "px";
-        openMenu = m;
-      }
-      document.addEventListener("click", (e) => {
-        if (
-          !e.target.closest(".menu") &&
-          !e.target.closest(".ib") &&
-          !e.target.closest(".perm-pill") &&
-          !e.target.closest(".mode-pill") &&
-          !e.target.closest(".ch-brand") &&
-          !e.target.closest(".ws-chip") &&
-          !e.target.closest(".ch-ws")
-        )
-          closeMenus();
-      });
-      // ---- 项目 ----
-      function loadWorkspaces() {
-        return fetch("/api/workspaces")
-          .then((r) => r.json())
-          .catch(() => []);
-      }
-      async function renderWsName() {
-        const list = await loadWorkspaces();
-        const cur = ws || (list[0] ? list[0].root : "");
-        const nm = projectName(cur) || "piz";
-        $("wsName").textContent = "piz";
-        $("tbWs").textContent = nm;
-        if ($("heroWsLbl")) $("heroWsLbl").textContent = nm || "选择项目";
-        if ($("hWs") && !$("hWs").textContent) {
-          $("hWs").textContent = nm;
-          if ($("hSep")) $("hSep").style.display = nm ? "" : "none";
-        }
-        return list;
-      }
-      async function addProject() {
-        const root = await askText("添加项目", "", "绝对路径，如 /home/me/proj");
-        if (!root) return;
-        fetch("/api/workspaces", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ root }),
-        })
-          .then((r) => r.json())
-          .then(() => {
-            location.href = sessUrl("default", root);
-          })
-          .catch(() => showToast("无效目录"));
-      }
-      async function openWsMenu(btn) {
-        const list = await renderWsName();
-        const cur = ws || (list[0] ? list[0].root : "");
-        const m = $("wsmenu");
-        m.innerHTML = "";
-        for (const w of list) {
-          const d = document.createElement("div");
-          d.className = "mi" + (w.root === cur ? " check" : "");
-          d.textContent = (w.name || projectName(w.root)) + " · " + w.root;
-          d.title = w.root;
-          d.onclick = () => {
-            if (w.root !== cur) location.href = sessUrl("default", w.root);
-          };
-          m.appendChild(d);
-        }
-        const sep = document.createElement("div");
-        sep.className = "sep";
-        m.appendChild(sep);
-        const add = document.createElement("div");
-        add.className = "mi";
-        add.textContent = "＋ 添加项目…";
-        add.onclick = () => {
-          closeMenus();
-          addProject();
-        };
-        m.appendChild(add);
-        openAt("wsmenu", btn);
-      }
-      $("wsqBtn").onclick = (e) => {
-        e.stopPropagation();
-        openWsMenu(e.currentTarget);
-      };
-      // ---- 会话列表 ----
-      let sessList = [],
-        archList = [],
-        sessMeta = {};
-      function sessionRow(s, arch, wsRoot) {
-        const d = document.createElement("div");
-        const here = !ws || !wsRoot || wsRoot === ws;
-        d.className =
-          "se" +
-          (s.name === sess && here ? " on" : "") +
-          (arch ? " arch" : "");
-        const title = s.name === "default" ? "默认会话" : s.title || s.name;
-        d.innerHTML =
-          '<div class="srow"><span class="lead">' +
-          (s.busy
-            ? '<span class="spin"></span>'
-            : s.unread
-              ? '<span class="unread-dot"></span>'
-              : "") +
-          '</span><span class="st">' +
-          esc(title) +
-          "</span>" +
-          (s.status === "awaitingQuestion"
-            ? '<span class="tag info">回答</span>'
-            : "") +
-          (s.status === "awaitingApproval"
-            ? '<span class="tag warn">审批</span>'
-            : "") +
-          (s.status === "aborted"
-            ? '<span class="tag danger">中止</span>'
-            : "") +
-          '<span class="sts">' +
-          fmtTime(s.ts) +
-          '</span><button class="kebab" title="操作">⋯</button></div>';
-        d.onclick = () => {
-          if (s.name === sess) {
-            if (s.mode || s.auto !== undefined) {
-              approvalMode = s.mode || (s.auto ? "yolo" : "ask");
-              setModeBtn();
-            }
-            closeSheet();
-          } else location.href = sessUrl(s.name, wsRoot);
-        };
-        const kb = d.querySelector(".kebab");
-        kb.onclick = (e) => {
-          e.stopPropagation();
-          openSessionMenu(kb, s, arch);
-        };
-        return d;
-      }
-      function openSessionMenu(btn, s, arch) {
-        const m = $("kmenu");
-        m.innerHTML = "";
-        if (!arch) {
-          const ren = document.createElement("div");
-          ren.className = "mi";
-          ren.textContent = "✎ 重命名";
-          ren.onclick = async () => {
-            closeMenus();
-            const t = await askText("重命名会话", s.title || s.name, "会话标题");
-            if (t === null) return;
-            act({ act: "rename", name: t }, (j) => {
-              loadSessions();
-              showToast(j && j.ok ? "已重命名" : "失败");
-            });
-          };
-          m.appendChild(ren);
-          const fork = document.createElement("div");
-          fork.className = "mi";
-          fork.textContent = "✱ 派生会话";
-          fork.onclick = async () => {
-            closeMenus();
-            const n = await askText("派生会话", "", "新会话名，留空自动");
-            if (n === null) return;
-            act({ act: "fork", name: n || "" }, (j) => {
-              if (j && j.name) {
-                showToast("已派生 " + j.name);
-                setTimeout(
-                  () =>
-                    (location.href = sessUrl(j.name)),
-                  600,
-                );
-              }
-            });
-          };
-          m.appendChild(fork);
-          const arc = document.createElement("div");
-          arc.className = "mi";
-          arc.textContent = "🗄 归档";
-          arc.onclick = () => {
-            closeMenus();
-            act({ act: "archive" }, (j) => {
-              if (j && j.ok) {
-                showToast("已归档");
-                if (s.name === sess)
-                  setTimeout(() => (location.href = sessUrl("default")), 400);
-              }
-              loadSessions();
-            });
-          };
-          m.appendChild(arc);
-          const sep = document.createElement("div");
-          sep.className = "sep";
-          m.appendChild(sep);
-        }
-        const del = document.createElement("div");
-        del.className = "mi danger";
-        del.textContent = arch ? "永久删除" : "删除";
-        del.onclick = async () => {
-          closeMenus();
-          if (!(await askYes("删除会话", "永久删除 " + s.name + "？"))) return;
-          act({ act: "delete" }, () => {
-            loadSessions();
-          });
-        };
-        m.appendChild(del);
-        if (arch) {
-          const res = document.createElement("div");
-          res.className = "mi";
-          res.textContent = "↩ 恢复";
-          res.onclick = () => {
-            closeMenus();
-            act({ act: "restore" }, () => {
-              loadSessions();
-              showToast("已恢复 " + s.name);
-            });
-          };
-          m.prepend(res);
-        }
-        openAt("kmenu", btn);
-      }
-      function loadSessions() {
-        Promise.all([
-          loadWorkspaces(),
-          fetch("/api/sessions?" + wsp)
-            .then((r) => r.json())
-            .catch(() => []),
-        ])
-          .then(([projects, list]) => {
-            sessList = list.filter((s) => !s.archived);
-            archList = list.filter((s) => s.archived);
-            sessMeta = {};
-            for (const s of list) sessMeta[s.name] = s;
-            const sl = $("slist");
-            sl.innerHTML = "";
-            const q = ((searchQ && searchQ.value) || "").toLowerCase();
-            const show = (s) =>
-              !q || (s.name + (s.title || "")).toLowerCase().includes(q);
-            const cur = ws || (projects[0] ? projects[0].root : "");
-            const lab = document.createElement("div");
-            lab.className = "side-lab";
-            lab.textContent = "项目";
-            sl.appendChild(lab);
-            if (!projects.length) {
-              const empty = document.createElement("div");
-              empty.className = "sg-name";
-              empty.style.padding = "6px 8px";
-              empty.textContent = "当前目录";
-              sl.appendChild(empty);
-            }
-            for (const w of projects) {
-              const isCur = w.root === cur;
-              const gh = document.createElement("div");
-              gh.className = "sg-head" + (isCur ? " on" : "");
-              gh.title = w.root;
-              gh.innerHTML =
-                '<span class="sg-chev' +
-                (isCur ? " open" : "") +
-                '">▶</span><span class="sg-name">' +
-                esc(w.name || projectName(w.root)) +
-                "</span>" +
-                (isCur
-                  ? '<span class="sg-cnt">' + sessList.length + "</span>"
-                  : "");
-              sl.appendChild(gh);
-              if (isCur) {
-                const wrap = document.createElement("div");
-                wrap.className = "sg-chats";
-                const vis = sessList.filter(show);
-                if (!vis.length && q) {
-                  const ne = document.createElement("div");
-                  ne.className = "sg-name";
-                  ne.textContent = "无匹配会话";
-                  wrap.appendChild(ne);
-                } else if (!vis.length) {
-                  const ne = document.createElement("div");
-                  ne.className = "sg-name";
-                  ne.textContent = "还没有会话,发一条消息开始";
-                  wrap.appendChild(ne);
-                }
-                for (const s of vis) wrap.appendChild(sessionRow(s, false, w.root));
-                if (archList.length) {
-                  const se = document.createElement("div");
-                  se.className = "sg-arch";
-                  se.textContent = "归档 " + archList.length;
-                  wrap.appendChild(se);
-                  for (const s of archList)
-                    wrap.appendChild(sessionRow(s, true, w.root));
-                }
-                sl.appendChild(wrap);
-                gh.onclick = () => {
-                  const open = gh
-                    .querySelector(".sg-chev")
-                    .classList.toggle("open");
-                  wrap.style.display = open ? "" : "none";
-                };
-              } else {
-                gh.onclick = () => {
-                  location.href = sessUrl("default", w.root);
-                };
-              }
-            }
-            const addp = document.createElement("button");
-            addp.className = "btn-add-proj";
-            addp.type = "button";
-            addp.innerHTML = '<span class="pl">＋</span><span>添加项目</span>';
-            addp.onclick = () => addProject();
-            sl.appendChild(addp);
-            const sb = $("sbody");
-            if (sb) {
-              sb.innerHTML = "";
-              for (const s of sessList) sb.appendChild(sessionRow(s, false, cur));
-              if (!sessList.length && !archList.length) {
-                const ne2 = document.createElement("div");
-                ne2.className = "sg-name";
-                ne2.style.padding = "12px 14px";
-                ne2.textContent = "还没有会话,发一条消息开始";
-                sb.appendChild(ne2);
-              }
-              if (archList.length) {
-                const se2 = document.createElement("div");
-                se2.className = "sg-sep";
-                sb.appendChild(se2);
-                const sh = document.createElement("div");
-                sh.className = "sg-arch";
-                sh.textContent = "归档 " + archList.length;
-                sb.appendChild(sh);
-                for (const s of archList)
-                  sb.appendChild(sessionRow(s, true, cur));
-              }
-            }
-          })
-          .catch(() => showToast("sessions load failed"));
-      }
-      const searchQ = document.createElement("input");
-      searchQ.id = "searchQ";
+      // ---- 菜单助手/项目/会话列已迁 sessions.ts ----
       $("searchBtn").onclick = () => openSearch();
-      // ---- 会话操作 ----
-      function act(body, then) {
-        fetch("/api/action?" + wsp + "session=" + encodeURIComponent(sess), {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify(body),
-        })
-          .then((r) => r.json())
-          .then((j) => {
-            if (then) then(j);
-          })
-          .catch(() => showToast("action failed"));
-      }
       // ---- 模型 ----
       async function applySessionModel(md) {
         try {
@@ -3181,11 +2830,11 @@
               openSearch();
               break;
             }
-            if (n < 1 || n > sessList.length) {
+            if (n < 1 || n > sessData.list.length) {
               showToast("没有第 " + n + " 个会话（/sessions）");
               break;
             }
-            location.href = sessUrl(sessList[n - 1].name);
+            location.href = sessUrl(sessData.list[n - 1].name);
             break;
           }
           case "/plan": {
@@ -4021,6 +3670,14 @@
       dlgHooks.hideSlash = hideSlash;
       dlgHooks.hideBang = hideBang;
       setOnAuthed(boot);
+      // sessions 解缠钩:点当前会话行 → 应其 mode/auto 并收 sheet
+      sessHooks.applySessionMeta = (s) => {
+        if (s.mode || s.auto !== undefined) {
+          approvalMode = s.mode || (s.auto ? "yolo" : "ask");
+          setModeBtn();
+        }
+        closeSheet();
+      };
       initServerAuth();
       const probe = rawFetch("/api/state?" + wsp + "session=" + encodeURIComponent(sess), {
         headers: getCredential() ? { Authorization: "Bearer " + getCredential() } : {},
