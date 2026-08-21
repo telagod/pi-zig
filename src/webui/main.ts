@@ -1,40 +1,23 @@
       "use strict";
-      import { qp, sess, ws, wsp, isMobile, prefs, savePrefs, sessUrl } from "./state";
-      import { $, esc, histText, projectName, fmtTime, fmtTok, closeFences, nunit, downloadText, toolType, parseToolArgs, argsPreview, toolIcon, artifactName, workKind, ico, icoKind, slashStem, startsWithInsens, indexOfInsens, fuzzySubseq, rankSlash, hlSpan, isMarkdownPath, looksLikeMd } from "./util";
-      import { md, ansiHtml, mdInline, mdBlocks, renderMd, diffHtml, todoHtml } from "./md";
-      import { segHtml, authPanelHtml, packageRows, pluginRows } from "./render";
-      import { initServerAuth, showAuthPage, hideAuthPage, setCredential, clearCredential, getCredential, rawFetch, setOnAuthed } from "./net";
-      import { showToast, closeDlg, openDlg, askText, askYes, dlgHooks, clipText, setScheme } from "./ui";
-      import { autosizeInp, saveDraft, restoreDraft, clearDraft, pushHist, histPrev, histNext } from "./store";
-      import { closeMenus, openAt, loadWorkspaces, renderWsName, addProject, openWsMenu, sessionRow, openSessionMenu, loadSessions, act, sessData, sessHooks } from "./sessions";
-      import { ev, connectSSE } from "./stream";
-      import { slashH, loadHelpCatalog, hideSlash, hideBang, slashOpen, updateSlash, updateComposerChrome, slashMove, slashComplete, slashPick, runSlash, findSlash } from "./slash";
-      import { chatH, th, scrl, setHistRange, getWebFindQ, paintHistMore, replayHist, loadOlder, findInThread, noteTurn, stampTurn, finishWork, addUser, asstEl, addAsst, finishAsst, addRsn, finishRsn, addTool, fillTool, toolDone, addPerm, addNotice, inspect, resumeAsst } from "./chat";
-      import { compH, getRunning, getLastUser, setLastUser, clearPending, setRun, refreshSend, ensureActPoll, renderQueue, dropPending, toggleKeysHint, attachClipboardImage, sendPlain, send } from "./composer";
+      import { sess, ws, wsp } from "./state";
+      import { $ } from "./util";
+      import { initServerAuth, showAuthPage, getCredential, rawFetch, setOnAuthed } from "./net";
+      import { showToast, dlgHooks, clipText } from "./ui";
+      import { restoreDraft } from "./store";
+      import { closeMenus, openWsMenu, renderWsName, loadSessions, sessHooks } from "./sessions";
+      import { connectSSE } from "./stream";
+      import { slashH, loadHelpCatalog, hideSlash, hideBang, runSlash } from "./slash";
+      import { chatH, th, setHistRange, getWebFindQ, paintHistMore, replayHist, findInThread, addUser, asstEl, addAsst, finishAsst, inspect, resumeAsst } from "./chat";
+      import { getRunning, getLastUser, setLastUser, clearPending, setRun, refreshSend, ensureActPoll, renderQueue, attachClipboardImage, sendPlain, send } from "./composer";
       import { applyBootState, setModeBtn, setSandboxBtn, applySandboxLevel, setApprovalMode, setCost, setCtx, modelH } from "./model";
-      import { openSettings, openSearch } from "./settings";
+      import { openSearch } from "./settings";
       import { closeSheet } from "./sheet";
       import { loadPlugins, pluginsH } from "./plugins";
-      // ---- 外观方案已迁 ui.ts(setScheme/applyScheme) ----
+      // 侧栏折叠态(piz.sidebar=1 则预合)
       try {
         if (localStorage.getItem("piz.sidebar") === "1")
           document.body.classList.add("collapsed");
       } catch {}
-      // ---- 服务器凭证与 fetch 包装已迁 net.ts;toast/对话框迁 ui.ts ----
-      // ---- 设置/搜索/全局键已迁 settings.ts ----
-      // ---- 菜单助手 ----
-      // ---- 菜单助手/项目/会话列已迁 sessions.ts ----
-      $("searchBtn").onclick = () => openSearch();
-      // ---- 模型/思考/授权/沙箱/cost/ctx/hdr 已迁 model.ts ----
-      // ---- 渲染核心已迁 chat.ts ----
-
-      // ---- SSE 已迁 stream.ts(ev.onmessage 于下方指派) ----
-      // ---- 发送态/SSE 路由/键盘/图片/send 已迁 composer.ts ----
-      // ---- 斜杠目录/菜单/runSlash 已迁 slash.ts ----
-      // ---- runSlash 已迁 slash.ts ----
-      // ---- sheet/顶栏钮/welcome 已迁 sheet.ts;插件 SDK 已迁 plugins.ts ----
-      // ---- 初始化 ----
-      // curModel/curThink/curTitle/curVision 已迁 model.ts
       // ---- 启动门(kimi GlobalLoading + auth gate):splash → 探活 → 登录页或主界面 ----
       let booted = false;
       let splashAt = Date.now();
@@ -98,6 +81,7 @@
       restoreDraft();
       }
       // ui/net 解缠钩:对话框开场收菜单/补全;登录成功续 boot
+      $("searchBtn").onclick = () => openSearch();
       dlgHooks.closeMenus = closeMenus;
       dlgHooks.hideSlash = hideSlash;
       dlgHooks.hideBang = hideBang;

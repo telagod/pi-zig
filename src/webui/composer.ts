@@ -1,6 +1,6 @@
 // composer.ts —— 发送生命周期:运行态/队列/活动条、SSE 事件路由(ev.onmessage)、
 // 输入框键盘与草稿、图片黏附、sendPlain/send。
-// 自 webui.js 切出。模型簇与插件之属 main,经 compH 钩袋注入;聊天渲染直引 chat.ts(无环)。
+// 自 webui.js 切出。聊天渲染直引 chat.ts,插件直引 plugins.ts,无环无钩。
 import { $, esc, fmtTok } from "./util";
 import { sess, wsp, prefs } from "./state";
 import { showToast } from "./ui";
@@ -20,7 +20,6 @@ import {
 } from "./model";
 import { pluginEmit } from "./plugins";
 
-export const compH: any = {};
 
 let running = false;
 let lastUser = "";

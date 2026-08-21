@@ -286,338 +286,6 @@ __modules["util"] = function(module, exports, require) {
 } exports.looksLikeMd = looksLikeMd;
 
 };
-__modules["md"] = function(module, exports, require) {
-"use strict";Object.defineProperty(exports, "__esModule", {value: true});// md.ts —— 极简 markdown / ansi / diff / todo 渲染,纯字符串进 HTML 出。
-// 自 webui.js 切出;名与义一字未改。
-var _util = require('./util');
-
-// markdown(极简:代码块+行内码+粗体)
- function md(raw) {
-  const out = [];
-  const re = /```(\w*)\n?([\s\S]*?)```/g;
-  let last = 0,
-    m;
-  while ((m = re.exec(raw)) !== null) {
-    if (m.index > last) out.push(mdInline(raw.slice(last, m.index)));
-    out.push('<pre><button class="pre-cp" type="button" title="复制">⧉</button><code>' + _util.esc.call(void 0, m[2]) + "</code></pre>");
-    last = m.index + m[0].length;
-  }
-  if (last < raw.length) out.push(mdInline(raw.slice(last)));
-  return out.join("");
-} exports.md = md;
-const AC = {
-  "30": "#333",
-  "31": "#f85149",
-  "32": "#3fb950",
-  "33": "#d29922",
-  "34": "#58a6ff",
-  "35": "#bc8cff",
-  "36": "#39c5cf",
-  "37": "#c9d1d9",
-  "90": "#8b949e",
-  "91": "#ff7b72",
-  "92": "#7ee787",
-  "93": "#e3b341",
-  "94": "#79c0ff",
-  "95": "#d2a8ff",
-  "96": "#76e3ea",
-  "97": "#e6edf3",
-};
- function ansiHtml(t) {
-  let o = "",
-    last = 0,
-    fg = null;
-  const re = /\x1b\[([0-9;]*)m/g;
-  let m;
-  while ((m = re.exec(t)) !== null) {
-    o += _util.esc.call(void 0, t.slice(last, m.index));
-    const c = m[1].split(";").filter(Boolean);
-    if (c.includes("0") || c.length === 0) fg = null;
-    else {
-      const col = AC[c.find((x) => AC[x]) || ""];
-      if (col) fg = col;
-    }
-    last = m.index + m[0].length;
-  }
-  o += _util.esc.call(void 0, t.slice(last));
-  return fg ? '<span style="color:' + fg + '">' + o + "</span>" : o;
-} exports.ansiHtml = ansiHtml;
- function mdInline(s) {
-  s = _util.esc.call(void 0, s);
-  s = s.replace(/`([^`]+)`/g, "<code>$1</code>");
-  s = s.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
-  s = s.replace(/(^|[^\*])\*(?!\*)([^*]+)\*(?!\*)/g, "$1<em>$2</em>");
-  s = s.replace(
-    /\[([^\]]+)\]\((https?:[^)\s]+)\)/g,
-    '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>',
-  );
-  return s;
-} exports.mdInline = mdInline;
- function mdBlocks(s) {
-  const lines = String(s).replace(/\r\n/g, "\n").split("\n");
-  let html = "";
-  let i = 0;
-  let para = [];
-  const flushP = () => {
-    if (!para.length) return;
-    html += "<p>" + mdInline(para.join(" ")) + "</p>";
-    para = [];
-  };
-  while (i < lines.length) {
-    const line = lines[i];
-    if (/^\s*$/.test(line)) {
-      flushP();
-      i++;
-      continue;
-    }
-    const hm = /^(#{1,3})\s+(.+)$/.exec(line);
-    if (hm) {
-      flushP();
-      html += "<h" + hm[1].length + ">" + mdInline(hm[2]) + "</h" + hm[1].length + ">";
-      i++;
-      continue;
-    }
-    if (/^---+$/.test(line.trim())) {
-      flushP();
-      html += "<hr/>";
-      i++;
-      continue;
-    }
-    if (/^>\s?/.test(line)) {
-      flushP();
-      const qs = [];
-      while (i < lines.length && /^>\s?/.test(lines[i])) {
-        qs.push(lines[i].replace(/^>\s?/, ""));
-        i++;
-      }
-      html += "<blockquote>" + mdInline(qs.join(" ")) + "</blockquote>";
-      continue;
-    }
-    if (/^\s*[-*]\s+/.test(line)) {
-      flushP();
-      html += "<ul>";
-      while (i < lines.length && /^\s*[-*]\s+/.test(lines[i])) {
-        html += "<li>" + mdInline(lines[i].replace(/^\s*[-*]\s+/, "")) + "</li>";
-        i++;
-      }
-      html += "</ul>";
-      continue;
-    }
-    if (/^\s*\d+\.\s+/.test(line)) {
-      flushP();
-      html += "<ol>";
-      while (i < lines.length && /^\s*\d+\.\s+/.test(lines[i])) {
-        html += "<li>" + mdInline(lines[i].replace(/^\s*[-*]\s+/, "")) + "</li>";
-        i++;
-      }
-      html += "</ol>";
-      continue;
-    }
-    para.push(line);
-    i++;
-  }
-  flushP();
-  return html;
-} exports.mdBlocks = mdBlocks;
- function renderMd(src) {
-  const text = String(src || "");
-  const re = /```(\w*)\n?([\s\S]*?)```/g;
-  let html = "";
-  let last = 0;
-  let m;
-  while ((m = re.exec(text))) {
-    if (m.index > last) html += mdBlocks(text.slice(last, m.index));
-    html += '<pre><button class="pre-cp" type="button" title="复制">⧉</button><code>' + _util.esc.call(void 0, m[2].replace(/\n$/, "")) + "</code></pre>";
-    last = m.index + m[0].length;
-  }
-  if (last < text.length) html += mdBlocks(text.slice(last));
-  return html;
-} exports.renderMd = renderMd;
- function diffHtml(t) {
-  const lines = String(t || "").split("\n");
-  let html = "";
-  let file = "";
-  for (const l of lines) {
-    if (/^(edited|wrote|created)\b/i.test(l)) {
-      html += '<div class="diff-meta">' + _util.esc.call(void 0, l) + "</div>";
-      continue;
-    }
-    if (l.startsWith("+++ ")) {
-      file = l.slice(4).replace(/^[ab]\//, "");
-      continue;
-    }
-    if (l.startsWith("--- ")) continue;
-    if (l.startsWith("@@")) {
-      html +=
-        '<div class="diff-row hunk"><span class="g"></span><span class="ln">' +
-        _util.esc.call(void 0, l) +
-        "</span></div>";
-      continue;
-    }
-    if (l.startsWith("+")) {
-      html +=
-        '<div class="diff-row add"><span class="g">+</span><span class="ln">' +
-        _util.esc.call(void 0, l.slice(1)) +
-        "</span></div>";
-      continue;
-    }
-    if (l.startsWith("-")) {
-      html +=
-        '<div class="diff-row del"><span class="g">−</span><span class="ln">' +
-        _util.esc.call(void 0, l.slice(1)) +
-        "</span></div>";
-      continue;
-    }
-    html +=
-      '<div class="diff-row"><span class="g"></span><span class="ln">' + _util.esc.call(void 0, l) + "</span></div>";
-  }
-  if (file) html = '<div class="diff-file">' + _util.esc.call(void 0, file) + "</div>" + html;
-  return html;
-} exports.diffHtml = diffHtml;
- function todoHtml(t) {
-  let html = "";
-  for (const l of String(t || "").split("\n")) {
-    const m = /^\[([ x>X])\]\s*(.*)$/.exec(l);
-    if (m) {
-      const st = m[1] === "x" || m[1] === "X" ? "done" : m[1] === ">" ? "run" : "pend";
-      const bm = /^(.*)\s+@([A-Za-z][A-Za-z0-9_-]*)$/.exec(m[2]);
-      const tx = bm ? bm[1] : m[2];
-      const bind = bm ? bm[2] : "";
-      html +=
-        '<div class="todo-i ' +
-        st +
-        '"><span class="todo-box"></span><span class="todo-tx">' +
-        _util.esc.call(void 0, tx) +
-        (bind ? '<span class="todo-bind">@' + _util.esc.call(void 0, bind) + "</span>" : "") +
-        "</span></div>";
-    } else if (l.trim()) {
-      html += '<div class="todo-foot">' + _util.esc.call(void 0, l) + "</div>";
-    }
-  }
-  return html;
-} exports.todoHtml = todoHtml;
-
-};
-__modules["render"] = function(module, exports, require) {
-"use strict";Object.defineProperty(exports, "__esModule", {value: true});// render.ts —— 设置面板的纯 HTML 构造器(seg 开关 / auth 键列 / 资源包 / 插件行)。
-// 自 webui.js 切出;名与义一字未改。DOM 绑定(bindSeg/bindAuthPanel)留在 main。
-var _util = require('./util');
-
- function segHtml(name, opts, cur) {
-  return (
-    '<div class="seg" data-seg="' +
-    name +
-    '">' +
-    opts
-      .map(
-        (o) =>
-          '<button type="button" data-v="' +
-          _util.esc.call(void 0, o.v) +
-          '" class="' +
-          (o.v === cur ? "on" : "") +
-          '">' +
-          _util.esc.call(void 0, o.l) +
-          "</button>",
-      )
-      .join("") +
-    "</div>"
-  );
-} exports.segHtml = segHtml;
- function authPanelHtml(cfg) {
-  const keysFirst = [
-    "deepseek",
-    "openai",
-    "anthropic",
-    "xai",
-    "openrouter",
-    "groq",
-    "mistral",
-    "together",
-    "fireworks",
-    "cerebras",
-    "moonshotai",
-    "huggingface",
-    "nvidia",
-    "zai",
-    "minimax",
-  ];
-  const src = cfg.providers || [];
-  const by = {};
-  src.forEach((p) => {
-    by[p.name] = p;
-  });
-  const list = keysFirst.map((n) => by[n] || { name: n, hasKey: false });
-  const oauthLabel = {
-    openrouter: "Sign in with OpenRouter",
-    xai: "Sign in with xAI",
-    openai: "Sign in with ChatGPT",
-  };
-  return (
-    '<div class="set-row"><div class="set-lab">API keys<span class="set-hint">Built-in providers. Paste a key and Save.</span></div></div>' +
-    list
-      .map((p) => {
-        const oauthl = oauthLabel[p.name];
-        return (
-          '<div class="set-row auth-row" data-prov="' +
-          _util.esc.call(void 0, p.name) +
-          '"><div class="set-lab">' +
-          _util.esc.call(void 0, p.name) +
-          '<span class="set-hint">' +
-          (p.hasKey ? "key set" : "no key") +
-          '</span></div><div class="auth-actions"><input class="set-sel auth-key" type="password" placeholder="API key" autocomplete="off">' +
-          '<button type="button" class="btn auth-save">Save</button>' +
-          (oauthl ? '<button type="button" class="btn auth-oauth">' + oauthl + "</button>" : "") +
-          '</div><div class="set-hint auth-dev" hidden></div></div>'
-        );
-      })
-      .join("")
-  );
-} exports.authPanelHtml = authPanelHtml;
- function packageRows(data) {
-  const user = data && Array.isArray(data.user) ? data.user : [];
-  const proj = data && Array.isArray(data.project) ? data.project : [];
-  if (!user.length && !proj.length) {
-    return '<div class="set-row"><div class="set-lab">资源包<span class="set-hint">piz pkg install &lt;path&gt; [-l]</span></div></div>';
-  }
-  function one(p, scope) {
-    return (
-      '<div class="set-row"><div class="set-lab">' +
-      _util.esc.call(void 0, p.name || "") +
-      '<span class="set-hint">' +
-      scope +
-      " · skills:" +
-      (p.skills || 0) +
-      " prompts:" +
-      (p.prompts || 0) +
-      (p.web ? " · web" : "") +
-      "</span></div></div>"
-    );
-  }
-  let html =
-    '<div class="set-row"><div class="set-lab">资源包<span class="set-hint">用户 ~/.piz/packages 与项目 .piz/packages</span></div></div>';
-  for (const p of user) html += one(p, "user");
-  for (const p of proj) html += one(p, "project");
-  return html;
-} exports.packageRows = packageRows;
- function pluginRows(list) {
-  const plugs = Array.isArray(list) ? list.filter((p) => p && p.optional) : [];
-  if (!plugs.length) return "";
-  let html =
-    '<div class="set-row"><div class="set-lab">插件<span class="set-hint">task-delegation 才有 workflow / 子代理。开关后下一轮生效。</span></div></div>';
-  for (const p of plugs) {
-    html +=
-      '<div class="set-row"><div class="set-lab">' +
-      _util.esc.call(void 0, p.name) +
-      '</div><button type="button" class="sw' +
-      (p.enabled ? " on" : "") +
-      '" data-plugin="' +
-      _util.esc.call(void 0, p.name) +
-      '"></button></div>';
-  }
-  return html;
-} exports.pluginRows = pluginRows;
-
-};
 __modules["net"] = function(module, exports, require) {
 "use strict";Object.defineProperty(exports, "__esModule", {value: true}); function _optionalChain(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }// net.ts —— 服务器凭证 + fetch 全局包装(带 Bearer,401 → 登录页)。
 // 自 webui.js 切出;原 closure 变量 credential 改为模块私有,经 accessor 进出。
@@ -3015,6 +2683,218 @@ let slashItems = [],
 } exports.runSlash = runSlash;
 
 };
+__modules["md"] = function(module, exports, require) {
+"use strict";Object.defineProperty(exports, "__esModule", {value: true});// md.ts —— 极简 markdown / ansi / diff / todo 渲染,纯字符串进 HTML 出。
+// 自 webui.js 切出;名与义一字未改。
+var _util = require('./util');
+
+// markdown(极简:代码块+行内码+粗体)
+ function md(raw) {
+  const out = [];
+  const re = /```(\w*)\n?([\s\S]*?)```/g;
+  let last = 0,
+    m;
+  while ((m = re.exec(raw)) !== null) {
+    if (m.index > last) out.push(mdInline(raw.slice(last, m.index)));
+    out.push('<pre><button class="pre-cp" type="button" title="复制">⧉</button><code>' + _util.esc.call(void 0, m[2]) + "</code></pre>");
+    last = m.index + m[0].length;
+  }
+  if (last < raw.length) out.push(mdInline(raw.slice(last)));
+  return out.join("");
+} exports.md = md;
+const AC = {
+  "30": "#333",
+  "31": "#f85149",
+  "32": "#3fb950",
+  "33": "#d29922",
+  "34": "#58a6ff",
+  "35": "#bc8cff",
+  "36": "#39c5cf",
+  "37": "#c9d1d9",
+  "90": "#8b949e",
+  "91": "#ff7b72",
+  "92": "#7ee787",
+  "93": "#e3b341",
+  "94": "#79c0ff",
+  "95": "#d2a8ff",
+  "96": "#76e3ea",
+  "97": "#e6edf3",
+};
+ function ansiHtml(t) {
+  let o = "",
+    last = 0,
+    fg = null;
+  const re = /\x1b\[([0-9;]*)m/g;
+  let m;
+  while ((m = re.exec(t)) !== null) {
+    o += _util.esc.call(void 0, t.slice(last, m.index));
+    const c = m[1].split(";").filter(Boolean);
+    if (c.includes("0") || c.length === 0) fg = null;
+    else {
+      const col = AC[c.find((x) => AC[x]) || ""];
+      if (col) fg = col;
+    }
+    last = m.index + m[0].length;
+  }
+  o += _util.esc.call(void 0, t.slice(last));
+  return fg ? '<span style="color:' + fg + '">' + o + "</span>" : o;
+} exports.ansiHtml = ansiHtml;
+ function mdInline(s) {
+  s = _util.esc.call(void 0, s);
+  s = s.replace(/`([^`]+)`/g, "<code>$1</code>");
+  s = s.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+  s = s.replace(/(^|[^\*])\*(?!\*)([^*]+)\*(?!\*)/g, "$1<em>$2</em>");
+  s = s.replace(
+    /\[([^\]]+)\]\((https?:[^)\s]+)\)/g,
+    '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>',
+  );
+  return s;
+} exports.mdInline = mdInline;
+ function mdBlocks(s) {
+  const lines = String(s).replace(/\r\n/g, "\n").split("\n");
+  let html = "";
+  let i = 0;
+  let para = [];
+  const flushP = () => {
+    if (!para.length) return;
+    html += "<p>" + mdInline(para.join(" ")) + "</p>";
+    para = [];
+  };
+  while (i < lines.length) {
+    const line = lines[i];
+    if (/^\s*$/.test(line)) {
+      flushP();
+      i++;
+      continue;
+    }
+    const hm = /^(#{1,3})\s+(.+)$/.exec(line);
+    if (hm) {
+      flushP();
+      html += "<h" + hm[1].length + ">" + mdInline(hm[2]) + "</h" + hm[1].length + ">";
+      i++;
+      continue;
+    }
+    if (/^---+$/.test(line.trim())) {
+      flushP();
+      html += "<hr/>";
+      i++;
+      continue;
+    }
+    if (/^>\s?/.test(line)) {
+      flushP();
+      const qs = [];
+      while (i < lines.length && /^>\s?/.test(lines[i])) {
+        qs.push(lines[i].replace(/^>\s?/, ""));
+        i++;
+      }
+      html += "<blockquote>" + mdInline(qs.join(" ")) + "</blockquote>";
+      continue;
+    }
+    if (/^\s*[-*]\s+/.test(line)) {
+      flushP();
+      html += "<ul>";
+      while (i < lines.length && /^\s*[-*]\s+/.test(lines[i])) {
+        html += "<li>" + mdInline(lines[i].replace(/^\s*[-*]\s+/, "")) + "</li>";
+        i++;
+      }
+      html += "</ul>";
+      continue;
+    }
+    if (/^\s*\d+\.\s+/.test(line)) {
+      flushP();
+      html += "<ol>";
+      while (i < lines.length && /^\s*\d+\.\s+/.test(lines[i])) {
+        html += "<li>" + mdInline(lines[i].replace(/^\s*[-*]\s+/, "")) + "</li>";
+        i++;
+      }
+      html += "</ol>";
+      continue;
+    }
+    para.push(line);
+    i++;
+  }
+  flushP();
+  return html;
+} exports.mdBlocks = mdBlocks;
+ function renderMd(src) {
+  const text = String(src || "");
+  const re = /```(\w*)\n?([\s\S]*?)```/g;
+  let html = "";
+  let last = 0;
+  let m;
+  while ((m = re.exec(text))) {
+    if (m.index > last) html += mdBlocks(text.slice(last, m.index));
+    html += '<pre><button class="pre-cp" type="button" title="复制">⧉</button><code>' + _util.esc.call(void 0, m[2].replace(/\n$/, "")) + "</code></pre>";
+    last = m.index + m[0].length;
+  }
+  if (last < text.length) html += mdBlocks(text.slice(last));
+  return html;
+} exports.renderMd = renderMd;
+ function diffHtml(t) {
+  const lines = String(t || "").split("\n");
+  let html = "";
+  let file = "";
+  for (const l of lines) {
+    if (/^(edited|wrote|created)\b/i.test(l)) {
+      html += '<div class="diff-meta">' + _util.esc.call(void 0, l) + "</div>";
+      continue;
+    }
+    if (l.startsWith("+++ ")) {
+      file = l.slice(4).replace(/^[ab]\//, "");
+      continue;
+    }
+    if (l.startsWith("--- ")) continue;
+    if (l.startsWith("@@")) {
+      html +=
+        '<div class="diff-row hunk"><span class="g"></span><span class="ln">' +
+        _util.esc.call(void 0, l) +
+        "</span></div>";
+      continue;
+    }
+    if (l.startsWith("+")) {
+      html +=
+        '<div class="diff-row add"><span class="g">+</span><span class="ln">' +
+        _util.esc.call(void 0, l.slice(1)) +
+        "</span></div>";
+      continue;
+    }
+    if (l.startsWith("-")) {
+      html +=
+        '<div class="diff-row del"><span class="g">−</span><span class="ln">' +
+        _util.esc.call(void 0, l.slice(1)) +
+        "</span></div>";
+      continue;
+    }
+    html +=
+      '<div class="diff-row"><span class="g"></span><span class="ln">' + _util.esc.call(void 0, l) + "</span></div>";
+  }
+  if (file) html = '<div class="diff-file">' + _util.esc.call(void 0, file) + "</div>" + html;
+  return html;
+} exports.diffHtml = diffHtml;
+ function todoHtml(t) {
+  let html = "";
+  for (const l of String(t || "").split("\n")) {
+    const m = /^\[([ x>X])\]\s*(.*)$/.exec(l);
+    if (m) {
+      const st = m[1] === "x" || m[1] === "X" ? "done" : m[1] === ">" ? "run" : "pend";
+      const bm = /^(.*)\s+@([A-Za-z][A-Za-z0-9_-]*)$/.exec(m[2]);
+      const tx = bm ? bm[1] : m[2];
+      const bind = bm ? bm[2] : "";
+      html +=
+        '<div class="todo-i ' +
+        st +
+        '"><span class="todo-box"></span><span class="todo-tx">' +
+        _util.esc.call(void 0, tx) +
+        (bind ? '<span class="todo-bind">@' + _util.esc.call(void 0, bind) + "</span>" : "") +
+        "</span></div>";
+    } else if (l.trim()) {
+      html += '<div class="todo-foot">' + _util.esc.call(void 0, l) + "</div>";
+    }
+  }
+  return html;
+} exports.todoHtml = todoHtml;
+
+};
 __modules["sheet"] = function(module, exports, require) {
 "use strict";Object.defineProperty(exports, "__esModule", {value: true}); function _optionalChain(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }// sheet.ts —— 移动 sheet(下滑关闭)、侧栏折叠钮、顶栏 sheet 钮、空态 welcome。
 // 自 webui.js 切出。setBtn 之线归 settings.ts(sheet↛settings,避环)。
@@ -4283,7 +4163,7 @@ function agentHtml(out, args) {
 __modules["composer"] = function(module, exports, require) {
 "use strict";Object.defineProperty(exports, "__esModule", {value: true});// composer.ts —— 发送生命周期:运行态/队列/活动条、SSE 事件路由(ev.onmessage)、
 // 输入框键盘与草稿、图片黏附、sendPlain/send。
-// 自 webui.js 切出。模型簇与插件之属 main,经 compH 钩袋注入;聊天渲染直引 chat.ts(无环)。
+// 自 webui.js 切出。聊天渲染直引 chat.ts,插件直引 plugins.ts,无环无钩。
 var _util = require('./util');
 var _state = require('./state');
 var _ui = require('./ui');
@@ -4303,7 +4183,6 @@ var _chat = require('./chat');
 var _model = require('./model');
 var _plugins = require('./plugins');
 
- const compH = {}; exports.compH = compH;
 
 let running = false;
 let lastUser = "";
@@ -4808,6 +4687,126 @@ document.addEventListener("paste", async (ev) => {
 } exports.send = send;
 
 };
+__modules["render"] = function(module, exports, require) {
+"use strict";Object.defineProperty(exports, "__esModule", {value: true});// render.ts —— 设置面板的纯 HTML 构造器(seg 开关 / auth 键列 / 资源包 / 插件行)。
+// 自 webui.js 切出;名与义一字未改。DOM 绑定(bindSeg/bindAuthPanel)留在 main。
+var _util = require('./util');
+
+ function segHtml(name, opts, cur) {
+  return (
+    '<div class="seg" data-seg="' +
+    name +
+    '">' +
+    opts
+      .map(
+        (o) =>
+          '<button type="button" data-v="' +
+          _util.esc.call(void 0, o.v) +
+          '" class="' +
+          (o.v === cur ? "on" : "") +
+          '">' +
+          _util.esc.call(void 0, o.l) +
+          "</button>",
+      )
+      .join("") +
+    "</div>"
+  );
+} exports.segHtml = segHtml;
+ function authPanelHtml(cfg) {
+  const keysFirst = [
+    "deepseek",
+    "openai",
+    "anthropic",
+    "xai",
+    "openrouter",
+    "groq",
+    "mistral",
+    "together",
+    "fireworks",
+    "cerebras",
+    "moonshotai",
+    "huggingface",
+    "nvidia",
+    "zai",
+    "minimax",
+  ];
+  const src = cfg.providers || [];
+  const by = {};
+  src.forEach((p) => {
+    by[p.name] = p;
+  });
+  const list = keysFirst.map((n) => by[n] || { name: n, hasKey: false });
+  const oauthLabel = {
+    openrouter: "Sign in with OpenRouter",
+    xai: "Sign in with xAI",
+    openai: "Sign in with ChatGPT",
+  };
+  return (
+    '<div class="set-row"><div class="set-lab">API keys<span class="set-hint">Built-in providers. Paste a key and Save.</span></div></div>' +
+    list
+      .map((p) => {
+        const oauthl = oauthLabel[p.name];
+        return (
+          '<div class="set-row auth-row" data-prov="' +
+          _util.esc.call(void 0, p.name) +
+          '"><div class="set-lab">' +
+          _util.esc.call(void 0, p.name) +
+          '<span class="set-hint">' +
+          (p.hasKey ? "key set" : "no key") +
+          '</span></div><div class="auth-actions"><input class="set-sel auth-key" type="password" placeholder="API key" autocomplete="off">' +
+          '<button type="button" class="btn auth-save">Save</button>' +
+          (oauthl ? '<button type="button" class="btn auth-oauth">' + oauthl + "</button>" : "") +
+          '</div><div class="set-hint auth-dev" hidden></div></div>'
+        );
+      })
+      .join("")
+  );
+} exports.authPanelHtml = authPanelHtml;
+ function packageRows(data) {
+  const user = data && Array.isArray(data.user) ? data.user : [];
+  const proj = data && Array.isArray(data.project) ? data.project : [];
+  if (!user.length && !proj.length) {
+    return '<div class="set-row"><div class="set-lab">资源包<span class="set-hint">piz pkg install &lt;path&gt; [-l]</span></div></div>';
+  }
+  function one(p, scope) {
+    return (
+      '<div class="set-row"><div class="set-lab">' +
+      _util.esc.call(void 0, p.name || "") +
+      '<span class="set-hint">' +
+      scope +
+      " · skills:" +
+      (p.skills || 0) +
+      " prompts:" +
+      (p.prompts || 0) +
+      (p.web ? " · web" : "") +
+      "</span></div></div>"
+    );
+  }
+  let html =
+    '<div class="set-row"><div class="set-lab">资源包<span class="set-hint">用户 ~/.piz/packages 与项目 .piz/packages</span></div></div>';
+  for (const p of user) html += one(p, "user");
+  for (const p of proj) html += one(p, "project");
+  return html;
+} exports.packageRows = packageRows;
+ function pluginRows(list) {
+  const plugs = Array.isArray(list) ? list.filter((p) => p && p.optional) : [];
+  if (!plugs.length) return "";
+  let html =
+    '<div class="set-row"><div class="set-lab">插件<span class="set-hint">task-delegation 才有 workflow / 子代理。开关后下一轮生效。</span></div></div>';
+  for (const p of plugs) {
+    html +=
+      '<div class="set-row"><div class="set-lab">' +
+      _util.esc.call(void 0, p.name) +
+      '</div><button type="button" class="sw' +
+      (p.enabled ? " on" : "") +
+      '" data-plugin="' +
+      _util.esc.call(void 0, p.name) +
+      '"></button></div>';
+  }
+  return html;
+} exports.pluginRows = pluginRows;
+
+};
 __modules["settings"] = function(module, exports, require) {
 "use strict";Object.defineProperty(exports, "__esModule", {value: true});// settings.ts —— 设置对话框(openSettings)、会话搜索(openSearch)、全局键盘。
 // 自 webui.js 切出。模型态直引 model.ts;外观方案直引 ui.ts;无环。
@@ -5203,8 +5202,6 @@ __modules["main"] = function(module, exports, require) {
 "use strict"; function _optionalChain(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }      "use strict";
       var _state = require('./state');
       var _util = require('./util');
-      
-      
       var _net = require('./net');
       var _ui = require('./ui');
       var _store = require('./store');
@@ -5217,26 +5214,11 @@ __modules["main"] = function(module, exports, require) {
       var _settings = require('./settings');
       var _sheet = require('./sheet');
       var _plugins = require('./plugins');
-      // ---- 外观方案已迁 ui.ts(setScheme/applyScheme) ----
+      // 侧栏折叠态(piz.sidebar=1 则预合)
       try {
         if (localStorage.getItem("piz.sidebar") === "1")
           document.body.classList.add("collapsed");
       } catch (e2) {}
-      // ---- 服务器凭证与 fetch 包装已迁 net.ts;toast/对话框迁 ui.ts ----
-      // ---- 设置/搜索/全局键已迁 settings.ts ----
-      // ---- 菜单助手 ----
-      // ---- 菜单助手/项目/会话列已迁 sessions.ts ----
-      _util.$.call(void 0, "searchBtn").onclick = () => _settings.openSearch.call(void 0, );
-      // ---- 模型/思考/授权/沙箱/cost/ctx/hdr 已迁 model.ts ----
-      // ---- 渲染核心已迁 chat.ts ----
-
-      // ---- SSE 已迁 stream.ts(ev.onmessage 于下方指派) ----
-      // ---- 发送态/SSE 路由/键盘/图片/send 已迁 composer.ts ----
-      // ---- 斜杠目录/菜单/runSlash 已迁 slash.ts ----
-      // ---- runSlash 已迁 slash.ts ----
-      // ---- sheet/顶栏钮/welcome 已迁 sheet.ts;插件 SDK 已迁 plugins.ts ----
-      // ---- 初始化 ----
-      // curModel/curThink/curTitle/curVision 已迁 model.ts
       // ---- 启动门(kimi GlobalLoading + auth gate):splash → 探活 → 登录页或主界面 ----
       let booted = false;
       let splashAt = Date.now();
@@ -5300,6 +5282,7 @@ __modules["main"] = function(module, exports, require) {
       _store.restoreDraft.call(void 0, );
       }
       // ui/net 解缠钩:对话框开场收菜单/补全;登录成功续 boot
+      _util.$.call(void 0, "searchBtn").onclick = () => _settings.openSearch.call(void 0, );
       _ui.dlgHooks.closeMenus = _sessions.closeMenus;
       _ui.dlgHooks.hideSlash = _slash.hideSlash;
       _ui.dlgHooks.hideBang = _slash.hideBang;
