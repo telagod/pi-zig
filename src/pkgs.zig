@@ -249,6 +249,24 @@ fn cloneGit(alloc: std.mem.Allocator, url: []const u8) ![]u8 {
     };
 }
 
+/// 读包目录 pkg.json 的 name 字段(git 源装名优先于此,胜于 URL basename)。
+/// 名字须像 basename:含 '/' 或 '..' 者不受,返 null 以示回退。
+fn pkgJsonName(alloc: std.mem.Allocator, pkg_dir: []const u8) ?[]u8 {
+    const path = util.joinPath(alloc, pkg_dir, "pkg.json") catch return null;
+    defer alloc.free(path);
+    const raw = std.Io.Dir.cwd().readFileAlloc(util.io, path, alloc, .limited(256 * 1024)) catch return null;
+    defer alloc.free(raw);
+    const parsed = std.json.parseFromSlice(std.json.Value, alloc, raw, .{}) catch return null;
+    defer parsed.deinit();
+    if (parsed.value != .object) return null;
+    const nv = parsed.value.object.get("name") orelse return null;
+    if (nv != .string) return null;
+    const n = nv.string;
+    if (n.len == 0 or n.len > 128) return null;
+    if (std.mem.indexOfScalar(u8, n, '/') != null or std.mem.indexOf(u8, n, "..") != null) return null;
+    return alloc.dupe(u8, n) catch null;
+}
+
 /// 安装包:复制 src 目录到 packages/<basename>/。git 源先 clone。返回安装路径。
 /// marketplace 解析:install "name@repo" —— repo 为 git 源或本地目录,
 /// 含 .claude-plugin/marketplace.json(catalog: {"plugins": {"name": {"source": "..."}}})。
@@ -307,19 +325,22 @@ pub fn install(alloc: std.mem.Allocator, src: []const u8, scope: Scope, project_
             var u = url;
             while (u.len > 0 and u[u.len - 1] == '/') u = u[0 .. u.len - 1];
             if (std.mem.endsWith(u8, u, ".git")) u = u[0 .. u.len - 4];
-            const name = std.fs.path.basename(u);
+            const fallback = std.fs.path.basename(u);
+            // 包名以 pkg.json 之 name 为准(作者权柄),无则 URL basename
+            const name = pkgJsonName(alloc, git_tmp.?) orelse fallback;
             break :blk try installPathNamed(alloc, git_tmp.?, name, src, scope, project_cwd);
         },
         .path => |p| try installPath(alloc, p, src, scope, project_cwd),
     };
 }
 
-/// 安装本地目录(路径源;包名 = 目录 basename)。
+/// 安装本地目录(路径源;包名 = pkg.json 之 name,无则目录 basename)。
 pub fn installPath(alloc: std.mem.Allocator, local: []const u8, orig_src: []const u8, scope: Scope, project_cwd: ?[]const u8) ![]u8 {
     var clean = local;
     while (clean.len > 1 and clean[clean.len - 1] == '/') clean = clean[0 .. clean.len - 1];
-    const base = std.fs.path.basename(clean);
+    var base = std.fs.path.basename(clean);
     if (base.len == 0 or std.mem.eql(u8, base, ".") or std.mem.eql(u8, base, "..")) return error.InvalidSource;
+    if (pkgJsonName(alloc, clean)) |n| base = n;
     return installPathNamed(alloc, local, base, orig_src, scope, project_cwd);
 }
 
@@ -602,6 +623,25 @@ test "pkg detectSource" {
     try t.expect(s4 == .git);
     const s5 = detectSource("./local/dir");
     try t.expect(s5 == .path);
+}
+
+test "pkgJsonName prefers manifest name, rejects pathy names" {
+    const t = std.testing;
+    try util.testInit();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = util.Arena.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cwd_abs = try std.process.currentPathAlloc(util.io, a);
+    const dir = try std.fmt.allocPrint(a, "{s}/.zig-cache/tmp/{s}", .{ cwd_abs, tmp.sub_path });
+    const manifest = try util.joinPath(a, dir, "pkg.json");
+    try std.Io.Dir.cwd().writeFile(util.io, .{ .sub_path = manifest, .data = "{\"name\":\"demo-git-pkg\"}" });
+    try t.expectEqualStrings("demo-git-pkg", pkgJsonName(a, dir).?);
+    try std.Io.Dir.cwd().writeFile(util.io, .{ .sub_path = manifest, .data = "{\"name\":\"../evil\"}" });
+    try t.expect(pkgJsonName(a, dir) == null);
+    try std.Io.Dir.cwd().writeFile(util.io, .{ .sub_path = manifest, .data = "{}" });
+    try t.expect(pkgJsonName(a, dir) == null);
 }
 
 test "pkg manifest + update + deps" {

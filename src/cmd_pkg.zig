@@ -71,7 +71,7 @@ pub fn runPkgCmd(alloc: std.mem.Allocator, args: *std.process.Args.Iterator) voi
     }
     if (std.mem.eql(u8, sub, "install")) {
         const src = args.next() orelse {
-            std.debug.print("piz pkg install: usage: piz pkg install <path> [-l] [-y]\n", .{});
+            std.debug.print("piz pkg install: usage: piz pkg install <path|git-url|name@repo> [-l] [-y]\n", .{});
             std.process.exit(1);
         };
         var scope = pkgsmod.Scope.user;

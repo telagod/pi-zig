@@ -34,7 +34,7 @@ pub const USAGE =
     \\      --no-plugin N 关闭插件(可重复,撤钩/工具/schema)
     \\      --plugins    列出全部内置插件与启用状态
     \\      --           之后的参数不再当选项(提示词以 '-' 开头时用)
-    \\  pkg 子命令: piz pkg install <path> [-l] [-y] | piz pkg list | piz pkg remove <name> [-l]
+    \\  pkg 子命令: piz pkg install <path|git-url|name@repo> [-l] [-y] | piz pkg list | piz pkg update | piz pkg remove <name> [-l]
     \\    (资源包:含 skills/、prompts/ 或 AGENTS.md 的目录;-l 安装到项目 .piz/packages)
     \\    (-y 跳过生命周期钩子确认;包声明的钩子会以 bash -c 执行)
     \\  web 子命令: piz web [--port N] [--no-open] [--token T | --no-token]

@@ -24,8 +24,11 @@
 piz pkg install ./my-package        # 本地目录
 piz pkg install ./my-package -l     # 装到项目级
 piz pkg install git:github.com/user/repo
+piz pkg install https://github.com/user/repo.git   # git URL( shallow clone)
+piz pkg install name@owner/repo     # marketplace:catalog 取名之 source
 piz pkg list                        # 列出已装包
-piz pkg remove my-package           # 移除
+piz pkg update                      # 全部按原 source 重装(git 即重拉)
+piz pkg remove my-package           # 移除(包名以 pkg.json 之 name 为准)
 piz pkg remove my-package -l        # 移除项目级
 ```
 

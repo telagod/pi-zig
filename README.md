@@ -80,6 +80,7 @@ piz --plugin lsp          # 本次开启
 | [Web UI](docs/web-ui.md) | `piz web`、鉴权、HTTP |
 | [Plugins](docs/plugins.md) | 内置插件、钩子 |
 | [Packages](docs/packages.md) | 资源包、skills |
+| [生态](docs/ecosystem.md) | 装包(git URL/marketplace)、写包、示例、兼容 |
 | [JS 扩展](docs/extensions-js.md) | QuickJS 窄桥：ESM/import/TS/async、fs/fetch、热重载 |
 | [Sessions](docs/sessions.md) | 会话、分支、格式 |
 | [Architecture](docs/architecture.md) | 模块、主链路、并发、Zig 0.16 |
