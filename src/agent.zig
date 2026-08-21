@@ -370,6 +370,24 @@ pub fn salvageTextForTest(
     salvageText(alloc, result, tool_name, output, .{});
 }
 
+/// 把未执行工具调用的 assistant 回合补上占位结果:OpenAI 兼容端要求
+/// 每个 tool_call_id 都有对应 role=tool 消息,否则请求直接 400
+/// 'insufficient tool messages following tool_calls'。
+/// 三处「不执行工具即 continue/return」的分支(流中断续跑、重复劝导、
+/// 重复停止)都曾留下悬空 tool_calls —— 用户会话实测抓到 400。
+fn stubToolResults(self: *Agent, calls: []const ai.ToolCall) !void {
+    const hint = "(this tool call was not executed — see the notice above; use the earlier result or answer directly)";
+    for (calls) |tc| {
+        if (tc.id.len == 0) continue;
+        try self.messages.append(.{ .role = "tool", .content = hint, .tool_call_id = tc.id });
+    }
+}
+
+/// 测试入口:仅供单测断言配对完整性。
+pub fn stubToolResultsForTest(agent: *Agent, calls: []const ai.ToolCall) !void {
+    try stubToolResults(agent, calls);
+}
+
 pub const Agent = struct {
     alloc: std.mem.Allocator,
     cfg: *cfgmod.Config,
@@ -845,11 +863,57 @@ pub const Agent = struct {
         }
     }
 
-    pub fn send(self: *Agent, user_text: []const u8) !ai.RunResult {
+    /// 发送前自愈:扫描历史,若 assistant(tool_calls) 后有缺失的 role=tool 配对
+/// (旧版本缺陷已写盘的会话、或续载的外部历史),就地补齐占位结果。
+/// 否则 OpenAI 兼容端每条请求都 400 'insufficient tool messages'。
+fn repairPairing(self: *Agent) !void {
+    var i: usize = 0;
+    while (i < self.messages.items.len) : (i += 1) {
+        const m = self.messages.items[i];
+        if (!std.mem.eql(u8, m.role, "assistant")) continue;
+        const tcs = m.tool_calls orelse continue;
+        var stub = std.array_list.Managed(ai.ToolCall).init(self.alloc);
+        for (tcs) |tc| {
+            var found = false;
+            var j = i + 1;
+            while (j < self.messages.items.len) : (j += 1) {
+                const r = self.messages.items[j];
+                if (!std.mem.eql(u8, r.role, "tool")) continue;
+                if (r.tool_call_id != null and std.mem.eql(u8, r.tool_call_id.?, tc.id)) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found and tc.id.len > 0) {
+                try stub.append(tc);
+            }
+        }
+        if (stub.items.len > 0) {
+            // 插到该 assistant 之后(保持配对相邻;append 尾部会让夹在中间的
+            // user 消息破坏「assistant(tool_calls) → tool 结果」的序,部分实现
+            // 仍会拒)。
+            const hint = "(this tool call was not executed — see the notice above; use the earlier result or answer directly)";
+            var k: usize = 0;
+            for (stub.items) |tc| {
+                try self.messages.insert(i + 1 + k, .{ .role = "tool", .content = hint, .tool_call_id = tc.id });
+                k += 1;
+            }
+        }
+    }
+}
+
+/// 发送前自愈(测试入口)。
+pub fn repairPairingForTest(agent: *Agent) !void {
+    try repairPairing(agent);
+}
+
+pub fn send(self: *Agent, user_text: []const u8) !ai.RunResult {
         return self.sendWithImage(user_text, null, "");
     }
 
     pub fn sendWithImage(self: *Agent, user_text: []const u8, image: ?[]const u8, mime_hint: []const u8) !ai.RunResult {
+        // 历史自愈:续载/旧缺陷可能带悬空 tool_calls,先补齐再发(每年 400 一次太贵)。
+        try repairPairing(self);
         var text0 = pluginsmod.runUserMessage(@ptrCast(self), user_text) orelse user_text;
         // JS 扩展 pre_turn(借 dsh agent/pre-step 之简形):入箱文可改写,或整句拦下。
         if (jsrt.enabled) {
@@ -1047,6 +1111,9 @@ pub const Agent = struct {
             if (result.stream_interrupted) |why| {
                 if (stream_retries < MAX_STREAM_RESUMES) {
                     stream_retries += 1;
+                    // 若断流前已吐出完整 tool_calls,同样补占位结果(配对本),
+                    // 否则续跑请求 400。
+                    if (result.tool_calls.len > 0) try stubToolResults(self, result.tool_calls);
                     if (self.cbs.on_notice) |f| {
                         var nb: [128]u8 = undefined;
                         const msg = std.fmt.bufPrint(&nb, "connection dropped mid-reply ({s}) — resuming ({d}/{d})", .{ why, stream_retries, MAX_STREAM_RESUMES }) catch "connection dropped — resuming";
@@ -1058,7 +1125,9 @@ pub const Agent = struct {
                     });
                     continue;
                 }
-                // 重连额度用尽:把已有内容交出去,并说明它不完整
+                // 重连额度用尽:把已有内容交出去,并说明它不完整。
+                // tool_calls 若已完整吐出,同样补占位(悬空会毒化后续所有请求)。
+                if (result.tool_calls.len > 0) try stubToolResults(self, result.tool_calls);
                 result.error_msg = try std.fmt.allocPrint(self.alloc, "connection kept dropping mid-reply ({s}); the reply above is incomplete", .{why});
                 try self.emitTurnEnd();
                 return result;
@@ -1116,6 +1185,9 @@ pub const Agent = struct {
             if (repeat_rounds >= MAX_REPEAT_ROUNDS) {
                 if (!nudged_once) {
                     // 第一次:劝它收尾。模型往往只是没意识到结果已经拿到了。
+                    // 本轮 tool_calls 未执行但已进 assistant 回合,必须补占位
+                    // 结果,否则下一轮请求 400(insufficient tool messages)。
+                    if (result.tool_calls.len > 0) try stubToolResults(self, result.tool_calls);
                     nudged_once = true;
                     if (self.cbs.on_notice) |f| {
                         var nb: [200]u8 = undefined;
@@ -1131,6 +1203,8 @@ pub const Agent = struct {
                     continue;
                 }
                 // 劝过还在重复:这是死循环换了个形状,停下并把已有内容交出去。
+                // 同样先补齐 tool_calls 占位(之后任何请求都不得再悬空)。
+                if (result.tool_calls.len > 0) try stubToolResults(self, result.tool_calls);
                 if (self.cbs.on_notice) |f| {
                     var nb: [220]u8 = undefined;
                     const msg = std.fmt.bufPrint(&nb, "stopped: the model kept repeating {s} even after being told to stop — the tool results above are correct, the model is not using them", .{result.tool_calls[0].name}) catch "stopped: the model would not stop repeating one tool call";

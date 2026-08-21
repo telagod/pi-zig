@@ -727,3 +727,99 @@ test "initOpts uses provided think_level instead of config default" {
     const def = try Agent.initOpts(a, &cfg, "mock", "m", "/tmp", .{});
     try t.expect(def.think_level == .high);
 }
+
+test "stubToolResults keeps tool_calls pairing intact" {
+    const t = std.testing;
+    try util.testInit();
+    var arena = util.Arena.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var cfg = cfgmod.Config{ .arena = &arena };
+    var provs = [_]cfgmod.Provider{.{ .name = "mock", .api = .openai_completions, .base_url = "http://127.0.0.1:1", .api_key = "k" }};
+    cfg.providers = &provs;
+    var agent = try Agent.init(a, &cfg, "mock", "m", "/tmp");
+
+    // 模型回合:两个并行 tool_calls(未执行即中断/劝导的场景)
+    const calls = [_]ai.ToolCall{
+        .{ .id = "call_a", .name = "bash", .args = "{}" },
+        .{ .id = "call_b", .name = "read", .args = "{}" },
+    };
+    try agent.messages.append(.{ .role = "assistant", .content = "", .tool_calls = &calls });
+    try agentmod.stubToolResultsForTest(&agent, &calls);
+
+    // 配对校验:每个 assistant(tool_calls) 的 id,在其后必须有一条 role=tool 且
+    // tool_call_id 匹配的消息 —— 违反即 OpenAI 兼容端 400 'insufficient tool
+    // messages'(用户会话实测捕获的 bug)。
+    var ti: usize = 0;
+    var tool_msgs: usize = 0;
+    for (agent.messages.items) |m| {
+        if (std.mem.eql(u8, m.role, "assistant")) {
+            if (m.tool_calls) |tcs| {
+                for (tcs) |tc| {
+                    var found = false;
+                    var j = ti + 1;
+                    while (j < agent.messages.items.len) : (j += 1) {
+                        const r = agent.messages.items[j];
+                        if (std.mem.eql(u8, r.role, "tool") and r.tool_call_id != null and
+                            std.mem.eql(u8, r.tool_call_id.?, tc.id)) {
+                            found = true;
+                            break;
+                        }
+                    }
+                    try t.expect(found);
+                    tool_msgs += 1;
+                }
+            }
+        }
+        ti += 1;
+    }
+    try t.expectEqual(@as(usize, 2), tool_msgs);
+}
+
+test "repairPairing heals dangling tool_calls from history" {
+    const t = std.testing;
+    try util.testInit();
+    var arena = util.Arena.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var cfg = cfgmod.Config{ .arena = &arena };
+    var provs = [_]cfgmod.Provider{.{ .name = "mock", .api = .openai_completions, .base_url = "http://127.0.0.1:1", .api_key = "k" }};
+    cfg.providers = &provs;
+    var agent = try Agent.init(a, &cfg, "mock", "m", "/tmp");
+
+    // 旧版缺陷写盘的历史:assistant(tool_calls) 后没有 tool 消息(悬空),\n    // 续载后每次请求都会 400 'insufficient tool messages'。
+    const calls = [_]ai.ToolCall{
+        .{ .id = "call_x", .name = "bash", .args = "{}" },
+        .{ .id = "call_y", .name = "read", .args = "{}" },
+    };
+    try agent.messages.append(.{ .role = "assistant", .content = "", .tool_calls = &calls });
+    try agent.messages.append(.{ .role = "user", .content = "continue" });
+    try agent.repairPairingForTest();
+
+    // 校验:call_x/call_y 均有对应 tool 消息,且补在 user 消息之前(保持配对相邻)。
+    var tx: bool = false;
+    var ty: bool = false;
+    var before_user = true;
+    for (agent.messages.items) |m| {
+        if (std.mem.eql(u8, m.role, "user") and std.mem.eql(u8, m.content, "continue")) {
+            before_user = false;
+            continue;
+        }
+        if (std.mem.eql(u8, m.role, "tool")) {
+            if (m.tool_call_id != null and std.mem.eql(u8, m.tool_call_id.?, "call_x")) {
+                tx = true;
+                try t.expect(before_user);
+            }
+            if (m.tool_call_id != null and std.mem.eql(u8, m.tool_call_id.?, "call_y")) {
+                ty = true;
+                try t.expect(before_user);
+            }
+        }
+    }
+    try t.expect(tx);
+    try t.expect(ty);
+    // 幂等:再修一次不重复注入。
+    const n_before = agent.messages.items.len;
+    try agent.repairPairingForTest();
+    try t.expectEqual(n_before, agent.messages.items.len);
+}
