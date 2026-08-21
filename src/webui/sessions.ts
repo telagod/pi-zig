@@ -161,7 +161,7 @@ export function openSessionMenu(btn: any, s: any, arch: boolean) {
       closeMenus();
       const t = await askText("重命名会话", s.title || s.name, "会话标题");
       if (t === null) return;
-      act({ act: "rename", name: t }, (j) => {
+      act({ act: "rename", name: t, session: s.name }, (j) => {
         loadSessions();
         showToast(j && j.ok ? "已重命名" : "失败");
       });
@@ -174,7 +174,7 @@ export function openSessionMenu(btn: any, s: any, arch: boolean) {
       closeMenus();
       const n = await askText("派生会话", "", "新会话名，留空自动");
       if (n === null) return;
-      act({ act: "fork", name: n || "" }, (j) => {
+      act({ act: "fork", name: n || "", session: s.name }, (j) => {
         if (j && j.name) {
           showToast("已派生 " + j.name);
           setTimeout(
@@ -191,7 +191,7 @@ export function openSessionMenu(btn: any, s: any, arch: boolean) {
     arc.textContent = "🗄 归档";
     arc.onclick = () => {
       closeMenus();
-      act({ act: "archive" }, (j) => {
+      act({ act: "archive", session: s.name }, (j) => {
         if (j && j.ok) {
           showToast("已归档");
           if (s.name === sess)
@@ -211,7 +211,7 @@ export function openSessionMenu(btn: any, s: any, arch: boolean) {
   del.onclick = async () => {
     closeMenus();
     if (!(await askYes("删除会话", "永久删除 " + s.name + "？"))) return;
-    act({ act: "delete" }, () => {
+    act({ act: "delete", session: s.name }, () => {
       loadSessions();
     });
   };
@@ -222,7 +222,7 @@ export function openSessionMenu(btn: any, s: any, arch: boolean) {
     res.textContent = "↩ 恢复";
     res.onclick = () => {
       closeMenus();
-      act({ act: "restore" }, () => {
+      act({ act: "restore", session: s.name }, () => {
         loadSessions();
         showToast("已恢复 " + s.name);
       });
@@ -352,7 +352,9 @@ searchQ.id = "searchQ";
 
 // ---- 会话操作 ----
 export function act(body: any, then?: (j: any) => void) {
-  fetch("/api/action?" + wsp + "session=" + encodeURIComponent(sess), {
+  // body.session 可为指定目标(会话行菜单操作);缺省用当前打开的 sess。
+  const target = body && body.session ? body.session : sess;
+  fetch("/api/action?" + wsp + "session=" + encodeURIComponent(target), {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
