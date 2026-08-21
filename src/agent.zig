@@ -411,6 +411,11 @@ pub const Agent = struct {
     pkg_tools_loaded: bool = false,
     /// 成功压缩次数(状态栏 ⊞N)
     compacts: usize = 0,
+    /// 待发图像消息(快压密图帧 / 工具产出图片)。工具回合内先暂存,
+    /// 回合结束才 flush 成 user 消息 —— 立即写会把 user 插进
+    /// assistant(tool_calls)→tool×N 流,OpenAI/DeepSeek 严格实现直接 400
+    /// "insufficient tool messages"(客实测捕获:read×3 后快压帧触发)。
+    pending_imgs: ?std.array_list.Managed(ai.Message) = null,
     /// 只读模式:不暴露工具,工具调用一律拒绝。
     read_only: bool = false,
     /// 本 Agent 的插件启用集(位掩码)。
@@ -909,6 +914,33 @@ pub fn repairPairingForTest(agent: *Agent) !void {
     try repairPairing(agent);
 }
 
+/// 暂存图像消息(快压帧/工具图片):回合内先挂起,回合末统一落位。
+fn queuePending(self: *Agent, m: ai.Message) !void {
+    if (self.pending_imgs == null) {
+        self.pending_imgs = std.array_list.Managed(ai.Message).init(self.alloc);
+    }
+    try self.pending_imgs.?.append(m);
+}
+
+/// 回合结束:把暂存的图像消息 append 到历史尾部(user 帧,不破坏 tool 配对流)。
+fn flushPendingImgs(self: *Agent) void {
+    const l = self.pending_imgs orelse return;
+    for (l.items) |m| {
+        self.messages.append(m) catch break;
+    }
+    self.pending_imgs = null;
+    l.deinit();
+}
+
+/// 测试入口。
+pub fn flushImgsForTest(agent: *Agent) !void {
+    agent.flushPendingImgs();
+}
+
+pub fn queuePendingForTest(agent: *Agent, m: ai.Message) !void {
+    try queuePending(agent, m);
+}
+
 pub fn send(self: *Agent, user_text: []const u8) !ai.RunResult {
         return self.sendWithImage(user_text, null, "");
     }
@@ -916,6 +948,8 @@ pub fn send(self: *Agent, user_text: []const u8) !ai.RunResult {
     pub fn sendWithImage(self: *Agent, user_text: []const u8, image: ?[]const u8, mime_hint: []const u8) !ai.RunResult {
         // 历史自愈:续载/旧缺陷可能带悬空 tool_calls,先补齐再发(每年 400 一次太贵)。
         try repairPairing(self);
+        // 图像消息(快压帧/工具图片)回合末统一落位,保证 tool 配对流不被 user 截断。
+        defer self.flushPendingImgs();
         var text0 = pluginsmod.runUserMessage(@ptrCast(self), user_text) orelse user_text;
         // JS 扩展 pre_turn(借 dsh agent/pre-step 之简形):入箱文可改写,或整句拦下。
         if (jsrt.enabled) {
@@ -1006,6 +1040,12 @@ pub fn send(self: *Agent, user_text: []const u8) !ai.RunResult {
         // 无步数帽。pi 也没有。空转由相同调用 / 相同输出两条判据收,用户 Esc 中止。
         while (true) {
             if (self.aborted.load(.acquire)) return error.Aborted;
+            // 请求前自愈 + 落位:悬空 tool_calls(compact 折页/续载/任何来源)
+            // 与待发图像帧在此收敛。帧必须置于 tool 段完整之后 —— 段中插
+            // user 消息(快压帧/工具图片)即 DeepSeek 400「insufficient tool
+            // messages」(实机复现:快压工具非末位时帧插进 tool1/tool2 之间)。
+            try repairPairing(self);
+            self.flushPendingImgs();
             // 组装完整消息(system 在前)
             var all = std.array_list.Managed(ai.Message).init(self.alloc);
             defer all.deinit();
@@ -1367,9 +1407,12 @@ pub fn send(self: *Agent, user_text: []const u8) !ai.RunResult {
                 });
                 // 入境密图与工具产出图片一样挂成 user 消息(协议:image block 只能在
                 // user/assistant 消息上;tool 消息是纯文本)。
+                // 2026-08 客实测:立即写回会把 user 帧插进 assistant(tool_calls)→
+                // tool×N 流,DeepSeek 严格校验直接 400「insufficient tool messages」。
+                // 改为暂存,回合结束统一 flush 成消息尾部的 user 帧,序列完整配对。
                 if (snap_image) |img| {
                     if (self.hasVision()) {
-                        try self.messages.append(.{
+                        const m = ai.Message{
                             .role = "user",
                             .content = "[Snapcompact frame — dense pixel text of the shaped tool output]",
                             .image = img,
@@ -1377,7 +1420,8 @@ pub fn send(self: *Agent, user_text: []const u8) !ai.RunResult {
                             .image_w = snap_w,
                             .image_h = snap_h,
                             .image_file = sessionmod.persistImageFile(self.alloc, img, "image/png"),
-                        });
+                        };
+                        try self.queuePending(m);
                     }
                 }
                 // 工具产出的图片附件挂成 user 消息(协议:image block 只能在
@@ -1386,7 +1430,7 @@ pub fn send(self: *Agent, user_text: []const u8) !ai.RunResult {
                 if (tres.images) |imgs| {
                     if (!self.hasVision()) continue;
                     for (imgs) |im| {
-                        try self.messages.append(.{
+                        const m = ai.Message{
                             .role = "user",
                             .content = im.note,
                             .image = im.data,
@@ -1394,7 +1438,8 @@ pub fn send(self: *Agent, user_text: []const u8) !ai.RunResult {
                             .image_w = im.w,
                             .image_h = im.h,
                             .image_file = sessionmod.persistImageFile(self.alloc, im.data, im.mime),
-                        });
+                        };
+                        try self.queuePending(m);
                     }
                 }
             }

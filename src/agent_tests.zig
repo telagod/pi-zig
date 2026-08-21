@@ -874,3 +874,49 @@ test "repairPairing heals dangling tool_calls from history" {
     try agent.repairPairingForTest();
     try t.expectEqual(n_before, agent.messages.items.len);
 }
+
+test "image frames defer to turn end, keeping tool pairing intact" {
+    const t = std.testing;
+    try util.testInit();
+    var arena = util.Arena.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var cfg = cfgmod.Config{ .arena = &arena };
+    var provs = [_]cfgmod.Provider{.{ .name = "mock", .api = .openai_completions, .base_url = "http://127.0.0.1:1", .api_key = "k" }};
+    cfg.providers = &provs;
+    var agent = try Agent.init(a, &cfg, "mock", "m", "/tmp");
+
+    // 一个回合:assistant(tool_calls=[r1]) → tool(r1) 已写回
+    const calls = [_]ai.ToolCall{.{ .id = "call_r1", .name = "read", .args = "{}" }};
+    try agent.messages.append(.{ .role = "assistant", .content = "", .tool_calls = &calls });
+    try agent.messages.append(.{ .role = "tool", .content = "out", .tool_call_id = "call_r1" });
+
+    // 快压帧 / 工具图片暂存(不入 messages):回合内先挂起
+    var img = [_]u8{ 1, 2, 3 };
+    try agent.queuePendingForTest(.{
+        .role = "user",
+        .content = "[Snapcompact frame]",
+        .image = &img,
+        .image_mime = "image/png",
+        .image_w = 8,
+        .image_h = 13,
+    });
+    // 回合未结束:user 帧绝不进 messages(旧行为此处已插进 tool 流 → 400)
+    try t.expectEqual(@as(usize, 2), agent.messages.items.len);
+    // 回合结束 flush:帧落历史尾部,配对流完整
+    try agent.flushImgsForTest();
+    try t.expectEqual(@as(usize, 3), agent.messages.items.len);
+    try t.expect(std.mem.eql(u8, agent.messages.items[2].role, "user"));
+    try t.expectEqual(@as(usize, 3), agent.messages.items[2].image.?.len);
+    const tcs = agent.messages.items[0].tool_calls.?;
+    var found = false;
+    var j: usize = 1;
+    while (j < 2) : (j += 1) {
+        const mm = agent.messages.items[j];
+        if (mm.tool_call_id != null and std.mem.eql(u8, mm.tool_call_id.?, tcs[0].id)) found = true;
+    }
+    try t.expect(found);
+    // 幂等:再次 flush 无新消息
+    try agent.flushImgsForTest();
+    try t.expectEqual(@as(usize, 3), agent.messages.items.len);
+}
