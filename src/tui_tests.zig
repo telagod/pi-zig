@@ -623,6 +623,45 @@ test "footer pi-style: place row 1, stats/model row 2; narrow packs" {
     }
 }
 
+test "footer overflow keeps model and never leaks raw ANSI" {
+    const t = std.testing;
+    // 客报乱码 $e[2m:slim stats 的 defer 曾块尾即焚,layoutFooter 读已 free 内存。
+    // 锁死:窄端+长模型名触发溢出降级,模型名必须在,且每个 \x1b 都是完整 CSI。
+    const ident = FooterIdent{
+        .model = "deepseek/v4-flash-vision-exp",
+        .think = "max",
+        .cwd = "~/project/pi-zig",
+        .session = "1",
+        .used = 5_000,
+        .window = 1_000_000,
+        .cache_read = 4_800,
+        .prompt = 4_900,
+        .tok_in = 4_900,
+        .tok_out = 65,
+        .tok_cache_r = 4_800,
+        .cost = 0.0,
+        .pct = 0,
+    };
+    var cols: usize = 52;
+    while (cols <= 96) : (cols += 1) {
+        const rows = try formatFooterRows(t.allocator, ident, "? for shortcuts", cols, true);
+        defer rows.deinit(t.allocator);
+        const plain = try stripForTest(t.allocator, rows.secondary);
+        defer t.allocator.free(plain);
+        try t.expect(std.mem.indexOf(u8, plain, "deepseek/v4-flash-vision-exp") != null);
+        var i: usize = 0;
+        while (i < rows.secondary.len) : (i += 1) {
+            if (rows.secondary[i] == 0x1b) {
+                try t.expect(i + 1 < rows.secondary.len and rows.secondary[i + 1] == '[');
+                var k = i + 2;
+                while (k < rows.secondary.len and !(rows.secondary[k] >= '@' and rows.secondary[k] <= '~')) k += 1;
+                try t.expect(k < rows.secondary.len);
+                i = k;
+            }
+        }
+    }
+}
+
 test "session card renders at paint width" {
     const t = std.testing;
     const info = SessionInfo{
