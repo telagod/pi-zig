@@ -960,6 +960,87 @@ let dlgPrevFocus = null;
 } exports.bindAuthPanel = bindAuthPanel;
 
 };
+__modules["store"] = function(module, exports, require) {
+"use strict";Object.defineProperty(exports, "__esModule", {value: true});// store.ts —— composer 的草稿与历史(localStorage,按会话分键)。
+// 自 webui.js 切出;名与义一字未改。依赖仅 $ 与 sess,无迟绑钩。
+var _util = require('./util');
+var _state = require('./state');
+
+ function autosizeInp() {
+  const i = _util.$.call(void 0, "inp") ;
+  if (!i) return;
+  i.style.height = "auto";
+  i.style.height = Math.min(i.scrollHeight, 180) + "px";
+} exports.autosizeInp = autosizeInp;
+function draftKey() {
+  return "piz.draft." + _state.sess;
+}
+ function saveDraft() {
+  try {
+    const v = (_util.$.call(void 0, "inp") ).value;
+    if (v) localStorage.setItem(draftKey(), v);
+    else localStorage.removeItem(draftKey());
+  } catch (e) {}
+} exports.saveDraft = saveDraft;
+ function restoreDraft() {
+  try {
+    const v = localStorage.getItem(draftKey());
+    if (v) {
+      (_util.$.call(void 0, "inp") ).value = v;
+      autosizeInp();
+    }
+  } catch (e2) {}
+} exports.restoreDraft = restoreDraft;
+ function clearDraft() {
+  try {
+    localStorage.removeItem(draftKey());
+  } catch (e3) {}
+} exports.clearDraft = clearDraft;
+function histKey() {
+  return "piz.hist." + _state.sess;
+}
+function loadHist() {
+  try {
+    return JSON.parse(localStorage.getItem(histKey()) || "[]");
+  } catch (e4) {
+    return [];
+  }
+}
+let histIdx = -1,
+  histDraft = "";
+ function pushHist(t) {
+  const a = loadHist().filter((x) => x !== t);
+  a.push(t);
+  while (a.length > 50) a.shift();
+  try {
+    localStorage.setItem(histKey(), JSON.stringify(a));
+  } catch (e5) {}
+  histIdx = -1;
+  histDraft = "";
+} exports.pushHist = pushHist;
+ function histPrev() {
+  const a = loadHist();
+  if (!a.length) return;
+  if (histIdx < 0) {
+    histDraft = (_util.$.call(void 0, "inp") ).value;
+    histIdx = a.length;
+  }
+  if (histIdx > 0) histIdx--;
+  (_util.$.call(void 0, "inp") ).value = a[histIdx] || "";
+  autosizeInp();
+} exports.histPrev = histPrev;
+ function histNext() {
+  const a = loadHist();
+  if (histIdx < 0) return;
+  histIdx++;
+  if (histIdx >= a.length) {
+    histIdx = -1;
+    (_util.$.call(void 0, "inp") ).value = histDraft;
+  } else (_util.$.call(void 0, "inp") ).value = a[histIdx] || "";
+  autosizeInp();
+} exports.histNext = histNext;
+
+};
 __modules["main"] = function(module, exports, require) {
 "use strict"; function _interopRequireWildcard(obj) { if (obj && obj.__esModule) { return obj; } else { var newObj = {}; if (obj != null) { for (var key in obj) { if (Object.prototype.hasOwnProperty.call(obj, key)) { newObj[key] = obj[key]; } } } newObj.default = obj; return newObj; } } function _nullishCoalesce(lhs, rhsFn) { if (lhs != null) { return lhs; } else { return rhsFn(); } } function _optionalChain(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }      "use strict";
       var _state = require('./state');
@@ -968,6 +1049,7 @@ __modules["main"] = function(module, exports, require) {
       var _render = require('./render');
       var _net = require('./net');
       var _ui = require('./ui');
+      var _store = require('./store');
       function setScheme(v) {
         const map = { auto: "system", light: "light", dark: "dark", system: "system" };
         const next = map[String(v || "").trim()];
@@ -3599,8 +3681,8 @@ __modules["main"] = function(module, exports, require) {
           inp.setSelectionRange(filled.length, filled.length);
           hideSlash();
         }
-        autosizeInp();
-        saveDraft();
+        _store.autosizeInp.call(void 0, );
+        _store.saveDraft.call(void 0, );
         refreshSend();
       }
       function hideBang() {
@@ -3662,8 +3744,8 @@ __modules["main"] = function(module, exports, require) {
         if (!it) return;
         _util.$.call(void 0, "inp").value = it.name + (it.accepts ? " " : "");
         hideSlash();
-        autosizeInp();
-        saveDraft();
+        _store.autosizeInp.call(void 0, );
+        _store.saveDraft.call(void 0, );
       }
       function slashPick() {
         if (pickKind === "file") {
@@ -3675,7 +3757,7 @@ __modules["main"] = function(module, exports, require) {
         if (it.accepts) {
           _util.$.call(void 0, "inp").value = it.name + " ";
           hideSlash();
-          autosizeInp();
+          _store.autosizeInp.call(void 0, );
           return;
         }
         _util.$.call(void 0, "inp").value = it.name;
@@ -3689,78 +3771,6 @@ __modules["main"] = function(module, exports, require) {
         slashIdx = +it.getAttribute("data-i") || 0;
         slashPick();
       };
-      function autosizeInp() {
-        const i = _util.$.call(void 0, "inp");
-        i.style.height = "auto";
-        i.style.height = Math.min(i.scrollHeight, 180) + "px";
-      }
-      function draftKey() {
-        return "piz.draft." + _state.sess;
-      }
-      function saveDraft() {
-        try {
-          const v = _util.$.call(void 0, "inp").value;
-          if (v) localStorage.setItem(draftKey(), v);
-          else localStorage.removeItem(draftKey());
-        } catch (e22) {}
-      }
-      function restoreDraft() {
-        try {
-          const v = localStorage.getItem(draftKey());
-          if (v) {
-            _util.$.call(void 0, "inp").value = v;
-            autosizeInp();
-          }
-        } catch (e23) {}
-      }
-      function clearDraft() {
-        try {
-          localStorage.removeItem(draftKey());
-        } catch (e24) {}
-      }
-      function histKey() {
-        return "piz.hist." + _state.sess;
-      }
-      function loadHist() {
-        try {
-          return JSON.parse(localStorage.getItem(histKey()) || "[]");
-        } catch (e25) {
-          return [];
-        }
-      }
-      let histIdx = -1,
-        histDraft = "";
-      function pushHist(t) {
-        const a = loadHist().filter((x) => x !== t);
-        a.push(t);
-        while (a.length > 50) a.shift();
-        try {
-          localStorage.setItem(histKey(), JSON.stringify(a));
-        } catch (e26) {}
-        histIdx = -1;
-        histDraft = "";
-      }
-      function histPrev() {
-        const a = loadHist();
-        if (!a.length) return;
-        if (histIdx < 0) {
-          histDraft = _util.$.call(void 0, "inp").value;
-          histIdx = a.length;
-        }
-        if (histIdx > 0) histIdx--;
-        _util.$.call(void 0, "inp").value = a[histIdx] || "";
-        autosizeInp();
-      }
-      function histNext() {
-        const a = loadHist();
-        if (histIdx < 0) return;
-        histIdx++;
-        if (histIdx >= a.length) {
-          histIdx = -1;
-          _util.$.call(void 0, "inp").value = histDraft;
-        } else _util.$.call(void 0, "inp").value = a[histIdx] || "";
-        autosizeInp();
-      }
       async function runSlash(item, arg) {
         switch (item.name) {
           case "/login": {
@@ -3845,7 +3855,7 @@ __modules["main"] = function(module, exports, require) {
                 addAsst("refreshed " + (j.refreshed || 0) + " provider(s), +" + (j.added || 0) + " models" +
                   (j.fail ? "\n" + j.fail + " provider(s) failed GET /models" : ""));
               }
-            } catch (e27) {
+            } catch (e22) {
               addAsst("cannot refresh models");
             }
             finishAsst();
@@ -3903,7 +3913,7 @@ __modules["main"] = function(module, exports, require) {
                   );
               }
               ensureActPoll();
-            } catch (e28) {
+            } catch (e23) {
               addAsst("cannot read activity");
             }
             finishAsst();
@@ -3917,7 +3927,7 @@ __modules["main"] = function(module, exports, require) {
               const cost = j.usd > 0 ? "  $" + Number(j.usd).toFixed(4) : "";
               const head = "usage  " + (j.lines || 0) + " turns  ↑" + _util.fmtTok.call(void 0, j.in || 0) + " ↓" + _util.fmtTok.call(void 0, j.out || 0) + cost;
               addAsst(j.tail ? head + "\n" + j.tail : head);
-            } catch (e29) {
+            } catch (e24) {
               addAsst("cannot read usage.jsonl");
             }
             finishAsst();
@@ -3967,7 +3977,7 @@ __modules["main"] = function(module, exports, require) {
               } else {
                 addAsst("no image on clipboard — use Ctrl+V");
               }
-            } catch (e30) {
+            } catch (e25) {
               addAsst("no image on clipboard — use Ctrl+V");
             }
             finishAsst();
@@ -4496,7 +4506,7 @@ __modules["main"] = function(module, exports, require) {
           _util.$.call(void 0, "inp").value.indexOf("\n") < 0
         ) {
           e.preventDefault();
-          histPrev();
+          _store.histPrev.call(void 0, );
           return;
         }
         if (
@@ -4506,7 +4516,7 @@ __modules["main"] = function(module, exports, require) {
           _util.$.call(void 0, "inp").value.indexOf("\n") < 0
         ) {
           e.preventDefault();
-          histNext();
+          _store.histNext.call(void 0, );
           return;
         }
         if (e.key === "Enter" && !e.shiftKey) {
@@ -4520,8 +4530,8 @@ __modules["main"] = function(module, exports, require) {
           kh.hidden = true;
           kh.innerHTML = "";
         }
-        autosizeInp();
-        saveDraft();
+        _store.autosizeInp.call(void 0, );
+        _store.saveDraft.call(void 0, );
         updateSlash();
         refreshSend();
       });
@@ -4578,7 +4588,7 @@ __modules["main"] = function(module, exports, require) {
               paintImgChip();
               return true;
             }
-          } catch (e31) {}
+          } catch (e26) {}
         }
         return false;
       }
@@ -4593,7 +4603,7 @@ __modules["main"] = function(module, exports, require) {
             try {
               pendingImg = await blobToChatImage(blob);
               paintImgChip();
-            } catch (e32) {}
+            } catch (e27) {}
             return;
           }
         }
@@ -4633,7 +4643,7 @@ __modules["main"] = function(module, exports, require) {
           if (!r.ok || j.ok === false) {
             _ui.showToast.call(void 0, j.error || "send failed");
           } else ok = true;
-        } catch (e33) {
+        } catch (e28) {
           _ui.showToast.call(void 0, "send failed");
         }
         if (!ok) {
@@ -4641,7 +4651,7 @@ __modules["main"] = function(module, exports, require) {
           setRun(false);
           if (t && _util.$.call(void 0, "inp")) {
             _util.$.call(void 0, "inp").value = t;
-            autosizeInp();
+            _store.autosizeInp.call(void 0, );
             refreshSend();
           }
           if (img && !pendingImg) {
@@ -4664,18 +4674,18 @@ __modules["main"] = function(module, exports, require) {
           if (item) {
             _util.$.call(void 0, "inp").value = "";
             _util.$.call(void 0, "inp").style.height = "auto";
-            clearDraft();
+            _store.clearDraft.call(void 0, );
             hideSlash();
             refreshSend();
-            pushHist(t);
+            _store.pushHist.call(void 0, t);
             await runSlash(item, arg);
             return;
           }
         }
         _util.$.call(void 0, "inp").value = "";
         _util.$.call(void 0, "inp").style.height = "auto";
-        clearDraft();
-        pushHist(t);
+        _store.clearDraft.call(void 0, );
+        _store.pushHist.call(void 0, t);
         hideSlash();
         refreshSend();
         await sendPlain(t);
@@ -4734,13 +4744,13 @@ __modules["main"] = function(module, exports, require) {
         document.body.classList.add("collapsed");
         try {
           localStorage.setItem("piz.sidebar", "1");
-        } catch (e34) {}
+        } catch (e29) {}
       };
       _util.$.call(void 0, "expBtn").onclick = () => {
         document.body.classList.remove("collapsed");
         try {
           localStorage.setItem("piz.sidebar", "0");
-        } catch (e35) {}
+        } catch (e30) {}
       };
       _util.$.call(void 0, "setBtn").onclick = () => openSettings();
       document.querySelector(".ch-brand").onclick = (e) => {
@@ -4858,7 +4868,7 @@ __modules["main"] = function(module, exports, require) {
                   "piz.plugin." + meta.id + "." + key,
                 );
                 return v === null ? fb : JSON.parse(v);
-              } catch (e36) {
+              } catch (e31) {
                 return fb;
               }
             },
@@ -4875,7 +4885,7 @@ __modules["main"] = function(module, exports, require) {
           while (owned.length) {
             try {
               owned.pop()();
-            } catch (e37) {}
+            } catch (e32) {}
           }
         };
         return Object.freeze(api);
@@ -4937,7 +4947,7 @@ __modules["main"] = function(module, exports, require) {
         while (pluginCleanups.length) {
           try {
             pluginCleanups.pop()();
-          } catch (e38) {}
+          } catch (e33) {}
         }
       });
       // ---- 初始化 ----
@@ -5025,7 +5035,7 @@ __modules["main"] = function(module, exports, require) {
       renderWsName();
       loadSessions();
       loadPlugins();
-      restoreDraft();
+      _store.restoreDraft.call(void 0, );
       }
       // ui/net 解缠钩:对话框开场收菜单/补全;登录成功续 boot
       _ui.dlgHooks.closeMenus = closeMenus;

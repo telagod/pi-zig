@@ -12,7 +12,8 @@
 | `render.ts` | 设置面板 HTML 构造器(seg/auth/资源包/插件行) |
 | `net.ts` | 服务器凭证、fetch 全局包装(Bearer/401)、登录页;`setOnAuthed` 迟绑 boot 解循环 |
 | `ui.ts` | toast、对话框(openDlg/askText/askYes)、seg/auth 绑定;`dlgHooks` 迟绑收菜单钩 |
-| `main.ts` | 其余全部:聊天流、SSE、composer、会话列表、插件页(尚余 ~4100 行) |
+| `store.ts` | composer 草稿与历史(localStorage,按会话分键) |
+| `main.ts` | 其余全部:聊天流、SSE、composer、会话列表、插件页(尚余 ~4000 行) |
 
 ## 构建
 

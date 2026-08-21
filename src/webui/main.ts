@@ -5,6 +5,7 @@
       import { segHtml, authPanelHtml, packageRows, pluginRows } from "./render";
       import { initServerAuth, showAuthPage, hideAuthPage, setCredential, clearCredential, getCredential, rawFetch, setOnAuthed } from "./net";
       import { showToast, closeDlg, openDlg, askText, askYes, bindSeg, bindAuthPanel, dlgHooks } from "./ui";
+      import { autosizeInp, saveDraft, restoreDraft, clearDraft, pushHist, histPrev, histNext } from "./store";
       function setScheme(v) {
         const map = { auto: "system", light: "light", dark: "dark", system: "system" };
         const next = map[String(v || "").trim()];
@@ -2726,78 +2727,6 @@
         slashIdx = +it.getAttribute("data-i") || 0;
         slashPick();
       };
-      function autosizeInp() {
-        const i = $("inp");
-        i.style.height = "auto";
-        i.style.height = Math.min(i.scrollHeight, 180) + "px";
-      }
-      function draftKey() {
-        return "piz.draft." + sess;
-      }
-      function saveDraft() {
-        try {
-          const v = $("inp").value;
-          if (v) localStorage.setItem(draftKey(), v);
-          else localStorage.removeItem(draftKey());
-        } catch {}
-      }
-      function restoreDraft() {
-        try {
-          const v = localStorage.getItem(draftKey());
-          if (v) {
-            $("inp").value = v;
-            autosizeInp();
-          }
-        } catch {}
-      }
-      function clearDraft() {
-        try {
-          localStorage.removeItem(draftKey());
-        } catch {}
-      }
-      function histKey() {
-        return "piz.hist." + sess;
-      }
-      function loadHist() {
-        try {
-          return JSON.parse(localStorage.getItem(histKey()) || "[]");
-        } catch {
-          return [];
-        }
-      }
-      let histIdx = -1,
-        histDraft = "";
-      function pushHist(t) {
-        const a = loadHist().filter((x) => x !== t);
-        a.push(t);
-        while (a.length > 50) a.shift();
-        try {
-          localStorage.setItem(histKey(), JSON.stringify(a));
-        } catch {}
-        histIdx = -1;
-        histDraft = "";
-      }
-      function histPrev() {
-        const a = loadHist();
-        if (!a.length) return;
-        if (histIdx < 0) {
-          histDraft = $("inp").value;
-          histIdx = a.length;
-        }
-        if (histIdx > 0) histIdx--;
-        $("inp").value = a[histIdx] || "";
-        autosizeInp();
-      }
-      function histNext() {
-        const a = loadHist();
-        if (histIdx < 0) return;
-        histIdx++;
-        if (histIdx >= a.length) {
-          histIdx = -1;
-          $("inp").value = histDraft;
-        } else $("inp").value = a[histIdx] || "";
-        autosizeInp();
-      }
       async function runSlash(item, arg) {
         switch (item.name) {
           case "/login": {
