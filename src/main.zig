@@ -266,21 +266,40 @@ pub const App = struct {
     pub fn switchModel(self: *App, spec: []const u8) !void {
         // 支持 provider/model 与 model 两种写法
         const ro = self.read_only;
+        const saved_cbs = self.agent.cbs; // 流式/工具卡/权限回调——重建 agent 不带过则切换后全失声(「TUI 不显示任何输出」之根)
+        // 对话史亦随新 agent:切换模型不该清空上下文(pi 同此)。搬法:新壳换旧表,旧壳置空防 deinit 双 free。
         if (std.mem.indexOfScalar(u8, spec, '/')) |slash| {
             const p = spec[0..slash];
             const m = spec[slash + 1 ..];
-            const agent = try agentmod.Agent.initOpts(self.alloc, self.cfg, p, m, self.agent.cwd, .{ .read_only = ro, .depth = self.agent.depth, .plugins = self.agent.plugins });
+            var agent = try agentmod.Agent.initOpts(self.alloc, self.cfg, p, m, self.agent.cwd, .{ .read_only = ro, .depth = self.agent.depth, .plugins = self.agent.plugins });
+            agent.cbs = saved_cbs;
+            agent.messages.deinit();
+            agent.messages = self.agent.messages;
+            self.agent.messages = std.array_list.Managed(ai.Message).init(self.alloc);
             self.agent.deinit();
             self.agent.* = agent;
             self.provider_override = p;
             self.model_override = m;
         } else {
-            const agent = try agentmod.Agent.initOpts(self.alloc, self.cfg, self.provider_override, spec, self.agent.cwd, .{ .read_only = ro, .depth = self.agent.depth, .plugins = self.agent.plugins });
+            var agent = try agentmod.Agent.initOpts(self.alloc, self.cfg, self.provider_override, spec, self.agent.cwd, .{ .read_only = ro, .depth = self.agent.depth, .plugins = self.agent.plugins });
+            agent.cbs = saved_cbs;
+            agent.messages.deinit();
+            agent.messages = self.agent.messages;
+            self.agent.messages = std.array_list.Managed(ai.Message).init(self.alloc);
             self.agent.deinit();
             self.agent.* = agent;
             self.model_override = spec;
         }
         syncThink(self);
+        // 落盘:重启不丢(「切换没有固定下来」之修;web UI 早有 saveSettings,TUI 独漏)
+        self.cfg.saveSettings(self.provider_override orelse self.agent.provider.name, self.model_override orelse self.agent.model) catch |err| {
+            util.debugCatch("model.saveSettings", err);
+            tuiNote(self, "\x1b[33m", "model switched, but saving to settings.json failed");
+        };
+        // 无 key 之切换:请求将静默失败,先明告
+        if (self.agent.key == null) {
+            tuiNote(self, "\x1b[33m", "warning: no API key for this provider — /login 或 auth.json");
+        }
     }
 
     fn syncThink(self: *App) void {

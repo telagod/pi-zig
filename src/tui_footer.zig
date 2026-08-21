@@ -216,7 +216,26 @@ fn formatFooterPi(alloc: std.mem.Allocator, ident: FooterIdent, hint: ?[]const u
     else
         try std.fmt.allocPrint(alloc, "{s}{s}{s}", .{ ANSI_BOLD, ident.model, ANSI_RESET });
     defer alloc.free(right);
-    const row2 = try layoutFooter(alloc, stats, right, width);
+    // 溢出降级:宁可丢 usage 明细(flow/cache/cost),不可丢模型名——
+    // 模型名是「我在跟说话」的唯一凭据,stats 长了它先没,客遂疑切换未生效。
+    var stats_use = stats;
+    if (visibleCols(stats) + 2 + visibleCols(right) > width and econ.items.len > 0) {
+        var slim = std.ArrayList(u8).empty;
+        defer slim.deinit(alloc);
+        try slim.appendSlice(alloc, "  ");
+        if (flow) |f| {
+            try slim.appendSlice(alloc, f);
+            try slim.appendSlice(alloc, sep);
+        }
+        try slim.appendSlice(alloc, ctx_s);
+        const slim_s = try slim.toOwnedSlice(alloc);
+        defer alloc.free(slim_s);
+        if (visibleCols(slim_s) + 2 + visibleCols(right) > width) {
+            // 仍溢:只留 ctx
+            stats_use = ctx_s;
+        } else stats_use = slim_s;
+    }
+    const row2 = try layoutFooter(alloc, stats_use, right, width);
     return .{ .primary = row1, .secondary = row2 };
 }
 
