@@ -10,7 +10,9 @@
 | `util.ts` | 纯工具:DOM/转义/格式化、工具分类与图标、斜杠打分 |
 | `md.ts` | 极简 markdown / ansi / diff / todo 渲染(字符串→HTML) |
 | `render.ts` | 设置面板 HTML 构造器(seg/auth/资源包/插件行) |
-| `main.ts` | 其余全部:聊天流、SSE、composer、会话列表、插件页(尚余 ~4300 行) |
+| `net.ts` | 服务器凭证、fetch 全局包装(Bearer/401)、登录页;`setOnAuthed` 迟绑 boot 解循环 |
+| `ui.ts` | toast、对话框(openDlg/askText/askYes)、seg/auth 绑定;`dlgHooks` 迟绑收菜单钩 |
+| `main.ts` | 其余全部:聊天流、SSE、composer、会话列表、插件页(尚余 ~4100 行) |
 
 ## 构建
 
@@ -25,7 +27,7 @@ piz build-web            # 同上手写
 
 - **改前端改 `src/webui/*.ts`,勿手改 `src/webui.js`**(头部有 generated 标记);改毕 `zig build web` 重产并一并提交。
 - 模块间只许 `import { x } from "./y"`,禁动态 `import()`;新增模块无需注册,被 import 即入伙。
-- 迁出纪律:函数搬进模块须**纯**(无 main 闭包态);名不改,调用点不动。有闭包纠缠者(agentHtml/toolBody 之 Flow、clipText 之 showToast)留 main,候下一轮以参数/钩子解缠。
+- 迁出纪律:函数搬进模块须**纯**(无 main 闭包态);名不改,调用点不动。有闭包纠缠者(agentHtml/toolBody 之 Flow)留 main;互倚成环者(登录续 boot、对话框收菜单)以迟绑钩注入,勿回环 import。
 
 ## 候拆缝(模块地图)
 

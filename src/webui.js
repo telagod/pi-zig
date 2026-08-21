@@ -614,12 +614,360 @@ var _util = require('./util');
 } exports.pluginRows = pluginRows;
 
 };
+__modules["net"] = function(module, exports, require) {
+"use strict";Object.defineProperty(exports, "__esModule", {value: true}); function _optionalChain(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }// net.ts —— 服务器凭证 + fetch 全局包装(带 Bearer,401 → 登录页)。
+// 自 webui.js 切出;原 closure 变量 credential 改为模块私有,经 accessor 进出。
+// 登录成功后的 boot 续跑由 main 经 setOnAuthed 注入(解循环)。
+var _util = require('./util');
+var _state = require('./state');
+
+const AUTH_KEY = "piz-web.credential";
+let credential = undefined;
+
+ function readFragmentToken() {
+  const hash = location.hash || "";
+  if (!hash.startsWith("#")) return undefined;
+  const params = new URLSearchParams(hash.slice(1));
+  const token = params.get("token");
+  if (!token) return undefined;
+  const url = new URL(location.href);
+  url.hash = "";
+  history.replaceState(history.state, "", url.pathname + url.search);
+  return token;
+} exports.readFragmentToken = readFragmentToken;
+ function initServerAuth() {
+  const frag = readFragmentToken();
+  if (frag) { setCredential(frag); return true; }
+  try {
+    const stored = sessionStorage.getItem(AUTH_KEY);
+    if (stored) { credential = stored; return true; }
+  } catch (e2) {}
+  return false;
+} exports.initServerAuth = initServerAuth;
+ function setCredential(v) {
+  credential = v;
+  try { sessionStorage.setItem(AUTH_KEY, v); } catch (e3) {}
+} exports.setCredential = setCredential;
+ function clearCredential() {
+  credential = undefined;
+  try { sessionStorage.removeItem(AUTH_KEY); } catch (e4) {}
+} exports.clearCredential = clearCredential;
+ const getCredential = () => credential; exports.getCredential = getCredential;
+ function showAuthPage(msg) {
+  _optionalChain([_util.$.call(void 0, "splash"), 'optionalAccess', _ => _.classList, 'access', _2 => _2.add, 'call', _3 => _3("hide")]);
+  _optionalChain([_util.$.call(void 0, "authPage"), 'optionalAccess', _4 => _4.classList, 'access', _5 => _5.add, 'call', _6 => _6("show")]);
+  if (msg) _util.$.call(void 0, "authErr").textContent = msg;
+  const inp = _util.$.call(void 0, "authTok") ;
+  if (inp) { inp.disabled = false; inp.focus(); }
+  const btn = _util.$.call(void 0, "authBtn") ;
+  if (btn) btn.disabled = true;
+} exports.showAuthPage = showAuthPage;
+ function hideAuthPage() {
+  _optionalChain([_util.$.call(void 0, "authPage"), 'optionalAccess', _7 => _7.classList, 'access', _8 => _8.remove, 'call', _9 => _9("show")]);
+  _util.$.call(void 0, "authErr").textContent = "";
+} exports.hideAuthPage = hideAuthPage;
+
+// fetch 全局包装:带 Bearer + 401 → 登录页(kimi http.ts 等价)
+ const rawFetch = window.fetch.bind(window); exports.rawFetch = rawFetch;
+window.fetch = (url, opts = {}) => {
+  opts = Object.assign({}, opts);
+  opts.headers = Object.assign({}, opts.headers || {});
+  if (credential) opts.headers["Authorization"] = "Bearer " + credential;
+  return exports.rawFetch.call(void 0, url, opts).then((res) => {
+    if (res.status === 401 && !opts.headers["X-Skip-Auth"]) {
+      clearCredential();
+      showAuthPage("凭证无效或已过期,请重新输入");
+    }
+    return res;
+  });
+};
+
+// 登录成功续跑(main 注入 boot)
+let onAuthed = () => {};
+ function setOnAuthed(f) { onAuthed = f; } exports.setOnAuthed = setOnAuthed;
+
+// 登录提交
+const authInp = _util.$.call(void 0, "authTok") ;
+authInp.addEventListener("input", () => {
+  (_util.$.call(void 0, "authBtn") ).disabled = !authInp.value.trim();
+});
+authInp.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && authInp.value.trim() && !(_util.$.call(void 0, "authBtn") ).disabled)
+    submitAuth();
+});
+ async function submitAuth() {
+  const v = authInp.value.trim();
+  if (!v) return;
+  (_util.$.call(void 0, "authBtn") ).disabled = true;
+  authInp.disabled = true;
+  setCredential(v);
+  try {
+    const r = await exports.rawFetch.call(void 0, "/api/state?" + _state.wsp + "session=" + encodeURIComponent(_state.sess), {
+      headers: { Authorization: "Bearer " + v, "X-Skip-Auth": "1" },
+    });
+    if (r.ok) {
+      hideAuthPage();
+      onAuthed();
+    } else {
+      clearCredential();
+      _util.$.call(void 0, "authErr").textContent = "连接失败,请检查 token";
+      authInp.disabled = false;
+      authInp.focus();
+      (_util.$.call(void 0, "authBtn") ).disabled = false;
+    }
+  } catch (e) {
+    clearCredential();
+    _util.$.call(void 0, "authErr").textContent = "无法连接服务器";
+    authInp.disabled = false;
+    (_util.$.call(void 0, "authBtn") ).disabled = false;
+  }
+} exports.submitAuth = submitAuth;
+(_util.$.call(void 0, "authBtn") ).onclick = submitAuth;
+
+};
+__modules["ui"] = function(module, exports, require) {
+"use strict";Object.defineProperty(exports, "__esModule", {value: true}); function _optionalChain(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }// ui.ts —— toast / 对话框 / seg 与 auth 面板 DOM 绑定。
+// 自 webui.js 切出。openDlg 开场要收菜单与补全 —— 彼在 main,经 dlgHooks 迟绑注入(解循环)。
+var _util = require('./util');
+
+// ---- toast ----
+const toastEl = _util.$.call(void 0, "toast");
+let toastT = null;
+ function showToast(t) {
+  toastEl.textContent = t;
+  toastEl.classList.add("show");
+  clearTimeout(toastT);
+  toastT = setTimeout(() => toastEl.classList.remove("show"), 2200);
+} exports.showToast = showToast;
+
+// 迟绑钩:main 在启动时把 closeMenus/hideSlash/hideBang 挂上
+ const dlgHooks = {
+  closeMenus: null,
+  hideSlash: null,
+  hideBang: null,
+}; exports.dlgHooks = dlgHooks;
+
+let dlgOnok = null,
+  dlgOncancel = null;
+let dlgPrevFocus = null;
+ function closeDlg() {
+  const ov = _util.$.call(void 0, "overlay");
+  ov.classList.remove("open", "sheet");
+  ov.innerHTML = "";
+  dlgOnok = dlgOncancel = null;
+  // 焦点还给弹出前的元素(还在文档里才还)。
+  if (dlgPrevFocus && document.contains(dlgPrevFocus)) {
+    try { dlgPrevFocus.focus({ preventScroll: true }); } catch (e2) {}
+  }
+  dlgPrevFocus = null;
+} exports.closeDlg = closeDlg;
+ function openDlg(opts) {
+  _optionalChain([exports.dlgHooks, 'access', _ => _.closeMenus, 'optionalCall', _2 => _2()]);
+  _optionalChain([exports.dlgHooks, 'access', _3 => _3.hideSlash, 'optionalCall', _4 => _4()]);
+  _optionalChain([exports.dlgHooks, 'access', _5 => _5.hideBang, 'optionalCall', _6 => _6()]);
+  const ov = _util.$.call(void 0, "overlay");
+  ov.classList.add("open");
+  if (opts.cls === "set") ov.classList.add("sheet");
+  ov.innerHTML =
+    '<div class="dlg ' +
+    (opts.cls || "") +
+    '" role="dialog"><div class="dlg-hd"><span>' +
+    _util.esc.call(void 0, opts.title || "") +
+    '</span><button class="dlg-x" id="dlgX" type="button">✕</button></div><div class="dlg-bd">' +
+    (opts.body || "") +
+    "</div>" +
+    (opts.ok
+      ? '<div class="dlg-ft">' +
+        (opts.cancel
+          ? '<button class="btn" id="dlgCancel" type="button">' +
+            _util.esc.call(void 0, opts.cancel) +
+            "</button>"
+          : "") +
+        '<button class="btn ' +
+        (opts.danger ? "btn-d" : "btn-p") +
+        '" id="dlgOk" type="button">' +
+        _util.esc.call(void 0, opts.ok) +
+        "</button></div>"
+      : "") +
+    "</div>";
+  dlgOnok = opts.onok || null;
+  dlgOncancel = opts.oncancel || null;
+  dlgPrevFocus = document.activeElement; // 关时还原焦点
+  _util.$.call(void 0, "dlgX").onclick = () => {
+    if (dlgOncancel) dlgOncancel();
+    closeDlg();
+  };
+  const cxl = _util.$.call(void 0, "dlgCancel");
+  if (cxl)
+    cxl.onclick = () => {
+      if (dlgOncancel) dlgOncancel();
+      closeDlg();
+    };
+  const ok = _util.$.call(void 0, "dlgOk");
+  if (ok)
+    ok.onclick = () => {
+      const r = dlgOnok && dlgOnok();
+      if (r !== false) closeDlg();
+    };
+  ov.onclick = (e) => {
+    if (e.target === ov) {
+      if (dlgOncancel) dlgOncancel();
+      closeDlg();
+    }
+  };
+  if (opts.focus && _util.$.call(void 0, opts.focus)) {
+    const el = _util.$.call(void 0, opts.focus);
+    el.focus();
+    if (el.select) el.select();
+  } else {
+    // 默认焦点给第一个可输入控件,否则给主按钮 —— 键盘流不用先 Tab 一圈。
+    const el = ov.querySelector(
+      ".dlg-bd input, .dlg-bd textarea, .dlg-bd select, .dlg-bd button",
+    ) ;
+    const btn = el || _util.$.call(void 0, "dlgOk");
+    if (btn) btn.focus({ preventScroll: true });
+  }
+} exports.openDlg = openDlg;
+ function askText(title, value, placeholder) {
+  return new Promise((resolve) => {
+    openDlg({
+      title,
+      body:
+        '<input id="dlgIn" class="dlg-in" value="' +
+        _util.esc.call(void 0, value || "") +
+        '" placeholder="' +
+        _util.esc.call(void 0, placeholder || "") +
+        '">',
+      ok: "确定",
+      cancel: "取消",
+      focus: "dlgIn",
+      onok: () => {
+        resolve((_util.$.call(void 0, "dlgIn") ).value);
+      },
+      oncancel: () => resolve(null),
+    });
+    _util.$.call(void 0, "dlgIn").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        resolve((_util.$.call(void 0, "dlgIn") ).value);
+        closeDlg();
+      }
+    });
+  });
+} exports.askText = askText;
+ function askYes(title, msg) {
+  return new Promise((resolve) => {
+    openDlg({
+      title,
+      body: '<p class="dlg-msg">' + _util.esc.call(void 0, msg) + "</p>",
+      ok: "确定",
+      danger: true,
+      cancel: "取消",
+      onok: () => resolve(true),
+      oncancel: () => resolve(false),
+    });
+  });
+} exports.askYes = askYes;
+ function bindSeg(name, fn) {
+  const box = document.querySelector('[data-seg="' + name + '"]') ;
+  if (!box) return;
+  box.onclick = (e) => {
+    const b = e.target.closest("button");
+    if (!b) return;
+    for (const x of box.querySelectorAll("button")) x.classList.remove("on");
+    b.classList.add("on");
+    fn(b.getAttribute("data-v"));
+  };
+} exports.bindSeg = bindSeg;
+ function bindAuthPanel() {
+  document.querySelectorAll(".auth-row").forEach((row) => {
+    const name = row.getAttribute("data-prov");
+    const inp = row.querySelector(".auth-key");
+    const save = row.querySelector(".auth-save");
+    const oauthBtn = row.querySelector(".auth-oauth");
+    if (save)
+      save.onclick = () => {
+        const key = (inp && inp.value) || "";
+        if (!key) {
+          showToast("paste an API key");
+          return;
+        }
+        fetch("/api/config", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ setAuth: { name, key } }),
+        })
+          .then((r) => r.json())
+          .then((j) => {
+            showToast(j && j.ok ? "saved " + name : "save failed");
+            if (inp) inp.value = "";
+          })
+          .catch(() => showToast("save failed"));
+      };
+    if (oauthBtn)
+      oauthBtn.onclick = async () => {
+        const hint = row.querySelector(".auth-dev");
+        try {
+          const r = await fetch("/api/oauth/start", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ provider: name }),
+          });
+          const j = await r.json();
+          if (!j || !j.ok) {
+            showToast("oauth start failed");
+            return;
+          }
+          if (j.user_code) {
+            if (hint) {
+              hint.hidden = false;
+              hint.textContent = "Enter code " + j.user_code + " at " + (j.verification_uri || "");
+            }
+            if (j.verification_uri) window.open(j.verification_uri, "_blank");
+            showToast("code " + j.user_code);
+          } else if (j.url) {
+            window.open(j.url, "_blank");
+            showToast("finish sign-in in the new tab");
+          } else {
+            showToast("oauth start failed");
+            return;
+          }
+          const path = j.user_code ? "/api/oauth/poll?state=" : "/api/oauth/status?state=";
+          const t0 = Date.now();
+          const tick = async () => {
+            if (Date.now() - t0 > 180000) {
+              showToast("oauth timed out");
+              return;
+            }
+            const s = await fetch(path + encodeURIComponent(j.state)).then((x) => x.json());
+            if (s && s.done && s.ok) {
+              showToast("signed in");
+              if (hint) hint.hidden = true;
+              return;
+            }
+            if (s && s.done && !s.ok) {
+              showToast("sign-in failed");
+              return;
+            }
+            setTimeout(tick, 1500);
+          };
+          setTimeout(tick, 1500);
+        } catch (e3) {
+          showToast("oauth start failed");
+        }
+      };
+  });
+} exports.bindAuthPanel = bindAuthPanel;
+
+};
 __modules["main"] = function(module, exports, require) {
 "use strict"; function _interopRequireWildcard(obj) { if (obj && obj.__esModule) { return obj; } else { var newObj = {}; if (obj != null) { for (var key in obj) { if (Object.prototype.hasOwnProperty.call(obj, key)) { newObj[key] = obj[key]; } } } newObj.default = obj; return newObj; } } function _nullishCoalesce(lhs, rhsFn) { if (lhs != null) { return lhs; } else { return rhsFn(); } } function _optionalChain(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }      "use strict";
       var _state = require('./state');
       var _util = require('./util');
       var _md = require('./md');
       var _render = require('./render');
+      var _net = require('./net');
+      var _ui = require('./ui');
       function setScheme(v) {
         const map = { auto: "system", light: "light", dark: "dark", system: "system" };
         const next = map[String(v || "").trim()];
@@ -657,321 +1005,7 @@ __modules["main"] = function(module, exports, require) {
         if (localStorage.getItem("piz.sidebar") === "1")
           document.body.classList.add("collapsed");
       } catch (e3) {}
-      // ---- 服务器凭证(kimi serverAuth.ts:#token= fragment + sessionStorage) ----
-      const AUTH_KEY = "piz-web.credential";
-      let credential = undefined;
-      function readFragmentToken() {
-        const hash = location.hash || "";
-        if (!hash.startsWith("#")) return undefined;
-        const params = new URLSearchParams(hash.slice(1));
-        const token = params.get("token");
-        if (!token) return undefined;
-        const url = new URL(location.href);
-        url.hash = "";
-        history.replaceState(history.state, "", url.pathname + url.search);
-        return token;
-      }
-      function initServerAuth() {
-        const frag = readFragmentToken();
-        if (frag) { setCredential(frag); return true; }
-        try {
-          const stored = sessionStorage.getItem(AUTH_KEY);
-          if (stored) { credential = stored; return true; }
-        } catch (e4) {}
-        return false;
-      }
-      function setCredential(v) {
-        credential = v;
-        try { sessionStorage.setItem(AUTH_KEY, v); } catch (e5) {}
-      }
-      function clearCredential() {
-        credential = undefined;
-        try { sessionStorage.removeItem(AUTH_KEY); } catch (e6) {}
-      }
-      function showAuthPage(msg) {
-        _optionalChain([_util.$.call(void 0, "splash"), 'optionalAccess', _ => _.classList, 'access', _2 => _2.add, 'call', _3 => _3("hide")]);
-        _optionalChain([_util.$.call(void 0, "authPage"), 'optionalAccess', _4 => _4.classList, 'access', _5 => _5.add, 'call', _6 => _6("show")]);
-        if (msg) _util.$.call(void 0, "authErr").textContent = msg;
-        const inp = _util.$.call(void 0, "authTok");
-        if (inp) { inp.disabled = false; inp.focus(); }
-        const btn = _util.$.call(void 0, "authBtn");
-        if (btn) btn.disabled = true;
-      }
-      function hideAuthPage() {
-        _optionalChain([_util.$.call(void 0, "authPage"), 'optionalAccess', _7 => _7.classList, 'access', _8 => _8.remove, 'call', _9 => _9("show")]);
-        _util.$.call(void 0, "authErr").textContent = "";
-      }
-      // fetch 全局包装:带 Bearer + 401 → 登录页(kimi http.ts 等价)
-      const rawFetch = window.fetch.bind(window);
-      window.fetch = (url, opts = {}) => {
-        opts = Object.assign({}, opts);
-        opts.headers = Object.assign({}, opts.headers || {});
-        if (credential) opts.headers["Authorization"] = "Bearer " + credential;
-        return rawFetch(url, opts).then((res) => {
-          if (res.status === 401 && !opts.headers["X-Skip-Auth"]) {
-            clearCredential();
-            showAuthPage("凭证无效或已过期,请重新输入");
-          }
-          return res;
-        });
-      };
-      // 登录提交
-      const authInp = _util.$.call(void 0, "authTok");
-      authInp.addEventListener("input", () => {
-        _util.$.call(void 0, "authBtn").disabled = !authInp.value.trim();
-      });
-      authInp.addEventListener("keydown", (e) => {
-        if (e.key === "Enter" && authInp.value.trim() && !_util.$.call(void 0, "authBtn").disabled)
-          submitAuth();
-      });
-      async function submitAuth() {
-        const v = authInp.value.trim();
-        if (!v) return;
-        _util.$.call(void 0, "authBtn").disabled = true;
-        authInp.disabled = true;
-        setCredential(v);
-        try {
-          const r = await rawFetch("/api/state?" + _state.wsp + "session=" + encodeURIComponent(_state.sess), {
-            headers: { Authorization: "Bearer " + v, "X-Skip-Auth": "1" },
-          });
-          if (r.ok) {
-            hideAuthPage();
-            boot();
-          } else {
-            clearCredential();
-            _util.$.call(void 0, "authErr").textContent = "连接失败,请检查 token";
-            authInp.disabled = false;
-            authInp.focus();
-            _util.$.call(void 0, "authBtn").disabled = false;
-          }
-        } catch (e) {
-          clearCredential();
-          _util.$.call(void 0, "authErr").textContent = "无法连接服务器";
-          authInp.disabled = false;
-          _util.$.call(void 0, "authBtn").disabled = false;
-        }
-      }
-      _util.$.call(void 0, "authBtn").onclick = submitAuth;
-      // ---- toast ----
-      const toastEl = _util.$.call(void 0, "toast");
-      let toastT = null;
-      function showToast(t) {
-        toastEl.textContent = t;
-        toastEl.classList.add("show");
-        clearTimeout(toastT);
-        toastT = setTimeout(() => toastEl.classList.remove("show"), 2200);
-      }
-      let dlgOnok = null,
-        dlgOncancel = null;
-      let dlgPrevFocus = null;
-      function closeDlg() {
-        const ov = _util.$.call(void 0, "overlay");
-        ov.classList.remove("open", "sheet");
-        ov.innerHTML = "";
-        dlgOnok = dlgOncancel = null;
-        // 焦点还给弹出前的元素(还在文档里才还)。
-        if (dlgPrevFocus && document.contains(dlgPrevFocus)) {
-          try { dlgPrevFocus.focus({ preventScroll: true }); } catch (e7) {}
-        }
-        dlgPrevFocus = null;
-      }
-      function openDlg(opts) {
-        if (typeof closeMenus === "function") closeMenus();
-        if (typeof hideSlash === "function") hideSlash();
-        if (typeof hideBang === "function") hideBang();
-        const ov = _util.$.call(void 0, "overlay");
-        ov.classList.add("open");
-        if (opts.cls === "set") ov.classList.add("sheet");
-        ov.innerHTML =
-          '<div class="dlg ' +
-          (opts.cls || "") +
-          '" role="dialog"><div class="dlg-hd"><span>' +
-          _util.esc.call(void 0, opts.title || "") +
-          '</span><button class="dlg-x" id="dlgX" type="button">✕</button></div><div class="dlg-bd">' +
-          (opts.body || "") +
-          "</div>" +
-          (opts.ok
-            ? '<div class="dlg-ft">' +
-              (opts.cancel
-                ? '<button class="btn" id="dlgCancel" type="button">' +
-                  _util.esc.call(void 0, opts.cancel) +
-                  "</button>"
-                : "") +
-              '<button class="btn ' +
-              (opts.danger ? "btn-d" : "btn-p") +
-              '" id="dlgOk" type="button">' +
-              _util.esc.call(void 0, opts.ok) +
-              "</button></div>"
-            : "") +
-          "</div>";
-        dlgOnok = opts.onok || null;
-        dlgOncancel = opts.oncancel || null;
-        dlgPrevFocus = document.activeElement; // 关时还原焦点
-        _util.$.call(void 0, "dlgX").onclick = () => {
-          if (dlgOncancel) dlgOncancel();
-          closeDlg();
-        };
-        const cxl = _util.$.call(void 0, "dlgCancel");
-        if (cxl)
-          cxl.onclick = () => {
-            if (dlgOncancel) dlgOncancel();
-            closeDlg();
-          };
-        const ok = _util.$.call(void 0, "dlgOk");
-        if (ok)
-          ok.onclick = () => {
-            const r = dlgOnok && dlgOnok();
-            if (r !== false) closeDlg();
-          };
-        ov.onclick = (e) => {
-          if (e.target === ov) {
-            if (dlgOncancel) dlgOncancel();
-            closeDlg();
-          }
-        };
-        if (opts.focus && _util.$.call(void 0, opts.focus)) {
-          const el = _util.$.call(void 0, opts.focus);
-          el.focus();
-          if (el.select) el.select();
-        } else {
-          // 默认焦点给第一个可输入控件,否则给主按钮 —— 键盘流不用先 Tab 一圈。
-          const el = ov.querySelector(
-            ".dlg-bd input, .dlg-bd textarea, .dlg-bd select, .dlg-bd button",
-          );
-          const btn = el || _util.$.call(void 0, "dlgOk");
-          if (btn) btn.focus({ preventScroll: true });
-        }
-      }
-      function askText(title, value, placeholder) {
-        return new Promise((resolve) => {
-          openDlg({
-            title,
-            body:
-              '<input id="dlgIn" class="dlg-in" value="' +
-              _util.esc.call(void 0, value || "") +
-              '" placeholder="' +
-              _util.esc.call(void 0, placeholder || "") +
-              '">',
-            ok: "确定",
-            cancel: "取消",
-            focus: "dlgIn",
-            onok: () => {
-              resolve(_util.$.call(void 0, "dlgIn").value);
-            },
-            oncancel: () => resolve(null),
-          });
-          _util.$.call(void 0, "dlgIn").addEventListener("keydown", (e) => {
-            if (e.key === "Enter") {
-              e.preventDefault();
-              resolve(_util.$.call(void 0, "dlgIn").value);
-              closeDlg();
-            }
-          });
-        });
-      }
-      function askYes(title, msg) {
-        return new Promise((resolve) => {
-          openDlg({
-            title,
-            body: '<p class="dlg-msg">' + _util.esc.call(void 0, msg) + "</p>",
-            ok: "确定",
-            danger: true,
-            cancel: "取消",
-            onok: () => resolve(true),
-            oncancel: () => resolve(false),
-          });
-        });
-      }
-      function bindSeg(name, fn) {
-        const box = document.querySelector('[data-seg="' + name + '"]');
-        if (!box) return;
-        box.onclick = (e) => {
-          const b = e.target.closest("button");
-          if (!b) return;
-          for (const x of box.querySelectorAll("button")) x.classList.remove("on");
-          b.classList.add("on");
-          fn(b.getAttribute("data-v"));
-        };
-      }
-      function bindAuthPanel() {
-        document.querySelectorAll(".auth-row").forEach((row) => {
-          const name = row.getAttribute("data-prov");
-          const inp = row.querySelector(".auth-key");
-          const save = row.querySelector(".auth-save");
-          const oauthBtn = row.querySelector(".auth-oauth");
-          if (save)
-            save.onclick = () => {
-              const key = (inp && inp.value) || "";
-              if (!key) {
-                showToast("paste an API key");
-                return;
-              }
-              fetch("/api/config", {
-                method: "POST",
-                headers: { "content-type": "application/json" },
-                body: JSON.stringify({ setAuth: { name, key } }),
-              })
-                .then((r) => r.json())
-                .then((j) => {
-                  showToast(j && j.ok ? "saved " + name : "save failed");
-                  if (inp) inp.value = "";
-                })
-                .catch(() => showToast("save failed"));
-            };
-          if (oauthBtn)
-            oauthBtn.onclick = async () => {
-              const hint = row.querySelector(".auth-dev");
-              try {
-                const r = await fetch("/api/oauth/start", {
-                  method: "POST",
-                  headers: { "content-type": "application/json" },
-                  body: JSON.stringify({ provider: name }),
-                });
-                const j = await r.json();
-                if (!j || !j.ok) {
-                  showToast("oauth start failed");
-                  return;
-                }
-                if (j.user_code) {
-                  if (hint) {
-                    hint.hidden = false;
-                    hint.textContent = "Enter code " + j.user_code + " at " + (j.verification_uri || "");
-                  }
-                  if (j.verification_uri) window.open(j.verification_uri, "_blank");
-                  showToast("code " + j.user_code);
-                } else if (j.url) {
-                  window.open(j.url, "_blank");
-                  showToast("finish sign-in in the new tab");
-                } else {
-                  showToast("oauth start failed");
-                  return;
-                }
-                const path = j.user_code ? "/api/oauth/poll?state=" : "/api/oauth/status?state=";
-                const t0 = Date.now();
-                const tick = async () => {
-                  if (Date.now() - t0 > 180000) {
-                    showToast("oauth timed out");
-                    return;
-                  }
-                  const s = await fetch(path + encodeURIComponent(j.state)).then((x) => x.json());
-                  if (s && s.done && s.ok) {
-                    showToast("signed in");
-                    if (hint) hint.hidden = true;
-                    return;
-                  }
-                  if (s && s.done && !s.ok) {
-                    showToast("sign-in failed");
-                    return;
-                  }
-                  setTimeout(tick, 1500);
-                };
-                setTimeout(tick, 1500);
-              } catch (e8) {
-                showToast("oauth start failed");
-              }
-            };
-        });
-      }
+      // ---- 服务器凭证与 fetch 包装已迁 net.ts;toast/对话框迁 ui.ts ----
       async function openSettings() {
         let cfg = {};
         let models = [];
@@ -986,7 +1020,7 @@ __modules["main"] = function(module, exports, require) {
           models = await mr.json();
           if (!Array.isArray(models)) models = [];
           pkgs = await pr.json();
-        } catch (e9) {}
+        } catch (e4) {}
         const defThink = cfg.defaultThinkingLevel || curThink || "high";
         const defAppr = cfg.approvalMode || "yolo";
         const defModel = cfg.defaultModel || "";
@@ -1030,7 +1064,7 @@ __modules["main"] = function(module, exports, require) {
             )
             .join("") ||
           '<div class="set-row"><div class="set-lab">无自定义 provider<span class="set-hint">见 ~/.piz/models.json</span></div></div>';
-        openDlg({
+        _ui.openDlg.call(void 0, {
           cls: "set",
           title: "设置",
           body:
@@ -1085,17 +1119,17 @@ __modules["main"] = function(module, exports, require) {
         });
         const tabs = _util.$.call(void 0, "setTabs");
         const panels = { auth: _util.$.call(void 0, "setAuth"), look: _util.$.call(void 0, "setLook"), agent: _util.$.call(void 0, "setAgent"), note: _util.$.call(void 0, "setNote"), about: _util.$.call(void 0, "setAbout") };
-        bindAuthPanel();
+        _ui.bindAuthPanel.call(void 0, );
         tabs.onclick = (e) => {
           const b = e.target.closest("button");
           if (!b) return;
           for (const x of tabs.querySelectorAll("button")) x.classList.toggle("on", x === b);
           for (const k of Object.keys(panels)) panels[k].hidden = k !== b.dataset.tab;
         };
-        bindSeg("scheme", (v) => {
+        _ui.bindSeg.call(void 0, "scheme", (v) => {
           setScheme(v);
         });
-        bindSeg("accent", (v) => {
+        _ui.bindSeg.call(void 0, "accent", (v) => {
           _state.prefs.accent = v;
           _state.prefs.accentPicked = true;
           _state.savePrefs.call(void 0, );
@@ -1119,13 +1153,13 @@ __modules["main"] = function(module, exports, require) {
             })
               .then((r) => r.json().catch(() => ({})))
               .then((j) => {
-                if (j && j.ok === false) showToast(j.error || "save default model failed");
+                if (j && j.ok === false) _ui.showToast.call(void 0, j.error || "save default model failed");
               })
-              .catch(() => showToast("save default model failed"));
+              .catch(() => _ui.showToast.call(void 0, "save default model failed"));
           };
-        bindSeg("think", (v) => setThink(v));
-        bindSeg("sessappr", (v) => setApproval(v));
-        bindSeg("defappr", (v) => {
+        _ui.bindSeg.call(void 0, "think", (v) => setThink(v));
+        _ui.bindSeg.call(void 0, "sessappr", (v) => setApproval(v));
+        _ui.bindSeg.call(void 0, "defappr", (v) => {
           fetch("/api/config", {
             method: "POST",
             headers: { "content-type": "application/json" },
@@ -1133,11 +1167,11 @@ __modules["main"] = function(module, exports, require) {
           })
             .then((r) => r.json().catch(() => ({})))
             .then((j) => {
-              if (j && j.ok === false) showToast(j.error || "save approval failed");
+              if (j && j.ok === false) _ui.showToast.call(void 0, j.error || "save approval failed");
             })
-            .catch(() => showToast("save approval failed"));
+            .catch(() => _ui.showToast.call(void 0, "save approval failed"));
         });
-        bindSeg("sandbox", (v) => {
+        _ui.bindSeg.call(void 0, "sandbox", (v) => {
           setSandbox(v);
         });
         document.querySelectorAll("[data-plugin]").forEach((btn) => {
@@ -1151,7 +1185,7 @@ __modules["main"] = function(module, exports, require) {
                 headers: { "content-type": "application/json" },
                 body: JSON.stringify({ setPlugin: { name, enabled: on } }),
               });
-            } catch (e10) {
+            } catch (e5) {
               btn.classList.toggle("on", !on);
             }
           };
@@ -1160,7 +1194,7 @@ __modules["main"] = function(module, exports, require) {
           if (!_state.prefs.notify && window.Notification && Notification.permission === "default") {
             try {
               await Notification.requestPermission();
-            } catch (e11) {}
+            } catch (e6) {}
           }
           _state.prefs.notify = !_state.prefs.notify;
           _util.$.call(void 0, "swNotify").classList.toggle("on", _state.prefs.notify);
@@ -1175,7 +1209,7 @@ __modules["main"] = function(module, exports, require) {
       function openSearch() {
         const hits = sessList.slice();
         let sel = 0;
-        openDlg({
+        _ui.openDlg.call(void 0, {
           cls: "wide",
           title: "搜索会话",
           body:
@@ -1220,7 +1254,7 @@ __modules["main"] = function(module, exports, require) {
         }
         function go(name) {
           if (!name) return;
-          closeDlg();
+          _ui.closeDlg.call(void 0, );
           location.href =
             "/?session=" +
             encodeURIComponent(name) +
@@ -1271,7 +1305,7 @@ __modules["main"] = function(module, exports, require) {
         if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "r") {
           e.preventDefault();
           if (lastUser) sendPlain(lastUser);
-          else showToast("没有可重发的输入");
+          else _ui.showToast.call(void 0, "没有可重发的输入");
           return;
         }
         // 输入框外按 "/":聚焦输入框并直接进斜杠菜单。
@@ -1309,7 +1343,7 @@ __modules["main"] = function(module, exports, require) {
           if (_util.$.call(void 0, "overlay").classList.contains("open")) {
             e.preventDefault();
             if (dlgOncancel) dlgOncancel();
-            closeDlg();
+            _ui.closeDlg.call(void 0, );
             return;
           }
           const sm = _util.$.call(void 0, "slashMenu");
@@ -1373,7 +1407,7 @@ __modules["main"] = function(module, exports, require) {
         return list;
       }
       async function addProject() {
-        const root = await askText("添加项目", "", "绝对路径，如 /home/me/proj");
+        const root = await _ui.askText.call(void 0, "添加项目", "", "绝对路径，如 /home/me/proj");
         if (!root) return;
         fetch("/api/workspaces", {
           method: "POST",
@@ -1384,7 +1418,7 @@ __modules["main"] = function(module, exports, require) {
           .then(() => {
             location.href = _state.sessUrl.call(void 0, "default", root);
           })
-          .catch(() => showToast("无效目录"));
+          .catch(() => _ui.showToast.call(void 0, "无效目录"));
       }
       async function openWsMenu(btn) {
         const list = await renderWsName();
@@ -1477,11 +1511,11 @@ __modules["main"] = function(module, exports, require) {
           ren.textContent = "✎ 重命名";
           ren.onclick = async () => {
             closeMenus();
-            const t = await askText("重命名会话", s.title || s.name, "会话标题");
+            const t = await _ui.askText.call(void 0, "重命名会话", s.title || s.name, "会话标题");
             if (t === null) return;
             act({ act: "rename", name: t }, (j) => {
               loadSessions();
-              showToast(j && j.ok ? "已重命名" : "失败");
+              _ui.showToast.call(void 0, j && j.ok ? "已重命名" : "失败");
             });
           };
           m.appendChild(ren);
@@ -1490,11 +1524,11 @@ __modules["main"] = function(module, exports, require) {
           fork.textContent = "✱ 派生会话";
           fork.onclick = async () => {
             closeMenus();
-            const n = await askText("派生会话", "", "新会话名，留空自动");
+            const n = await _ui.askText.call(void 0, "派生会话", "", "新会话名，留空自动");
             if (n === null) return;
             act({ act: "fork", name: n || "" }, (j) => {
               if (j && j.name) {
-                showToast("已派生 " + j.name);
+                _ui.showToast.call(void 0, "已派生 " + j.name);
                 setTimeout(
                   () =>
                     (location.href = _state.sessUrl.call(void 0, j.name)),
@@ -1511,7 +1545,7 @@ __modules["main"] = function(module, exports, require) {
             closeMenus();
             act({ act: "archive" }, (j) => {
               if (j && j.ok) {
-                showToast("已归档");
+                _ui.showToast.call(void 0, "已归档");
                 if (s.name === _state.sess)
                   setTimeout(() => (location.href = _state.sessUrl.call(void 0, "default")), 400);
               }
@@ -1528,7 +1562,7 @@ __modules["main"] = function(module, exports, require) {
         del.textContent = arch ? "永久删除" : "删除";
         del.onclick = async () => {
           closeMenus();
-          if (!(await askYes("删除会话", "永久删除 " + s.name + "？"))) return;
+          if (!(await _ui.askYes.call(void 0, "删除会话", "永久删除 " + s.name + "？"))) return;
           act({ act: "delete" }, () => {
             loadSessions();
           });
@@ -1542,7 +1576,7 @@ __modules["main"] = function(module, exports, require) {
             closeMenus();
             act({ act: "restore" }, () => {
               loadSessions();
-              showToast("已恢复 " + s.name);
+              _ui.showToast.call(void 0, "已恢复 " + s.name);
             });
           };
           m.prepend(res);
@@ -1660,7 +1694,7 @@ __modules["main"] = function(module, exports, require) {
               }
             }
           })
-          .catch(() => showToast("sessions load failed"));
+          .catch(() => _ui.showToast.call(void 0, "sessions load failed"));
       }
       const searchQ = document.createElement("input");
       searchQ.id = "searchQ";
@@ -1676,7 +1710,7 @@ __modules["main"] = function(module, exports, require) {
           .then((j) => {
             if (then) then(j);
           })
-          .catch(() => showToast("action failed"));
+          .catch(() => _ui.showToast.call(void 0, "action failed"));
       }
       // ---- 模型 ----
       async function applySessionModel(md) {
@@ -1691,14 +1725,14 @@ __modules["main"] = function(module, exports, require) {
           );
           const j = await r.json().catch(() => ({}));
           if (!r.ok || j.ok === false || !j.model) {
-            showToast(j.error || "switch model failed");
+            _ui.showToast.call(void 0, j.error || "switch model failed");
             return false;
           }
           curModel = j.model;
           renderModel();
           return true;
-        } catch (e12) {
-          showToast("switch model failed");
+        } catch (e7) {
+          _ui.showToast.call(void 0, "switch model failed");
           return false;
         }
       }
@@ -1719,7 +1753,7 @@ __modules["main"] = function(module, exports, require) {
             }
             openAt("modelMenu", sel);
           })
-          .catch(() => showToast("models load failed"));
+          .catch(() => _ui.showToast.call(void 0, "models load failed"));
       }
       function modelShort(m) {
         if (!m) return "模型";
@@ -1760,7 +1794,7 @@ __modules["main"] = function(module, exports, require) {
           });
           const j = await r.json().catch(() => ({}));
           if (!r.ok || j.ok === false) {
-            showToast(j.error || "switch think failed");
+            _ui.showToast.call(void 0, j.error || "switch think failed");
             return false;
           }
           if (j && j.defaultThinkingLevel) {
@@ -1768,8 +1802,8 @@ __modules["main"] = function(module, exports, require) {
             renderThink();
           }
           return true;
-        } catch (e13) {
-          showToast("switch think failed");
+        } catch (e8) {
+          _ui.showToast.call(void 0, "switch think failed");
           return false;
         }
       }
@@ -1823,14 +1857,14 @@ __modules["main"] = function(module, exports, require) {
           );
           const j = await r.json().catch(() => ({}));
           if (!r.ok || j.ok === false) {
-            showToast(j.error || "授权切换失败");
+            _ui.showToast.call(void 0, j.error || "授权切换失败");
             return;
           }
           if (j.mode) approvalMode = j.mode;
           else if (j.auto !== undefined) approvalMode = j.auto ? "yolo" : "ask";
           setModeBtn();
-        } catch (e14) {
-          showToast("授权切换失败");
+        } catch (e9) {
+          _ui.showToast.call(void 0, "授权切换失败");
         }
       }
       _util.$.call(void 0, "permPill").onclick = (e) => {
@@ -1879,14 +1913,14 @@ __modules["main"] = function(module, exports, require) {
           });
           const j = await r.json().catch(() => ({}));
           if (!r.ok || j.ok === false) {
-            showToast(j.error || "沙箱切换失败");
+            _ui.showToast.call(void 0, j.error || "沙箱切换失败");
             return;
           }
           if (j && j.sandboxMode) sandboxMode = j.sandboxMode;
           if (j && j.sandboxBackend) window.sandboxBackend = j.sandboxBackend;
           setSandboxBtn();
-        } catch (e15) {
-          showToast("沙箱切换失败");
+        } catch (e10) {
+          _ui.showToast.call(void 0, "沙箱切换失败");
         }
       }
       _util.$.call(void 0, "sbPill").onclick = (e) => {
@@ -1955,9 +1989,9 @@ __modules["main"] = function(module, exports, require) {
           const c = _util.$.call(void 0, "compactChip");
           c.style.display = "";
           c.onclick = () => {
-            showToast("正在压缩…");
+            _ui.showToast.call(void 0, "正在压缩…");
             act({ act: "compact" }, (j) => {
-              showToast(j && j.ok ? "压缩完成" : "压缩失败");
+              _ui.showToast.call(void 0, j && j.ok ? "压缩完成" : "压缩失败");
             });
           };
         } else _util.$.call(void 0, "compactChip").style.display = "none";
@@ -2042,20 +2076,20 @@ __modules["main"] = function(module, exports, require) {
           );
           const j = await r.json().catch(() => ({}));
           if (!r.ok || j.ok === false || j.title === undefined) {
-            showToast(j.error || "set title failed");
+            _ui.showToast.call(void 0, j.error || "set title failed");
             return false;
           }
           curTitle = j.title;
           if (hdr) renderHdr({ title: j.title });
           loadSessions();
           return true;
-        } catch (e16) {
-          showToast("set title failed");
+        } catch (e11) {
+          _ui.showToast.call(void 0, "set title failed");
           return false;
         }
       }
       _util.$.call(void 0, "hSes").onclick = async () => {
-        const t = await askText("会话标题", curTitle || "", "");
+        const t = await _ui.askText.call(void 0, "会话标题", curTitle || "", "");
         if (t === null) return;
         await applySessionTitle(t, true);
       };
@@ -2078,20 +2112,20 @@ __modules["main"] = function(module, exports, require) {
         mi("☰ 消息列表", () => runSlash({ name: "/tree" }, ""));
         mi("📋 复制全部", () => runSlash({ name: "/dump" }, ""));
         mi("✎ 计划", async () => {
-          const g = await askText("计划目标", "", "要完成什么");
+          const g = await _ui.askText.call(void 0, "计划目标", "", "要完成什么");
           if (g) runSlash({ name: "/plan" }, g);
         });
         mi("✎ 重命名", async () => {
-          const t = await askText("会话标题", curTitle || "", "");
+          const t = await _ui.askText.call(void 0, "会话标题", curTitle || "", "");
           if (t === null) return;
           await applySessionTitle(t, false);
         });
         mi("✱ 派生会话", async () => {
-          const n = await askText("派生会话", "", "新会话名，留空自动");
+          const n = await _ui.askText.call(void 0, "派生会话", "", "新会话名，留空自动");
           if (n === null) return;
           act({ act: "fork", name: n || "" }, (j) => {
             if (j && j.name) {
-              showToast("已派生 " + j.name);
+              _ui.showToast.call(void 0, "已派生 " + j.name);
               setTimeout(
                 () =>
                   (location.href = _state.sessUrl.call(void 0, j.name)),
@@ -2105,14 +2139,14 @@ __modules["main"] = function(module, exports, require) {
         m.appendChild(se);
         mi("↶ 撤销最后一条", () => {
           act({ act: "undo" }, (j) => {
-            showToast(j && j.ok ? "已撤销" : "无可撤销");
+            _ui.showToast.call(void 0, j && j.ok ? "已撤销" : "无可撤销");
             setTimeout(() => location.reload(), 400);
           });
         });
         mi("⚡ 压缩上下文", () => {
-          showToast("正在压缩…");
+          _ui.showToast.call(void 0, "正在压缩…");
           act({ act: "compact" }, (j) => {
-            showToast(j && j.ok ? "压缩完成" : "压缩失败");
+            _ui.showToast.call(void 0, j && j.ok ? "压缩完成" : "压缩失败");
           });
         });
         const se2 = document.createElement("div");
@@ -2123,7 +2157,7 @@ __modules["main"] = function(module, exports, require) {
           () => {
             act({ act: "archive" }, (j) => {
               if (j && j.ok) {
-                showToast("已归档");
+                _ui.showToast.call(void 0, "已归档");
                 setTimeout(() => (location.href = _state.sessUrl.call(void 0, "default")), 400);
               }
             });
@@ -2635,7 +2669,7 @@ __modules["main"] = function(module, exports, require) {
         t.querySelector(".copy-chip").onclick = () => clipText(rawUser, "已复制", "复制失败");
         t.querySelector(".undo-chip").onclick = () => {
           act({ act: "undo" }, (j) => {
-            showToast(j && j.ok ? "已撤销" : "无可撤销");
+            _ui.showToast.call(void 0, j && j.ok ? "已撤销" : "无可撤销");
             setTimeout(() => location.reload(), 400);
           });
         };
@@ -2844,7 +2878,7 @@ __modules["main"] = function(module, exports, require) {
                 const j = await r.json();
                 if (j && j.text) out = j.text;
               }
-            } catch (e17) {}
+            } catch (e12) {}
           }
           if (!out) {
             host.innerHTML = '<div class="insp-wait">No output.</div>';
@@ -2902,7 +2936,7 @@ __modules["main"] = function(module, exports, require) {
               d.dataset.out = j.text;
               out = j.text;
             }
-          } catch (e18) {}
+          } catch (e13) {}
         }
         const bd = d.querySelector(".bb-pad");
         const card = cards[d.id];
@@ -3001,13 +3035,13 @@ __modules["main"] = function(module, exports, require) {
           });
           const j = await r.json().catch(() => ({}));
           if (!r.ok || j.ok === false) {
-            showToast(j.error || "审批失败");
+            _ui.showToast.call(void 0, j.error || "审批失败");
             card.querySelectorAll("button").forEach((b) => (b.disabled = false));
             return;
           }
           card.remove();
-        } catch (e19) {
-          showToast("审批失败");
+        } catch (e14) {
+          _ui.showToast.call(void 0, "审批失败");
           card.querySelectorAll("button").forEach((b) => (b.disabled = false));
         }
       }
@@ -3022,15 +3056,15 @@ __modules["main"] = function(module, exports, require) {
       }
       function clipText(text, ok, fail) {
         if (!text) {
-          showToast(fail || "没有内容");
+          _ui.showToast.call(void 0, fail || "没有内容");
           return;
         }
         if (navigator.clipboard && navigator.clipboard.writeText) {
           navigator.clipboard
             .writeText(text)
-            .then(() => showToast(ok || "已复制"))
-            .catch(() => showToast(fail || "复制失败"));
-        } else showToast(fail || "复制失败");
+            .then(() => _ui.showToast.call(void 0, ok || "已复制"))
+            .catch(() => _ui.showToast.call(void 0, fail || "复制失败"));
+        } else _ui.showToast.call(void 0, fail || "复制失败");
       }
       function agentHtml(out, args) {
         if (Flow.el && (Flow.out === out || Flow.args === args || _util.parseToolArgs.call(void 0, args).nodes)) {
@@ -3090,7 +3124,7 @@ __modules["main"] = function(module, exports, require) {
         if (!line.startsWith("data: ")) return;
         try {
           ev.onmessage({ data: line.slice(6) });
-        } catch (e20) {}
+        } catch (e15) {}
       }
       async function connectSSE() {
         try {
@@ -3119,7 +3153,7 @@ __modules["main"] = function(module, exports, require) {
               for (const line of chunk.split("\n")) handleSSELine(line);
             }
           }
-        } catch (e21) {}
+        } catch (e16) {}
         sseDown();
         setTimeout(connectSSE, sseDelay());
       }
@@ -3200,7 +3234,7 @@ __modules["main"] = function(module, exports, require) {
           el.hidden = false;
           el.innerHTML = list.map(fmtActChip).join("");
           return list.length;
-        } catch (e22) {
+        } catch (e17) {
           return 0;
         }
       }
@@ -3240,7 +3274,7 @@ __modules["main"] = function(module, exports, require) {
         let evt;
         try {
           evt = JSON.parse(e.data);
-        } catch (e23) {
+        } catch (e18) {
           return;
         }
         if (evt.session && evt.session !== _state.sess) return;
@@ -3311,7 +3345,7 @@ __modules["main"] = function(module, exports, require) {
             ) {
               try {
                 new Notification("piz", { body: "本轮已完成" });
-              } catch (e24) {}
+              } catch (e19) {}
             }
             if (_state.prefs.sound) {
               try {
@@ -3325,7 +3359,7 @@ __modules["main"] = function(module, exports, require) {
                 g.connect(ac.destination);
                 o.start();
                 o.stop(ac.currentTime + 0.08);
-              } catch (e25) {}
+              } catch (e20) {}
             }
             break;
           case "status":
@@ -3366,7 +3400,7 @@ __modules["main"] = function(module, exports, require) {
         return fetch("/api/help?" + _state.wsp + "session=" + encodeURIComponent(_state.sess))
           .then((r) => r.json())
           .then(applyHelpCatalog)
-          .catch(() => showToast("help catalog load failed"));
+          .catch(() => _ui.showToast.call(void 0, "help catalog load failed"));
       }
       let SLASH = [
         { name: "/help", desc: "list commands" },
@@ -3538,7 +3572,7 @@ __modules["main"] = function(module, exports, require) {
             if (slashIdx >= slashItems.length) slashIdx = 0;
             pickKind = "file";
             renderSlash();
-          } catch (e26) {
+          } catch (e21) {
             hideSlash();
           }
         }, 60);
@@ -3668,7 +3702,7 @@ __modules["main"] = function(module, exports, require) {
           const v = _util.$.call(void 0, "inp").value;
           if (v) localStorage.setItem(draftKey(), v);
           else localStorage.removeItem(draftKey());
-        } catch (e27) {}
+        } catch (e22) {}
       }
       function restoreDraft() {
         try {
@@ -3677,12 +3711,12 @@ __modules["main"] = function(module, exports, require) {
             _util.$.call(void 0, "inp").value = v;
             autosizeInp();
           }
-        } catch (e28) {}
+        } catch (e23) {}
       }
       function clearDraft() {
         try {
           localStorage.removeItem(draftKey());
-        } catch (e29) {}
+        } catch (e24) {}
       }
       function histKey() {
         return "piz.hist." + _state.sess;
@@ -3690,7 +3724,7 @@ __modules["main"] = function(module, exports, require) {
       function loadHist() {
         try {
           return JSON.parse(localStorage.getItem(histKey()) || "[]");
-        } catch (e30) {
+        } catch (e25) {
           return [];
         }
       }
@@ -3702,7 +3736,7 @@ __modules["main"] = function(module, exports, require) {
         while (a.length > 50) a.shift();
         try {
           localStorage.setItem(histKey(), JSON.stringify(a));
-        } catch (e31) {}
+        } catch (e26) {}
         histIdx = -1;
         histDraft = "";
       }
@@ -3734,7 +3768,7 @@ __modules["main"] = function(module, exports, require) {
             const name = parts[0] || "";
             const key = parts.slice(1).join(" ").trim();
             if (!name || !key) {
-              showToast("usage: /login <provider> <api-key>");
+              _ui.showToast.call(void 0, "usage: /login <provider> <api-key>");
               break;
             }
             fetch("/api/config", {
@@ -3743,12 +3777,12 @@ __modules["main"] = function(module, exports, require) {
               body: JSON.stringify({ setAuth: { name, key } }),
             })
               .then((r) => r.json())
-              .then((j) => showToast(j && j.ok ? "saved " + name : "login failed"))
-              .catch(() => showToast("login failed"));
+              .then((j) => _ui.showToast.call(void 0, j && j.ok ? "saved " + name : "login failed"))
+              .catch(() => _ui.showToast.call(void 0, "login failed"));
             break;
           }
           case "/quit":
-            showToast("close the tab to quit");
+            _ui.showToast.call(void 0, "close the tab to quit");
             break;
           case "/help":
             addUser("/help");
@@ -3772,26 +3806,26 @@ __modules["main"] = function(module, exports, require) {
             break;
           case "/undo":
             act({ act: "undo" }, (j) =>
-              showToast(j && j.ok ? "已撤销" : "撤销失败"),
+              _ui.showToast.call(void 0, j && j.ok ? "已撤销" : "撤销失败"),
             );
             break;
           case "/compact":
             act({ act: "compact" }, (j) =>
-              showToast(j && j.ok ? "压缩完成" : "压缩失败"),
+              _ui.showToast.call(void 0, j && j.ok ? "压缩完成" : "压缩失败"),
             );
             break;
           case "/fork": {
             const n =
-              arg || (await askText("派生会话", "", "新会话名，留空自动"));
+              arg || (await _ui.askText.call(void 0, "派生会话", "", "新会话名，留空自动"));
             if (n === null) return;
             act({ act: "fork", name: n || "" }, (j) => {
               if (j && j.ok && j.name) location.href = _state.sessUrl.call(void 0, j.name);
-              else showToast("派生失败");
+              else _ui.showToast.call(void 0, "派生失败");
             });
             break;
           }
           case "/title": {
-            const t = arg || (await askText("会话标题", curTitle || "", ""));
+            const t = arg || (await _ui.askText.call(void 0, "会话标题", curTitle || "", ""));
             if (t === null || !t) return;
             await applySessionTitle(t, true);
             break;
@@ -3811,7 +3845,7 @@ __modules["main"] = function(module, exports, require) {
                 addAsst("refreshed " + (j.refreshed || 0) + " provider(s), +" + (j.added || 0) + " models" +
                   (j.fail ? "\n" + j.fail + " provider(s) failed GET /models" : ""));
               }
-            } catch (e32) {
+            } catch (e27) {
               addAsst("cannot refresh models");
             }
             finishAsst();
@@ -3869,7 +3903,7 @@ __modules["main"] = function(module, exports, require) {
                   );
               }
               ensureActPoll();
-            } catch (e33) {
+            } catch (e28) {
               addAsst("cannot read activity");
             }
             finishAsst();
@@ -3883,7 +3917,7 @@ __modules["main"] = function(module, exports, require) {
               const cost = j.usd > 0 ? "  $" + Number(j.usd).toFixed(4) : "";
               const head = "usage  " + (j.lines || 0) + " turns  ↑" + _util.fmtTok.call(void 0, j.in || 0) + " ↓" + _util.fmtTok.call(void 0, j.out || 0) + cost;
               addAsst(j.tail ? head + "\n" + j.tail : head);
-            } catch (e34) {
+            } catch (e29) {
               addAsst("cannot read usage.jsonl");
             }
             finishAsst();
@@ -3933,7 +3967,7 @@ __modules["main"] = function(module, exports, require) {
               } else {
                 addAsst("no image on clipboard — use Ctrl+V");
               }
-            } catch (e35) {
+            } catch (e30) {
               addAsst("no image on clipboard — use Ctrl+V");
             }
             finishAsst();
@@ -4159,7 +4193,7 @@ __modules["main"] = function(module, exports, require) {
               break;
             }
             if (n < 1 || n > sessList.length) {
-              showToast("没有第 " + n + " 个会话（/sessions）");
+              _ui.showToast.call(void 0, "没有第 " + n + " 个会话（/sessions）");
               break;
             }
             location.href = _state.sessUrl.call(void 0, sessList[n - 1].name);
@@ -4168,7 +4202,7 @@ __modules["main"] = function(module, exports, require) {
           case "/plan": {
             const goal =
               (arg && arg.trim()) ||
-              (await askText("计划目标", "", "要完成什么"));
+              (await _ui.askText.call(void 0, "计划目标", "", "要完成什么"));
             if (!goal) return;
             await sendPlain("/plan " + goal);
             break;
@@ -4177,7 +4211,7 @@ __modules["main"] = function(module, exports, require) {
             pending = [];
             renderQueue();
             act({ act: "queue" }, (j) => {
-              showToast(
+              _ui.showToast.call(void 0, 
                 j && j.cleared
                   ? "已清空 " + j.cleared + " 条"
                   : "没有待发送的消息",
@@ -4188,18 +4222,18 @@ __modules["main"] = function(module, exports, require) {
             const rest = (arg || "").trim();
             if (rest === "clear") {
               act({ act: "memory-clear" }, (j) =>
-                showToast(j && j.ok ? "记忆已清空" : "清空失败"),
+                _ui.showToast.call(void 0, j && j.ok ? "记忆已清空" : "清空失败"),
               );
               break;
             }
             if (rest.startsWith("set ")) {
               const text = rest.slice(4).trim();
               if (!text) {
-                showToast("usage: /memory set <text>");
+                _ui.showToast.call(void 0, "usage: /memory set <text>");
                 break;
               }
               act({ act: "memory-set", name: text }, (j) =>
-                showToast(j && j.ok ? "记忆已写入" : "写入失败"),
+                _ui.showToast.call(void 0, j && j.ok ? "记忆已写入" : "写入失败"),
               );
               break;
             }
@@ -4235,12 +4269,12 @@ __modules["main"] = function(module, exports, require) {
                   );
                   finishAsst();
                 })
-                .catch(() => showToast("plugins 读取失败"));
+                .catch(() => _ui.showToast.call(void 0, "plugins 读取失败"));
               break;
             }
             const m = rest.match(/^(on|off)\s+(\S+)$/);
             if (!m) {
-              showToast("usage: /plugins on <name> | /plugins off <name>");
+              _ui.showToast.call(void 0, "usage: /plugins on <name> | /plugins off <name>");
               break;
             }
             const on = m[1] === "on";
@@ -4252,13 +4286,13 @@ __modules["main"] = function(module, exports, require) {
               .then((r) => r.json())
               .then((j) => {
                 if (j && j.ok === false) {
-                  showToast("插件开关失败");
+                  _ui.showToast.call(void 0, "插件开关失败");
                   return;
                 }
-                showToast("plugin " + m[2] + (on ? " on" : " off") + " — next turn");
+                _ui.showToast.call(void 0, "plugin " + m[2] + (on ? " on" : " off") + " — next turn");
                 loadHelpCatalog();
               })
-              .catch(() => showToast("插件开关失败"));
+              .catch(() => _ui.showToast.call(void 0, "插件开关失败"));
             break;
           }
           case "/pkg":
@@ -4313,8 +4347,8 @@ __modules["main"] = function(module, exports, require) {
             act({ act: "export" }, (j) => {
               if (j && j.text) {
                 _util.downloadText.call(void 0, "piz-export.html", j.text, "text/html");
-                showToast("已导出");
-              } else showToast("导出失败");
+                _ui.showToast.call(void 0, "已导出");
+              } else _ui.showToast.call(void 0, "导出失败");
             });
             break;
           case "/dump":
@@ -4331,7 +4365,7 @@ __modules["main"] = function(module, exports, require) {
             break;
           case "/redo":
             if (!lastUser) {
-              showToast("没有可重发的输入");
+              _ui.showToast.call(void 0, "没有可重发的输入");
               break;
             }
             await sendPlain(lastUser);
@@ -4349,9 +4383,9 @@ __modules["main"] = function(module, exports, require) {
                   addUser("/" + stem + (arg ? " " + arg : ""));
                   addAsst(j.text || "");
                   finishAsst();
-                } else showToast((j && j.error) || "未知命令");
+                } else _ui.showToast.call(void 0, (j && j.error) || "未知命令");
               })
-              .catch(() => showToast("未知命令"));
+              .catch(() => _ui.showToast.call(void 0, "未知命令"));
             break;
           }
         }
@@ -4544,7 +4578,7 @@ __modules["main"] = function(module, exports, require) {
               paintImgChip();
               return true;
             }
-          } catch (e36) {}
+          } catch (e31) {}
         }
         return false;
       }
@@ -4559,7 +4593,7 @@ __modules["main"] = function(module, exports, require) {
             try {
               pendingImg = await blobToChatImage(blob);
               paintImgChip();
-            } catch (e37) {}
+            } catch (e32) {}
             return;
           }
         }
@@ -4597,10 +4631,10 @@ __modules["main"] = function(module, exports, require) {
           );
           const j = await r.json().catch(() => ({}));
           if (!r.ok || j.ok === false) {
-            showToast(j.error || "send failed");
+            _ui.showToast.call(void 0, j.error || "send failed");
           } else ok = true;
-        } catch (e38) {
-          showToast("send failed");
+        } catch (e33) {
+          _ui.showToast.call(void 0, "send failed");
         }
         if (!ok) {
           // 失败不吞草稿:文本塞回输入框,图也还回 pending。
@@ -4700,13 +4734,13 @@ __modules["main"] = function(module, exports, require) {
         document.body.classList.add("collapsed");
         try {
           localStorage.setItem("piz.sidebar", "1");
-        } catch (e39) {}
+        } catch (e34) {}
       };
       _util.$.call(void 0, "expBtn").onclick = () => {
         document.body.classList.remove("collapsed");
         try {
           localStorage.setItem("piz.sidebar", "0");
-        } catch (e40) {}
+        } catch (e35) {}
       };
       _util.$.call(void 0, "setBtn").onclick = () => openSettings();
       document.querySelector(".ch-brand").onclick = (e) => {
@@ -4717,7 +4751,7 @@ __modules["main"] = function(module, exports, require) {
       function hideWelcome() {
         const x = _util.$.call(void 0, "welcome");
         if (x) x.remove();
-        _optionalChain([_util.$.call(void 0, "app"), 'optionalAccess', _10 => _10.classList, 'access', _11 => _11.remove, 'call', _12 => _12("hero")]);
+        _optionalChain([_util.$.call(void 0, "app"), 'optionalAccess', _ => _.classList, 'access', _2 => _2.remove, 'call', _3 => _3("hero")]);
       }
       // ---- 插件 SDK v1 ----
       const pluginListeners = new Map(),
@@ -4760,7 +4794,7 @@ __modules["main"] = function(module, exports, require) {
             owned.push(off);
             return off;
           },
-          toast: showToast,
+          toast: _ui.showToast,
           fetch: async (path, opts) => {
             const u = new URL(path, location.href);
             if (u.origin !== location.origin || !u.pathname.startsWith("/api/"))
@@ -4824,7 +4858,7 @@ __modules["main"] = function(module, exports, require) {
                   "piz.plugin." + meta.id + "." + key,
                 );
                 return v === null ? fb : JSON.parse(v);
-              } catch (e41) {
+              } catch (e36) {
                 return fb;
               }
             },
@@ -4841,7 +4875,7 @@ __modules["main"] = function(module, exports, require) {
           while (owned.length) {
             try {
               owned.pop()();
-            } catch (e42) {}
+            } catch (e37) {}
           }
         };
         return Object.freeze(api);
@@ -4903,7 +4937,7 @@ __modules["main"] = function(module, exports, require) {
         while (pluginCleanups.length) {
           try {
             pluginCleanups.pop()();
-          } catch (e43) {}
+          } catch (e38) {}
         }
       });
       // ---- 初始化 ----
@@ -4920,8 +4954,8 @@ __modules["main"] = function(module, exports, require) {
         inspect.init();
         const wait = Math.max(0, 450 - (Date.now() - splashAt));
         setTimeout(() => {
-          _optionalChain([_util.$.call(void 0, "splash"), 'optionalAccess', _13 => _13.classList, 'access', _14 => _14.add, 'call', _15 => _15("hide")]);
-          setTimeout(() => _optionalChain([_util.$.call(void 0, "splash"), 'optionalAccess', _16 => _16.remove, 'call', _17 => _17()]), 350);
+          _optionalChain([_util.$.call(void 0, "splash"), 'optionalAccess', _4 => _4.classList, 'access', _5 => _5.add, 'call', _6 => _6("hide")]);
+          setTimeout(() => _optionalChain([_util.$.call(void 0, "splash"), 'optionalAccess', _7 => _7.remove, 'call', _8 => _8()]), 350);
         }, wait);
         connectSSE();
         fetch("/api/state?" + _state.wsp + "session=" + encodeURIComponent(_state.sess))
@@ -4957,7 +4991,7 @@ __modules["main"] = function(module, exports, require) {
           }
           renderHdr(s);
         })
-        .catch(() => showToast("state load failed"));
+        .catch(() => _ui.showToast.call(void 0, "state load failed"));
       setModeBtn();
       setSandboxBtn();
       fetch("/api/config")
@@ -4967,7 +5001,7 @@ __modules["main"] = function(module, exports, require) {
           if (cfg && cfg.sandboxBackend) window.sandboxBackend = cfg.sandboxBackend;
           setSandboxBtn();
         })
-        .catch(() => showToast("config load failed"));
+        .catch(() => _ui.showToast.call(void 0, "config load failed"));
       loadHelpCatalog();
       const welcome = document.createElement("div");
       welcome.id = "welcome";
@@ -4993,14 +5027,19 @@ __modules["main"] = function(module, exports, require) {
       loadPlugins();
       restoreDraft();
       }
-      initServerAuth();
-      const probe = rawFetch("/api/state?" + _state.wsp + "session=" + encodeURIComponent(_state.sess), {
-        headers: credential ? { Authorization: "Bearer " + credential } : {},
+      // ui/net 解缠钩:对话框开场收菜单/补全;登录成功续 boot
+      _ui.dlgHooks.closeMenus = closeMenus;
+      _ui.dlgHooks.hideSlash = hideSlash;
+      _ui.dlgHooks.hideBang = hideBang;
+      _net.setOnAuthed.call(void 0, boot);
+      _net.initServerAuth.call(void 0, );
+      const probe = _net.rawFetch.call(void 0, "/api/state?" + _state.wsp + "session=" + encodeURIComponent(_state.sess), {
+        headers: _net.getCredential.call(void 0, ) ? { Authorization: "Bearer " + _net.getCredential.call(void 0, ) } : {},
       });
       probe
         .then((r) => {
           if (r.ok) boot();
-          else if (r.status === 401) showAuthPage("");
+          else if (r.status === 401) _net.showAuthPage.call(void 0, "");
           else if (r.status === 403 && _state.ws) {
             const u = new URL(location.href);
             u.searchParams.delete("ws");
@@ -5011,7 +5050,7 @@ __modules["main"] = function(module, exports, require) {
         })
         .catch(() => {
           _util.$.call(void 0, "authErr").textContent = "无法连接本地服务器";
-          showAuthPage("无法连接本地服务器,请确认 piz web 已启动");
+          _net.showAuthPage.call(void 0, "无法连接本地服务器,请确认 piz web 已启动");
         });
 
 };
