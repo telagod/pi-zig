@@ -859,6 +859,7 @@ export function toolDone(name: string, err?: boolean, summary?: string) {
   c.done = true;
   d.dataset.out = c.out;
   if (name === "workflow") Flow.finish(c.out);
+  if (name === "todo" && !err) planStrip(c);
   if (inspect.src === id && $("inspect") && !$("inspect")!.hidden) inspect.paint(d);
   else if (err) inspect.open(d);
 }
@@ -934,6 +935,59 @@ export function addNotice(txt: string) {
   th.appendChild(d);
   scrl();
 }
+// 压缩检查点(dsh checkpoint row):消息流内一行,点开摘要;静止时仅悬停显示展开指示
+let cpOpen: any = null;
+export function addCheckpoint(summary: string, folded: number, kept: number) {
+  hideWelcome();
+  if (cpOpen) {
+    cpOpen.classList.remove("open");
+    cpOpen = null;
+  }
+  const d = document.createElement("div");
+  d.className = "cp";
+  const n = Number(folded) || 0;
+  const k = Number(kept) || 0;
+  const same = th.lastElementChild && th.lastElementChild.classList && th.lastElementChild.classList.contains("cp");
+  d.innerHTML =
+    '<button type="button" class="cp-sum" aria-expanded="false"><span class="cp-ic">⧉</span><span class="cp-t">上下文已压缩</span>' +
+    (same ? "" : "<span class=\"cp-meta\">折叠 " + n + " 条 · 保留 " + fmtK(k) + " tok</span>") +
+    '<span class="cp-caret">▸</span></button>' +
+    '<div class="cp-body"></div>';
+  const bd = d.querySelector(".cp-body")!;
+  if (summary) bd.textContent = summary;
+  (d.querySelector(".cp-sum") as HTMLElement).onclick = () => {
+    d.classList.toggle("open");
+    (d.querySelector(".cp-sum") as HTMLElement).setAttribute("aria-expanded", String(d.classList.contains("open")));
+  };
+  th.appendChild(d);
+  cpOpen = d;
+  scrl();
+}
+// todo 计划条(dsh input dock 计划条之形):todo 工具完成时,输入区上方一条
+// 📋 计划 · x/y 完成,点击打开检视查看全表;无计划即隐藏。
+export function planStrip(c: any) {
+  const txt = c.out || "";
+  const done = (txt.match(/\[x\]/gi) || []).length;
+  const open = (txt.match(/\[ \]/g) || []).length;
+  const total = done + open;
+  const strip = $("planStrip") as HTMLElement | null;
+  if (!strip || !total) return;
+  strip.hidden = false;
+  strip.innerHTML =
+    '<button type="button" class="plan-sum"><span class="plan-ic">📋</span><span class="plan-t">计划</span><span class="plan-meta">' +
+    done +
+    "/" +
+    total +
+    " 完成</span><span class=\"plan-caret\">▸</span></button>";
+  (strip.querySelector(".plan-sum") as HTMLElement).onclick = () => inspect.open(c.el);
+}
+function fmtK(n: number) {
+  if (n >= 1000) {
+    const k = n / 1000;
+    return (k >= 100 ? Math.round(k) : Math.round(k * 10) / 10) + "k";
+  }
+  return String(Math.round(n));
+}
 function agentHtml(out: string, args: string) {
   if (Flow.el && (Flow.out === out || Flow.args === args || parseToolArgs(args).nodes)) {
     return Flow.html();
@@ -983,4 +1037,9 @@ export function toolBody(ty: string, out: string, path: string, args?: string): 
   pre.className = "code";
   pre.textContent = text.length > 32000 ? text.slice(0, 32000) + "\n…" : text;
   return pre;
+}
+
+// 验证钩(Playwright 驱动;生产无副作用,不挂全局业务)
+if (typeof window !== "undefined") {
+  (window as any).pizDbg = { addCheckpoint, planStrip };
 }

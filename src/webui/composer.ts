@@ -13,7 +13,7 @@ import {
 } from "./slash";
 import {
   addUser, addAsst, finishAsst, addRsn, finishRsn, addTool, toolDone,
-  addSub, addPerm, addNotice, finishWork, stampTurn, noteTurn,
+  addSub, addPerm, addNotice, addCheckpoint, finishWork, stampTurn, noteTurn,
 } from "./chat";
 import {
   applyThink, applyTitle, renderModel, setCost, setCtx, setTurnMeta, getVision,
@@ -151,6 +151,9 @@ ev.onmessage = (e) => {
       break;
     case "notice":
       addNotice(evt.text);
+      break;
+    case "checkpoint":
+      addCheckpoint(evt.summary, evt.folded, evt.kept);
       break;
     case "reasoning":
       setRun(true);

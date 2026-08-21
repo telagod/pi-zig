@@ -3303,3 +3303,119 @@
           opacity: 0.35;
         }
       }
+
+      /* 压缩检查点行(dsh checkpoint row 之形) */
+      .cp {
+        margin: 10px 0;
+      }
+      .cp-sum {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        max-width: 100%;
+        padding: 4px 10px;
+        border: 1px solid var(--color-line);
+        border-radius: var(--radius-md);
+        background: var(--color-surface);
+        color: var(--color-text);
+        font-size: 12.5px;
+        cursor: pointer;
+      }
+      .cp-sum:hover {
+        border-color: var(--color-accent-bd);
+      }
+      .cp-ic {
+        color: var(--color-text-faint);
+        font-size: 13px;
+      }
+      .cp-t {
+        font-weight: 500;
+      }
+      .cp-meta {
+        color: var(--color-text-muted);
+        font-variant-numeric: tabular-nums;
+      }
+      .cp-caret {
+        color: var(--color-text-faint);
+        font-size: 10px;
+        transition: transform 0.15s;
+      }
+      .cp.open .cp-caret {
+        transform: rotate(90deg);
+      }
+      .cp-body {
+        display: none;
+        margin: 6px 0 0 10px;
+        padding: 8px 12px;
+        border-left: 2px solid var(--color-line);
+        color: var(--color-text-muted);
+        font-size: 13px;
+        line-height: 1.6;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+      .cp.open .cp-body {
+        display: block;
+      }
+
+      /* 会话头谱系(dsh session.header.lineage 之简形) */
+      .lineage {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        font-size: 12px;
+        color: var(--color-text-muted);
+      }
+      .lineage .lg-sep {
+        color: var(--color-text-faint);
+      }
+      .lineage .lg-n {
+        font-weight: 400;
+        cursor: default;
+      }
+      /* jobs 终态行弱化(dsh ui-jobs:终态可见但弱化,失败 detail 仍可读) */
+      .jr.gone {
+        opacity: 0.55;
+      }
+      .jr.gone .jr-g,
+      .jr.gone .jr-n {
+        color: var(--color-text-muted);
+      }
+      .jr.gone .jr-t {
+        color: var(--color-text-faint);
+      }
+      /* todo 计划条(dsh input dock 计划条之形) */
+      .plan-strip {
+        display: flex;
+        justify-content: flex-start;
+        padding: 2px 4px 4px;
+      }
+      .plan-sum {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 3px 10px;
+        border: 1px solid var(--color-line);
+        border-radius: var(--radius-full);
+        background: var(--color-surface);
+        color: var(--color-text);
+        font-size: 12px;
+        cursor: pointer;
+      }
+      .plan-sum:hover {
+        border-color: var(--color-accent-bd);
+      }
+      .plan-ic {
+        font-size: 12px;
+      }
+      .plan-t {
+        font-weight: 500;
+      }
+      .plan-meta {
+        color: var(--color-text-muted);
+        font-variant-numeric: tabular-nums;
+      }
+      .plan-caret {
+        color: var(--color-text-faint);
+        font-size: 10px;
+      }

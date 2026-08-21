@@ -320,6 +320,8 @@ pub const AgentCallbacks = struct {
     /// 「模型说链路断了」和「引擎发现链路断了正在重连」—— 后者才需要
     /// 用户知道 piz 仍在推进,而不是卡住了。
     on_notice: ?*const fn (ctx: ?*anyopaque, text: []const u8) anyerror!void = null,
+    /// 压缩成功:摘要 + 折叠条数 + 保留 token(web 端渲染检查点行;TUI 走 on_notice)。
+    on_compact: ?*const fn (ctx: ?*anyopaque, summary: []const u8, folded: usize, kept: usize) anyerror!void = null,
     /// subagent 的中间事件(进程内委派)。`idx` 是任务序号(1 起)。
     ///
     /// 子进程路径下委派是纯黑盒:父 agent join() 干等,只能拿到最终文本。
@@ -1545,6 +1547,10 @@ pub fn send(self: *Agent, user_text: []const u8) !ai.RunResult {
             var nb: [128]u8 = undefined;
             const msg = std.fmt.bufPrint(&nb, "context compacted · kept {d} tok · {d} msgs folded", .{ self.estTokens(), cut }) catch "context compacted";
             f(self.cbs.ctx, msg) catch |err| util.debugCatch("on_notice.compact_ok", err);
+        }
+        // 结构化检查点事件(web 渲染为可展开行;摘要文本与计数齐)
+        if (self.cbs.on_compact) |f| {
+            f(self.cbs.ctx, fold.summary, cut, self.estTokens()) catch |err| util.debugCatch("on_compact.checkpoint", err);
         }
         return fold.summary;
     }

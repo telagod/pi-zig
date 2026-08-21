@@ -1941,6 +1941,18 @@ let slashItems = [],
       slashItems = (j.items || []).map((it) =>
         Object.assign({ desc: it.link ? "→ " + it.link : it.dir ? "目录" : "文件" }, it),
       );
+      // 裸 @(无 ./):运行中的子代理候选排最前(插入字面 @label,不做继续语义)
+      if (!cur.q) {
+        const subs = (exports.subPool || [])
+          .filter((s) => s && s.kind === "subagent" && s.name)
+          .map((s) => ({
+            id: "@" + s.name,
+            name: s.name,
+            desc: "运行中 子代理",
+            sub: true,
+          }));
+        if (subs.length) slashItems = subs.concat(slashItems);
+      }
       if (slashIdx >= slashItems.length) slashIdx = 0;
       pickKind = "file";
       renderSlash();
@@ -1949,6 +1961,11 @@ let slashItems = [],
     }
   }, 60);
 } exports.scheduleFiles = scheduleFiles;
+// 运行子代理池(jobs 轮询灌入;裸 @ 候选)
+ let subPool = []; exports.subPool = subPool;
+ function setSubPool(list) {
+  exports.subPool = list || [];
+} exports.setSubPool = setSubPool;
  function insertFile() {
   const it = slashItems[slashIdx];
   const inp = _util.$.call(void 0, "inp") ;
@@ -1959,7 +1976,13 @@ let slashItems = [],
   }
   const prefix = inp.value.slice(0, tok.start);
   const suffix = inp.value.slice(tok.start + tok.raw.length);
-  if (it.dir) {
+  if (it.sub && it.name) {
+    // 子代理引用:插入字面 @label(不做继续语义,仅文本)
+    const filled = prefix + "@" + it.name + " ";
+    inp.value = filled + suffix;
+    inp.setSelectionRange(filled.length, filled.length);
+    hideSlash();
+  } else if (it.dir) {
     const filled = prefix + "@./" + it.path + "/";
     inp.value = filled + suffix;
     inp.setSelectionRange(filled.length, filled.length);
@@ -4034,6 +4057,7 @@ const pendingByName = {};
   c.done = true;
   d.dataset.out = c.out;
   if (name === "workflow") exports.Flow.finish(c.out);
+  if (name === "todo" && !err) planStrip(c);
   if (exports.inspect.src === id && _util.$.call(void 0, "inspect") && !_util.$.call(void 0, "inspect").hidden) exports.inspect.paint(d);
   else if (err) exports.inspect.open(d);
 } exports.toolDone = toolDone;
@@ -4109,6 +4133,59 @@ async function appr(card, id, allow, always) {
   exports.th.appendChild(d);
   scrl();
 } exports.addNotice = addNotice;
+// 压缩检查点(dsh checkpoint row):消息流内一行,点开摘要;静止时仅悬停显示展开指示
+let cpOpen = null;
+ function addCheckpoint(summary, folded, kept) {
+  _sheet.hideWelcome.call(void 0, );
+  if (cpOpen) {
+    cpOpen.classList.remove("open");
+    cpOpen = null;
+  }
+  const d = document.createElement("div");
+  d.className = "cp";
+  const n = Number(folded) || 0;
+  const k = Number(kept) || 0;
+  const same = exports.th.lastElementChild && exports.th.lastElementChild.classList && exports.th.lastElementChild.classList.contains("cp");
+  d.innerHTML =
+    '<button type="button" class="cp-sum" aria-expanded="false"><span class="cp-ic">⧉</span><span class="cp-t">上下文已压缩</span>' +
+    (same ? "" : "<span class=\"cp-meta\">折叠 " + n + " 条 · 保留 " + fmtK(k) + " tok</span>") +
+    '<span class="cp-caret">▸</span></button>' +
+    '<div class="cp-body"></div>';
+  const bd = d.querySelector(".cp-body");
+  if (summary) bd.textContent = summary;
+  (d.querySelector(".cp-sum") ).onclick = () => {
+    d.classList.toggle("open");
+    (d.querySelector(".cp-sum") ).setAttribute("aria-expanded", String(d.classList.contains("open")));
+  };
+  exports.th.appendChild(d);
+  cpOpen = d;
+  scrl();
+} exports.addCheckpoint = addCheckpoint;
+// todo 计划条(dsh input dock 计划条之形):todo 工具完成时,输入区上方一条
+// 📋 计划 · x/y 完成,点击打开检视查看全表;无计划即隐藏。
+ function planStrip(c) {
+  const txt = c.out || "";
+  const done = (txt.match(/\[x\]/gi) || []).length;
+  const open = (txt.match(/\[ \]/g) || []).length;
+  const total = done + open;
+  const strip = _util.$.call(void 0, "planStrip") ;
+  if (!strip || !total) return;
+  strip.hidden = false;
+  strip.innerHTML =
+    '<button type="button" class="plan-sum"><span class="plan-ic">📋</span><span class="plan-t">计划</span><span class="plan-meta">' +
+    done +
+    "/" +
+    total +
+    " 完成</span><span class=\"plan-caret\">▸</span></button>";
+  (strip.querySelector(".plan-sum") ).onclick = () => exports.inspect.open(c.el);
+} exports.planStrip = planStrip;
+function fmtK(n) {
+  if (n >= 1000) {
+    const k = n / 1000;
+    return (k >= 100 ? Math.round(k) : Math.round(k * 10) / 10) + "k";
+  }
+  return String(Math.round(n));
+}
 function agentHtml(out, args) {
   if (exports.Flow.el && (exports.Flow.out === out || exports.Flow.args === args || _util.parseToolArgs.call(void 0, args).nodes)) {
     return exports.Flow.html();
@@ -4160,16 +4237,29 @@ function agentHtml(out, args) {
   return pre;
 } exports.toolBody = toolBody;
 
+// 验证钩(Playwright 驱动;生产无副作用,不挂全局业务)
+if (typeof window !== "undefined") {
+  (window ).pizDbg = { addCheckpoint, planStrip };
+}
+
 };
 __modules["jobs"] = function(module, exports, require) {
 "use strict";Object.defineProperty(exports, "__esModule", {value: true}); function _nullishCoalesce(lhs, rhsFn) { if (lhs != null) { return lhs; } else { return rhsFn(); } } function _optionalChain(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }// jobs.ts —— 后台活动触发钮 + 弹层(借 dsh ui-jobs 之形)。
 // header 一颗 ⠿ 钮,活动时带计数 badge;点开平铺列表,esc/点外关。
 // 数据同 composer 活动条(/api/activity 轮询),本模块只做容器与渲染,无轮询。
-// opens 状态以 DOM(.menu.open)为准:closeMenus(其它菜单触发)会摘掉 open,
-// 本模块 tick 时自纠,不会残留假开态。
+// dsh 对齐:活跃行在前(startedAt 升序=早开始在前,以 elapsed 降序近似);
+// 已见但结束的行走「终态」区(finishedAt 降序=最新完成在前)弱化保留,
+// 失败 detail 是唯一可读之处,不过滤;耗时钟打开且含活物才跑。
 var _util = require('./util');
+var _slash = require('./slash');
 
-let lastList = [];
+let live = [];
+let gone = [];
+let tickTimer = 0;
+
+function keyOf(a) {
+  return a.kind + ":" + a.name;
+}
 
 function isOpen() {
   return _nullishCoalesce(_optionalChain([_util.$.call(void 0, "jobsPop"), 'optionalAccess', _ => _.classList, 'access', _2 => _2.contains, 'call', _3 => _3("open")]), () => ( false));
@@ -4196,6 +4286,10 @@ function isOpen() {
  function closeJobs() {
   _optionalChain([_util.$.call(void 0, "jobsPop"), 'optionalAccess', _6 => _6.classList, 'access', _7 => _7.remove, 'call', _8 => _8("open")]);
   _optionalChain([_util.$.call(void 0, "hJobs"), 'optionalAccess', _9 => _9.classList, 'access', _10 => _10.remove, 'call', _11 => _11("open")]);
+  if (tickTimer) {
+    clearInterval(tickTimer);
+    tickTimer = 0;
+  }
 } exports.closeJobs = closeJobs;
 
  function toggleJobs() {
@@ -4206,50 +4300,126 @@ function isOpen() {
   const p = _util.$.call(void 0, "jobsPop");
   if (p) p.classList.add("open");
   _optionalChain([_util.$.call(void 0, "hJobs"), 'optionalAccess', _12 => _12.classList, 'access', _13 => _13.add, 'call', _14 => _14("open")]);
-  refreshJobs(lastList);
+  refreshJobs(live);
+  startTickIfNeeded();
 } exports.toggleJobs = toggleJobs;
 
-function fmtRow(a) {
-  const sec = a.ms < 10000 ? (a.ms / 1000).toFixed(1) : String(Math.round(a.ms / 1000));
+function fmtSec(ms) {
+  const s = ms / 1000;
+  if (s < 10) return s.toFixed(1) + "s";
+  if (s < 3600) return Math.round(s) + "s";
+  return Math.round(s / 60) + "m";
+}
+
+function fmtRow(a, gone_, i) {
+  const sec = fmtSec(a.ms || 0);
   const lim = a.limit_ms && !a.detached ? "/" + Math.round(a.limit_ms / 1000) + "s" : "";
   const by = a.bytes ? " · " + _util.fmtTok.call(void 0, a.bytes) : "";
-  const retry = a.attempt > 1 ? " · retry " + (a.attempt - 1) : "";
+  const retry = a.attempt > 1 && !gone_ ? " · retry " + (a.attempt - 1) : "";
   const glyph = a.detached ? "~" : a.kind === "subagent" ? "●" : a.kind === "http" ? "↻" : "▸";
   const det = a.detail ? '<span class="jr-d">' + _util.esc.call(void 0, a.detail) + "</span>" : "";
   return (
-    '<div class="jr' + (a.detached ? " bg" : "") + '">' +
+    '<div class="jr' + (a.detached ? " bg" : "") + (gone_ ? " gone" : "") + '">' +
     '<span class="jr-g">' + glyph + "</span>" +
     '<span class="jr-n">' + _util.esc.call(void 0, a.name || "job") + "</span>" +
     det +
-    '<span class="jr-t">' + sec + "s" + lim + by + retry + "</span>" +
+    '<span class="jr-t" data-i="' + i + '">' + sec + lim + by + retry + (gone_ ? " · 完成" : "") + "</span>" +
     "</div>"
   );
 }
 
+function startTickIfNeeded() {
+  if (!isOpen()) return;
+  if (tickTimer) return;
+  // 只有列表里确实有会动的东西时,时钟才跑(dsh 同规)
+  if (live.length === 0) return;
+  tickTimer = setInterval(() => {
+    if (!isOpen()) {
+      clearInterval(tickTimer);
+      tickTimer = 0;
+      return;
+    }
+    live.forEach((a, i) => {
+      a.ms = (a.ms || 0) + 1000;
+      const el = document.querySelector('.jr-t[data-i="' + i + '"]');
+      if (el) {
+        const lim = a.limit_ms && !a.detached ? "/" + Math.round(a.limit_ms / 1000) + "s" : "";
+        const by = a.bytes ? " · " + _util.fmtTok.call(void 0, a.bytes) : "";
+        const retry = a.attempt > 1 ? " · retry " + (a.attempt - 1) : "";
+        el.textContent = fmtSec(a.ms) + lim + by + retry;
+      }
+    });
+  }, 1000);
+}
+
  function refreshJobs(list) {
-  lastList = list;
+  _slash.setSubPool.call(void 0, list);
+  updateLineage(list);
+  // 终态归集:上次活跃、这次消失的 → 弱化保留(最新完成在前)
+  const nowIds = new Set(list.map(keyOf));
+  for (const j of live) {
+    if (!nowIds.has(keyOf(j))) gone.unshift(j);
+  }
+  live = list;
   const n = list.length;
   const btn = _util.$.call(void 0, "hJobs");
-  if (btn) btn.hidden = n === 0;
+  // 控件出现条件:至少有一个任务(含已结束的历史);零不宣告零
+  if (btn) btn.hidden = n === 0 && gone.length === 0;
   const badge = _util.$.call(void 0, "hJobsBadge");
   if (badge) {
     badge.hidden = n === 0;
     badge.textContent = String(n);
   }
   if (!isOpen()) {
-    // 其它菜单路径(closeMenus)摘了 open,顺带复位按钮样式
     const hb = _util.$.call(void 0, "hJobs");
     if (_optionalChain([hb, 'optionalAccess', _15 => _15.classList, 'access', _16 => _16.contains, 'call', _17 => _17("open")])) hb.classList.remove("open");
     return;
   }
   const p = _util.$.call(void 0, "jobsPop");
   if (!p) return;
-  if (!n) {
+  if (!n && !gone.length) {
     closeJobs();
     return;
   }
-  p.innerHTML = list.map(fmtRow).join("");
+  // 排序:活跃 startedAt 升序(以 elapsed 降序近似)在前,终态 finishedAt 降序在后
+  const sortedLive = [...live].sort((a, b) => (b.ms || 0) - (a.ms || 0));
+  p.innerHTML =
+    sortedLive.map((a, i) => fmtRow(a, false, i)).join("") +
+    gone.map((a, i) => fmtRow(a, true, i + sortedLive.length)).join("");
+  startTickIfNeeded();
 } exports.refreshJobs = refreshJobs;
+
+// 会话头谱系(dsh session.header.lineage 之简形):标题后 `/ N` 面包屑,
+// N=活动子代理数;悬停 title 列出运行中的子代理(只读,不做继续语义)。
+function updateLineage(list) {
+  const subs = (list || []).filter((j) => j && j.kind === "subagent" && j.name);
+  const ses = _util.$.call(void 0, "hSes");
+  let el = _util.$.call(void 0, "hLineage") ;
+  if (!subs.length) {
+    if (el) el.hidden = true;
+    return;
+  }
+  if (!el) {
+    if (!ses) return;
+    el = document.createElement("span");
+    el.id = "hLineage";
+    el.className = "lineage";
+    ses.insertAdjacentElement("afterend", el);
+  }
+  el.hidden = false;
+  el.innerHTML =
+    '<span class="lg-sep">/</span><span class="lg-n" title="' +
+    _util.esc.call(void 0, subs.map((s) => s.name + (s.detail ? " — " + s.detail : "")).join("\n")) +
+    '">' +
+    subs.length +
+    (subs.length > 1 ? " 个子代理" : " 子代理") +
+    "</span>";
+}
+
+// 验证钩(Playwright 驱动)
+if (typeof window !== "undefined") {
+  (window ).pizDbgJobs = { refreshJobs, toggleJobs, closeJobs };
+}
 
 };
 __modules["composer"] = function(module, exports, require) {
@@ -4406,6 +4576,9 @@ _stream.ev.onmessage = (e) => {
       break;
     case "notice":
       _chat.addNotice.call(void 0, evt.text);
+      break;
+    case "checkpoint":
+      _chat.addCheckpoint.call(void 0, evt.summary, evt.folded, evt.kept);
       break;
     case "reasoning":
       setRun(true);
@@ -5352,6 +5525,12 @@ __modules["main"] = function(module, exports, require) {
         })
         .catch(() => _ui.showToast.call(void 0, "config load failed"));
       _slash.loadHelpCatalog.call(void 0, );
+      // todo 计划条插槽(dsh input dock 计划条):actStrip 之后、队列行之前
+      const ps = document.createElement("div");
+      ps.id = "planStrip";
+      ps.className = "plan-strip";
+      ps.hidden = true;
+      _optionalChain([_util.$.call(void 0, "actStrip"), 'optionalAccess', _6 => _6.insertAdjacentElement, 'call', _7 => _7("afterend", ps)]);
       const welcome = document.createElement("div");
       welcome.id = "welcome";
       welcome.className = "empty-hint";

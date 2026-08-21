@@ -214,6 +214,18 @@ export function scheduleFiles(tok: any) {
       slashItems = (j.items || []).map((it: any) =>
         Object.assign({ desc: it.link ? "→ " + it.link : it.dir ? "目录" : "文件" }, it),
       );
+      // 裸 @(无 ./):运行中的子代理候选排最前(插入字面 @label,不做继续语义)
+      if (!cur.q) {
+        const subs = (subPool || [])
+          .filter((s: any) => s && s.kind === "subagent" && s.name)
+          .map((s: any) => ({
+            id: "@" + s.name,
+            name: s.name,
+            desc: "运行中 子代理",
+            sub: true,
+          }));
+        if (subs.length) slashItems = subs.concat(slashItems);
+      }
       if (slashIdx >= slashItems.length) slashIdx = 0;
       pickKind = "file";
       renderSlash();
@@ -221,6 +233,11 @@ export function scheduleFiles(tok: any) {
       hideSlash();
     }
   }, 60);
+}
+// 运行子代理池(jobs 轮询灌入;裸 @ 候选)
+export let subPool: any[] = [];
+export function setSubPool(list: any[]) {
+  subPool = list || [];
 }
 export function insertFile() {
   const it = slashItems[slashIdx];
@@ -232,7 +249,13 @@ export function insertFile() {
   }
   const prefix = inp.value.slice(0, tok.start);
   const suffix = inp.value.slice(tok.start + tok.raw.length);
-  if (it.dir) {
+  if (it.sub && it.name) {
+    // 子代理引用:插入字面 @label(不做继续语义,仅文本)
+    const filled = prefix + "@" + it.name + " ";
+    inp.value = filled + suffix;
+    inp.setSelectionRange(filled.length, filled.length);
+    hideSlash();
+  } else if (it.dir) {
     const filled = prefix + "@./" + it.path + "/";
     inp.value = filled + suffix;
     inp.setSelectionRange(filled.length, filled.length);

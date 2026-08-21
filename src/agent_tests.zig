@@ -57,16 +57,67 @@ test "compaction triggers after hard line" {
     // compact 成功 → on_notice 一行(上下文有内容可折)
     const Hook = struct {
         var noticed: bool = false;
+        var compacted: bool = false;
+        var folded: usize = 0;
+        var kept: usize = 0;
+        var summary: []const u8 = "";
         fn notice(_: ?*anyopaque, text: []const u8) anyerror!void {
             if (std.mem.indexOf(u8, text, "context compacted") != null) noticed = true;
         }
+        fn compact(_: ?*anyopaque, s: []const u8, f: usize, k: usize) anyerror!void {
+            compacted = true;
+            summary = s;
+            folded = f;
+            kept = k;
+        }
     };
     Hook.noticed = false;
-    agent.cbs = .{ .on_notice = Hook.notice };
+    Hook.compacted = false;
+    agent.cbs = .{ .on_notice = Hook.notice, .on_compact = Hook.compact };
     const _out = try agent.compact();
     _ = _out;
     try t.expect(Hook.noticed);
     try t.expect(agent.compacts == 1);
+    // checkpoint 结构化事件:摘要非空、折叠条数 = 可折消息数(2),保留 token > 0
+    try t.expect(Hook.compacted);
+    try t.expect(Hook.folded == 2);
+    try t.expect(Hook.kept > 0);
+    try t.expect(Hook.summary.len > 0);
+}
+
+test "on_compact fires with folded count and summary" {
+    const t = std.testing;
+    try util.testInit();
+    var arena = util.Arena.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var provs = [_]cfgmod.Provider{.{ .name = "mock", .api = .openai_completions, .base_url = "http://127.0.0.1:1", .api_key = "k" }};
+    var cfg = cfgmod.Config{ .arena = &arena };
+    cfg.providers = &provs;
+    var agent = try Agent.init(a, &cfg, "mock", "m", "/tmp");
+    for (0..2) |_| {
+        try agent.messages.append(.{ .role = "assistant", .content = "s" ** (250 * 1024) });
+    }
+    try agent.messages.append(.{ .role = "user", .content = "continue" });
+    const Hook = struct {
+        var compacted: bool = false;
+        var summary: []const u8 = "";
+        var folded: usize = 0;
+        var kept: usize = 0;
+        fn compact(_: ?*anyopaque, s: []const u8, f: usize, k: usize) anyerror!void {
+            compacted = true;
+            summary = s;
+            folded = f;
+            kept = k;
+        }
+    };
+    Hook.compacted = false;
+    Hook.summary = "";
+    agent.cbs = .{ .on_compact = Hook.compact };
+    _ = try agent.compact();
+    try t.expect(Hook.compacted);
+    try t.expect(Hook.folded == 2);
+    try t.expect(Hook.summary.len > 0);
 }
 
 test "token estimate does not underreport CJK text" {

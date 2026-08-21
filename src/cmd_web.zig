@@ -315,6 +315,7 @@ pub const SessionPool = struct {
             .on_abort = webOnAbort,
             .on_connect = webOnConnect,
             .on_subagent = webOnSubagent,
+            .on_compact = webOnCompact,
         };
         rebuildSnap(ses);
         ses.worker = std.Thread.spawn(.{}, webWorker, .{ses}) catch return null;
@@ -684,6 +685,15 @@ fn webOnText(ctx: ?*anyopaque, text: []const u8) anyerror!void {
 fn webOnReasoning(ctx: ?*anyopaque, text: []const u8) anyerror!void {
     const s: *WebSession = @ptrCast(@alignCast(ctx.?));
     s.hub.push("{{\"type\":\"reasoning\",\"session\":{s},\"text\":{s}}}", .{ try util.jsonString(s.agent.alloc, s.name), try util.jsonString(s.agent.alloc, text) });
+}
+fn webOnCompact(ctx: ?*anyopaque, summary: []const u8, folded: usize, kept: usize) anyerror!void {
+    const s: *WebSession = @ptrCast(@alignCast(ctx.?));
+    s.hub.push("{{\"type\":\"checkpoint\",\"session\":{s},\"summary\":{s},\"folded\":{d},\"kept\":{d}}}", .{
+        try util.jsonString(s.agent.alloc, s.name),
+        try util.jsonString(s.agent.alloc, summary),
+        folded,
+        kept,
+    });
 }
 fn webOnSubagent(ctx: ?*anyopaque, idx: usize, kind: agentmod.SubagentEvent, text: []const u8) anyerror!void {
     switch (kind) {

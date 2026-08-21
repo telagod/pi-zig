@@ -57,6 +57,12 @@
         })
         .catch(() => showToast("config load failed"));
       loadHelpCatalog();
+      // todo 计划条插槽(dsh input dock 计划条):actStrip 之后、队列行之前
+      const ps = document.createElement("div");
+      ps.id = "planStrip";
+      ps.className = "plan-strip";
+      ps.hidden = true;
+      $("actStrip")?.insertAdjacentElement("afterend", ps);
       const welcome = document.createElement("div");
       welcome.id = "welcome";
       welcome.className = "empty-hint";
