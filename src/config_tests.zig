@@ -366,6 +366,12 @@ test "catalogMeta knows DeepSeek V4 and parseModelMeta reads OpenRouter shape" {
     try t.expectEqual(false, v4.vision.?);
     try t.expectEqual(true, v4.reasoning.?);
     try t.expectEqual(@as(u32, 1_000_000), catalogMeta("acme/deepseek-v4-pro").context_window);
+    // 官方文档补录之实验视觉版(上游 pi-ai 未收,EXTRA 机制保 regen)
+    const ve = catalogMeta("deepseek-v4-flash-vision-exp");
+    try t.expectEqual(@as(u32, 1_000_000), ve.context_window);
+    try t.expectEqual(@as(u32, 384_000), ve.max_output);
+    try t.expectEqual(true, ve.vision.?);
+    try t.expectEqual(true, ve.reasoning.?);
     try t.expect(catalogMeta("gpt-4o").context_window > 0);
     try t.expectEqual(@as(u32, 0), catalogMeta("deepseek-chat").context_window);
     try t.expectEqual(@as(u32, 0), catalogMeta("deepseek-reasoner").context_window);

@@ -25,6 +25,20 @@ SRC = os.path.join(os.path.dirname(__file__), "..", "src")
 OUT = os.path.join(SRC, "pricing.zig")
 CATALOG_OUT = os.path.join(SRC, "catalog.zig")
 
+# 手工补录:官方文档有而 pi-ai 上游未收之型号。regen 不丢。
+# 源: api-docs.deepseek.com/quick_start/pricing(2026-08 核)。
+EXTRA = {
+    "deepseek/deepseek-v4-flash-vision-exp": {
+        "id": "deepseek-v4-flash-vision-exp",
+        "provider": "deepseek",
+        "contextWindow": 1000000,
+        "maxTokens": 384000,
+        "input": ["text", "image"],
+        "reasoning": True,
+        "cost": {"input": 0.14, "output": 0.28, "cacheRead": 0.0028, "cacheWrite": 0},
+    },
+}
+
 
 def find_data_dir() -> str:
     for d in CANDIDATE_DIRS:
@@ -81,6 +95,33 @@ def main() -> None:
                     ent["t_cache_write"] = top.get("cacheWrite", 0)
                 entries[key] = ent  # 后写覆盖:同 key 跨 api 组去重
                 rates_by_id[m.get("id", mid)] = ent
+
+    # 手工补录合流(同走 caps/rates 生成,优先级高于上游同名)
+    for key, m in EXTRA.items():
+        inputs = m.get("input") or []
+        cap = {
+            "context_window": int(m.get("contextWindow") or 0),
+            "max_output": int(m.get("maxTokens") or 0),
+            "vision": "image" in inputs,
+            "reasoning": bool(m.get("reasoning")),
+        }
+        caps[key] = cap
+        caps_by_id[m["id"]] = cap
+        cost = m.get("cost")
+        if cost:
+            ent = {
+                "input": cost.get("input", 0),
+                "output": cost.get("output", 0),
+                "cache_read": cost.get("cacheRead", 0),
+                "cache_write": cost.get("cacheWrite", 0),
+                "tier_above": 0,
+                "t_input": 0.0,
+                "t_output": 0.0,
+                "t_cache_read": 0.0,
+                "t_cache_write": 0.0,
+            }
+            entries[key] = ent
+            rates_by_id[m["id"]] = ent
 
     lines = [
         "// 代码生成,勿手改。源: pi-ai dist/providers/data/*.json",
