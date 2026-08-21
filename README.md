@@ -4,29 +4,40 @@
 <h1 align="center">piz</h1>
 <p align="center">
   极简终端编码 agent。<a href="https://pi.dev">pi</a> 的 Zig 0.16 重写。<br>
-  <sub>单个静态二进制 · Linux · Apache-2.0</sub>
+  <sub>6.3 MB 单静态二进制 · 冷启 0.63 ms · Linux · Apache-2.0</sub>
 </p>
 
 <p align="center">
   <img src="docs/images/tui.png" width="720" alt="piz 交互模式：会话卡、对话、boxed composer">
 </p>
-<p align="center"><sub>交互模式。开场是会话卡，对话用 <code>›</code> / <code>•</code>，输入在底栏框。页脚左侧提示、右侧上下文占用。空框按 <code>?</code> 看快捷键。</sub></p>
+<p align="center"><sub>交互模式。开场是会话卡，对话用 <code>›</code> / <code>•</code>，输入在底栏框。空框按 <code>?</code> 看快捷键。</sub></p>
 
 <p align="center">
   <img src="docs/images/web.png" width="720" alt="piz Web UI：项目侧栏、对话、工具卡、斜杠命令">
 </p>
-<p align="center"><sub><code>piz web</code> 活页面。侧栏按项目列会话，对话里有工具卡，<code>/</code> 出命令；手动审批、缓存命中和上下文环在输入栏。</sub></p>
+<p align="center"><sub><code>piz web</code> 本地界面。侧栏按项目列会话，<code>/</code> 出命令；审批、缓存命中、上下文环在输入栏。</sub></p>
 
-核心只做一条链路：组消息 → 调模型 → 跑工具 → 压缩。其余是编译期插件表，随二进制发布。不用的工具不进请求——少付 schema，也不打乱 prompt 前缀缓存。
+## 占用（同机实测，可复跑）
+
+| | piz | pi(node 24) | 倍差 |
+|---|---|---|---|
+| 磁盘 | **6.3 MB** 单二进制 | ≈268 MB(运行时+包) | 42× |
+| 冷启动 | **0.63 ms** | 471 ms | 746× |
+| 峰值内存(`--version`) | **3.5 MB** | 154 MB | 44× |
+| `piz web` 稳态 | **<9 MB**(200 并发后无泄漏) | — | |
+
+Web 首屏 3 请求共 283 KB(gzip 65 KB),DOMContentLoaded 21 ms。全表与机况见 [benchmarks](docs/benchmarks.md),`./scripts/bench.sh` 一键复跑。
+
+## 是什么
+
+核心只做一条链路:组消息 → 调模型 → 跑工具 → 压缩。其余是编译期插件表,随二进制发布;不用的工具不进请求——少付 schema,也不打乱 prompt 前缀缓存。
 
 | | |
 |---|---|
-| 工具 | 默认 8 个：`read` `write` `edit` `multi_edit` `grep` `find` `ls` `bash`。搜索认 `.gitignore`。`read` 带行号。写盘先 tmp 再 rename，且不得逃出工作区。其余 `--plugin` 才开 |
-| 扩展 | `pkg.json` 可声明工具与钩子；另有内嵌 QuickJS 运行时免编译加载 JS/TS 扩展（pi 式 `export default`，见下）。`piz --plugins` 列出 `[pkg]`。Web / TUI 可贴图，续会话从图文件回放 |
-| 子 agent | 8 线程 worker 池，闲着不占线程。顶层排队 32、嵌套 4。孩子默认不带 `task` / `spawn_agent` |
-| 缓存 | tools 写在 messages 前面，`prompt_cache_key` 用工作目录。快压优先动廉价尾 |
-| 依赖 | Zig 标准库 + vendored [stb](https://github.com/nothings/stb)（读图）。正则和 glob 是自己的 |
-| 占用 | 6.3 MB 单二进制；冷启 0.63 ms、峰值 3.5 MB；`piz web` 稳态 <9 MB。对比 node 版 pi：快 746×、省 97.7% 内存。实测见 [benchmarks](docs/benchmarks.md) |
+| 工具 | 默认 8 个:`read` `write` `edit` `multi_edit` `grep` `find` `ls` `bash`。搜索认 `.gitignore`,`read` 带行号,写盘先 tmp 再 rename 且不得逃出工作区。其余 `--plugin` 才开 |
+| 界面 | 终端 TUI + 本地 Web UI(`piz web`,内嵌页,手机竖屏适配)。皆可贴图,续会话从图回放 |
+| 子 agent | 8 线程 worker 池,顶层排队 32、嵌套 4;孩子默认不带 `task`/`spawn_agent` |
+| 依赖 | Zig 标准库 + vendored [stb](https://github.com/nothings/stb)。正则和 glob 是自己的,无 node_modules |
 
 macOS 未验证。Windows 不做。
 
@@ -36,15 +47,13 @@ macOS 未验证。Windows 不做。
 
 ```bash
 git clone <repo> && cd pi-zig
-zig build                 # 默认 ReleaseFast
+zig build                 # 默认 ReleaseFast;调试传 -Doptimize=Debug
 ./zig-out/bin/piz --help
 ```
 
-调试：`zig build -Doptimize=Debug`。
-
 ## 快速开始
 
-密钥写 `~/.piz/auth.json`，或 `DEEPSEEK_API_KEY` / `ANTHROPIC_API_KEY` / `<PROVIDER>_API_KEY`：
+密钥写 `~/.piz/auth.json`,或 `DEEPSEEK_API_KEY` / `ANTHROPIC_API_KEY` / `<PROVIDER>_API_KEY`:
 
 ```json
 { "deepseek": { "type": "api_key", "key": "sk-..." } }
@@ -52,21 +61,35 @@ zig build                 # 默认 ReleaseFast
 
 ```bash
 cd ~/your-project
-piz                       # 交互，续载该目录最近一次会话
+piz                       # 交互,续载该目录最近一次会话
 piz -n                    # 新会话
 piz -p "解释构建流程"     # 一次性问答
 echo "总结这个文件" | piz -p
-piz web                   # 本地界面
+piz web                   # 本地 Web UI
+piz doctor                # 体检:配置、沙箱、联网、git
 ```
 
-`-x` 自动执行（模型能跑任意 shell）。`-r` 只读：一个工具都不发，连 `read` 也没有，别拿它做调研。`--sandbox workspace` 把 bash 关进 bwrap（工作区外只读）。
+权限三档:`-r` 只读(一个工具都不发)、默认逐项问、`-x` 全权。`--sandbox workspace` 把 bash 关进 bwrap。`--plugin lsp` 本次开启可选插件;持久写 `~/.piz/settings.json` 的 `plugins` 数组。
 
-```bash
-piz --plugins             # 看启用状态
-piz --plugin lsp          # 本次开启
+## 生态与扩展
+
+三面机制,皆可免编译:
+
+- **JS/TS 扩展**:内嵌 QuickJS-ng,`~/.piz/extensions/` 与项目 `.piz/extensions/` 启动即装,pi 式写法直跑(见下)。
+- **资源包**:`piz pkg install <目录|git-url|name@marketplace>` 装 skills/prompts/AGENTS.md/前端插件,Git 仓库即 registry。
+- **Web 前端插件**:SDK v1——slots、`renderTool`、storage、事件总线。
+
+```ts
+// ~/.piz/extensions/hello.js
+export default function (pi: any) {
+  pi.registerCommand("hello", { handler: (a: string) => "hi " + a });
+  pi.registerTool({ name: "rand", description: "随机数", schema: {},
+    execute: async () => String(Math.random()) });
+  pi.on("agent_end", (e: any) => console.log?.(e.text));
+}
 ```
 
-持久写 `~/.piz/settings.json` 的 `plugins` 数组。
+ESM `import "./dep.mjs"`、TS 类型剥离、async handler、`pi.readFile/exec/fetch` 同步原语、TUI `/reload` 热重载。示例:[hello-tool.js](examples/extensions/)、[skill-pack](examples/skill-pack/)、[web-plugin](examples/web-plugin/)。全貌见 [生态](docs/ecosystem.md)。
 
 ## 文档
 
@@ -77,53 +100,30 @@ piz --plugin lsp          # 本次开启
 | [Usage](docs/usage.md) | 交互、斜杠命令、CLI、键位 |
 | [Tools](docs/tools.md) | 核心工具与可选扩展 |
 | [Configuration](docs/configuration.md) | 配置、provider、认证 |
-| [Web UI](docs/web-ui.md) | `piz web`、鉴权、HTTP |
+| [Web UI](docs/web-ui.md) | `piz web`、鉴权、HTTP、前端架构 |
 | [Plugins](docs/plugins.md) | 内置插件、钩子 |
-| [Packages](docs/packages.md) | 资源包、skills |
-| [生态](docs/ecosystem.md) | 装包(git URL/marketplace)、写包、示例、兼容 |
-| [JS 扩展](docs/extensions-js.md) | QuickJS 窄桥：ESM/import/TS/async、fs/fetch、热重载 |
-| [Sessions](docs/sessions.md) | 会话、分支、格式 |
+| [Packages](docs/packages.md) / [生态](docs/ecosystem.md) | 资源包规约 / 装包、写包、分发 |
+| [JS 扩展](docs/extensions-js.md) | QuickJS 窄桥:ESM/import/TS/async、fs/fetch、热重载 |
+| [Benchmarks](docs/benchmarks.md) | 占用实测全表 |
 | [Architecture](docs/architecture.md) | 模块、主链路、并发、Zig 0.16 |
-
-改 piz 本身先读 Architecture。对照外部 harness 哲学看 [dsh-mapping](docs/dsh-mapping.md)。
-
-## JS 扩展(免编译)
-
-内嵌 QuickJS-ng(默认开,`-Dquickjs=false` 可关):`~/.piz/extensions/` 与项目
-`.piz/extensions/` 下的 `.js/.mjs/.ts` 启动即装,pi 式写法直接跑:
-
-```ts
-export default function(pi: any) {
-  pi.registerCommand("hello", { handler: (a: string) => "hi " + a });
-  pi.registerTool({ name: "rand", description: "随机数", schema: {},
-    execute: async () => String(Math.random()) });
-  pi.on("agent_end", (e: any) => console.log?.(e.text));
-}
-```
-
-ESM `import "./dep.mjs"`、TS 类型剥离(sucrase 内嵌)、async handler、
-`pi.readFile/writeFile/env/cwd/fetch` 同步原语;TUI `/reload` 秒级热重载。
-全部见 [docs/extensions-js.md](docs/extensions-js.md)。
 
 ## 与 pi 的关系
 
-配置目录是 `~/.piz`，不与 pi 共用。`settings.json` / `auth.json` / `models.json` / `AGENTS.md` 格式兼容，可以从 `~/.pi/agent` 拷过来。
+配置目录是 `~/.piz`,不与 pi 共用。`settings.json` / `auth.json` / `models.json` / `AGENTS.md` 格式兼容,可以从 `~/.pi/agent` 拷过来;会话文件格式不兼容(见 [Sessions](docs/sessions.md#会话格式与-pi-的差异))。
 
-会话文件格式不兼容，历史迁不过来。见 [Sessions](docs/sessions.md#会话格式与-pi-的差异)。
-
-piz 做了 pi 明确声明不做的事：权限门、`/plan`、todo、任务委托、LSP、本地 Web UI。认 API key，也接 OpenRouter PKCE 与 Codex/xAI device-code。Claude Pro / ChatGPT Plus 订阅 OAuth 未接。
+piz 做了 pi 明确不做的事:权限门、`/plan`、todo、任务委托、LSP、本地 Web UI。认 API key,也接 OpenRouter PKCE 与 Codex/xAI device-code;Claude Pro / ChatGPT Plus 订阅 OAuth 未接。
 
 ## 开发
 
 ```bash
-zig build test
+zig build test            # 389 测试
 zig fmt src build.zig
 ```
 
-改并发或委派前读 Architecture 里的约束。不要让子 agent 默认带回 `task-delegation`。
+改并发或委派前读 [Architecture](docs/architecture.md) 的约束;各模块禁则见 [modules.md](docs/modules.md)。改前端只动 `src/webui/*.ts`,`zig build web` 重产 `webui.js` 后再全量构建(嵌件陷阱,详见 web-ui.md#前端架构)。
 
 ## 许可证
 
 [Apache-2.0](LICENSE)。Copyright 2026 telagod。
 
-重写自 [pi](https://github.com/earendil-works/pi)（MIT，Copyright (c) 2025 Mario Zechner）。上游声明在 [NOTICE](NOTICE)。独立实现，没有逐字拷贝的代码。
+重写自 [pi](https://github.com/earendil-works/pi)(MIT,Copyright (c) 2025 Mario Zechner)。上游声明在 [NOTICE](NOTICE)。独立实现,没有逐字拷贝的代码。

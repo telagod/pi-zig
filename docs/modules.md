@@ -1,7 +1,7 @@
 # 模块规矩
 
 每模块一段:职责、禁则、测试归处。新人改码前先读对应段;规矩即 review 依据。
-总纲:[architecture.md](architecture.md);插件合同:[plugins.md](plugins.md) + [plugin-extraction.md](plugin-extraction.md)。
+总纲:[architecture.md](architecture.md);插件合同:[plugins.md](plugins.md)。
 
 ## 通用五条
 
@@ -47,7 +47,7 @@
 - 实现按域居 `src/plugins/`(hooks/extras/todo/agents/task/workflow/lsp/childbind),
   合同在 `plugins/api.zig`,工具限流在 `plugins/limits.zig`。
 - 能走 JS 扩展者不入此表;抽离件留**空壳行**(`extracted = true`)守名籍,实现居
-  `src/embedded/extensions/`,jsrt 按启用集门控装载(见 [抽离路线](plugin-extraction.md))。
+  `src/embedded/extensions/`,jsrt 按启用集门控装载。
 - 文档插件数须与 `builtin_plugins` 实数核对。
 
 ## jsrt(JS 窄桥)

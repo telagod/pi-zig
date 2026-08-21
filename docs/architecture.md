@@ -146,7 +146,7 @@ graph TD
 | `pkgs.zig` | 包安装/移除/枚举、marketplace 解析、`tools[]` 声明 |
 | `events.zig` | 扫描包扩展声明、事件触发时 spawn 命令 |
 | `webui.zig` | HTTP 服务、鉴权 / CSRF / workspace 守卫、SSE |
-| `build_web.zig` + `webui/*.ts` | 前端 TS 模块化:`piz build-web`(sucrase 转译拼合)产 `webui.js`,见 docs/webui.md |
+| `build_web.zig` + `webui/*.ts` | 前端 TS 模块化:`piz build-web`(sucrase 转译拼合)产 `webui.js`,见 docs/web-ui.md#前端架构 |
 | `webui_routes.zig` | ~40 条 API 路由体（顺序敏感，先匹配先赢） |
 | `webplugins.zig` | 前端插件清单与资源服务 |
 | `main.zig` | argv 解析、交互态编排 |

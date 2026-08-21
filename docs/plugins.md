@@ -1,4 +1,4 @@
-> 想加插件？让 piz 读这篇，然后描述你要挂的钩子。它会照着 `src/plugins.zig` 的现有条目写。对齐外部 harness 哲学时先读 [dsh 对照札](dsh-mapping.md)。
+> 想加插件？让 piz 读这篇，然后描述你要挂的钩子。它会照着 `src/plugins.zig` 的现有条目写。
 
 # 内置插件
 
@@ -6,7 +6,7 @@ piz 的插件是**编译期注册的 Zig 函数表**，不是运行时加载的�
 
 这是有意的取舍:核心(`src/agent.zig`)只做主链路,凡是「有用但不该进核心」的能力都做成插件挂钩子。想改插件行为要改代码重编译 —— 换来的是没有插件加载器、没有沙箱、没有 ABI 兼容性负担。
 
-适合免编译的场景化插件正逐步抽成真 JS 扩展(内嵌层随二进制出厂,同名可覆写),路线图见 [插件抽离](plugin-extraction.md)。
+适合免编译的场景化插件已抽成真 JS 扩展(内嵌层随二进制出厂,同名可覆写),桥见 [JS 扩展](extensions-js.md)。
 
 面向终端用户的运行时扩展点是 [Packages](packages.md) 的事件声明和 `tools[]`，那条路不需要重编译。
 
@@ -31,7 +31,7 @@ piz 的插件是**编译期注册的 Zig 函数表**，不是运行时加载的�
 | `compact-resilience` | — | **已废留名**:密图折页不调模型,备用模型重试无的放矢;名籍守旧配置 |
 | `command-canonicalization` | `on_tool_before` | 拦截危险 shell 命令 |
 | `artifact-store` | `on_tool_result` | 超大输出外置到文件(**已抽为内嵌 JS 扩展**,见下) |
-| `usage-ledger` | `after_turn` | 每轮 token 追加到 `~/.piz/usage.jsonl`(**已抽为内嵌 JS 扩展**,见 [抽离路线](plugin-extraction.md)) |
+| `usage-ledger` | `after_turn` | 每轮 token 追加到 `~/.piz/usage.jsonl`(**已抽为内嵌 JS 扩展**) |
 
 ### 默认关闭
 
@@ -42,7 +42,7 @@ piz 的插件是**编译期注册的 Zig 函数表**，不是运行时加载的�
 | `lsp` | `lsp` |
 | `todo` | `todo_write` `todo_read`（已抽为内嵌 JS 扩展,按会话 sid 隔离) |
 | `task-delegation` | `task` `workflow` `spawn_agent` `wait_agent` `read_agent` `send_agent` `list_agents` `close_agent`；斜杠 `/agents` |
-| `web-search` | `web_search` `fetch_url`(`fetch_url` 拒内网 / metadata / localhost);斜杠 `/web`(**已抽为内嵌 JS 扩展**,开关语义不变,见 [抽离路线](plugin-extraction.md)) |
+| `web-search` | `web_search` `fetch_url`(`fetch_url` 拒内网 / metadata / localhost);斜杠 `/web`(**已抽为内嵌 JS 扩展**,开关语义不变) |
 | `git-awareness` | `git_status`（已抽为内嵌 JS 扩展） |
 | `context-budget` | `get_context_remaining` |
 | `elicitation` | `ask_user`（成功后本轮立刻停，答复即问题正文;已抽为内嵌 JS 扩展） |
