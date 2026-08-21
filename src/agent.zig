@@ -850,7 +850,22 @@ pub const Agent = struct {
     }
 
     pub fn sendWithImage(self: *Agent, user_text: []const u8, image: ?[]const u8, mime_hint: []const u8) !ai.RunResult {
-        const text0 = pluginsmod.runUserMessage(@ptrCast(self), user_text) orelse user_text;
+        var text0 = pluginsmod.runUserMessage(@ptrCast(self), user_text) orelse user_text;
+        // JS 扩展 pre_turn(借 dsh agent/pre-step 之简形):入箱文可改写,或整句拦下。
+        if (jsrt.enabled) {
+            var pa = std.heap.ArenaAllocator.init(std.heap.c_allocator);
+            defer pa.deinit();
+            switch (jsrt.emitPreTurn(pa.allocator(), text0, self.cwd)) {
+                .pass => {},
+                .replace => |rt| text0 = try self.alloc.dupe(u8, rt), // arena 即焚,入户须自存
+                .block => |reason| {
+                    if (self.cbs.on_notice) |f| {
+                        f(self.cbs.ctx, "pre_turn: message blocked by js extension") catch |err| util.debugCatch("on_notice.pre_turn", err);
+                    }
+                    return .{ .text = try self.alloc.dupe(u8, reason) };
+                },
+            }
+        }
         const text = if (text0.len > 0) text0 else if (image != null) "(image)" else text0;
         if (image) |raw| {
             if (raw.len > 0 and self.hasVision()) {
@@ -902,6 +917,8 @@ pub const Agent = struct {
         var last_result = ai.RunResult{};
         // 断线续跑计数:一轮之内累计,不因迭代推进而重置。
         var stream_retries: usize = 0;
+        // request_error 救援额度:每轮至多一回(dsh agent/request-error 之简形),防扩展死环。
+        var rescued = false;
         // 窗况脚注每回合只在首个工具批盖一次(turn 节点)。
         var turn_footered = false;
         // 空转检测有两个判据:调用完全相同(参数级),或成功输出完全相同(结果级)。
@@ -994,6 +1011,18 @@ pub const Agent = struct {
                 if (result.usage.input) |inp| self.calibrateEst(inp);
             }
             if (result.error_msg != null) {
+                // JS 扩展救援(借 dsh agent/request-error):终败询一次,扩展得请重试。
+                if (!rescued and jsrt.enabled) {
+                    var ra = std.heap.ArenaAllocator.init(std.heap.c_allocator);
+                    defer ra.deinit();
+                    if (jsrt.emitRequestError(ra.allocator(), result.error_msg.?, self.model, self.cwd)) {
+                        rescued = true;
+                        if (self.cbs.on_notice) |f| {
+                            f(self.cbs.ctx, "request failed — js extension requested one retry") catch |err| util.debugCatch("on_notice.request_error", err);
+                        }
+                        continue;
+                    }
+                }
                 return result;
             }
             if (result.tool_calls.len == 0 and result.text.len == 0) {
@@ -1435,6 +1464,8 @@ pub const Agent = struct {
             defer ca.deinit();
             jsrt.emitCompact(ca.allocator(), fold.summary, self.cwd);
         }
+        // 压缩审计落 sidecar(借 dsh compaction/* 仅日志事件之意):折因有据,回放不染。
+        sessionmod.Session.logCompaction(self.alloc, self.cwd, cut, keep.items.len, self.compacts, w, self.estTokens(), fold.summary);
         return fold.summary;
     }
 };

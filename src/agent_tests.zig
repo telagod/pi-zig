@@ -628,6 +628,75 @@ test "ask_user stops the turn without another model call" {
     try t.expect(std.mem.indexOf(u8, last.content, "which port?") != null);
 }
 
+test "js pre_turn block/replace + request_error rescue(借 dsh pre-step/request-error)" {
+    if (!jsrt.enabled) return error.SkipZigTest;
+    const t = std.testing;
+    try util.testInit();
+    pluginsmod.resetEnabledForTest();
+    var arena = util.Arena.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var cfg = cfgmod.Config{ .arena = &arena };
+    var provs = [_]cfgmod.Provider{.{ .name = "mock", .api = .openai_completions, .base_url = "http://127.0.0.1:1", .api_key = "k" }};
+    cfg.providers = &provs;
+    var agent = try Agent.init(a, &cfg, "mock", "m", "/tmp");
+
+    // 起引擎载内联件:BLOCK 拦、他句改文;请求错必请重试
+    jsrt.deinit();
+    jsrt.init(std.heap.c_allocator);
+    const root = std.fmt.allocPrint(a, "/tmp/piz_pt_{d}", .{std.os.linux.getpid()}) catch return error.SkipZigTest;
+    defer std.Io.Dir.cwd().deleteTree(util.io, root) catch {};
+    try std.Io.Dir.cwd().createDirPath(util.io, root);
+    const ext_src =
+        \\piz.on("pre_turn", (e) => e.text === "BLOCK" ? { block: "halted" } : { replace: e.text + "?" });
+        \\piz.on("request_error", () => ({ retry: true }));
+    ;
+    const ext_path = try std.fmt.allocPrint(a, "{s}/extensions/x.js", .{root});
+    try std.Io.Dir.cwd().createDirPath(util.io, std.fs.path.dirname(ext_path).?);
+    try std.Io.Dir.cwd().writeFile(util.io, .{ .sub_path = ext_path, .data = ext_src });
+    jsrt.loadExtensions(root, "/tmp");
+
+    const Hook = struct {
+        var calls: usize = 0;
+        fn run(
+            alloc: std.mem.Allocator,
+            _: std.mem.Allocator,
+            _: *const cfgmod.Provider,
+            _: ?[]const u8,
+            _: []const u8,
+            _: []const u8,
+            _: []const ai.Message,
+            _: []const ai.ToolDef,
+            _: ai.Options,
+        ) anyerror!ai.RunResult {
+            _ = alloc;
+            calls += 1;
+            if (calls == 2) return .{ .error_msg = "boom: provider 500" };
+            return .{ .text = "ok" };
+        }
+    };
+    Hook.calls = 0;
+    agent.llm_run = Hook.run;
+
+    // block:不入箱、不调模型、回拦由
+    const r0 = try agent.send("BLOCK");
+    try t.expectEqual(@as(usize, 0), Hook.calls);
+    try t.expectEqualStrings("halted", r0.text);
+    try t.expect(agent.messages.items.len == 0);
+
+    // replace:入箱文被改写
+    const r1 = try agent.send("hello");
+    try t.expectEqual(@as(usize, 1), Hook.calls);
+    try t.expectEqualStrings("ok", r1.text);
+    try t.expect(agent.messages.items.len >= 1);
+    try t.expectEqualStrings("hello?", agent.messages.items[0].content);
+
+    // request_error:下一轮首发即败,扩展请重试 → 救回 ok,calls 共 3(败 1 + 重试 1)
+    const r2 = try agent.send("again");
+    try t.expectEqual(@as(usize, 3), Hook.calls);
+    try t.expectEqualStrings("ok", r2.text);
+}
+
 test "initOpts uses provided think_level instead of config default" {
     const t = std.testing;
     try util.testInit();

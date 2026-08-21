@@ -33,6 +33,17 @@ piz.on("tool_result", (e) => {
 piz.on("agent_end", (e) => { /* e.text = 回合最后 assistant 正文(截 8KB,可空);
      e.model/e.cwd/e.config_dir/e.ts;有用量时 e.usage = {in,out,cr,cw,usd},无则 null */ });
 piz.on("compact", (e) => { /* e.summary/e.cwd/e.config_dir/e.ts(压缩成功后,fire-and-forget) */ });
+piz.on("pre_turn", (e) => {
+  // 用户入箱文(借 dsh agent/pre-step 之简形);e.text/e.cwd
+  if (e.text.startsWith("/")) return;                 // 放行
+  if (e.text === "shutdown") return { block: "halted" }; // 整句拦:不入箱、不调模型,回拦由
+  return { replace: e.text.trim() };                     // 改写后再入箱
+});
+piz.on("request_error", (e) => {
+  // 请求终败(借 dsh agent/request-error 之简形);e.error/e.model/e.cwd
+  // 返 { retry: true } 请重试一次 —— 每轮至多一回,防死环
+  if (e.error.includes("429")) return { retry: true };
+});
 
 // 注册 LLM 工具(走与内置工具同一 permissions 闸;同步 execute)
 piz.registerTool({

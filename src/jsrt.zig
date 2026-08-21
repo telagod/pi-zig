@@ -159,6 +159,8 @@ var h_tool_result = false;
 var h_session_start = false;
 var h_agent_end = false;
 var h_compact = false;
+var h_pre_turn = false;
+var h_request_error = false;
 
 fn jsThrowToString(ctx_: *c.JSContext, arena: std.mem.Allocator) []const u8 {
     const ex = c.JS_GetException(ctx_);
@@ -612,6 +614,8 @@ pub fn deinit() void {
     h_session_start = false;
     h_agent_end = false;
     h_compact = false;
+    h_pre_turn = false;
+    h_request_error = false;
     ts_ready = false;
     if (sucrase_z) |z| {
         if (gpa) |a| a.free(z);
@@ -953,6 +957,8 @@ fn refreshRegistry() void {
     h_session_start = bridgeHas(arena, "session_start");
     h_agent_end = bridgeHas(arena, "agent_end");
     h_compact = bridgeHas(arena, "compact");
+    h_pre_turn = bridgeHas(arena, "pre_turn");
+    h_request_error = bridgeHas(arena, "request_error");
 }
 
 fn bridgeHas(arena: std.mem.Allocator, ev: []const u8) bool {
@@ -1087,6 +1093,36 @@ pub fn emitToolResult(arena: std.mem.Allocator, name: []const u8, content: []con
         if (v == .string) return v.string;
     }
     return null;
+}
+
+/// pre_turn 事件(借 dsh agent/pre-step 之简形):用户入箱文可改写或整句拦下。
+/// 多 handler 后者胜;无 handler 旗标短路,不进 JS。
+pub const PreTurnDecision = union(enum) { pass, replace: []const u8, block: []const u8 };
+pub fn emitPreTurn(arena: std.mem.Allocator, text: []const u8, cwd: []const u8) PreTurnDecision {
+    if (!enabled or rt == null or !h_pre_turn) return .pass;
+    const payload = std.json.Stringify.valueAlloc(arena, .{ .text = text, .cwd = cwd }, .{}) catch return .pass;
+    const out = emit(arena, "pre_turn", payload) orelse return .pass;
+    const parsed = std.json.parseFromSliceLeaky(std.json.Value, arena, out, .{}) catch return .pass;
+    if (parsed != .object) return .pass;
+    if (parsed.object.get("block")) |v| {
+        if (v == .string and v.string.len > 0) return .{ .block = v.string };
+    }
+    if (parsed.object.get("replace")) |v| {
+        if (v == .string and v.string.len > 0) return .{ .replace = v.string };
+    }
+    return .pass;
+}
+
+/// request_error 事件(借 dsh agent/request-error 之简形):请求终败时询扩展。
+/// 返 true = 扩展请重试(额度在 agent 侧把守,每轮至多一回,防死环)。
+pub fn emitRequestError(arena: std.mem.Allocator, err_msg: []const u8, model: []const u8, cwd: []const u8) bool {
+    if (!enabled or rt == null or !h_request_error) return false;
+    const payload = std.json.Stringify.valueAlloc(arena, .{ .@"error" = err_msg, .model = model, .cwd = cwd }, .{}) catch return false;
+    const out = emit(arena, "request_error", payload) orelse return false;
+    const parsed = std.json.parseFromSliceLeaky(std.json.Value, arena, out, .{}) catch return false;
+    if (parsed != .object) return false;
+    if (parsed.object.get("retry")) |v| return v == .bool and v.bool;
+    return false;
 }
 
 /// compact 事件:压缩成功后携摘要发(跨会话记忆/概念图)。fire-and-forget。
@@ -1427,6 +1463,55 @@ test "qjs fs primitives: readFile/writeFile/env/cwd" {
     const out = runCommand(arena_inst.allocator(), "fsprobe", "", null).?;
     try t.expect(std.mem.indexOf(u8, out, "true|fsok:") != null);
     try t.expect(std.mem.indexOf(u8, out, "|true|true") != null);
+}
+
+test "qjs events: pre_turn 改写/拦 + request_error 救援(借 dsh pre-step/request-error)" {
+    if (!enabled) return error.SkipZigTest;
+    const t = std.testing;
+    const a = t.allocator;
+    deinit();
+    init(a);
+    defer deinit();
+    mu.lockUncancelable(util.io);
+    const src =
+        \\globalThis.__mode = "pass";
+        \\piz.on("pre_turn", (e) => __mode === "replace" ? { replace: e.text + "!" } : __mode === "block" ? { block: "halt" } : undefined);
+        \\piz.on("request_error", (e) => e.error.indexOf("boom") >= 0 ? { retry: true } : undefined);
+    ;
+    var v = c.JS_Eval(ctx.?, src.ptr, src.len, "<test>", c.JS_EVAL_TYPE_GLOBAL);
+    try t.expect(!c.JS_IsException(v));
+    c.JS_FreeValue(ctx.?, v);
+    mu.unlock(util.io);
+    refreshRegistryLockedForTest();
+    var arena_inst = util.Arena.init(a);
+    defer arena_inst.deinit();
+    const ar = arena_inst.allocator();
+
+    // pass:无决定
+    try t.expect(emitPreTurn(ar, "hi", "/tmp") == .pass);
+    // replace:文改
+    mu.lockUncancelable(util.io);
+    const s2 = "__mode = \"replace\";";
+    v = c.JS_Eval(ctx.?, s2.ptr, s2.len, "<test>", c.JS_EVAL_TYPE_GLOBAL);
+    c.JS_FreeValue(ctx.?, v);
+    mu.unlock(util.io);
+    switch (emitPreTurn(ar, "hi", "/tmp")) {
+        .replace => |txt| try t.expectEqualStrings("hi!", txt),
+        else => return error.TestExpectedReplace,
+    }
+    // block:整句拦
+    mu.lockUncancelable(util.io);
+    const s3 = "__mode = \"block\";";
+    v = c.JS_Eval(ctx.?, s3.ptr, s3.len, "<test>", c.JS_EVAL_TYPE_GLOBAL);
+    c.JS_FreeValue(ctx.?, v);
+    mu.unlock(util.io);
+    switch (emitPreTurn(ar, "hi", "/tmp")) {
+        .block => |rs| try t.expectEqualStrings("halt", rs),
+        else => return error.TestExpectedBlock,
+    }
+    // request_error:含 boom 则请重试,他误则否
+    try t.expect(emitRequestError(ar, "boom: 500", "m1", "/tmp"));
+    try t.expect(!emitRequestError(ar, "auth failed", "m1", "/tmp"));
 }
 
 test "qjs agent_end: fires with last assistant text" {

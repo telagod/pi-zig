@@ -17,6 +17,41 @@ const restoreWeb = sess.restoreWeb;
 const persistImageFile = sess.persistImageFile;
 const loadImageFile = sess.loadImageFile;
 
+test "session compaction audit sidecar(借 dsh compaction/* 仅日志之意)" {
+    const t = std.testing;
+    try util.testInit();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = util.Arena.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cwd_abs = try std.process.currentPathAlloc(util.io, a);
+    const tmp_path = try std.fmt.allocPrint(a, "{s}/.zig-cache/tmp/{s}", .{ cwd_abs, tmp.sub_path });
+    try util.environ_map.?.put("PIZ_DIR", tmp_path);
+    defer util.environ_map.?.put("PIZ_DIR", "/nonexistent-piz-dir") catch {};
+
+    Session.logCompaction(a, "/work/x", 12, 5, 1, 262144, 40000, "折叠摘要甲");
+    Session.logCompaction(a, "/work/x", 3, 20, 2, 262144, 9000, "摘要乙");
+    const path = try std.fmt.allocPrint(a, "{s}/sessions/compactions.jsonl", .{tmp_path});
+    const content = try std.Io.Dir.cwd().readFileAlloc(util.io, path, a, .limited(1 << 20));
+    var lines = std.mem.splitScalar(u8, content, '\n');
+    const l1 = lines.next().?;
+    const l2 = lines.next().?;
+    const rest = lines.next() orelse "";
+    try t.expect(rest.len == 0);
+    try t.expect(lines.next() == null);
+    const v1 = try std.json.parseFromSliceLeaky(std.json.Value, a, l1, .{});
+    try t.expectEqual(@as(i64, 12), v1.object.get("cut").?.integer);
+    try t.expectEqual(@as(i64, 5), v1.object.get("kept").?.integer);
+    try t.expectEqualStrings("/work/x", v1.object.get("cwd").?.string);
+    try t.expectEqualStrings("折叠摘要甲", v1.object.get("summary").?.string);
+    const v2 = try std.json.parseFromSliceLeaky(std.json.Value, a, l2, .{});
+    try t.expectEqual(@as(i64, 2), v2.object.get("compacts").?.integer);
+    try t.expectEqual(@as(i64, 9000), v2.object.get("est_after").?.integer);
+    // 回放不染:行无 role 字段,loadMessages 天然跳过
+    try t.expect(v1.object.get("role") == null);
+}
+
 test "session roundtrip" {
     const t = std.testing;
     try util.testInit();

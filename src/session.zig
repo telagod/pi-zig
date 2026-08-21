@@ -877,6 +877,45 @@ pub const Session = struct {
         return false;
     }
 
+    /// 压缩审计(借 dsh compaction/* 仅日志事件之意):密图折页一成,全局追加一行于
+    /// <cfg>/sessions/compactions.jsonl。独立 sidecar —— 会话文件被 app 层整写,
+    /// 标记行会被冲掉;另立档案,回放不染。失败静默:审计不应绊主链。
+    pub fn logCompaction(alloc: std.mem.Allocator, cwd: []const u8, cut: usize, kept: usize, compacts: usize, window: usize, est_after: usize, summary: []const u8) void {
+        const cfg = util.configDir(alloc) catch return;
+        defer alloc.free(cfg);
+        const dir = util.joinPath(alloc, cfg, "sessions") catch return;
+        defer alloc.free(dir);
+        std.Io.Dir.cwd().createDirPath(util.io, dir) catch {};
+        const path = util.joinPath(alloc, dir, "compactions.jsonl") catch return;
+        defer alloc.free(path);
+        const sum_clip = if (summary.len > 200) summary[0..200] else summary;
+        const cwd_json = util.jsonString(alloc, cwd) catch return;
+        defer alloc.free(cwd_json);
+        const sum_json = util.jsonString(alloc, sum_clip) catch return;
+        defer alloc.free(sum_json);
+        const line = std.fmt.allocPrint(alloc, "{{\"ts\":{d},\"cwd\":{s},\"cut\":{d},\"kept\":{d},\"compacts\":{d},\"window\":{d},\"est_after\":{d},\"summary\":{s}}}\n", .{
+            @divTrunc(std.Io.Clock.now(.real, util.io).nanoseconds, std.time.ns_per_ms),
+            cwd_json,
+            cut,
+            kept,
+            compacts,
+            window,
+            est_after,
+            sum_json,
+        }) catch return;
+        defer alloc.free(line);
+        var f = std.Io.Dir.cwd().createFile(util.io, path, .{ .exclusive = true, .permissions = @enumFromInt(0o600) }) catch |err| switch (err) {
+            error.PathAlreadyExists => std.Io.Dir.cwd().openFile(util.io, path, .{ .mode = .write_only }) catch return,
+            else => return,
+        };
+        defer f.close(util.io);
+        var wbuf: [512]u8 = undefined;
+        var w = f.writer(util.io, &wbuf);
+        w.seekTo(f.length(util.io) catch 0) catch return;
+        w.interface.writeAll(line) catch return;
+        w.flush() catch return;
+    }
+
     /// 从日志重建模型历史:丢掉 system / 未知角色,保留 user/assistant/tool。
     pub fn reconstructModelVisible(self: *Session) ![]ai.Message {
         const all = try self.loadMessages();

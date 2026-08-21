@@ -31,10 +31,11 @@ dsh 选事件域是改动的第一个决定。本仓对应如下。
 | 本仓钩子 | 时机 | 近于 dsh | 差在哪 |
 |----------|------|----------|--------|
 | `before_turn` | 每轮请求前 | `agent/pre-step`（无 reject/rewrite 消息） | 只能副作用（快压），不能拒领或改写入箱 |
+| jsrt `pre_turn` | 用户入箱前 | `agent/pre-step` 之简形 | 可改写/整句拦；不能重排、无 next-step inbox |
+| jsrt `request_error` | 请求终败 | `agent/request-error` 之简形 | 只许 `{retry:true}` 救一回；无通用错误链/换模动作 |
 | `on_tool_before` | 工具执行前 | `tools/pre-execute` waterfall | 须 `next()`，可包装 |
 | `on_tool_result` | 工具结果回写前 | `tools/post-execute` | 同上，无 `next()` |
-| `on_compact` | 压缩成功 | 近 `ctx.compaction` 之后的观察 | 无独立 compaction seam |
-| `on_compact_failed` | 压缩失败 | 近 `agent/request-error` 救援 | 返回备用模型名，不是通用错误链 |
+| `on_compact` | 压缩成功 | 近 `ctx.compaction` 之后的观察 | 无独立 compaction seam；审计落 sidecar(见下) |
 | `on_user_message` | 用户提交 | 近 inbox 改写 | 可替换进模型的文本；不能拒绝整条。首个非 null 胜出 |
 
 多个插件同钩：声明序执行。工具前后是 waterfall；其余 `?T` 钩子仍首胜。
@@ -45,9 +46,9 @@ dsh 选事件域是改动的第一个决定。本仓对应如下。
 
 命令 detach，stdin 喂 JSON，piz 不等、不收输出。这是**旁路观察**，不能当审批门。审批在 `on_tool_before` 与 TUI/Web 权限门。
 
-### 会话 JSONL ≈ dsh 会话事件（残）
+### 会话 JSONL ≈ dsh 会话事件（半残→有补）
 
-记了模型对话三态。未记：系统提示拼装、skill 加载、记忆注入、快压占位的「为何裁」。dsh 铁律「进模型的都能从日志重建」——本仓尚未立。
+记了模型对话三态。系统提示拼装、skill 加载、记忆注入仍未记；**折页决策已有档**：`Session.logCompaction` 于密图折页成功时全局追加 `<cfg>/sessions/compactions.jsonl`(ts/cwd/cut/kept/compacts/window/est_after/summary),即 dsh `compaction/*` 仅日志事件之简形。sidecar 独立——会话文件被 app 层整写,标记行入之则遭冲。「模型可见 ⟺ 已记录」全量铁律仍未立,但「为何裁」一项已补。
 
 ### Web 插件 ≈ dsh ConversationNode（远）
 
@@ -59,12 +60,23 @@ dsh 选事件域是改动的第一个决定。本仓对应如下。
 - 工具 schema 进提示拼装（`appendToolDefsIn`）—— 近 Consumer 挂 `ctx.tools`。
 - 权限门、沙箱、快压已是可关插件，不是焊死在 loop 里。
 - Packages 把技能/事件/前端打成目录 —— 近 bundle，只是无 patch 语言。
+- **工具流水线三阶段同构**（2026-08 复核）：串行 preflight(权限+前置 waterfall)→ 信号量滚池并行执行(无批边界)→ 按原序后处理写回，即 dsh 「ordered pre / bounded rolling pool / ordered post」。无单调守卫注册表与 `finalizeContent` 不变式层——留待有需再立。
+
+## 本轮新摘（jsrt 时代,2026-08）
+
+1. **`pre_turn` 事件** — 借 `agent/pre-step`：入箱文可改写/整句拦,JS 件即 steering。
+2. **`request_error` 事件** — 借 `agent/request-error`：终败询扩展,`{retry:true}` 救一回/轮。正继 compact-resilience 未竟之意(其废因:钩无调用点 + 密图不调模型;今救援点移请求层,的矢俱在)。
+3. **压缩审计 sidecar** — 借 `compaction/*` 仅日志事件:「为何裁」落 `compactions.jsonl`,回放不染。
+
+## 仍不可摘（动则换身份）
 
 ## 不可摘（动则换身份）
 
 - Cordis / `cordis.yml` / 运行时加载 .so 或 JS 插件。
 - 把 `agent.zig` 降成可替换 Provider。主链留在核心，是静态二进制的代价。
 - 为 seam 而引入第三方运行时或 ABI。
+- **全量事件溯源**:会话即唯一真源、消息历史纯投影。本仓 messages 是内存态、JSONL 是快照;改之则 fork/续跑/回放语义全变,代价过大。摘其「关键决策落日志」之神(审计 sidecar),不摘其形。
+- **单调守卫注册表 + ctx.approval 服务**:本仓权限门是单回调(on_require_permission),已足;多守卫仲裁留待有需。
 
 ## 可摘进度
 
