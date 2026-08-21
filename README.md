@@ -26,6 +26,7 @@
 | 子 agent | 8 线程 worker 池，闲着不占线程。顶层排队 32、嵌套 4。孩子默认不带 `task` / `spawn_agent` |
 | 缓存 | tools 写在 messages 前面，`prompt_cache_key` 用工作目录。快压优先动廉价尾 |
 | 依赖 | Zig 标准库 + vendored [stb](https://github.com/nothings/stb)（读图）。正则和 glob 是自己的 |
+| 占用 | 6.3 MB 单二进制；冷启 0.63 ms、峰值 3.5 MB；`piz web` 稳态 <9 MB。对比 node 版 pi：快 746×、省 97.7% 内存。实测见 [benchmarks](docs/benchmarks.md) |
 
 macOS 未验证。Windows 不做。
 
