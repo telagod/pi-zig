@@ -142,6 +142,7 @@ pub fn runEvolve(alloc: std.mem.Allocator, args: *std.process.Args.Iterator) nor
             std.debug.print("[dry-run] task prompt:\n{s}\n", .{prompt});
             e.state = "open";
             e.attempts -= 1;
+            popStash(alloc, ".", e, stash_ok);
             continue;
         }
 
