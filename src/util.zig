@@ -229,12 +229,46 @@ pub fn clipboardText(alloc: std.mem.Allocator) ?[]u8 {
 /// sessions/ 目录会让 /sessions 列出对方的会话、选中后静默得到空历史。
 /// 独立目录换来:格式自由演进、不怕 pi 升级、不怕互相踩。
 /// 自演化队列路径:~/.piz/evolve/queue.jsonl(采集端 web 与执行端 CLI 共用)。
+
+/// 自演化队列路径:~/.piz/evolve/queue.jsonl(采集端 web 与执行端 CLI 共用)。
 pub fn evolveQueuePath(alloc: std.mem.Allocator) ![]u8 {
     const cfg_dir = try configDir(alloc);
     defer alloc.free(cfg_dir);
     const ev_dir = try joinPath(alloc, cfg_dir, "evolve");
     defer alloc.free(ev_dir);
     return joinPath(alloc, ev_dir, "queue.jsonl");
+}
+
+/// 全生命周期错误记录路径:~/.piz/errors.jsonl。
+pub fn errorsPath(alloc: std.mem.Allocator) ![]u8 {
+    const cfg_dir = try configDir(alloc);
+    defer alloc.free(cfg_dir);
+    return joinPath(alloc, cfg_dir, "errors.jsonl");
+}
+
+/// 全生命周期错误记录(尽力而为,绝不动摇主流程)。
+/// kind:web-http / web-agent / web-save / bash / config / cli / evolve / fe 等;
+/// where:定位(文件#行 或组件名);msg:简短描述。
+pub fn errLog(alloc: std.mem.Allocator, kind: []const u8, where: []const u8, msg: []const u8) void {
+    const p = errorsPath(alloc) catch return;
+    defer alloc.free(p);
+    const dir = std.fs.path.dirname(p) orelse ".";
+    if (dir.len > 0 and !std.mem.eql(u8, dir, ".")) {
+        std.Io.Dir.cwd().createDirPath(io, dir) catch {};
+    }
+    const old = std.Io.Dir.cwd().readFileAlloc(io, p, std.heap.page_allocator, .limited(64 * 1024 * 1024)) catch "";
+    var w = std.Io.Writer.Allocating.init(std.heap.page_allocator);
+    defer w.deinit();
+    const wr = &w.writer;
+    wr.writeAll(old) catch {};
+    wr.writeAll("{\"ts\":") catch {};
+    wr.print("{d}", .{@divTrunc(std.Io.Clock.now(.real, io).nanoseconds, std.time.ns_per_s)}) catch {};
+    wr.writeAll(",\"pid\":") catch {};
+    wr.print("{d}", .{std.os.linux.getpid()}) catch {};
+    wr.print(",\"kind\":{s}", .{jsonString(alloc, kind) catch "\"?\""}) catch {};
+    wr.print(",\"where\":{s}", .{jsonString(alloc, where) catch "\"\""}) catch {};
+    wr.print(",\"msg\":{s}}}\n", .{jsonString(alloc, msg) catch "\"\""}) catch {};
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = p, .data = w.toOwnedSlice() catch old }) catch {};
 }
 
 pub fn configDir(alloc: std.mem.Allocator) ![]u8 {

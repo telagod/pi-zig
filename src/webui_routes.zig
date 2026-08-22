@@ -501,6 +501,8 @@ pub fn evolveSink(self: *WebServer, req: *http.Server.Request) !void {
             if (line.len > 0 and qp.len > 0) {
                 evolveAppend(qp, line) catch {};
             }
+            // 双写:errors.jsonl 全生命周期记录(前端错误流也进总账)
+            util.errLog(self.alloc, "fe", jsonStr(root, "where") orelse "window", jsonStr(root, "msg") orelse "");
         }
     } else |_| {}
     try req.respond("{\"ok\":true}", .{

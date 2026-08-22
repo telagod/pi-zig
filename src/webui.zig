@@ -340,7 +340,10 @@ pub const WebServer = struct {
             // 读到 EOF 才停的那类读法(allocRemaining 之类)会永久阻塞 ——
             // 浏览器自己会关所以看不出来,别的客户端就挂住。
             const keep = req.head.keep_alive;
-            self.serve(&req, stream.socket.handle) catch return;
+            self.serve(&req, stream.socket.handle) catch |err| {
+                util.errLog(self.alloc, "web-http", req.head.target, @errorName(err));
+                return;
+            };
             if (!keep) return;
         }
     }

@@ -914,6 +914,7 @@ pub const Config = struct {
     /// 启动时点名解析失败的配置文件。走 stderr:stdout 留给管道下游。
     pub fn warnBroken(self: *const Config) void {
         for (self.broken_files) |name| {
+            util.errLog(self.allocator(), "config", "~/.piz/{s}", "语法错误,已按不存在处理");
             std.debug.print(
                 "piz: ~/.piz/{s} 有语法错误,已按「不存在」处理。修好它才会生效。\n",
                 .{name},
@@ -925,7 +926,7 @@ pub const Config = struct {
         self.arena.deinit();
     }
 
-    pub fn allocator(self: *Config) std.mem.Allocator {
+    pub fn allocator(self: *const Config) std.mem.Allocator {
         return self.arena.allocator();
     }
 

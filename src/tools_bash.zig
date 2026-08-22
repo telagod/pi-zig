@@ -487,6 +487,8 @@ pub fn toolBash(arena: std.mem.Allocator, args: []const u8) !Result {
 
     var term: std.process.Child.Term = undefined;
     if (stopped) {
+        // 超时/取消也计入全生命周期错误账(工具失败是常见缺陷源)
+        util.errLog(arena, "bash", "bash-timeout", std.fmt.allocPrint(arena, "{d}s timeout: {s} (partial {d}B)", .{ @divTrunc(timeout_ms, 1000), command[0..@min(command.len, 200)], @as(u64, @intCast(@min(state.total_out + state.total_err, 99999))) }) catch command);
         // 先给整个进程组发信号收掉孙子进程,再 child.kill 收直接子进程。
         if (child_pid) |pid| killGroup(pid);
         // `Child.kill` 自己会 block 到终止并清理资源,之后 `child.id` 为 null ——

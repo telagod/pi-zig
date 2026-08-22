@@ -163,6 +163,7 @@ pub fn runEvolve(alloc: std.mem.Allocator, args: *std.process.Args.Iterator) nor
 
         // 跑内置 agent(在当前目录=仓库根)
         _ = runAgentTask(alloc, prompt) catch |err| {
+            util.errLog(alloc, "evolve", e.id, @errorName(err));
             e.state = "failed";
             e.note = std.fmt.allocPrint(alloc, "agent error: {s}", .{@errorName(err)}) catch "agent error";
             fail_n += 1;
@@ -186,6 +187,7 @@ pub fn runEvolve(alloc: std.mem.Allocator, args: *std.process.Args.Iterator) nor
         } else {
             // 无 evolve 提交:若工作区脏,清理(agent 半途而废)
             if (dirty.len > 0) gitRun(".", &.{ "checkout", "--", "." }) catch {};
+            util.errLog(alloc, "evolve", e.id, "no evolve commit; changes reverted");
             e.state = "failed";
             e.note = "no evolve commit; changes reverted";
             fail_n += 1;
@@ -533,6 +535,59 @@ fn runPublish(alloc: std.mem.Allocator, qpath: []const u8) !void {
     std.Io.Dir.cwd().deleteFile(util.io, p) catch {};
     std.debug.print("发布完成,待审候选已清空。\n", .{});
     _ = bin_src;
+}
+
+/// `piz errors [--tail N] [kind]` —— 全生命周期错误账查看。
+pub fn runErrors(alloc: std.mem.Allocator, args: *std.process.Args.Iterator) noreturn {
+    var tail: usize = 20;
+    var kind_f: []const u8 = "";
+    while (args.next()) |a| {
+        if (std.mem.eql(u8, a, "--tail")) {
+            tail = std.fmt.parseInt(usize, args.next() orelse "20", 10) catch 20;
+        } else if (std.mem.eql(u8, a, "--help") or std.mem.eql(u8, a, "-h")) {
+            std.debug.print("piz errors [--tail N] [kind]\n  查看全生命周期错误账(~/.piz/errors.jsonl)。kind 过滤如 fe/web-http/bash/config/cli/evolve。\n", .{});
+            std.process.exit(0);
+        } else if (kind_f.len == 0 and a.len > 0 and a[0] != '-') {
+            kind_f = a;
+        } else {
+            std.debug.print("piz errors: unknown arg {s}\n", .{a});
+            std.process.exit(1);
+        }
+    }
+    const p = util.errorsPath(alloc) catch {
+        std.debug.print("piz errors: cannot resolve path\n", .{});
+        std.process.exit(1);
+    };
+    const data = util.readFile(alloc, p) catch {
+        std.debug.print("piz errors: 无记录(~/.piz/errors.jsonl 不存在)\n", .{});
+        std.process.exit(0);
+    };
+    // 收集匹配行(尾 N 条)
+    var lines = std.array_list.Managed([]const u8).init(alloc);
+    var it = std.mem.splitScalar(u8, data, '\n');
+    while (it.next()) |line| {
+        if (line.len == 0) continue;
+        if (kind_f.len > 0) {
+            const v = std.json.parseFromSliceLeaky(std.json.Value, alloc, line, .{}) catch continue;
+            const k = jsonStr(v, "kind") orelse "";
+            if (std.mem.indexOf(u8, k, kind_f) == null) continue;
+        }
+        if (lines.items.len >= tail) {
+            // 保尾:删头
+            _ = lines.orderedRemove(0);
+        }
+        lines.append(line) catch {};
+    }
+    const n = lines.items.len;
+    if (n == 0) {
+        std.debug.print("piz errors: 无匹配记录({s})\n", .{if (kind_f.len > 0) kind_f else "-all-"});
+        std.process.exit(0);
+    }
+    std.debug.print("--- 错误账 {d} 条(kind filter={s}) ---\n", .{ n, kind_f });
+    for (lines.items) |line| {
+        std.debug.print("{s}\n", .{line});
+    }
+    std.process.exit(0);
 }
 
 /// 任务后恢复 stash;冲突则保留并记 note。

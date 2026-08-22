@@ -1003,6 +1003,8 @@ pub fn main(init: std.process.Init) !void {
             std.process.exit(0);
         } else if (std.mem.eql(u8, arg, "evolve")) {
             cmd_evolve.runEvolve(alloc, &args); // 不返回
+        } else if (std.mem.eql(u8, arg, "errors")) {
+            cmd_evolve.runErrors(alloc, &args); // 不返回
         } else if (std.mem.eql(u8, arg, "diff")) {
             const here = std.process.currentPathAlloc(util.io, alloc) catch ".";
             const text = cmd_diff.format(alloc, here) catch {
@@ -1227,6 +1229,7 @@ pub fn main(init: std.process.Init) !void {
 /// 「UnknownProvider」加十行 std 内部帧,对着它没法判断该改哪个文件。
 /// 错误消息要说清**下一步做什么**,不是描述内部状态。
 fn explainAndExit(e: anyerror, cfg: *cfgmod.Config, opts: RunOptions) noreturn {
+    util.errLog(cfg.allocator(), "cli", @errorName(e), "run failed");
     switch (e) {
         error.UnknownProvider => {
             const want = opts.provider_name orelse util.getEnv("PIZ_PROVIDER") orelse "(default)";

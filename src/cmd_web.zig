@@ -693,6 +693,7 @@ fn webWorker(ses: *WebSession) void {
         }
         sessionmod.saveWebTs(ses.agent.alloc, ses.cwd, ses.name, ses.agent.model, sessionIsYolo(ses), ses.agent.title, ses.agent.messages.items, ses.updated_ns) catch |err| {
             const msg = std.fmt.allocPrint(ses.agent.alloc, "会话保存失败({s}):本轮内容在重启后会丢失", .{@errorName(err)}) catch "session save failed";
+            util.errLog(ses.agent.alloc, "web-save", ses.name, msg);
             ses.hub.push("{{\"type\":\"notice\",\"session\":{s},\"text\":{s}}}", .{ util.jsonString(ses.agent.alloc, ses.name) catch "\"\"", util.jsonString(ses.agent.alloc, msg) catch "\"\"" });
         };
         rebuildSnap(ses);
@@ -1383,7 +1384,10 @@ pub fn poolActionHook(ctx: ?*anyopaque, cwd: []const u8, session: []const u8, ac
         if (msgs.len == 0) return "{\"ok\":false,\"act\":\"undo\"}";
         ses.agent.messages.shrinkRetainingCapacity(msgs.len - cut);
         ses.updated_ns = std.Io.Clock.now(.real, util.io).nanoseconds;
-        sessionmod.saveWebTs(alloc, cwd2, session, ses.agent.model, sessionIsYolo(ses), ses.agent.title, ses.agent.messages.items, ses.updated_ns) catch |err| util.debugCatch("saveWebTs", err);
+        sessionmod.saveWebTs(alloc, cwd2, session, ses.agent.model, sessionIsYolo(ses), ses.agent.title, ses.agent.messages.items, ses.updated_ns) catch |err| {
+            util.errLog(alloc, "web-save", session, @errorName(err));
+            util.debugCatch("saveWebTs", err);
+        };
         rebuildSnap(ses);
         return std.fmt.allocPrint(alloc, "{{\"ok\":true,\"act\":\"undo\",\"msgs\":{d}}}", .{msgs.len - cut}) catch null;
     }
