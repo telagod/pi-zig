@@ -476,19 +476,6 @@ fn restartWeb(alloc: std.mem.Allocator) !void {
             std.debug.print("  web 旧进程 {d} 已停\n", .{old_pid});
         }
     }
-    // 拉新:同 token/port/cwd;PIZ_DIR 必须同值,否则新 web 读错配置。
-    var argv = std.array_list.Managed([]const u8).init(alloc);
-    try argv.append("/proc/self/exe");
-    try argv.append("web");
-    try argv.append("--port");
-    try argv.append(try std.fmt.allocPrint(alloc, "{d}", .{port}));
-    try argv.append("--no-open");
-    if (token.len > 0) {
-        try argv.append("--token");
-        try argv.append(token);
-    } else {
-        try argv.append("--no-token");
-    }
     // 拉新:同 token/port/cwd;PIZ_DIR 经 sh -c env 前缀传入(进程自身 environ
     // 无法修改,shell 包一层最稳;spawn 不等待,父退子留)。
     var argv = std.array_list.Managed([]const u8).init(alloc);
