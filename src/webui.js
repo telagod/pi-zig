@@ -5585,6 +5585,66 @@ document.addEventListener("keydown", (e) => {
 });
 
 };
+__modules["evolve"] = function(module, exports, require) {
+"use strict";Object.defineProperty(exports, "__esModule", {value: true}); function _optionalChain(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }// evolve.ts —— 自演化观测(采集端)。
+// 前端运行时错误 → POST /api/evolve/sink → 服务器落 ~/.piz/evolve/queue.jsonl。
+// 发送用 sendBeacon:不阻塞、页面关闭也送达;失败静默,不干扰用户。
+// 去重:60 秒内同签名(where|msg 前 200 字符)只发一次。
+
+const SINK = "/api/evolve/sink";
+
+let lastSig = "";
+let lastAt = 0;
+
+function sink(kind, where, msg, stack) {
+  if (!msg && !stack) return;
+  const sig = (where + "|" + msg).slice(0, 200);
+  const now = Date.now();
+  if (sig === lastSig && now - lastAt < 60000) return;
+  lastSig = sig;
+  lastAt = now;
+  try {
+    const payload = JSON.stringify({
+      kind,
+      where: String(where || "").slice(0, 300),
+      msg: String(msg || "").slice(0, 2000),
+      stack: String(stack || "").slice(0, 4000),
+      ts: Math.floor(now / 1000),
+      session: "", // 调用时补
+      ua: String(navigator.userAgent || "").slice(0, 200),
+    });
+    navigator.sendBeacon(SINK, new Blob([payload], { type: "application/json" }));
+  } catch (e2) {}
+}
+
+ function initEvolve() {
+  window.addEventListener("error", (e) => {
+    // 资源加载失败(target 非 window)不算缺陷,跳过
+    if (e.target && e.target !== window) return;
+    const where = e.filename
+      ? (e.filename.split("/").pop() || e.filename) + (e.lineno ? "#" + e.lineno : "") + (e.colno ? ":" + e.colno : "")
+      : "window";
+    sink("jserr", where, e.message || "", _optionalChain([e, 'access', _ => _.error, 'optionalAccess', _2 => _2.stack]) || "");
+  });
+  window.addEventListener("unhandledrejection", (e) => {
+    const r = e.reason;
+    const msg = _optionalChain([r, 'optionalAccess', _3 => _3.message]) || String(r || "");
+    sink("unhandled", "promise", msg, _optionalChain([r, 'optionalAccess', _4 => _4.stack]) || "");
+  });
+  let ce = console.error;
+  console.error = function (...a) {
+    try {
+      const msg = a
+        .map((x) => (x && (x.message || x.stack)) || String(x || ""))
+        .join(" ")
+        .slice(0, 1000);
+      sink("console", "console.error", msg, "");
+    } catch (e3) {}
+    ce.apply(console, a );
+  };
+} exports.initEvolve = initEvolve;
+
+};
 __modules["main"] = function(module, exports, require) {
 "use strict"; function _optionalChain(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }      "use strict";
       var _state = require('./state');
@@ -5602,6 +5662,7 @@ __modules["main"] = function(module, exports, require) {
       var _sheet = require('./sheet');
       var _plugins = require('./plugins');
       var _jobs = require('./jobs');
+      var _evolve = require('./evolve');
       // 侧栏折叠态(piz.sidebar=1 则预合)
       try {
         if (localStorage.getItem("piz.sidebar") === "1")
@@ -5681,6 +5742,8 @@ __modules["main"] = function(module, exports, require) {
       _plugins.loadPlugins.call(void 0, );
       _jobs.setupJobs.call(void 0, );
       _store.restoreDraft.call(void 0, );
+      // 全生命周期错误采集:页面加载即挂 window error/unhandledrejection/console.error
+      _evolve.initEvolve.call(void 0, );
       }
       // ui/net 解缠钩:对话框开场收菜单/补全;登录成功续 boot
       _util.$.call(void 0, "searchBtn").onclick = () => _settings.openSearch.call(void 0, );

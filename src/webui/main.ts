@@ -14,6 +14,7 @@
       import { closeSheet } from "./sheet";
       import { loadPlugins, pluginsH } from "./plugins";
       import { setupJobs } from "./jobs";
+      import { initEvolve } from "./evolve";
       // 侧栏折叠态(piz.sidebar=1 则预合)
       try {
         if (localStorage.getItem("piz.sidebar") === "1")
@@ -93,6 +94,8 @@
       loadPlugins();
       setupJobs();
       restoreDraft();
+      // 全生命周期错误采集:页面加载即挂 window error/unhandledrejection/console.error
+      initEvolve();
       }
       // ui/net 解缠钩:对话框开场收菜单/补全;登录成功续 boot
       $("searchBtn").onclick = () => openSearch();
