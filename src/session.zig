@@ -500,7 +500,7 @@ pub const Session = struct {
 
     /// 打开指定路径的会话(解析首行元信息)。
     pub fn open(alloc: std.mem.Allocator, path: []const u8) !Session {
-        const content = std.Io.Dir.cwd().readFileAlloc(util.io, path, alloc, .limited(256 * 1024)) catch {
+        const content = std.Io.Dir.cwd().readFileAlloc(util.io, path, alloc, .limited(16 * 1024 * 1024)) catch {
             return error.InvalidSession;
         };
         defer alloc.free(content);
@@ -536,7 +536,7 @@ pub const Session = struct {
 
     /// 文件内有消息行({"role":...)即非空。首行 meta 之外一条消息即算。
     fn hasMessages(alloc: std.mem.Allocator, path: []const u8) bool {
-        const raw = std.Io.Dir.cwd().readFileAlloc(util.io, path, alloc, .limited(1024 * 1024)) catch return false;
+        const raw = std.Io.Dir.cwd().readFileAlloc(util.io, path, alloc, .limited(16 * 1024 * 1024)) catch return false;
         defer alloc.free(raw);
         return std.mem.indexOf(u8, raw, "\"role\":") != null;
     }
