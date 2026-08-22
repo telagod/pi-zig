@@ -948,6 +948,9 @@ pub fn main(init: std.process.Init) !void {
         } else if (std.mem.eql(u8, arg, "login")) {
             cmd_login.run(alloc, &args);
             return;
+        } else if (std.mem.eql(u8, arg, "logout")) {
+            cmd_login.runLogout(alloc, &args);
+            return;
         } else if (std.mem.eql(u8, arg, "reload")) {
             var arena = util.Arena.init(alloc);
             defer arena.deinit();

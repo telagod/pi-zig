@@ -705,7 +705,7 @@ pub fn dispatch(tui: *tui_mod.Tui, app: *App, cmd: []const u8) anyerror!bool {
     if (std.mem.eql(u8, cmd, "login") or std.mem.startsWith(u8, cmd, "login ")) {
         const rest = if (std.mem.startsWith(u8, cmd, "login ")) std.mem.trim(u8, cmd["login ".len..], " ") else "";
         if (rest.len == 0) {
-            tuiNote(app, "\x1b[2m", "usage: /login <provider> <api-key>  (or: piz login)");
+            tuiNote(app, "\x1b[2m", "usage: /login <provider> <api-key>  (or: piz login 交互选择;订阅/OAuth 走 piz web → Settings → Account)");
             return true;
         }
         var it = std.mem.tokenizeScalar(u8, rest, ' ');
@@ -713,7 +713,7 @@ pub fn dispatch(tui: *tui_mod.Tui, app: *App, cmd: []const u8) anyerror!bool {
         const key = it.rest();
         const key_t = std.mem.trim(u8, key, " ");
         if (key_t.len == 0) {
-            tuiNote(app, "\x1b[2m", "usage: /login <provider> <api-key>  (or: piz login <provider>)");
+            tuiNote(app, "\x1b[2m", "usage: /login <provider> <api-key>  (or: piz login <provider> 交互;订阅/OAuth 走 piz web → Settings → Account)");
             return true;
         }
         app.cfg.saveAuth(name, key_t) catch |e| {

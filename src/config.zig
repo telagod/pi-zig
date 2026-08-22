@@ -1539,6 +1539,42 @@ pub const Config = struct {
         try writeJsonFile(alloc, path, root);
     }
 
+    /// 删单个 provider 的 auth.json 条目(键不存在则无副作用)。
+    pub fn clearAuth(self: *Config, provider: []const u8) !void {
+        if (!authProviderOk(provider)) return error.BadProvider;
+        const alloc = self.allocator();
+        const cfg_dir = try util.configDir(alloc);
+        defer alloc.free(cfg_dir);
+        const path = try util.joinPath(alloc, cfg_dir, "auth.json");
+        defer alloc.free(path);
+        var root: std.json.Value = .{ .object = .{} };
+        var existed = false;
+        if (std.Io.Dir.cwd().readFileAlloc(util.io, path, alloc, .limited(4 * 1024 * 1024))) |content| {
+            defer alloc.free(content);
+            if (self.jsonVal(content)) |parsed| {
+                if (parsed == .object) root = parsed;
+            } else |_| {}
+            existed = true;
+        } else |_| {}
+        _ = root.object.orderedRemove(provider);
+        if (root.object.count() == 0) {
+            // 删空即删文件
+            std.Io.Dir.cwd().deleteFile(util.io, path) catch {};
+            return;
+        }
+        if (existed) try writeJsonFile(alloc, path, root);
+    }
+
+    /// 清空全部 auth.json 条目(删除文件)。
+    pub fn clearAuthAll(self: *Config) !void {
+        const alloc = self.allocator();
+        const cfg_dir = try util.configDir(alloc);
+        defer alloc.free(cfg_dir);
+        const path = try util.joinPath(alloc, cfg_dir, "auth.json");
+        defer alloc.free(path);
+        std.Io.Dir.cwd().deleteFile(util.io, path) catch {};
+    }
+
     /// 写 models.json(仅动态 provider;内置 deepseek/openai/anthropic 不落盘)。
     pub fn saveModels(self: *Config, providers: []const Provider) !void {
         const alloc = self.allocator();
