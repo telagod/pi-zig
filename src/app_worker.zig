@@ -89,6 +89,12 @@ pub const WorkerCtx = struct {
 
 pub fn workerMain(wctx: *WorkerCtx) void {
     const app = wctx.app;
+    // 上一轮可能被 Esc 打断:abort 标志是 onAbort 置的,若不清,新 worker
+    // 启动即 break,再发消息毫无反应(实机坑:打断后重发没用)。
+    // 清放 worker 内而非 onSubmit:worker 是唯一消费方,且 Esc 只能在此后发生
+    // (用户先在界面看到 worker 才按 Esc),无「清后又被旧 Esc 置位」的窗口。
+    app.abort.store(false, .release);
+    app.agent.aborted.store(false, .release);
     app.tui.streaming.store(true, .release);
     app.worker_active.store(true, .release);
     defer {
