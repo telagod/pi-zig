@@ -457,6 +457,120 @@ pub fn models(self: *WebServer, req: *http.Server.Request) !void {
     });
 }
 
+// ---- 自演化采集 sink ----
+// 前端错误报告 → ~/.piz/evolve/queue.jsonl(JSONL)。尽力而为:任何失败
+// 都静默(采集本身不能成为缺陷)。
+pub fn evolveSink(self: *WebServer, req: *http.Server.Request) !void {
+    var body_buf: [8192]u8 = undefined;
+    const reader = req.readerExpectNone(&body_buf);
+    const body = reader.allocRemaining(self.alloc, .limited(8192)) catch "";
+    if (std.json.parseFromSliceLeaky(std.json.Value, self.alloc, body, .{})) |root| {
+        if (root == .object) {
+            const sig = evolveSig(self.alloc, root) catch "";
+            const ts = @divTrunc(std.Io.Clock.now(.real, util.io).nanoseconds, std.time.ns_per_s);
+            var w = std.Io.Writer.Allocating.init(self.alloc);
+            defer w.deinit();
+            const wr = &w.writer;
+            wr.writeAll("{\"id\":") catch {};
+            wr.print("{s}", .{try util.jsonString(self.alloc, sig)}) catch {};
+            wr.writeAll(",\"ts\":") catch {};
+            wr.print("{d}", .{ts}) catch {};
+            if (jsonStr(root, "kind")) |v| {
+                wr.writeAll(",\"kind\":") catch {};
+                wr.print("{s}", .{try util.jsonString(self.alloc, v)}) catch {};
+            }
+            if (jsonStr(root, "where")) |v| {
+                wr.writeAll(",\"where\":") catch {};
+                wr.print("{s}", .{try util.jsonString(self.alloc, v)}) catch {};
+            }
+            if (jsonStr(root, "msg")) |v| {
+                wr.writeAll(",\"msg\":") catch {};
+                wr.print("{s}", .{try util.jsonString(self.alloc, v[0..@min(v.len, 1200)] )}) catch {};
+            }
+            if (jsonStr(root, "stack")) |v| {
+                wr.writeAll(",\"stack\":") catch {};
+                wr.print("{s}", .{try util.jsonString(self.alloc, v[0..@min(v.len, 3000)] )}) catch {};
+            }
+            if (jsonStr(root, "session")) |v| {
+                wr.writeAll(",\"session\":") catch {};
+                wr.print("{s}", .{try util.jsonString(self.alloc, v)}) catch {};
+            }
+            wr.writeAll(",\"state\":\"open\",\"attempts\":0}") catch {};
+            const line = w.toOwnedSlice() catch "";
+            const qp = util.evolveQueuePath(self.alloc) catch "";
+            if (line.len > 0 and qp.len > 0) {
+                evolveAppend(qp, line) catch {};
+            }
+        }
+    } else |_| {}
+    try req.respond("{\"ok\":true}", .{
+        .status = .ok,
+        .extra_headers = &.{.{ .name = "content-type", .value = "application/json" }},
+    });
+}
+
+/// 同源同信息合并成稳定 id(前缀签名,后续可去重)。
+pub fn evolveSig(alloc: std.mem.Allocator, root: std.json.Value) ![]const u8 {
+    const where = jsonStr(root, "where") orelse "";
+    const msg = jsonStr(root, "msg") orelse "";
+    var h = std.hash.Wyhash.init(0x9e3779b97f4a7c15);
+    h.update(where);
+    h.update(msg[0..@min(msg.len, 200)]);
+    return std.fmt.allocPrint(alloc, "e-{x}", .{h.final()});
+}
+
+pub fn jsonStr(root: std.json.Value, key: []const u8) ?[]const u8 {
+    if (root != .object) return null;
+    const v = root.object.get(key) orelse return null;
+    return switch (v) {
+        .string => |s| s,
+        else => null,
+    };
+}
+
+pub fn evolveAppend(path: []const u8, line: []const u8) !void {
+    const dir = std.fs.path.dirname(path) orelse ".";
+    if (dir.len > 0 and !std.mem.eql(u8, dir, ".")) {
+        std.Io.Dir.cwd().createDirPath(util.io, dir) catch {};
+    }
+    // 读改写(队列文件小;避开 Io.File 各版本的 seek 差异)
+    const old = std.Io.Dir.cwd().readFileAlloc(util.io, path, std.heap.page_allocator, .limited(8 * 1024 * 1024)) catch "";
+    var w = std.Io.Writer.Allocating.init(std.heap.page_allocator);
+    defer w.deinit();
+    try w.writer.writeAll(old);
+    try w.writer.writeAll(line);
+    try w.writer.writeByte('\n');
+    try std.Io.Dir.cwd().writeFile(util.io, .{ .sub_path = path, .data = w.toOwnedSlice() catch line });
+}
+
+/// GET /api/evolve/queue:返回全部条目(供 UI/审计)。
+pub fn evolveQueue(self: *WebServer, req: *http.Server.Request) !void {
+    const qp = util.evolveQueuePath(self.alloc) catch "";
+    var body: []const u8 = "[]";
+    if (qp.len > 0) {
+        if (std.Io.Dir.cwd().readFileAlloc(util.io, qp, self.alloc, .limited(8 * 1024 * 1024))) |data| {
+            var w = std.Io.Writer.Allocating.init(self.alloc);
+            defer w.deinit();
+            const wr = &w.writer;
+            wr.writeByte('[') catch {};
+            var it = std.mem.splitScalar(u8, data, '\n');
+            var first = true;
+            while (it.next()) |line| {
+                if (line.len == 0) continue;
+                if (!first) wr.writeByte(',') catch {};
+                first = false;
+                wr.writeAll(line) catch {};
+            }
+            wr.writeByte(']') catch {};
+            body = w.toOwnedSlice() catch "[]";
+        } else |_| {}
+    }
+    try req.respond(body, .{
+        .status = .ok,
+        .extra_headers = &.{.{ .name = "content-type", .value = "application/json" }},
+    });
+}
+
 pub fn activityPost(self: *WebServer, req: *http.Server.Request) !void {
     var body_buf: [4096]u8 = undefined;
     const reader = req.readerExpectNone(&body_buf);

@@ -228,6 +228,15 @@ pub fn clipboardText(alloc: std.mem.Allocator) ?[]u8 {
 /// 格式不兼容(pi 把消息包在 entry.message 里,piz 是扁平结构),共用
 /// sessions/ 目录会让 /sessions 列出对方的会话、选中后静默得到空历史。
 /// 独立目录换来:格式自由演进、不怕 pi 升级、不怕互相踩。
+/// 自演化队列路径:~/.piz/evolve/queue.jsonl(采集端 web 与执行端 CLI 共用)。
+pub fn evolveQueuePath(alloc: std.mem.Allocator) ![]u8 {
+    const cfg_dir = try configDir(alloc);
+    defer alloc.free(cfg_dir);
+    const ev_dir = try joinPath(alloc, cfg_dir, "evolve");
+    defer alloc.free(ev_dir);
+    return joinPath(alloc, ev_dir, "queue.jsonl");
+}
+
 pub fn configDir(alloc: std.mem.Allocator) ![]u8 {
     if (getEnv("PIZ_DIR")) |d| {
         if (d.len > 0) return alloc.dupe(u8, d);

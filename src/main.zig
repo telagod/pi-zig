@@ -27,6 +27,7 @@ const cmd_doctor = @import("cmd_doctor.zig");
 const cmd_init = @import("cmd_init.zig");
 const cmd_diff = @import("cmd_diff.zig");
 const cmd_commit = @import("cmd_commit.zig");
+const cmd_evolve = @import("cmd_evolve.zig");
 const cmd_slash = @import("cmd_slash.zig");
 const app_pickers = @import("app_pickers.zig");
 const app_views = @import("app_views.zig");
@@ -1000,6 +1001,8 @@ pub fn main(init: std.process.Init) !void {
             };
             std.debug.print("{s}\n", .{text});
             std.process.exit(0);
+        } else if (std.mem.eql(u8, arg, "evolve")) {
+            cmd_evolve.runEvolve(alloc, &args); // 不返回
         } else if (std.mem.eql(u8, arg, "diff")) {
             const here = std.process.currentPathAlloc(util.io, alloc) catch ".";
             const text = cmd_diff.format(alloc, here) catch {

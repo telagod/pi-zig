@@ -435,6 +435,9 @@ pub const Agent = struct {
     /// 从前只能靠 PIZ_TASK_DEPTH 环境变量跨进程传 —— 进程内 subagent 没有
     /// 新进程可继承环境,深度必须是 Agent 自己的字段。
     depth: usize = 0,
+    /// 回合帽:本轮 while 循环最多发多少次模型请求。0 = 无(交互默认)。
+    /// 自动任务(piz evolve)设上限防烧钱。
+    turn_cap: usize = 0,
     cbs: AgentCallbacks = .{},
     /// 思考强度。TUI /think 与 Alt+,/. 改它,下一轮请求带上。
     think_level: ai.ThinkLevel = .high,
@@ -1038,7 +1041,19 @@ pub fn send(self: *Agent, user_text: []const u8) !ai.RunResult {
         // 再多就是这个模型在这个模式下压不住,该把实情告诉用户。
         var fake_call_retries: usize = 0;
         // 无步数帽。pi 也没有。空转由相同调用 / 相同输出两条判据收,用户 Esc 中止。
+        var turn_count: usize = 0;
         while (true) {
+            // 回合帽:自动任务用。达到上限发 notice 并收尾 —— 返回当前最佳
+            // 结果(模型可能已有中间结论;无则用最后一次工具输出兜底)。
+            if (self.turn_cap > 0 and turn_count >= self.turn_cap) {
+                if (self.cbs.on_notice) |f| {
+                    f(self.cbs.ctx, "stopped: reached turn cap") catch |err| util.debugCatch("on_notice.turn_cap", err);
+                }
+                salvageText(self.alloc, &last_result, last_good_tool, last_good_output, self.cbs);
+                try self.emitTurnEnd();
+                return last_result;
+            }
+            turn_count += 1;
             if (self.aborted.load(.acquire)) return error.Aborted;
             // 请求前自愈 + 落位:悬空 tool_calls(compact 折页/续载/任何来源)
             // 与待发图像帧在此收敛。帧必须置于 tool 段完整之后 —— 段中插

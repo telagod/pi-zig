@@ -437,6 +437,12 @@ pub const WebServer = struct {
         if (method == .POST and std.mem.eql(u8, path, "/api/activity")) {
             return routes.activityPost(self, req);
         }
+        if (method == .POST and std.mem.eql(u8, path, "/api/evolve/sink")) {
+            return routes.evolveSink(self, req);
+        }
+        if (method == .GET and std.mem.eql(u8, path, "/api/evolve/queue")) {
+            return routes.evolveQueue(self, req);
+        }
         if (method == .GET and std.mem.eql(u8, path, "/api/activity")) {
             return routes.activityGet(self, req);
         }
