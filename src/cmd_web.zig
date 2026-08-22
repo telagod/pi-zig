@@ -9,6 +9,7 @@ const sessionmod = @import("core").session;
 const pluginsmod = @import("core").plugins;
 const compress = @import("core").compress;
 const toolsmod = @import("core").tools;
+const jsonx = @import("core").jsonx;
 const mcpmod = @import("core").mcp;
 const jsrt = @import("core").jsrt;
 const webui_mod = @import("webui.zig");
@@ -711,8 +712,60 @@ fn webOnSubagent(ctx: ?*anyopaque, idx: usize, kind: agentmod.SubagentEvent, tex
 }
 fn webOnToolStart(ctx: ?*anyopaque, name: []const u8, args: []const u8) anyerror!void {
     const s: *WebSession = @ptrCast(@alignCast(ctx.?));
-    const short_args = if (args.len > 500) args[0..500] else args;
-    s.hub.push("{{\"type\":\"tool_call\",\"session\":{s},\"name\":{s},\"args\":{s}}}", .{ try util.jsonString(s.agent.alloc, s.name), try util.jsonString(s.agent.alloc, name), try util.jsonString(s.agent.alloc, short_args) });
+    // workflow 的 args 是 goal+节点数组,整体 JSON 常超 500 字:硬截断会把
+    // JSON 切成两半,前端 parseToolArgs 失败 → 工作流卡 nodes/goal 全空
+    // (客实测「workflow 显示不正常」)。workflow 发精简 args(id/role/needs/goal),
+    // 其余工具保持旧截断。
+    var brief: []const u8 = args;
+    if (std.mem.eql(u8, name, "workflow")) {
+        brief = briefWorkflowArgs(s.agent.alloc, args) catch args;
+    }
+    const short_args = if (brief.len > 500 and !std.mem.eql(u8, name, "workflow")) brief[0..500] else brief;
+    s.hub.push("{{\"type\":\"tool_call\",\"session\":{s},\"name\":{s},\"args\":{s}}}", .{
+        try util.jsonString(s.agent.alloc, s.name),
+        try util.jsonString(s.agent.alloc, name),
+        try util.jsonString(s.agent.alloc, short_args),
+    });
+}
+
+/// workflow args → 精简 JSON(仅 goal + nodes[id/role/needs])。
+fn briefWorkflowArgs(alloc: std.mem.Allocator, args: []const u8) ![]const u8 {
+    if (args.len == 0) return args;
+    const v = std.json.parseFromSliceLeaky(std.json.Value, alloc, args, .{}) catch return args;
+    if (v != .object) return args;
+    const goal = jsonx.jsonStr(v, "goal") orelse "";
+    const nv = v.object.get("nodes") orelse v.object.get("steps") orelse return args;
+    if (nv != .array) return args;
+    var w = std.Io.Writer.Allocating.init(alloc);
+    defer w.deinit();
+    try w.writer.writeAll("{\"goal\":");
+    try w.writer.print("{s},\"nodes\":[", .{try util.jsonString(alloc, goal)});
+    for (nv.array.items, 0..) |item, i| {
+        if (i > 0) try w.writer.writeByte(',');
+        if (item != .object) continue;
+        const id = jsonx.jsonStr(item, "id") orelse "";
+        const role = jsonx.jsonStr(item, "role") orelse "";
+        try w.writer.writeAll("{\"id\":");
+        try w.writer.print("{s}", .{try util.jsonString(alloc, id)});
+        if (role.len > 0) {
+            try w.writer.writeAll(",\"role\":");
+            try w.writer.print("{s}", .{try util.jsonString(alloc, role)});
+        }
+        const needs_v = item.object.get("needs") orelse item.object.get("deps");
+        if (needs_v) |nm| {
+            if (nm == .array) {
+                try w.writer.writeAll(",\"needs\":[");
+                for (nm.array.items, 0..) |nd, k| {
+                    if (k > 0) try w.writer.writeByte(',');
+                    if (nd == .string) try w.writer.print("{s}", .{try util.jsonString(alloc, nd.string)});
+                }
+                try w.writer.writeByte(']');
+            }
+        }
+        try w.writer.writeByte('}');
+    }
+    try w.writer.writeAll("]}");
+    return w.toOwnedSlice() catch args;
 }
 /// 工具权限:yolo 放行;read-only 拒危险工具;ask → 浏览器确认卡。
 fn webOnPermission(ctx: ?*anyopaque, name: []const u8, args: []const u8) anyerror!bool {

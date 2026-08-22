@@ -16,6 +16,7 @@ pub const pkgs = @import("pkgs.zig");
 pub const events = @import("events.zig");
 pub const webplugins = @import("webplugins.zig");
 pub const plugins = @import("plugins.zig");
+pub const jsonx = @import("plugins/jsonx.zig");
 pub const jsrt = @import("jsrt.zig");
 pub const compress = @import("compress.zig");
 pub const seams = @import("seams.zig");
