@@ -125,7 +125,12 @@ pub fn runEvolve(alloc: std.mem.Allocator, args: *std.process.Args.Iterator) nor
         // 失败后的还原也会毁掉它们(首版实机踩坑:evolve 自身 checkout -- .
         // 把开发中的 src/main.zig 改动全撤了)。任务结束 pop 回来;冲突时
         // 保留 stash(evolve-<id>)并记入 note。
-        const stash_ok = gitCode(".", &.{ "stash", "push", "-u", "-m", std.fmt.allocPrint(alloc, "evolve-{s}", .{e.id}) catch "evolve" }) == 0;
+        const stash_tag = std.fmt.allocPrint(alloc, "evolve-{s}", .{e.id}) catch "evolve";
+        // 仅当 stash 列表真正新增条目才算成功(「No local changes」时 push 退出码也是 0)
+        const stash_before = gitOut(alloc, ".", &.{ "stash", "list" }) orelse "";
+        const stash_code = gitCode(".", &.{ "stash", "push", "-u", "-m", stash_tag });
+        const stash_after = gitOut(alloc, ".", &.{ "stash", "list" }) orelse "";
+        const stash_ok = stash_code == 0 and !std.mem.eql(u8, stash_before, stash_after);
 
         const prompt = buildPrompt(alloc, e.*, ".") catch {
             e.state = "failed";
