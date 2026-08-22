@@ -65,6 +65,8 @@ pub const USAGE =
     \\    (列出已配置 MCP server 与工具)
     \\  reload 子命令: piz reload
     \\    (重读 settings.json:主题/授权/沙箱;插件需重启)
+    \\  evolve 子命令: piz evolve [task-id]
+    \\    (自演化修复:按缺陷报告定位根因、修复,跑绿 build/test 后提交)
     \\  -v, --version    版本
     \\  -h, --help       帮助
     \\
