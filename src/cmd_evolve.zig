@@ -423,10 +423,10 @@ fn doPublish(alloc: std.mem.Allocator, e: Entry, restart_web: bool) !void {
     if (restart_web) try restartWeb(alloc);
 }
 
-/// 二进制冒烟:跑 <bin> --version,输出含 "piz v"。
+/// 二进制冒烟:跑 <bin> --version(2>&1 合并管道),输出含 "piz v"。
 fn binSmoke(alloc: std.mem.Allocator, bin: []const u8) bool {
-    // 直接用 --version 全路径(不改 cwd):std.process.spawn + argv
-    const argv = &.{ bin, "--version" };
+    const cmd = std.fmt.allocPrint(alloc, "{s} --version 2>&1", .{bin}) catch return false;
+    const argv = &.{ "/bin/sh", "-c", cmd };
     var child = std.process.spawn(util.io, .{
         .argv = argv,
         .stdin = .ignore,
@@ -478,17 +478,23 @@ fn restartWeb(alloc: std.mem.Allocator) !void {
     }
     // 拉新:同 token/port/cwd;PIZ_DIR 经 sh -c env 前缀传入(进程自身 environ
     // 无法修改,shell 包一层最稳;spawn 不等待,父退子留)。
+    // 注意:exec 目标必须是刚部署的绝对路径,不可用 /proc/self/exe —— 那在
+    // sh 里指向 sh 自己,拉起的不是 piz(实机踩坑:web 没换出来)。
+    const home2 = try util.homeDir(alloc);
+    const bin2 = try std.fmt.allocPrint(alloc, "{s}/.local/bin/piz", .{home2});
     var argv = std.array_list.Managed([]const u8).init(alloc);
     try argv.append("/bin/sh");
     try argv.append("-c");
     const inner = if (piz_dir.len > 0)
-        try std.fmt.allocPrint(alloc, "PIZ_DIR={s} exec /proc/self/exe web --port {d} --no-open {s}", .{
+        try std.fmt.allocPrint(alloc, "PIZ_DIR={s} exec {s} web --port {d} --no-open {s}", .{
             piz_dir,
+            bin2,
             port,
             if (token.len > 0) try std.fmt.allocPrint(alloc, "--token {s}", .{token}) else "--no-token",
         })
     else
-        try std.fmt.allocPrint(alloc, "exec /proc/self/exe web --port {d} --no-open {s}", .{
+        try std.fmt.allocPrint(alloc, "exec {s} web --port {d} --no-open {s}", .{
+            bin2,
             port,
             if (token.len > 0) try std.fmt.allocPrint(alloc, "--token {s}", .{token}) else "--no-token",
         });
