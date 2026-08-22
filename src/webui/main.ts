@@ -4,7 +4,7 @@
       import { initServerAuth, showAuthPage, getCredential, rawFetch, setOnAuthed } from "./net";
       import { showToast, dlgHooks, clipText } from "./ui";
       import { restoreDraft } from "./store";
-      import { closeMenus, openWsMenu, renderWsName, loadSessions, sessHooks } from "./sessions";
+      import { closeMenus, openWsMenu, renderWsName, loadSessions, sessHooks, initSideFilter, initSideGrip } from "./sessions";
       import { connectSSE } from "./stream";
       import { slashH, loadHelpCatalog, hideSlash, hideBang, runSlash } from "./slash";
       import { chatH, th, setHistRange, getWebFindQ, paintHistMore, replayHist, findInThread, addUser, asstEl, addAsst, finishAsst, inspect, resumeAsst } from "./chat";
@@ -86,6 +86,8 @@
         };
         $("heroStart").onclick = () => $("newBtn").click();
       }
+      initSideFilter();
+      initSideGrip();
       renderWsName();
       loadSessions();
       loadPlugins();

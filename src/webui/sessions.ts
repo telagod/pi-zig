@@ -102,6 +102,75 @@ export async function openWsMenu(btn: any) {
   m.appendChild(add);
   openAt("wsmenu", btn);
 }
+// 侧栏内联过滤:搜索按钮原地变输入框(实时过滤会话;✕ 清空)
+export function initSideFilter() {
+  const btn = $("searchBtn");
+  if (!btn || btn.dataset.done) return;
+  btn.dataset.done = "1";
+  const box = document.createElement("div");
+  box.className = "side-filter";
+  box.innerHTML =
+    '<span class="sf-ic">⌕</span><input type="text" placeholder="搜索会话…" spellcheck="false" /><button type="button" class="sf-x" title="清空">✕</button>';
+  const inp = box.querySelector("input") as HTMLInputElement;
+  const x = box.querySelector(".sf-x") as HTMLElement;
+  x.hidden = true;
+  let ft: any = 0;
+  inp.addEventListener("input", () => {
+    x.hidden = inp.value.length === 0;
+    clearTimeout(ft);
+    ft = setTimeout(() => {
+      sideQ = (inp.value || "").toLowerCase().trim();
+      loadSessions();
+    }, 120);
+  });
+  x.addEventListener("click", () => {
+    inp.value = "";
+    x.hidden = true;
+    sideQ = "";
+    loadSessions();
+    inp.focus();
+  });
+  btn.replaceWith(box);
+  sideFilterEl = inp;
+}
+// 侧栏拖宽:5px 热区,记忆 localStorage
+export function initSideGrip() {
+  if (document.getElementById("sideGrip")) return;
+  const side = $("side");
+  const rail = document.querySelector(".side-rail");
+  if (!side || !rail) return;
+  // grip 挂 side 内右缘(absolute),不得插入 grid —— 第 4 个子元素会破坏三列布局
+  side.style.position = "relative";
+  const g = document.createElement("div");
+  g.id = "sideGrip";
+  side.appendChild(g);
+  // --side-w 定义在 .app(局部变量),documentElement 上 set 会被遮蔽
+  const appEl = document.querySelector(".app");
+  try {
+    const w = localStorage.getItem("piz.sideW");
+    if (w && appEl) appEl.style.setProperty("--side-w", w + "px");
+  } catch {}
+  let dragging = false;
+  g.addEventListener("mousedown", (e: any) => {
+    dragging = true;
+    document.body.classList.add("gripping");
+    e.preventDefault();
+  });
+  window.addEventListener("mousemove", (e: any) => {
+    if (!dragging) return;
+    const w = Math.min(420, Math.max(200, e.clientX - side.getBoundingClientRect().left + 4));
+    appEl && appEl.style.setProperty("--side-w", w + "px");
+  });
+  window.addEventListener("mouseup", () => {
+    if (!dragging) return;
+    dragging = false;
+    document.body.classList.remove("gripping");
+    try {
+      localStorage.setItem("piz.sideW", String(Math.round(side.getBoundingClientRect().width)));
+    } catch {}
+  });
+}
+
 ($("wsqBtn") as HTMLElement).onclick = (e: any) => {
   e.stopPropagation();
   openWsMenu(e.currentTarget);
@@ -247,7 +316,7 @@ export function loadSessions() {
         archList = sessData.arch;
       const sl = $("slist")!;
       sl.innerHTML = "";
-      const q = ((searchQ && searchQ.value) || "").toLowerCase();
+      const q = sideQ;
       const show = (s: any) =>
         !q || (s.name + (s.title || "")).toLowerCase().includes(q);
       const cur = ws || (projects[0] ? projects[0].root : "");
@@ -296,10 +365,22 @@ export function loadSessions() {
           if (archList.length) {
             const se = document.createElement("div");
             se.className = "sg-arch";
-            se.textContent = "归档 " + archList.length;
-            wrap.appendChild(se);
+            se.innerHTML =
+              '<span class="sg-chev">▶</span><span>归档</span><span class="sg-arch-n">' +
+              archList.length +
+              "</span>";
+            const awrap = document.createElement("div");
+            awrap.className = "arch-chats";
+            awrap.hidden = true;
             for (const s of archList)
-              wrap.appendChild(sessionRow(s, true, w.root));
+              awrap.appendChild(sessionRow(s, true, w.root));
+            wrap.appendChild(se);
+            wrap.appendChild(awrap);
+            se.onclick = (e: any) => {
+              e.stopPropagation();
+              const open = se.classList.toggle("open");
+              awrap.hidden = !open;
+            };
           }
           sl.appendChild(wrap);
           gh.onclick = () => {
@@ -346,9 +427,25 @@ export function loadSessions() {
     })
     .catch(() => showToast("sessions load failed"));
 }
-// 搜索框过滤态(脱壳元素,值随 openSearch 写入)
-export const searchQ = document.createElement("input");
-searchQ.id = "searchQ";
+// 搜索框过滤态:内联侧栏过滤输入(loadSessions 的 show 读它)
+let sideQ = "";
+export function currentFilterQ(): string {
+  return sideQ;
+}
+let sideFilterEl: HTMLInputElement | null = null;
+export function setSideFilter(q: string) {
+  sideQ = q;
+  if (sideFilterEl) sideFilterEl.value = q;
+}
+// 旧接口引用(searchQ 全局)保持兼容
+export const searchQ: any = {
+  get value() {
+    return sideQ;
+  },
+  set value(v: string) {
+    sideQ = String(v || "");
+  },
+};
 
 // ---- 会话操作 ----
 export function act(body: any, then?: (j: any) => void) {

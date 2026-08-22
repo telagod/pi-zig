@@ -872,6 +872,75 @@ document.addEventListener("click", (e) => {
   m.appendChild(add);
   openAt("wsmenu", btn);
 } exports.openWsMenu = openWsMenu;
+// 侧栏内联过滤:搜索按钮原地变输入框(实时过滤会话;✕ 清空)
+ function initSideFilter() {
+  const btn = _util.$.call(void 0, "searchBtn");
+  if (!btn || btn.dataset.done) return;
+  btn.dataset.done = "1";
+  const box = document.createElement("div");
+  box.className = "side-filter";
+  box.innerHTML =
+    '<span class="sf-ic">⌕</span><input type="text" placeholder="搜索会话…" spellcheck="false" /><button type="button" class="sf-x" title="清空">✕</button>';
+  const inp = box.querySelector("input") ;
+  const x = box.querySelector(".sf-x") ;
+  x.hidden = true;
+  let ft = 0;
+  inp.addEventListener("input", () => {
+    x.hidden = inp.value.length === 0;
+    clearTimeout(ft);
+    ft = setTimeout(() => {
+      sideQ = (inp.value || "").toLowerCase().trim();
+      loadSessions();
+    }, 120);
+  });
+  x.addEventListener("click", () => {
+    inp.value = "";
+    x.hidden = true;
+    sideQ = "";
+    loadSessions();
+    inp.focus();
+  });
+  btn.replaceWith(box);
+  sideFilterEl = inp;
+} exports.initSideFilter = initSideFilter;
+// 侧栏拖宽:5px 热区,记忆 localStorage
+ function initSideGrip() {
+  if (document.getElementById("sideGrip")) return;
+  const side = _util.$.call(void 0, "side");
+  const rail = document.querySelector(".side-rail");
+  if (!side || !rail) return;
+  // grip 挂 side 内右缘(absolute),不得插入 grid —— 第 4 个子元素会破坏三列布局
+  side.style.position = "relative";
+  const g = document.createElement("div");
+  g.id = "sideGrip";
+  side.appendChild(g);
+  // --side-w 定义在 .app(局部变量),documentElement 上 set 会被遮蔽
+  const appEl = document.querySelector(".app");
+  try {
+    const w = localStorage.getItem("piz.sideW");
+    if (w && appEl) appEl.style.setProperty("--side-w", w + "px");
+  } catch (e2) {}
+  let dragging = false;
+  g.addEventListener("mousedown", (e) => {
+    dragging = true;
+    document.body.classList.add("gripping");
+    e.preventDefault();
+  });
+  window.addEventListener("mousemove", (e) => {
+    if (!dragging) return;
+    const w = Math.min(420, Math.max(200, e.clientX - side.getBoundingClientRect().left + 4));
+    appEl && appEl.style.setProperty("--side-w", w + "px");
+  });
+  window.addEventListener("mouseup", () => {
+    if (!dragging) return;
+    dragging = false;
+    document.body.classList.remove("gripping");
+    try {
+      localStorage.setItem("piz.sideW", String(Math.round(side.getBoundingClientRect().width)));
+    } catch (e3) {}
+  });
+} exports.initSideGrip = initSideGrip;
+
 (_util.$.call(void 0, "wsqBtn") ).onclick = (e) => {
   e.stopPropagation();
   openWsMenu(e.currentTarget);
@@ -1017,7 +1086,7 @@ document.addEventListener("click", (e) => {
         archList = exports.sessData.arch;
       const sl = _util.$.call(void 0, "slist");
       sl.innerHTML = "";
-      const q = ((exports.searchQ && exports.searchQ.value) || "").toLowerCase();
+      const q = sideQ;
       const show = (s) =>
         !q || (s.name + (s.title || "")).toLowerCase().includes(q);
       const cur = _state.ws || (projects[0] ? projects[0].root : "");
@@ -1066,10 +1135,22 @@ document.addEventListener("click", (e) => {
           if (archList.length) {
             const se = document.createElement("div");
             se.className = "sg-arch";
-            se.textContent = "归档 " + archList.length;
-            wrap.appendChild(se);
+            se.innerHTML =
+              '<span class="sg-chev">▶</span><span>归档</span><span class="sg-arch-n">' +
+              archList.length +
+              "</span>";
+            const awrap = document.createElement("div");
+            awrap.className = "arch-chats";
+            awrap.hidden = true;
             for (const s of archList)
-              wrap.appendChild(sessionRow(s, true, w.root));
+              awrap.appendChild(sessionRow(s, true, w.root));
+            wrap.appendChild(se);
+            wrap.appendChild(awrap);
+            se.onclick = (e) => {
+              e.stopPropagation();
+              const open = se.classList.toggle("open");
+              awrap.hidden = !open;
+            };
           }
           sl.appendChild(wrap);
           gh.onclick = () => {
@@ -1116,9 +1197,25 @@ document.addEventListener("click", (e) => {
     })
     .catch(() => _ui.showToast.call(void 0, "sessions load failed"));
 } exports.loadSessions = loadSessions;
-// 搜索框过滤态(脱壳元素,值随 openSearch 写入)
- const searchQ = document.createElement("input"); exports.searchQ = searchQ;
-exports.searchQ.id = "searchQ";
+// 搜索框过滤态:内联侧栏过滤输入(loadSessions 的 show 读它)
+let sideQ = "";
+ function currentFilterQ() {
+  return sideQ;
+} exports.currentFilterQ = currentFilterQ;
+let sideFilterEl = null;
+ function setSideFilter(q) {
+  sideQ = q;
+  if (sideFilterEl) sideFilterEl.value = q;
+} exports.setSideFilter = setSideFilter;
+// 旧接口引用(searchQ 全局)保持兼容
+ const searchQ = {
+  get value() {
+    return sideQ;
+  },
+  set value(v) {
+    sideQ = String(v || "");
+  },
+}; exports.searchQ = searchQ;
 
 // ---- 会话操作 ----
  function act(body, then) {
@@ -5577,6 +5674,8 @@ __modules["main"] = function(module, exports, require) {
         };
         _util.$.call(void 0, "heroStart").onclick = () => _util.$.call(void 0, "newBtn").click();
       }
+      _sessions.initSideFilter.call(void 0, );
+      _sessions.initSideGrip.call(void 0, );
       _sessions.renderWsName.call(void 0, );
       _sessions.loadSessions.call(void 0, );
       _plugins.loadPlugins.call(void 0, );
