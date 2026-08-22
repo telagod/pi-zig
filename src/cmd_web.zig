@@ -105,6 +105,10 @@ pub fn runWebCmd(alloc: std.mem.Allocator, args: *std.process.Args.Iterator) voi
     }
     ws.openBrowser();
 
+    // 启动信息落盘:发布器(piz evolve --publish)重启 web 时按原参数拉起。
+    // 含 pid/token/port/PIZ_DIR;覆盖写,勿删 —— 老进程退场后残留信息无害。
+    writeLaunchJson(&cfg, ws.port, wopts.token, abs_cwd) catch |e| util.debugCatch("web.launchjson", e);
+
     // 会话池:default 会话 + hooks(webui 端点经回调接入)
     var pool = SessionPool{
         .alloc = sync_arena.allocator(),
@@ -195,6 +199,23 @@ pub const WebSession = struct {
     snap_used: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     snap_window: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
 };
+
+fn writeLaunchJson(cfg: *cfgmod.Config, port: u16, token: ?[]const u8, cwd: []const u8) !void {
+    const alloc = cfg.allocator();
+    const p = try util.joinPath(alloc, try util.configDir(alloc), "web.launch.json");
+    const pid = std.os.linux.getpid();
+    var w = std.Io.Writer.Allocating.init(alloc);
+    defer w.deinit();
+    const wr = &w.writer;
+    try wr.print("{{\"pid\":{d},\"port\":{d},\"cwd\":{s},\"token\":{s},\"piz_dir\":{s}}}", .{
+        pid,
+        port,
+        try util.jsonString(alloc, cwd),
+        if (token) |t| try util.jsonString(alloc, t) else "null",
+        try util.jsonString(alloc, try util.configDir(alloc)),
+    });
+    try util.writeFile(p, try w.toOwnedSlice());
+}
 
 fn sessionApproval(ses: *WebSession) cfgmod.ApprovalMode {
     return switch (ses.approval.load(.acquire)) {

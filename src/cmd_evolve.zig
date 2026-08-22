@@ -38,17 +38,20 @@ const Entry = struct {
 pub fn runEvolve(alloc: std.mem.Allocator, args: *std.process.Args.Iterator) noreturn {
     var all = false;
     var dry = false;
+    var publish = false;
     var limit: usize = 1;
     while (args.next()) |a| {
         if (std.mem.eql(u8, a, "--all")) {
             all = true;
         } else if (std.mem.eql(u8, a, "--dry-run")) {
             dry = true;
+        } else if (std.mem.eql(u8, a, "--publish")) {
+            publish = true;
         } else if (std.mem.eql(u8, a, "--limit")) {
             limit = std.fmt.parseInt(usize, args.next() orelse "3", 10) catch 3;
         } else if (std.mem.eql(u8, a, "--help") or std.mem.eql(u8, a, "-h")) {
             std.debug.print(
-                \\piz evolve [--all] [--dry-run] [--limit N]
+                \\piz evolve [--all] [--dry-run] [--publish] [--limit N]
                 \\
                 \\  采集队列(~/.piz/evolve/queue.jsonl)里的 open 缺陷,交给内置
                 \\  agent 在仓库根修复:定位根因 → 改源码 → zig build/test → 绿则
@@ -56,6 +59,8 @@ pub fn runEvolve(alloc: std.mem.Allocator, args: *std.process.Args.Iterator) nor
                 \\
                 \\  --all      循环处理全部 open(默认只 1 条)
                 \\  --dry-run  只打印条目与任务 prompt,不跑 agent
+                \\  --publish  发布待审候选(备份旧二进制→替换→冒烟→重启 web),
+                \\             仅当有 pending 候选或 selfevolveConfirm=false
                 \\  --limit N  至多 N 条(默认 3)
                 \\
             , .{});
@@ -66,6 +71,16 @@ pub fn runEvolve(alloc: std.mem.Allocator, args: *std.process.Args.Iterator) nor
         }
     }
     if (all) limit = if (limit < 3) 3 else limit;
+
+    // 发布闸:全自动模式(confirm=false)或 --publish 显式发布
+    const qpath = util.evolveQueuePath(alloc) catch "";
+    if (publish) {
+        runPublish(alloc, qpath) catch |e| {
+            std.debug.print("piz evolve: publish failed: {s}\n", .{@errorName(e)});
+            std.process.exit(1);
+        };
+        std.process.exit(0);
+    }
 
     const qp = util.evolveQueuePath(alloc) catch {
         std.debug.print("piz evolve: cannot resolve queue path\n", .{});
@@ -165,6 +180,9 @@ pub fn runEvolve(alloc: std.mem.Allocator, args: *std.process.Args.Iterator) nor
             e.commit = last_hash;
             e.note = "committed";
             done_n += 1;
+            maybePublish(alloc, e.*, last_subj) catch |pe| {
+                std.debug.print("piz evolve: publish prepare failed: {s}\n", .{@errorName(pe)});
+            };
         } else {
             // 无 evolve 提交:若工作区脏,清理(agent 半途而废)
             if (dirty.len > 0) gitRun(".", &.{ "checkout", "--", "." }) catch {};
@@ -327,6 +345,192 @@ fn jsonInt(v: std.json.Value, key: []const u8, fallback: usize) usize {
         .integer => |n| if (n < 0) fallback else @intCast(n),
         else => fallback,
     };
+}
+
+/// done 后的发布入口:confirm=true 只备 pending(人工审);false 直接部署。
+fn maybePublish(alloc: std.mem.Allocator, e: Entry, subj: []const u8) !void {
+    var cfg_arena = util.Arena.init(alloc);
+    var cfg = cfgmod.Config{ .arena = &cfg_arena };
+    defer cfg.deinit();
+    try cfg.load();
+    const desc = if (subj.len > 8) subj[8..] else subj; // 去 "evolve: " 前缀
+    if (cfg.selfevolve_confirm) {
+        try writePending(alloc, e, desc);
+        std.debug.print("  候选就绪(会审模式):piz evolve --publish 发布\n", .{});
+    } else {
+        try doPublish(alloc, e, true);
+    }
+}
+
+fn pendingPath(alloc: std.mem.Allocator) ![]u8 {
+    const cfg_dir = try util.configDir(alloc);
+    defer alloc.free(cfg_dir);
+    const ev = try util.joinPath(alloc, cfg_dir, "evolve");
+    defer alloc.free(ev);
+    return util.joinPath(alloc, ev, "pending-publish.json");
+}
+
+fn writePending(alloc: std.mem.Allocator, e: Entry, desc: []const u8) !void {
+    const p = try pendingPath(alloc);
+    const repo = try std.process.currentPathAlloc(util.io, alloc);
+    const bin_src = try std.fmt.allocPrint(alloc, "{s}/zig-out/bin/piz", .{repo});
+    var w = std.Io.Writer.Allocating.init(alloc);
+    defer w.deinit();
+    const wr = &w.writer;
+    try wr.print("{{\"id\":{s},\"commit\":{s},\"desc\":{s},\"bin_src\":{s},\"ts\":{d}}}", .{
+        try util.jsonString(alloc, e.id),
+        try util.jsonString(alloc, e.commit),
+        try util.jsonString(alloc, desc[0..@min(desc.len, 200)]),
+        try util.jsonString(alloc, bin_src),
+        @divTrunc(std.Io.Clock.now(.real, util.io).nanoseconds, std.time.ns_per_s),
+    });
+    try util.writeFile(p, try w.toOwnedSlice());
+}
+
+/// 部署(本机):备份旧二进制 → 替换 → 冒烟 → (重启 web)。
+fn doPublish(alloc: std.mem.Allocator, e: Entry, restart_web: bool) !void {
+    const home = try util.homeDir(alloc);
+    const repo = try std.process.currentPathAlloc(util.io, alloc);
+    const bin_src = try std.fmt.allocPrint(alloc, "{s}/zig-out/bin/piz", .{repo});
+    const bin = try std.fmt.allocPrint(alloc, "{s}/.local/bin/piz", .{home});
+    // 1) 源存在?
+    std.Io.Dir.cwd().access(util.io, bin_src, .{}) catch {
+        std.debug.print("piz evolve: 构建产物不存在 {s}(先 zig build)\n", .{bin_src});
+        return;
+    };
+    // 2) 备份旧二进制
+    if (std.Io.Dir.cwd().readFileAlloc(util.io, bin, alloc, .limited(256 * 1024 * 1024))) |od| {
+        const bak = try std.fmt.allocPrint(alloc, "{s}.bak-{s}", .{ bin, e.commit[0..@min(e.commit.len, 8)] });
+        try util.writeFile(bak, od);
+        std.debug.print("  备份旧二进制 → {s}\n", .{bak});
+    } else |_| {}
+    // 3) 替换(executable_file=0o777,umask 后落 755)
+    const new_data = try util.readFile(alloc, bin_src);
+    std.Io.Dir.cwd().writeFile(util.io, .{ .sub_path = bin, .data = new_data, .flags = .{ .permissions = .executable_file } }) catch |we| {
+        // 写的新文件可能已存在且为只读等:退回 util.writeFile 保底
+        util.debugCatch("evolve.writebin", we);
+        try util.writeFile(bin, new_data);
+    };
+    std.debug.print("  已部署 {s}\n  -> {s}\n", .{ bin_src, bin });
+    // 4) 冒烟:--version
+    if (binSmoke(alloc, bin)) {
+        std.debug.print("  冒烟:--version OK\n", .{});
+    } else {
+        std.debug.print("  冒烟:--version 失败(已部署但二进制可疑),回滚备份!\n", .{});
+        return error.SmokeFailed;
+    }
+    // 5) 重启 web(可选)
+    if (restart_web) try restartWeb(alloc);
+}
+
+/// 二进制冒烟:跑 <bin> --version,输出含 "piz v"。
+fn binSmoke(alloc: std.mem.Allocator, bin: []const u8) bool {
+    // 直接用 --version 全路径(不改 cwd):std.process.spawn + argv
+    const argv = &.{ bin, "--version" };
+    var child = std.process.spawn(util.io, .{
+        .argv = argv,
+        .stdin = .ignore,
+        .stdout = .pipe,
+        .stderr = .ignore,
+    }) catch return false;
+    var out = std.array_list.Managed(u8).init(alloc);
+    defer out.deinit();
+    var tmp: [4096]u8 = undefined;
+    var total: usize = 0;
+    while (total < 4096) {
+        const n = std.posix.read(child.stdout.?.handle, &tmp) catch break;
+        if (n == 0) break;
+        out.appendSlice(tmp[0..n]) catch break;
+        total += n;
+    }
+    const term = child.wait(util.io) catch return false;
+    if (term != .exited or term.exited != 0) return false;
+    return std.mem.indexOf(u8, out.items, "piz v") != null;
+}
+
+/// 重启 web:读 web.launch.json → 杀旧(pid+cmdline 校验)→ 同参拉起。
+fn restartWeb(alloc: std.mem.Allocator) !void {
+    const cfg_dir = try util.configDir(alloc);
+    const lp = try util.joinPath(alloc, cfg_dir, "web.launch.json");
+    // 无 launch 信息 = web 不是本机跑的,不动。
+    const data = std.Io.Dir.cwd().readFileAlloc(util.io, lp, alloc, .limited(1024 * 1024)) catch {
+        std.debug.print("  web 未运行(无 launch 信息),跳过重启\n", .{});
+        return;
+    };
+    const v = std.json.parseFromSliceLeaky(std.json.Value, alloc, data, .{}) catch {
+        std.debug.print("  web.launch.json 损坏,跳过重启\n", .{});
+        return;
+    };
+    const old_pid: i32 = @intCast(jsonInt(v, "pid", 0));
+    const port: u16 = @intCast(jsonInt(v, "port", 8899));
+    const token = jsonStr(v, "token") orelse "";
+    const piz_dir = jsonStr(v, "piz_dir") orelse "";
+    const web_cwd = jsonStr(v, "cwd") orelse ".";
+    // 杀旧(校验 cmdline 含 web,防误杀)
+    if (old_pid > 0) {
+        const proc_path = try std.fmt.allocPrint(alloc, "/proc/{d}/cmdline", .{old_pid});
+        const cmdline = std.Io.Dir.cwd().readFileAlloc(util.io, proc_path, alloc, .limited(4096)) catch "";
+        if (cmdline.len > 0 and std.mem.indexOf(u8, cmdline, "web") != null) {
+            std.posix.kill(old_pid, std.posix.SIG.TERM) catch {};
+            std.Io.sleep(util.io, .{ .nanoseconds = 600 * std.time.ns_per_ms }, .awake) catch {};
+            std.debug.print("  web 旧进程 {d} 已停\n", .{old_pid});
+        }
+    }
+    // 拉新:同 token/port/cwd;PIZ_DIR 必须同值,否则新 web 读错配置。
+    var argv = std.array_list.Managed([]const u8).init(alloc);
+    try argv.append("/proc/self/exe");
+    try argv.append("web");
+    try argv.append("--port");
+    try argv.append(try std.fmt.allocPrint(alloc, "{d}", .{port}));
+    try argv.append("--no-open");
+    if (token.len > 0) {
+        try argv.append("--token");
+        try argv.append(token);
+    } else {
+        try argv.append("--no-token");
+    }
+    var envmap = std.process.EnvMap.init(alloc);
+    // 继承现环境,再钉 PIZ_DIR(launch 记录的)
+    if (std.process.getEnvMap(alloc)) |cur| {
+        var it = cur.iterator();
+        while (it.next()) |kv| envmap.put(kv.key_ptr.*, kv.value_ptr.*) catch {};
+    } else |_| {}
+    if (piz_dir.len > 0) envmap.put("PIZ_DIR", piz_dir) catch {};
+    const child = try std.process.spawn(util.io, .{
+        .argv = argv.items,
+        .cwd = .{ .path = web_cwd },
+        .environ_map = &envmap,
+        .stdin = .ignore,
+        .stdout = .ignore,
+        .stderr = .ignore,
+    });
+    _ = child;
+    std.debug.print("  web 已拉起 port {d}(PIZ_DIR={s})\n", .{ port, piz_dir });
+}
+
+/// 读 pending 并执行部署(--publish 子命令入口)。
+fn runPublish(alloc: std.mem.Allocator, qpath: []const u8) !void {
+    _ = qpath;
+    const p = try pendingPath(alloc);
+    const data = util.readFile(alloc, p) catch {
+        std.debug.print("piz evolve --publish: 无待发布候选(先跑 piz evolve 出 done 任务)\n", .{});
+        return;
+    };
+    const v = std.json.parseFromSliceLeaky(std.json.Value, alloc, data, .{}) catch {
+        std.debug.print("piz evolve --publish: pending 文件损坏\n", .{});
+        return;
+    };
+    const id = jsonStr(v, "id") orelse "?";
+    const commit = jsonStr(v, "commit") orelse "?";
+    const desc = jsonStr(v, "desc") orelse "";
+    const bin_src = jsonStr(v, "bin_src") orelse "zig-out/bin/piz";
+    const e = Entry{ .id = id, .commit = commit, .note = desc };
+    std.debug.print("发布候选: {s} / {s}({s})\n", .{ commit[0..@min(commit.len, 8)], id, desc });
+    try doPublish(alloc, e, true);
+    // 成功后清 pending
+    std.Io.Dir.cwd().deleteFile(util.io, p) catch {};
+    std.debug.print("发布完成,待审候选已清空。\n", .{});
+    _ = bin_src;
 }
 
 /// 任务后恢复 stash;冲突则保留并记 note。

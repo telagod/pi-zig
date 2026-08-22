@@ -893,6 +893,8 @@ pub const Config = struct {
     default_approval: ApprovalMode = .yolo,
     /// settings.json 的 `sandboxMode`。缺省 off(无 bwrap 的机器也能跑)。
     default_sandbox: SandboxMode = .off,
+    /// 自演化发布确认闸(settings.json `selfevolveConfirm`)。缺省 true = 必审。
+    selfevolve_confirm: bool = true,
     /// settings.json 的 `thinkingBudgets`。未写用 pi 缺省。
     thinking_budgets: ThinkingBudgets = .{},
     /// settings.json 的 `plugins` 数组:要额外开启的可选插件名。
@@ -1106,6 +1108,11 @@ pub const Config = struct {
                 }
                 if (getStr(root, "sandboxMode")) |s| {
                     if (SandboxMode.parse(s)) |m| self.default_sandbox = m;
+                }
+                // 自演化发布闸:true = 每次发布前人工确认(evolve 跑
+                // --publish 只备好候选,不自动替换);false = 全自动。
+                if (getStr(root, "selfevolveConfirm")) |s| {
+                    self.selfevolve_confirm = std.mem.eql(u8, s, "true") or std.mem.eql(u8, s, "on") or std.mem.eql(u8, s, "yes");
                 }
                 if (root.object.get("thinkingBudgets")) |raw| {
                     if (raw == .object) self.thinking_budgets = parseThinkingBudgets(raw.object);
