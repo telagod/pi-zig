@@ -489,17 +489,26 @@ fn restartWeb(alloc: std.mem.Allocator) !void {
     } else {
         try argv.append("--no-token");
     }
-    var envmap = std.process.EnvMap.init(alloc);
-    // 继承现环境,再钉 PIZ_DIR(launch 记录的)
-    if (std.process.getEnvMap(alloc)) |cur| {
-        var it = cur.iterator();
-        while (it.next()) |kv| envmap.put(kv.key_ptr.*, kv.value_ptr.*) catch {};
-    } else |_| {}
-    if (piz_dir.len > 0) envmap.put("PIZ_DIR", piz_dir) catch {};
+    // 拉新:同 token/port/cwd;PIZ_DIR 经 sh -c env 前缀传入(进程自身 environ
+    // 无法修改,shell 包一层最稳;spawn 不等待,父退子留)。
+    var argv = std.array_list.Managed([]const u8).init(alloc);
+    try argv.append("/bin/sh");
+    try argv.append("-c");
+    const inner = if (piz_dir.len > 0)
+        try std.fmt.allocPrint(alloc, "PIZ_DIR={s} exec /proc/self/exe web --port {d} --no-open {s}", .{
+            piz_dir,
+            port,
+            if (token.len > 0) try std.fmt.allocPrint(alloc, "--token {s}", .{token}) else "--no-token",
+        })
+    else
+        try std.fmt.allocPrint(alloc, "exec /proc/self/exe web --port {d} --no-open {s}", .{
+            port,
+            if (token.len > 0) try std.fmt.allocPrint(alloc, "--token {s}", .{token}) else "--no-token",
+        });
+    try argv.append(inner);
     const child = try std.process.spawn(util.io, .{
         .argv = argv.items,
         .cwd = .{ .path = web_cwd },
-        .environ_map = &envmap,
         .stdin = .ignore,
         .stdout = .ignore,
         .stderr = .ignore,
