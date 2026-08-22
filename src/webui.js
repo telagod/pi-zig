@@ -3830,13 +3830,34 @@ let mdTimer = 0;
     scrl();
   }
   const tc = rsnEl.querySelector(".tk");
-  if (tc.textContent) tc.textContent += "\n\n";
-  tc.textContent += txt;
+  // 流式 chunk 挤压成词,逐 chunk 换行会每词一行(客实测截图)。
+  // 与 addAsst 同法:累积 raw + 节流重画,断行只落句读/换行处。
+  tc.dataset.raw = (tc.dataset.raw || "") + txt;
+  if (!rsnTm) {
+    rsnTm = setTimeout(() => {
+      rsnTm = 0;
+      paintRsn();
+    }, 90);
+  }
   scrl();
   if (exports.inspect.thinkEl === rsnEl && _util.$.call(void 0, "inspect") && !_util.$.call(void 0, "inspect").hidden) exports.inspect.openThink(rsnEl);
 } exports.addRsn = addRsn;
+let rsnTm = 0;
+function paintRsn() {
+  if (!rsnEl) return;
+  const tc = rsnEl.querySelector(".tk");
+  const raw = tc.dataset.raw || "";
+  // 断行:句读/分号/引号后换行;压缩连续换行;黏合流式碎片
+  let out = raw
+    .replace(/([。！？!?;；]|：|——|\.{2,}|\n)/g, "$1\n")
+    .replace(/\n{2,}/g, "\n\n")
+    .trim();
+  tc.textContent = out;
+}
  function finishRsn() {
   if (!rsnEl) return;
+  paintRsn();
+  rsnTm && (clearTimeout(rsnTm), (rsnTm = 0));
   const txt = rsnEl.querySelector(".think-txt");
   if (txt) txt.textContent = "Thought";
   rsnEl = null;
