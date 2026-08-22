@@ -110,7 +110,7 @@ pub fn webDirPublic(alloc: std.mem.Allocator, cwd: []const u8) ![]u8 {
     return webDir(alloc, cwd);
 }
 
-fn webDir(alloc: std.mem.Allocator, cwd: []const u8) ![]u8 {
+pub fn webDir(alloc: std.mem.Allocator, cwd: []const u8) ![]u8 {
     const cfg_dir = try util.configDir(alloc);
     defer alloc.free(cfg_dir);
     const sess_dir = try util.joinPath(alloc, cfg_dir, "sessions");
@@ -160,7 +160,9 @@ pub fn saveWeb(alloc: std.mem.Allocator, cwd: []const u8, name: []const u8, mode
     saveWebTs(alloc, cwd, name, model, auto, title, messages, std.Io.Clock.now(.real, util.io).nanoseconds) catch |e| return e;
 }
 
-/// saveWeb 带显式更新时间(毫秒粒度)。
+/// saveWeb 带显式更新时间(毫秒粒度)。v2:常规路径追加(只写新消息),
+/// 消息变短(undo/compact)才整体重写 —— 超长会话不再轮轮 O(size)。
+/// 镜像 <name>.meta.json 记 model/auto/title/updated/count。
 pub fn saveWebTs(alloc: std.mem.Allocator, cwd: []const u8, name: []const u8, model: []const u8, auto: bool, title: ?[]const u8, messages: []const ai.Message, updated_ns: i128) !void {
     if (!webNameOk(name)) return error.InvalidName;
     const dir = try webDir(alloc, cwd);
@@ -170,13 +172,70 @@ pub fn saveWebTs(alloc: std.mem.Allocator, cwd: []const u8, name: []const u8, mo
     defer alloc.free(fname);
     const path = try util.joinPath(alloc, dir, fname);
     defer alloc.free(path);
-    // Web 会话每轮 turn_end 都全量重写(不像 CLI 那样追加),所以崩溃窗口比 CLI
-    // 大得多 —— 直写目标路径的话,写到一半被 kill 就是整份历史被截断。
-    // 写临时文件再 rename:要么看到旧文件,要么看到完整的新文件。
-    // 权限显式 0600:会话里是完整对话内容,不该跟目录默认权限走。
+    const mp = try util.joinPath(alloc, dir, try std.fmt.allocPrint(alloc, "{s}.meta.json", .{name}));
+    defer alloc.free(mp);
+
+    // 镜像计数:文件已有几条消息(无镜像回退数行,一次性)
+    var count0: usize = 0;
+    if (std.Io.Dir.cwd().readFileAlloc(util.io, mp, alloc, .limited(64 * 1024))) |mraw| {
+        defer alloc.free(mraw);
+        const m = std.json.parseFromSliceLeaky(std.json.Value, alloc, mraw, .{}) catch null;
+        if (m) |mv| {
+            if (mv == .object) {
+                if (mv.object.get("count")) |v| {
+                    if (v == .integer) count0 = @intCast(@max(v.integer, 0));
+                }
+            }
+        }
+    } else |_| {
+        // 无镜像:先看文件在不在;在则数行(旧文件,一次性代价)
+        if (std.Io.Dir.cwd().statFile(util.io, path, .{})) |st| {
+            if (st.size > 0) {
+                const got = std.Io.Dir.cwd().readFileAlloc(util.io, path, alloc, .limited(64 * 1024 * 1024)) catch null;
+                if (got) |g| {
+                    defer alloc.free(g);
+                    var n: usize = 0;
+                    var lines = std.mem.splitScalar(u8, g, '\n');
+                    while (lines.next()) |l| {
+                        if (l.len == 0) continue;
+                        n += 1;
+                    }
+                    count0 = n - @as(usize, @intFromBool(n > 0));
+                }
+            }
+        } else |_| {}
+    }
+
+    const st0 = std.Io.Dir.cwd().statFile(util.io, path, .{}) catch null;
+    if (count0 >= messages.len and st0 != null) {
+        // 消息没变多:只更新镜像(updated/title/auto 可能过了)
+        try writeWebMirror(alloc, mp, model, auto, title orelse "", updated_ns, messages.len);
+        return;
+    }
+
+    if (count0 > 0 and count0 < messages.len and st0 != null) {
+        // 常规:追加新消息(messages[count0..])
+        {
+            var f = try std.Io.Dir.cwd().openFile(util.io, path, .{ .mode = .write_only });
+            defer f.close(util.io);
+            var wbuf: [8192]u8 = undefined;
+            var w = f.writer(util.io, &wbuf);
+            try w.seekTo(try f.length(util.io));
+            for (messages[count0..]) |m| {
+                const line = try webMessageLine(alloc, m);
+                defer alloc.free(line);
+                try w.interface.writeAll(line);
+            }
+            try w.interface.flush();
+        }
+        try writeWebMirror(alloc, mp, model, auto, title orelse "", updated_ns, messages.len);
+        return;
+    }
+
+    // 首写或消息变短(undo/compact):整体重写(tmp+rename 原子)
     const tmp = try std.fmt.allocPrint(alloc, "{s}.tmp", .{path});
     defer alloc.free(tmp);
-    errdefer std.Io.Dir.cwd().deleteFile(util.io, tmp) catch |err| util.debugCatch("session.web.tmp", err);
+    errdefer std.Io.Dir.cwd().deleteFile(util.io, tmp) catch {};
     {
         const file = try std.Io.Dir.cwd().createFile(util.io, tmp, .{
             .truncate = true,
@@ -194,44 +253,68 @@ pub fn saveWebTs(alloc: std.mem.Allocator, cwd: []const u8, name: []const u8, mo
         w.interface.writeAll(",\"updated\":") catch return error.WriteFailed;
         w.interface.print("{d}\n", .{@divTrunc(updated_ns, std.time.ns_per_ms)}) catch return error.WriteFailed;
         for (messages) |m| {
-            var jw = std.Io.Writer.Allocating.init(alloc);
-            defer jw.deinit();
-            const jwtr = &jw.writer;
-            jwtr.writeByte('{') catch return error.WriteFailed;
-            jwtr.print("\"role\":{s}", .{util.jsonString(alloc, m.role) catch "\"\""}) catch return error.WriteFailed;
-            jwtr.print(",\"content\":{s}", .{util.jsonString(alloc, m.content) catch "\"\""}) catch return error.WriteFailed;
-            if (m.tool_call_id) |id| jwtr.print(",\"tool_call_id\":{s}", .{util.jsonString(alloc, id) catch "\"\""}) catch return error.WriteFailed;
-            if (m.tool_calls) |tcs| {
-                jwtr.writeAll(",\"tool_calls\":[") catch return error.WriteFailed;
-                for (tcs, 0..) |tc, i| {
-                    if (i > 0) jwtr.writeByte(',') catch return error.WriteFailed;
-                    jwtr.print("{{\"id\":{s},\"name\":{s},\"args\":{s}}}", .{
-                        util.jsonString(alloc, tc.id) catch "\"\"",
-                        util.jsonString(alloc, tc.name) catch "\"\"",
-                        util.jsonString(alloc, tc.args) catch "\"\"",
-                    }) catch return error.WriteFailed;
-                }
-                jwtr.writeByte(']') catch return error.WriteFailed;
-            }
-            if (m.reasoning) |r| {
-                if (r.len > 0)
-                    jwtr.print(",\"reasoning\":{s}", .{util.jsonString(alloc, r) catch "\"\""}) catch return error.WriteFailed;
-            }
-            if (m.thinking_signature) |s| {
-                if (s.len > 0)
-                    jwtr.print(",\"thinking_signature\":{s}", .{util.jsonString(alloc, s) catch "\"\""}) catch return error.WriteFailed;
-            }
-            if (m.thinking_redacted) jwtr.writeAll(",\"thinking_redacted\":true") catch return error.WriteFailed;
-            writeImageFields(jwtr, alloc, m);
-            jwtr.writeAll("}\n") catch return error.WriteFailed;
-            const line = jw.toOwnedSlice() catch return error.WriteFailed;
+            const line = try webMessageLine(alloc, m);
             defer alloc.free(line);
             w.interface.writeAll(line) catch return error.WriteFailed;
         }
         w.interface.flush() catch return error.WriteFailed;
     }
-    // 走到这里临时文件已完整落盘并关闭;rename 在同一文件系统上原子
     try std.Io.Dir.rename(std.Io.Dir.cwd(), tmp, std.Io.Dir.cwd(), path, util.io);
+    try writeWebMirror(alloc, mp, model, auto, title orelse "", updated_ns, messages.len);
+}
+
+/// 单条 web 消息行(序列化共用)。
+fn webMessageLine(alloc: std.mem.Allocator, m: ai.Message) ![]u8 {
+    var jw = std.Io.Writer.Allocating.init(alloc);
+    defer jw.deinit();
+    const jwtr = &jw.writer;
+    jwtr.writeByte('{') catch return error.WriteFailed;
+    jwtr.print("\"role\":{s}", .{util.jsonString(alloc, m.role) catch "\"\""}) catch return error.WriteFailed;
+    jwtr.print(",\"content\":{s}", .{util.jsonString(alloc, m.content) catch "\"\""}) catch return error.WriteFailed;
+    if (m.tool_call_id) |id| jwtr.print(",\"tool_call_id\":{s}", .{util.jsonString(alloc, id) catch "\"\""}) catch return error.WriteFailed;
+    if (m.tool_calls) |tcs| {
+        jwtr.writeAll(",\"tool_calls\":[") catch return error.WriteFailed;
+        for (tcs, 0..) |tc, i| {
+            if (i > 0) jwtr.writeByte(',') catch return error.WriteFailed;
+            jwtr.print("{{\"id\":{s},\"name\":{s},\"args\":{s}}}", .{
+                util.jsonString(alloc, tc.id) catch "\"\"",
+                util.jsonString(alloc, tc.name) catch "\"\"",
+                util.jsonString(alloc, tc.args) catch "\"\"",
+            }) catch return error.WriteFailed;
+        }
+        jwtr.writeByte(']') catch return error.WriteFailed;
+    }
+    if (m.reasoning) |r| {
+        if (r.len > 0)
+            jwtr.print(",\"reasoning\":{s}", .{util.jsonString(alloc, r) catch "\"\""}) catch return error.WriteFailed;
+    }
+    if (m.thinking_signature) |s| {
+        if (s.len > 0)
+            jwtr.print(",\"thinking_signature\":{s}", .{util.jsonString(alloc, s) catch "\"\""}) catch return error.WriteFailed;
+    }
+    if (m.thinking_redacted) jwtr.writeAll(",\"thinking_redacted\":true") catch return error.WriteFailed;
+    writeImageFields(jwtr, alloc, m);
+    jwtr.writeAll("}\n") catch return error.WriteFailed;
+    return jw.toOwnedSlice() catch return error.WriteFailed;
+}
+
+/// web 镜像:model/auto/title/updated/count。
+fn writeWebMirror(alloc: std.mem.Allocator, mp: []const u8, model: []const u8, auto: bool, title: []const u8, updated_ns: i128, count: usize) !void {
+    var ww = std.Io.Writer.Allocating.init(alloc);
+    defer ww.deinit();
+    const wr = &ww.writer;
+    wr.writeAll("{\"model\":") catch return error.WriteFailed;
+    wr.writeAll(util.jsonString(alloc, model) catch "\"\"") catch return error.WriteFailed;
+    wr.writeAll(",\"auto\":") catch return error.WriteFailed;
+    wr.writeAll(if (auto) "true" else "false") catch return error.WriteFailed;
+    wr.writeAll(",\"title\":") catch return error.WriteFailed;
+    wr.writeAll(util.jsonString(alloc, title) catch "\"\"") catch return error.WriteFailed;
+    wr.writeAll(",\"updated\":") catch return error.WriteFailed;
+    wr.print("{d}", .{@divTrunc(updated_ns, std.time.ns_per_ms)}) catch return error.WriteFailed;
+    wr.print(",\"count\":{d}}}\n", .{count}) catch return error.WriteFailed;
+    const data = ww.toOwnedSlice() catch return error.WriteFailed;
+    defer alloc.free(data);
+    try writeFile600(alloc, mp, data);
 }
 
 /// 加载 web 会话:返回 (meta_auto, messages) 或 null(不存在/损坏)。
@@ -243,9 +326,10 @@ pub fn loadWeb(alloc: std.mem.Allocator, cwd: []const u8, name: []const u8) !?st
     defer alloc.free(fname);
     const path = try util.joinPath(alloc, dir, fname);
     defer alloc.free(path);
-    const content = std.Io.Dir.cwd().readFileAlloc(util.io, path, alloc, .limited(32 * 1024 * 1024)) catch return null;
-    var lines = std.mem.splitScalar(u8, content, '\n');
-    const meta_line = lines.next() orelse return null;
+    const w = try loadSessionWindow(alloc, path, SESSION_FULL_LIMIT, SESSION_TAIL_BYTES);
+    defer alloc.free(w.body);
+    const meta_line = w.meta_line orelse return null;
+    defer alloc.free(meta_line);
     var auto = true;
     var title: ?[]const u8 = null;
     var model: ?[]const u8 = null;
@@ -283,6 +367,13 @@ pub fn loadWeb(alloc: std.mem.Allocator, cwd: []const u8, name: []const u8) !?st
         }
         list.deinit();
     }
+    if (w.folded) {
+        try list.append(.{
+            .role = try alloc.dupe(u8, "system"),
+            .content = try std.fmt.allocPrint(alloc, "[会话历史折叠] 当前上下文仅含本会话近尾内容(前文未载入,完整历史在会话文件中)。如需完整历史重新载入,请直接引用旧会话。", .{}),
+        });
+    }
+    var lines = std.mem.splitScalar(u8, w.body, '\n');
     while (lines.next()) |raw| {
         const line = std.mem.trim(u8, raw, " \t\r\n");
         if (line.len == 0) continue;
@@ -423,6 +514,95 @@ pub fn listWebNames(alloc: std.mem.Allocator, cwd: []const u8) ![][]const u8 {
     return names.toOwnedSlice() catch &.{};
 }
 
+/// v2 阈值:全文载入上限与尾窗字节(参数化便于测试)。
+pub const SESSION_FULL_LIMIT: usize = 8 * 1024 * 1024;
+pub const SESSION_TAIL_BYTES: usize = 3 * 1024 * 1024;
+
+pub const SessionWindow = struct {
+    /// 文件首行(meta;小文件时与 body 同源,单独 dupe)
+    meta_line: ?[]u8,
+    /// 消息区(已剥 meta 行;尾窗时从行边界起)
+    body: []u8,
+    /// 是否折叠(前文省略)
+    folded: bool,
+};
+
+/// 会话读窗口:小文件全载;大文件只取尾 tail_bytes(行边界起)+ 首行 meta。
+/// 写路径不变(追加);此为读侧唯一入口(CLI loadMessages / web loadWeb 共用)。
+pub fn loadSessionWindow(alloc: std.mem.Allocator, path: []const u8, full_limit: usize, tail_bytes: usize) !SessionWindow {
+    var f = try std.Io.Dir.cwd().openFile(util.io, path, .{ .mode = .read_only });
+    defer f.close(util.io);
+    const len = try f.length(util.io);
+    var rbuf: [8192]u8 = undefined;
+    var r = f.reader(util.io, &rbuf);
+
+    // 首行 meta:小读(8KB 足够 meta 行)
+    var meta_line: ?[]u8 = null;
+    {
+        var hbuf: [8192]u8 = undefined;
+        const got = r.interface.readSliceShort(&hbuf) catch 0;
+        if (got > 0) {
+            const nl = std.mem.indexOfScalar(u8, hbuf[0..@min(got, hbuf.len)], '\n');
+            const end = if (nl) |i| i else got;
+            if (end > 0) meta_line = try alloc.dupe(u8, hbuf[0..@min(end, got)]);
+        }
+        try r.seekTo(0);
+    }
+
+    if (len <= full_limit) {
+        const whole = try r.interface.readAlloc(alloc, @intCast(len + 1));
+        var body: []u8 = whole;
+        if (meta_line) |ml| {
+            // 剥首行(逐字节定位;meta_line 长度即首行长度)
+            if (whole.len > ml.len) {
+                const skip = ml.len + 1; // 首行 + '\n'
+                if (skip < whole.len) body = whole[skip..];
+            }
+        }
+        return .{ .meta_line = meta_line, .body = body, .folded = false };
+    }
+
+    if (meta_line) |ml| alloc.free(ml); // 尾窗:meta 仍要(调用方从首行取),重取?—— 保留:头部已在;返还
+    // 尾窗:seek 到 len - tail(行边界修正:找窗口内首个 '\n' 后起)
+    const start = len - @min(len, @as(u64, tail_bytes));
+    try r.seekTo(start);
+    const win = try r.interface.readAlloc(alloc, @intCast(@min(len - start, @as(u64, tail_bytes) + 1)));
+    const nl = std.mem.indexOfScalar(u8, win, '\n');
+    const body = if (nl) |i|
+        if (i + 1 <= win.len) win[i + 1 ..] else win
+    else
+        win;
+    return .{ .meta_line = meta_line, .body = body, .folded = true };
+}
+
+/// 镜像路径(文件级):<path 去 .jsonl>.meta.json。
+pub fn mirrorPathFor(alloc: std.mem.Allocator, path: []const u8) ![]u8 {
+    var mp = std.array_list.Managed(u8).init(alloc);
+    const base = if (std.mem.endsWith(u8, path, ".jsonl")) path[0 .. path.len - ".jsonl".len] else path;
+    try mp.appendSlice(base);
+    try mp.appendSlice(".meta.json");
+    return mp.toOwnedSlice();
+}
+
+/// 写 0600 小文件(镜像用)。
+pub fn writeFile600(alloc: std.mem.Allocator, path: []const u8, data: []const u8) !void {
+    const tmp = try std.fmt.allocPrint(alloc, "{s}.tmp", .{path});
+    defer alloc.free(tmp);
+    errdefer std.Io.Dir.cwd().deleteFile(util.io, tmp) catch {};
+    {
+        const f = try std.Io.Dir.cwd().createFile(util.io, tmp, .{
+            .truncate = true,
+            .permissions = @enumFromInt(0o600),
+        });
+        defer f.close(util.io);
+        var wbuf: [4096]u8 = undefined;
+        var w = f.writer(util.io, &wbuf);
+        try w.interface.writeAll(data);
+        try w.interface.flush();
+    }
+    try std.Io.Dir.rename(std.Io.Dir.cwd(), tmp, std.Io.Dir.cwd(), path, util.io);
+}
+
 pub const Session = struct {
     alloc: std.mem.Allocator,
     path: []u8, // 会话文件绝对路径
@@ -434,13 +614,80 @@ pub const Session = struct {
     /// meta 首行已落盘?惰性写盘:fresh 只定径不写首行,首条消息/setTitle/fork 方落——
     /// 开而未言即退者不留空壳(findLatest/list 本也不见无 meta 之档)。
     meta_written: bool = false,
+    /// v2:轻量镜像 <id>.meta.json(扫描/描述零正文读)。preview/turns 由镜像维护。
+    mirror: bool = false,
+    preview: ?[]const u8 = null,
+    turns: u32 = 0,
 
     pub fn deinit(self: *Session) void {
         self.alloc.free(self.path);
         self.alloc.free(self.cwd);
         if (self.title) |t| self.alloc.free(t);
         if (self.last_id) |i| self.alloc.free(i);
+        if (self.preview) |p| self.alloc.free(p);
     }
+
+    /// 镜像路径:会话文件去 .jsonl 加 .meta.json。
+    fn mirrorPath(self: *const Session, alloc: std.mem.Allocator) ![]u8 {
+        var mp = std.array_list.Managed(u8).init(alloc);
+        try mp.appendSlice(self.path[0 .. self.path.len - ".jsonl".len]);
+        try mp.appendSlice(".meta.json");
+        return mp.toOwnedSlice();
+    }
+
+    /// 写轻量镜像(整字段覆盖写;180-500B/次)。
+    pub fn writeMirror(self: *const Session) !void {
+        const mp = try self.mirrorPath(self.alloc);
+        defer self.alloc.free(mp);
+        var ww = std.Io.Writer.Allocating.init(self.alloc);
+        defer ww.deinit();
+        const wr = &ww.writer;
+        wr.writeAll("{\"format\":2,\"cwd\":") catch return error.WriteFailed;
+        wr.writeAll(util.jsonString(self.alloc, self.cwd) catch "\"\"") catch return error.WriteFailed;
+        wr.writeAll(",\"started\":") catch return error.WriteFailed;
+        wr.print("{d}", .{@divTrunc(std.Io.Clock.now(.real, util.io).nanoseconds, std.time.ns_per_s)}) catch return error.WriteFailed;
+        if (self.title) |t| {
+            wr.writeAll(",\"title\":") catch return error.WriteFailed;
+            wr.writeAll(util.jsonString(self.alloc, t) catch "\"\"") catch return error.WriteFailed;
+        }
+        if (self.preview) |p| {
+            wr.writeAll(",\"preview\":") catch return error.WriteFailed;
+            wr.writeAll(util.jsonString(self.alloc, p) catch "\"\"") catch return error.WriteFailed;
+        }
+        if (self.turns > 0) {
+            wr.writeAll(",\"turns\":") catch return error.WriteFailed;
+            wr.print("{d}", .{self.turns}) catch return error.WriteFailed;
+        }
+        wr.writeAll("}\n") catch return error.WriteFailed;
+        const data = ww.toOwnedSlice() catch return error.WriteFailed;
+        defer self.alloc.free(data);
+        try writeFile600(self.alloc, mp, data);
+    }
+
+    /// 从镜像读(open 用):解析 format 2 镜像,填充 cwd/title/preview/turns。
+    fn readMirror(self: *Session, mirror_raw: []const u8) bool {
+        const m = std.json.parseFromSliceLeaky(std.json.Value, self.alloc, mirror_raw, .{}) catch return false;
+        if (m != .object) return false;
+        const fmt = if (m.object.get("format")) |v| (if (v == .integer) v.integer else 0) else 0;
+        if (fmt != 2) return false;
+        const mcwd = if (m.object.get("cwd")) |v| (if (v == .string) v.string else "") else "";
+        if (mcwd.len == 0) return false;
+        self.cwd = self.alloc.dupe(u8, mcwd) catch return false;
+        if (m.object.get("title")) |v| {
+            if (v == .string and v.string.len > 0) self.title = self.alloc.dupe(u8, v.string) catch null;
+        }
+        if (m.object.get("preview")) |v| {
+            if (v == .string and v.string.len > 0) self.preview = self.alloc.dupe(u8, v.string) catch null;
+        }
+        if (m.object.get("turns")) |v| {
+            if (v == .integer) self.turns = @intCast(@max(v.integer, 0));
+        }
+        self.mirror = true;
+        self.meta_written = true;
+        return true;
+    }
+
+
 
     pub fn sessionsDir(self: *Session) ![]u8 {
         const cfg_dir = try util.configDir(self.alloc);
@@ -499,7 +746,24 @@ pub const Session = struct {
     }
 
     /// 打开指定路径的会话(解析首行元信息)。
+    /// 打开:优先读轻量镜像(open 是 list/findById 热路径,不能全读正文);
+    /// 无镜像回退首行内嵌 meta(v1 格式,兼容旧档)。
     pub fn open(alloc: std.mem.Allocator, path: []const u8) !Session {
+        // v2:镜像优先
+        if (mirrorPathFor(alloc, path)) |mp| {
+            defer alloc.free(mp);
+            if (std.Io.Dir.cwd().readFileAlloc(util.io, mp, alloc, .limited(64 * 1024))) |mraw| {
+                defer alloc.free(mraw);
+                var self = Session{
+                    .alloc = alloc,
+                    .path = try alloc.dupe(u8, path),
+                    .cwd = try alloc.dupe(u8, ""),
+                    .mirror = true,
+                    .meta_written = true,
+                };
+                if (self.readMirror(mraw)) return self;
+            } else |_| {}
+        } else |_| {}
         const content = std.Io.Dir.cwd().readFileAlloc(util.io, path, alloc, .limited(16 * 1024 * 1024)) catch {
             return error.InvalidSession;
         };
@@ -535,7 +799,16 @@ pub const Session = struct {
     }
 
     /// 文件内有消息行({"role":...)即非空。首行 meta 之外一条消息即算。
+    /// 文件内有消息行({"role":...)即非空。镜像在场直接判;否则核查正文。
     fn hasMessages(alloc: std.mem.Allocator, path: []const u8) bool {
+        if (mirrorPathFor(alloc, path)) |mp| {
+            defer alloc.free(mp);
+            if (std.Io.Dir.cwd().readFileAlloc(util.io, mp, alloc, .limited(64 * 1024))) |mraw| {
+                defer alloc.free(mraw);
+                if (std.mem.indexOf(u8, mraw, "\"turns\":") != null) return true;
+                if (std.mem.indexOf(u8, mraw, "\"preview\":") != null) return true;
+            } else |_| {}
+        } else |_| {}
         const raw = std.Io.Dir.cwd().readFileAlloc(util.io, path, alloc, .limited(16 * 1024 * 1024)) catch return false;
         defer alloc.free(raw);
         return std.mem.indexOf(u8, raw, "\"role\":") != null;
@@ -591,48 +864,20 @@ pub const Session = struct {
         const line = try ww.toOwnedSlice();
         defer self.alloc.free(line);
         try self.append(line);
+        // v2:同步镜像(轻量 read-modify 面都在镜像上)
+        try self.writeMirror();
         self.meta_written = true;
     }
 
-    /// 设置标题:重写首行元信息。
-    /// 参数在这里裁到 MAX_TITLE_BYTES —— 这是标题落盘的唯一入口,裁在这里
-    /// 就保证磁盘上不会出现无界标题,读回来的也一定是安全值。
+    /// 设置标题:v2 只改镜像(不再重写正文;老版回退首行可见旧标题,无碍)。
     pub fn setTitle(self: *Session, raw_title: []const u8) !void {
         const title = util.clampUtf8(raw_title, MAX_TITLE_BYTES);
-        if (!self.meta_written) {
-            // 档未落盘:首行写出时自携 title,此刻只记账
-            const old = self.title;
-            self.title = if (title.len > 0) try self.alloc.dupe(u8, title) else null;
-            if (old) |o| self.alloc.free(o);
-            return;
-        }
-        const content = std.Io.Dir.cwd().readFileAlloc(util.io, self.path, self.alloc, .limited(256 * 1024)) catch return error.InvalidSession;
-        defer self.alloc.free(content);
-        var lines = std.mem.splitScalar(u8, content, '\n');
-        _ = lines.next() orelse return error.InvalidSession;
-        var outw = std.Io.Writer.Allocating.init(self.alloc);
-        defer outw.deinit();
-        try outw.writer.print("{{\"cwd\":{s},\"started\":{d}", .{
-            try util.jsonString(self.alloc, self.cwd),
-            @divTrunc(std.Io.Clock.now(.real, util.io).nanoseconds, std.time.ns_per_s),
-        });
-        if (title.len > 0) {
-            try outw.writer.print(",\"title\":{s}", .{try util.jsonString(self.alloc, title)});
-        }
-        try outw.writer.writeAll("}\n");
-        // 其余行原样
-        var rest = std.array_list.Managed(u8).init(self.alloc);
-        defer rest.deinit();
-        var it = lines;
-        while (it.next()) |l| {
-            try rest.appendSlice(l);
-            try rest.append('\n');
-        }
-        try outw.writer.writeAll(rest.items);
-        try self.writeAtomic(self.path, try outw.toOwnedSlice());
         const old = self.title;
         self.title = if (title.len > 0) try self.alloc.dupe(u8, title) else null;
         if (old) |o| self.alloc.free(o);
+        // 档未落盘:首行写出时自携 title,此刻只记账;镜像也等 writeMeta 再写
+        if (!self.meta_written) return;
+        try self.writeMirror();
     }
 
     fn append(self: *Session, line: []const u8) !void {
@@ -745,6 +990,15 @@ pub const Session = struct {
         const line = try ww.toOwnedSlice();
         defer self.alloc.free(line);
         try self.append(line);
+        // v2:user 消息维护镜像(preview/turns) —— 列表/描述零正文读
+        if (std.mem.eql(u8, msg.role, "user")) {
+            if (self.preview == null and msg.content.len > 0) {
+                const p = util.clampUtf8(msg.content, 60);
+                if (p.len > 0) self.preview = try self.alloc.dupe(u8, p);
+            }
+            self.turns += 1;
+            try self.writeMirror();
+        }
     }
 
     /// 会话 id:文件名去掉 .jsonl,与 `-s` / findById 同一套。
@@ -767,11 +1021,17 @@ pub const Session = struct {
     };
 
     /// 列表/picker 用:标题优先,否则首条 user 预览,再否则 id。hint 为相对时间与轮数。
+    /// v2:镜像在场则零正文读;v1 旧档回退读首 256KB。
     pub fn describe(self: *const Session, alloc: std.mem.Allocator, now_ns: i128) !Describe {
         var preview_buf: [64]u8 = undefined;
         var preview: ?[]const u8 = null;
         var turns: usize = 0;
-        if (std.Io.Dir.cwd().readFileAlloc(util.io, self.path, alloc, .limited(256 * 1024))) |content| {
+        var preview_owned: ?[]u8 = null;
+        defer if (preview_owned) |p| alloc.free(p);
+        if (self.mirror) {
+            preview = self.preview;
+            turns = self.turns;
+        } else if (std.Io.Dir.cwd().readFileAlloc(util.io, self.path, alloc, .limited(256 * 1024))) |content| {
             defer alloc.free(content);
             var lines = std.mem.splitScalar(u8, content, '\n');
             while (lines.next()) |line| {
@@ -786,6 +1046,7 @@ pub const Session = struct {
                 const body = if (parsed.value.object.get("content")) |c| (if (c == .string) c.string else "") else "";
                 if (body.len == 0) continue;
                 preview = flattenPreview(body, &preview_buf);
+                preview_owned = alloc.dupe(u8, preview.?) catch null;
             }
         } else |_| {}
 
@@ -819,13 +1080,11 @@ pub const Session = struct {
         return null;
     }
 
-    /// 载入全部消息。
-    pub fn loadMessages(self: *Session) ![]ai.Message {
-        var out = std.array_list.Managed(ai.Message).init(self.alloc);
-        const content = std.Io.Dir.cwd().readFileAlloc(util.io, self.path, self.alloc, .limited(16 * 1024 * 1024)) catch return &.{};
-        defer self.alloc.free(content);
+    /// 解析消息行(跳过 skip_first 行),追加到 out。恢复 seq/last_id;统计
+    /// preview/turns(镜像缺失时兜底,载完由调用方落镜像升级 v1→v2)。
+    fn parseMessageLines(self: *Session, content: []const u8, skip_first: bool, out: *std.array_list.Managed(ai.Message)) !void {
         var lines = std.mem.splitScalar(u8, content, '\n');
-        var first = true;
+        var first = skip_first;
         while (lines.next()) |line| {
             if (line.len == 0) continue;
             if (first) {
@@ -885,8 +1144,47 @@ pub const Session = struct {
                 if (r == .bool) msg.thinking_redacted = r.bool;
             }
             applyImageFields(self.alloc, v, &msg);
+            // preview/turns 统计(镜像兜底)
+            if (std.mem.eql(u8, role, "user")) {
+                if (self.preview == null and content_str.len > 0) {
+                    const p = util.clampUtf8(content_str, 60);
+                    if (p.len > 0) self.preview = try self.alloc.dupe(u8, p);
+                }
+                self.turns += 1;
+            }
             try out.append(msg);
         }
+    }
+
+    /// 载入消息(超限尾窗 + 折叠锚)。见 loadSessionWindow。
+    pub fn loadMessages(self: *Session) ![]ai.Message {
+        var out = std.array_list.Managed(ai.Message).init(self.alloc);
+        const w = try loadSessionWindow(self.alloc, self.path, SESSION_FULL_LIMIT, SESSION_TAIL_BYTES);
+        defer if (w.meta_line) |ml| self.alloc.free(ml);
+        try self.parseMessageLines(w.body, false, &out);
+        if (w.folded) {
+            // 折叠锚置首(在最前):历史被省,模型需知
+            var anchored = std.array_list.Managed(ai.Message).init(self.alloc);
+            try anchored.append(.{
+                .role = "system",
+                .content = try std.fmt.allocPrint(self.alloc, "[会话历史折叠] 当前上下文仅含本会话近尾内容(前文未载入,完整历史在会话文件中)。如需完整历史重新载入,请直接引用旧会话。", .{}),
+            });
+            try anchored.appendSlice(out.items);
+            out = anchored;
+        }
+        // v1 旧档升级:载入后补镜像(preview/turns 已统计)
+        if (!self.mirror and self.meta_written) {
+            self.writeMirror() catch |err| util.debugCatch("session.mirror.bootstrap", err);
+        }
+        return out.toOwnedSlice();
+    }
+
+    /// 全量载入(带 meta 行解析;loadMessages 尾窗版用 body 流)。
+    pub fn loadAllMessages(self: *Session) ![]ai.Message {
+        const content = std.Io.Dir.cwd().readFileAlloc(util.io, self.path, self.alloc, .limited(64 * 1024 * 1024)) catch return error.InvalidSession;
+        defer self.alloc.free(content);
+        var out = std.array_list.Managed(ai.Message).init(self.alloc);
+        try self.parseMessageLines(content, true, &out);
         return out.toOwnedSlice();
     }
 

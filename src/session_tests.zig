@@ -540,3 +540,90 @@ test "deriveTitle takes first line and clamps" {
     const clipped = deriveTitle(a, long) orelse return error.NoTitle;
     try t.expect(clipped.len <= 64);
 }
+
+test "session window: tail-only load for oversized file" {
+    const t = std.testing;
+    var arena = util.Arena.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cwd_abs = try std.process.currentPathAlloc(util.io, a);
+    const tmp_path = try std.fmt.allocPrint(a, "{s}/.zig-cache/tmp/wintest", .{cwd_abs});
+    try util.environ_map.?.put("PIZ_DIR", tmp_path);
+    const dir = try util.configDir(a);
+    _ = dir;
+    const path = try std.fmt.allocPrint(a, "{s}/big.jsonl", .{tmp_path});
+    std.Io.Dir.cwd().createDirPath(util.io, tmp_path) catch {};
+    // 首行 meta + 70 条消息行(每行 6KB)→ 文件 ~420KB
+    {
+        var f = try std.Io.Dir.cwd().createFile(util.io, path, .{ .truncate = true });
+        defer f.close(util.io);
+        var wbuf: [4096]u8 = undefined;
+        var w = f.writer(util.io, &wbuf);
+        try w.interface.writeAll("{\"cwd\":\"/x\",\"started\":1}\n");
+        const filler = "y" ** 6000;
+        for (0..70) |i| {
+            try w.interface.print("{{\"role\":\"user\",\"content\":\"{d}:{s}\"}}\n", .{ i, filler[0..2000] });
+        }
+        try w.interface.flush();
+    }
+    const st = try std.Io.Dir.cwd().statFile(util.io, path, .{});
+    try t.expect(st.size > 300 * 1024);
+    // 全载限 300KB,尾窗 100KB → 应折叠
+    const w = try sess.loadSessionWindow(a, path, 300 * 1024, 100 * 1024);
+    try t.expect(w.folded);
+    try t.expect(w.meta_line != null);
+    try t.expect(w.body.len > 0);
+    try t.expect(w.body.len < 200 * 1024);
+    // 行边界:body 第一条必须是合法 JSON(完整行)
+    var lines = std.mem.splitScalar(u8, w.body, '\n');
+    const first = lines.next() orelse return error.NoLine;
+    const parsed = std.json.parseFromSliceLeaky(std.json.Value, a, first, .{}) catch return error.BadLine;
+    try t.expect(parsed == .object);
+    // 小文件全载不折叠
+    const w2 = try sess.loadSessionWindow(a, path, 1024 * 1024, 100 * 1024);
+    try t.expect(!w2.folded);
+}
+
+fn mkMsg(_: std.mem.Allocator, role: []const u8, content: []const u8) ai.Message {
+    return .{ .role = role, .content = content };
+}
+
+test "web save appends; undo rewrites" {
+    const t = std.testing;
+    var arena = util.Arena.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cwd_abs = try std.process.currentPathAlloc(util.io, a);
+    const tmp_path = try std.fmt.allocPrint(a, "{s}/.zig-cache/tmp/webtest", .{cwd_abs});
+    try util.environ_map.?.put("PIZ_DIR", tmp_path);
+    var msgs = [_]ai.Message{ mkMsg(a, "user", "a"), mkMsg(a, "assistant", "b"), mkMsg(a, "user", "c") };
+    try sess.saveWebTs(a, "/work", "s1", "m1", false, "t", &msgs, 100);
+    // 追加 2 条(消息变多 → append)
+    var msgs2 = [_]ai.Message{ mkMsg(a, "user", "a"), mkMsg(a, "assistant", "b"), mkMsg(a, "user", "c"), mkMsg(a, "assistant", "d"), mkMsg(a, "user", "e") };
+    try sess.saveWebTs(a, "/work", "s1", "m1", false, "t", &msgs2, 200);
+    const dir = try sess.webDir(a, "/work");
+    defer a.free(dir);
+    const path = try std.fmt.allocPrint(a, "{s}/s1.jsonl", .{dir});
+    // 1 meta + 5 消息(追加生效,非重写)
+    {
+        var n: usize = 0;
+        const content = try std.Io.Dir.cwd().readFileAlloc(util.io, path, a, .limited(10 * 1024 * 1024));
+        var lines = std.mem.splitScalar(u8, content, '\n');
+        while (lines.next()) |l| {
+            if (l.len > 0) n += 1;
+        }
+        try t.expectEqual(@as(usize, 6), n);
+    }
+    // undo:回到 2 条(消息变短 → 重写)
+    var msgs3 = [_]ai.Message{ mkMsg(a, "user", "a"), mkMsg(a, "assistant", "b") };
+    try sess.saveWebTs(a, "/work", "s1", "m1", false, "t", &msgs3, 300);
+    {
+        var n: usize = 0;
+        const content = try std.Io.Dir.cwd().readFileAlloc(util.io, path, a, .limited(10 * 1024 * 1024));
+        var lines = std.mem.splitScalar(u8, content, '\n');
+        while (lines.next()) |l| {
+            if (l.len > 0) n += 1;
+        }
+        try t.expectEqual(@as(usize, 3), n);
+    }
+}
