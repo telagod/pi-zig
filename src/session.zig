@@ -550,7 +550,7 @@ pub fn loadSessionWindow(alloc: std.mem.Allocator, path: []const u8, full_limit:
     }
 
     if (len <= full_limit) {
-        const whole = try r.interface.readAlloc(alloc, @intCast(len + 1));
+        const whole = try r.interface.readAlloc(alloc, @intCast(len));
         var body: []u8 = whole;
         if (meta_line) |ml| {
             // 剥首行(逐字节定位;meta_line 长度即首行长度)
@@ -566,7 +566,7 @@ pub fn loadSessionWindow(alloc: std.mem.Allocator, path: []const u8, full_limit:
     // 尾窗:seek 到 len - tail(行边界修正:找窗口内首个 '\n' 后起)
     const start = len - @min(len, @as(u64, tail_bytes));
     try r.seekTo(start);
-    const win = try r.interface.readAlloc(alloc, @intCast(@min(len - start, @as(u64, tail_bytes) + 1)));
+    const win = try r.interface.readAlloc(alloc, @intCast(@min(len - start, @as(u64, tail_bytes))));
     const nl = std.mem.indexOfScalar(u8, win, '\n');
     const body = if (nl) |i|
         if (i + 1 <= win.len) win[i + 1 ..] else win
