@@ -609,6 +609,7 @@ pub const spawnWorker = app_worker.spawnWorker;
 const onAbort = app_worker.onAbort;
 const onDetach = app_worker.onDetach;
 const tuiOnAbort = app_worker.tuiOnAbort;
+const tuiOnConnect = app_worker.tuiOnConnect;
 const isQuit = app_worker.isQuit;
 
 pub const OutputFormat = runopts.OutputFormat;
@@ -742,6 +743,7 @@ pub fn runInteractive(alloc: std.mem.Allocator, cfg: *cfgmod.Config, cwd: []cons
         .on_subagent = tuiOnSubagent,
         .on_require_permission = tuiOnRequirePermission,
         .on_abort = tuiOnAbort,
+        .on_connect = tuiOnConnect,
     };
     app.perm.always.store(app.approval == .yolo, .release);
 

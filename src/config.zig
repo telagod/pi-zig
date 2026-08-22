@@ -1044,6 +1044,59 @@ pub const Config = struct {
                                 .subscription = if (p.object.get("subscription")) |sv| sv == .bool and sv.bool else false,
                             });
                         }
+                    } else if (provs == .array) {
+                        // 数组格式 {"providers": [{"name":..., ...}]}(pi 式 / 客手写)
+                        for (provs.array.items) |p| {
+                            if (p != .object) continue;
+                            const name = getStr(p, "name") orelse continue;
+                            const api_str = getStr(p, "api") orelse "openai-completions";
+                            const base_url = getStr(p, "baseUrl") orelse continue;
+                            const api_enum = if (std.mem.eql(u8, api_str, "anthropic-messages"))
+                                Api.anthropic_messages
+                            else if (std.mem.eql(u8, api_str, "openai-responses"))
+                                Api.openai_responses
+                            else
+                                Api.openai_completions;
+                            var models = std.array_list.Managed([]const u8).init(alloc);
+                            var metas = std.array_list.Managed(ModelMeta).init(alloc);
+                            var context_window: u32 = 0;
+                            if (jsonPick(p.object, &.{ "contextWindow", "context_window" })) |cw| {
+                                if (parsePositiveU32(cw)) |n| context_window = n;
+                            }
+                            if (p.object.get("models")) |ms| {
+                                if (ms == .array) {
+                                    for (ms.array.items) |m| {
+                                        if (m == .string) {
+                                            try models.append(m.string);
+                                            try metas.append(.{});
+                                        } else if (m == .object) {
+                                            if (m.object.get("id")) |id| {
+                                                if (id == .string) {
+                                                    try models.append(id.string);
+                                                    const meta = parseModelMeta(m.object);
+                                                    try metas.append(meta);
+                                                    if (meta.context_window > 0) {
+                                                        context_window = @max(context_window, meta.context_window);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            if (context_window == 0) context_window = DEFAULT_CONTEXT_WINDOW;
+                            try file_providers.append(.{
+                                .name = name,
+                                .api = api_enum,
+                                .base_url = base_url,
+                                .api_key = getStr(p, "apiKey"),
+                                .models = try models.toOwnedSlice(),
+                                .model_metas = try metas.toOwnedSlice(),
+                                .context_window = context_window,
+                                .compat = parseCompat(p.object),
+                                .subscription = if (p.object.get("subscription")) |sv| sv == .bool and sv.bool else false,
+                            });
+                        }
                     }
                 }
             }

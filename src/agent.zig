@@ -313,7 +313,9 @@ pub const AgentCallbacks = struct {
     /// 返回 true 时中断当前轮并保留 partial 文本。
     on_abort: ?*const fn (ctx: ?*anyopaque) bool = null,
     /// 流建立后通知(存 cur_stream,供中断 shutdown 打断阻塞读)
-    on_connect: ?*const fn (ctx: ?*anyopaque, stream: *httpcmod.Stream) void = null,
+    /// 连接建立后通知(fd 供中断 shutdown;时机=请求已发、响应头未回)。
+    /// 早于头读取 —— 服务器挂死时头永远不来,先前时机 Esc 无效(实机踩坑)。
+    on_connect: ?*const fn (ctx: ?*anyopaque, fd: std.posix.fd_t) void = null,
     /// 系统级告知:自愈动作、限额触顶等「agent 替用户做了什么」的说明。
     ///
     /// 独立于 on_text:那是模型的话,这是引擎的话。混在一起用户分不清
@@ -1055,6 +1057,7 @@ pub fn send(self: *Agent, user_text: []const u8) !ai.RunResult {
             }
             turn_count += 1;
             if (self.aborted.load(.acquire)) return error.Aborted;
+            util.debugLog("agent run: turn {d} start (key={s} url={s})", .{ turn_count, if (self.key) |k| k[0..@min(k.len, 4)] else "none", self.url });
             // 请求前自愈 + 落位:悬空 tool_calls(compact 折页/续载/任何来源)
             // 与待发图像帧在此收敛。帧必须置于 tool 段完整之后 —— 段中插
             // user 消息(快压帧/工具图片)即 DeepSeek 400「insufficient tool
@@ -1111,6 +1114,8 @@ pub fn send(self: *Agent, user_text: []const u8) !ai.RunResult {
                 tool_defs.items,
                 self.llmOpts(.{ .callbacks = cbs, .cache_key = self.cwd }),
             );
+            // 所有路径清 fd:防数字复用后误 shutdown 新连接(见 httpc.fd 注释)。
+            self.cur_stream_fd.store(-1, .release);
             if (result.aborted) {
                 // 中断:保留已生成 partial 文本,结束本轮(不再执行工具)
                 if (result.text.len > 0) {

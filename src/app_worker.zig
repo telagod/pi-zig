@@ -14,6 +14,7 @@ const sessionmod = @import("core").session;
 const toolsmod = @import("core").tools;
 const pluginsmod = @import("core").plugins;
 const pricing = @import("core").pricing;
+const httpc = @import("core").httpc;
 const tui_mod = @import("tui");
 const cmd_slash = @import("cmd_slash.zig");
 const main_mod = @import("main.zig");
@@ -415,6 +416,24 @@ pub fn tuiOnTick(ctx: ?*anyopaque) void {
     spawnWorker(app, owned, false);
 }
 
+/// 流建立后立刻把底层 fd 存进 agent(供 Esc 中断时 shutdown 打断阻塞读)。
+/// 键路:读阻塞 → 无人 shutdown → abort 标志无人检查 —— 实机 40 分钟卡死
+/// (满屏 interrupted,Working 0.0s)。
+/// 连接建立即登记 fd(供 Esc 中断时 shutdown 打断阻塞读)。
+/// 时机提前:响应头可能永远不来(服务器挂/代理黑洞),等头阶段就要能打断 ——
+/// 实机 40 分钟卡死(满屏 interrupted,Working 0.0s)就是登记太晚。
+pub fn tuiOnConnect(ctx: ?*anyopaque, fd: std.posix.fd_t) void {
+    const app: *App = @ptrCast(@alignCast(ctx orelse return));
+    app.agent.cur_stream_fd.store(@intCast(fd), .release);
+    util.debugLog("tuiOnConnect fd={d}", .{fd});
+}
+
+/// 流建立后清理(agent 已有完成路径;此处保险,防漏)。
+pub fn tuiOnDisconnect(ctx: ?*anyopaque) void {
+    const app: *App = @ptrCast(@alignCast(ctx orelse return));
+    app.agent.cur_stream_fd.store(-1, .release);
+}
+
 /// Ctrl+C:中止当前一轮。
 ///
 /// 三件事都要做,少一件用户就会觉得按了没反应:
@@ -426,6 +445,12 @@ pub fn onAbort(ctx: ?*anyopaque) void {
     app.abort.store(true, .release);
     app.agent.aborted.store(true, .release);
     const n = activity.cancelAll();
+    // 关键:阻塞中的网络读要立刻醒来。仅置标志是没用的 —— 流式主循环卡在
+    // read 上,永远到不了检查 abort 的那一行;shutdown 让 read 即刻返回错误,
+    // catch 里看到 abortRequested → 干净退出。
+    const fd = app.agent.cur_stream_fd.load(.acquire);
+    util.debugLog("onAbort fd={d}", .{fd});
+    if (fd >= 0) _ = std.posix.system.shutdown(@intCast(fd), 0);
     var buf: [96]u8 = undefined;
     const msg = if (n > 0)
         std.fmt.bufPrint(&buf, "interrupted — cancelling {d} running activity(s)", .{n}) catch "interrupted"

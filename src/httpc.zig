@@ -172,6 +172,8 @@ pub fn requestWithRetry(
     policy: RetryPolicy,
     abort_fn: ?AbortFn,
     abort_ctx: ?*anyopaque,
+    on_conn: ?*const fn (ctx: ?*anyopaque, fd: std.posix.fd_t) void,
+    on_conn_ctx: ?*anyopaque,
 ) !*Stream {
     var attempt: u8 = 0;
     // 登记活动:重试 + 退避最长能到约 90 秒,原先这段时间界面完全静止,
@@ -183,7 +185,7 @@ pub fn requestWithRetry(
             if (f(abort_ctx)) return error.Canceled;
         }
         act.attempt(@as(u32, attempt) + 1);
-        const maybe_stream = Stream.init(alloc, url, headers, body);
+        const maybe_stream = Stream.initConn(alloc, url, headers, body, on_conn, on_conn_ctx);
         if (maybe_stream) |stream| {
             const st = stream.status();
             // 成功或不可重试的错误码:直接交给调用方(它会解析 body 里的错误消息)
@@ -241,7 +243,17 @@ pub const Stream = struct {
         return initWith(alloc, url, headers, body, .POST);
     }
 
+    /// 同 initWith,但连接建立(flush 完、receiveHead 前)立即回调 fd。
+    /// 供中断方在「等响应头」阶段就能 shutdown —— 否则 Esc 无效。
+    pub fn initConn(alloc: std.mem.Allocator, url: []const u8, headers: []const Header, body: []const u8, on_conn: ?*const fn (ctx: ?*anyopaque, fd: std.posix.fd_t) void, on_conn_ctx: ?*anyopaque) !*Stream {
+        return initWithImpl(alloc, url, headers, body, .POST, on_conn, on_conn_ctx);
+    }
+
     pub fn initWith(alloc: std.mem.Allocator, url: []const u8, headers: []const Header, body: []const u8, method: std.http.Method) !*Stream {
+        return initWithImpl(alloc, url, headers, body, method, null, null);
+    }
+
+    pub fn initWithImpl(alloc: std.mem.Allocator, url: []const u8, headers: []const Header, body: []const u8, method: std.http.Method, on_conn: ?*const fn (ctx: ?*anyopaque, fd: std.posix.fd_t) void, on_conn_ctx: ?*anyopaque) !*Stream {
         const self = try alloc.create(Stream);
         errdefer alloc.destroy(self);
         self.* = .{ .alloc = alloc, .req = undefined, .response = undefined, .content_type = null, .retry_after = null, .reader = undefined };
@@ -278,6 +290,10 @@ pub const Stream = struct {
         try bw.writer.writeAll(body);
         try bw.end();
         try req.connection.?.flush();
+
+        // 连接已建、请求已发:此时就通知中断方(fd 登记),而非等响应头 ——
+        // 响应头可能永远不来(服务器挂/代理黑洞),等头阶段 Esc 必须能打断。
+        if (on_conn) |f| f(on_conn_ctx, req.connection.?.stream_reader.stream.socket.handle);
 
         var redirect_buf: [1024]u8 = undefined;
         const response = try req.receiveHead(&redirect_buf);

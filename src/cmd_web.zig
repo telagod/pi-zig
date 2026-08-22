@@ -461,9 +461,9 @@ fn webOnAbort(ctx: ?*anyopaque) bool {
     const s: *WebSession = @ptrCast(@alignCast(ctx.?));
     return s.agent.aborted.load(.acquire);
 }
-fn webOnConnect(ctx: ?*anyopaque, stream: *@import("core").httpc.Stream) void {
+fn webOnConnect(ctx: ?*anyopaque, fd: std.posix.fd_t) void {
     const s: *WebSession = @ptrCast(@alignCast(ctx.?));
-    s.agent.cur_stream_fd.store(stream.fd() orelse -1, .release);
+    s.agent.cur_stream_fd.store(@intCast(fd), .release);
 }
 
 fn poolSessionsHook(ctx: ?*anyopaque, cwd: []const u8, alloc: std.mem.Allocator) []const u8 {

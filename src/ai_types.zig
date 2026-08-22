@@ -1,6 +1,7 @@
 // ai_types.zig — shared provider types. Split from ai.zig so parsers can import without a cycle.
 const httpc = @import("httpc.zig");
 const cfgmod = @import("config.zig");
+const std = @import("std");
 
 pub const ThinkLevel = cfgmod.ThinkLevel;
 
@@ -59,7 +60,7 @@ pub const Callbacks = struct {
     on_text: ?*const fn (ctx: ?*anyopaque, text: []const u8) anyerror!void = null,
     on_reasoning: ?*const fn (ctx: ?*anyopaque, text: []const u8) anyerror!void = null,
     on_abort: ?*const fn (ctx: ?*anyopaque) bool = null,
-    on_connect: ?*const fn (ctx: ?*anyopaque, stream: *httpc.Stream) void = null,
+    on_connect: ?*const fn (ctx: ?*anyopaque, fd: std.posix.fd_t) void = null,
 };
 
 pub const Options = struct {

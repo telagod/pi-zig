@@ -194,6 +194,17 @@ pub fn run(
     // 重试窗口仅覆盖此处:连接 + receiveHead + 状态码判定。
     // 一旦往下走进流式读取(向 out_text 累积 / 触发 on_text),就绝不能重试 ——
     // 否则用户会看到重复输出。requestWithRetry 内部同样只在返回前重试。
+    // 连接建立回调：把 httpc 的 fd 通知直接转成 ai.Callbacks.on_connect。
+    // 时机提前到「连接建立、请求已发」—— receiveHead 可能永远不来(服务器
+    // 挂死),那之前就必须让中断方拿到 fd。
+    const FdWrap = struct {
+        cbs: *const Callbacks,
+        fn tramp(ctx: ?*anyopaque, fd: std.posix.fd_t) void {
+            const p: *const @This() = @ptrCast(@alignCast(ctx.?));
+            if (p.cbs.on_connect) |f| f(p.cbs.ctx, fd);
+        }
+    };
+    var fdwrap = FdWrap{ .cbs = &options.callbacks };
     var stream = httpc.requestWithRetry(
         alloc,
         url,
@@ -202,6 +213,8 @@ pub fn run(
         options.retry_policy,
         if (options.callbacks.on_abort) |_| abortTrampoline else null,
         @ptrCast(@constCast(&options.callbacks)),
+        FdWrap.tramp,
+        &fdwrap,
     ) catch |err| {
         if (err == error.Canceled) {
             result.aborted = true;
@@ -211,8 +224,6 @@ pub fn run(
         return result;
     };
     defer stream.deinit();
-    // 通知中断方持有流(供 shutdown 打断阻塞读)
-    if (options.callbacks.on_connect) |f| f(options.callbacks.ctx, stream);
 
     const status = stream.status();
     if (status >= 400) {
