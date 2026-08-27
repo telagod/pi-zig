@@ -812,7 +812,8 @@ test "stubToolResults keeps tool_calls pairing intact" {
                     while (j < agent.messages.items.len) : (j += 1) {
                         const r = agent.messages.items[j];
                         if (std.mem.eql(u8, r.role, "tool") and r.tool_call_id != null and
-                            std.mem.eql(u8, r.tool_call_id.?, tc.id)) {
+                            std.mem.eql(u8, r.tool_call_id.?, tc.id))
+                        {
                             found = true;
                             break;
                         }

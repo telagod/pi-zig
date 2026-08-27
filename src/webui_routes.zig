@@ -485,11 +485,11 @@ pub fn evolveSink(self: *WebServer, req: *http.Server.Request) !void {
             }
             if (jsonStr(root, "msg")) |v| {
                 wr.writeAll(",\"msg\":") catch {};
-                wr.print("{s}", .{try util.jsonString(self.alloc, v[0..@min(v.len, 1200)] )}) catch {};
+                wr.print("{s}", .{try util.jsonString(self.alloc, v[0..@min(v.len, 1200)])}) catch {};
             }
             if (jsonStr(root, "stack")) |v| {
                 wr.writeAll(",\"stack\":") catch {};
-                wr.print("{s}", .{try util.jsonString(self.alloc, v[0..@min(v.len, 3000)] )}) catch {};
+                wr.print("{s}", .{try util.jsonString(self.alloc, v[0..@min(v.len, 3000)])}) catch {};
             }
             if (jsonStr(root, "session")) |v| {
                 wr.writeAll(",\"session\":") catch {};

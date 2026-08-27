@@ -876,77 +876,77 @@ pub const Agent = struct {
     }
 
     /// 发送前自愈:扫描历史,若 assistant(tool_calls) 后有缺失的 role=tool 配对
-/// (旧版本缺陷已写盘的会话、或续载的外部历史),就地补齐占位结果。
-/// 否则 OpenAI 兼容端每条请求都 400 'insufficient tool messages'。
-fn repairPairing(self: *Agent) !void {
-    var i: usize = 0;
-    while (i < self.messages.items.len) : (i += 1) {
-        const m = self.messages.items[i];
-        if (!std.mem.eql(u8, m.role, "assistant")) continue;
-        const tcs = m.tool_calls orelse continue;
-        var stub = std.array_list.Managed(ai.ToolCall).init(self.alloc);
-        for (tcs) |tc| {
-            var found = false;
-            var j = i + 1;
-            while (j < self.messages.items.len) : (j += 1) {
-                const r = self.messages.items[j];
-                if (!std.mem.eql(u8, r.role, "tool")) continue;
-                if (r.tool_call_id != null and std.mem.eql(u8, r.tool_call_id.?, tc.id)) {
-                    found = true;
-                    break;
+    /// (旧版本缺陷已写盘的会话、或续载的外部历史),就地补齐占位结果。
+    /// 否则 OpenAI 兼容端每条请求都 400 'insufficient tool messages'。
+    fn repairPairing(self: *Agent) !void {
+        var i: usize = 0;
+        while (i < self.messages.items.len) : (i += 1) {
+            const m = self.messages.items[i];
+            if (!std.mem.eql(u8, m.role, "assistant")) continue;
+            const tcs = m.tool_calls orelse continue;
+            var stub = std.array_list.Managed(ai.ToolCall).init(self.alloc);
+            for (tcs) |tc| {
+                var found = false;
+                var j = i + 1;
+                while (j < self.messages.items.len) : (j += 1) {
+                    const r = self.messages.items[j];
+                    if (!std.mem.eql(u8, r.role, "tool")) continue;
+                    if (r.tool_call_id != null and std.mem.eql(u8, r.tool_call_id.?, tc.id)) {
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found and tc.id.len > 0) {
+                    try stub.append(tc);
                 }
             }
-            if (!found and tc.id.len > 0) {
-                try stub.append(tc);
-            }
-        }
-        if (stub.items.len > 0) {
-            // 插到该 assistant 之后(保持配对相邻;append 尾部会让夹在中间的
-            // user 消息破坏「assistant(tool_calls) → tool 结果」的序,部分实现
-            // 仍会拒)。
-            const hint = "(this tool call was not executed — see the notice above; use the earlier result or answer directly)";
-            var k: usize = 0;
-            for (stub.items) |tc| {
-                try self.messages.insert(i + 1 + k, .{ .role = "tool", .content = hint, .tool_call_id = tc.id });
-                k += 1;
+            if (stub.items.len > 0) {
+                // 插到该 assistant 之后(保持配对相邻;append 尾部会让夹在中间的
+                // user 消息破坏「assistant(tool_calls) → tool 结果」的序,部分实现
+                // 仍会拒)。
+                const hint = "(this tool call was not executed — see the notice above; use the earlier result or answer directly)";
+                var k: usize = 0;
+                for (stub.items) |tc| {
+                    try self.messages.insert(i + 1 + k, .{ .role = "tool", .content = hint, .tool_call_id = tc.id });
+                    k += 1;
+                }
             }
         }
     }
-}
 
-/// 发送前自愈(测试入口)。
-pub fn repairPairingForTest(agent: *Agent) !void {
-    try repairPairing(agent);
-}
-
-/// 暂存图像消息(快压帧/工具图片):回合内先挂起,回合末统一落位。
-fn queuePending(self: *Agent, m: ai.Message) !void {
-    if (self.pending_imgs == null) {
-        self.pending_imgs = std.array_list.Managed(ai.Message).init(self.alloc);
+    /// 发送前自愈(测试入口)。
+    pub fn repairPairingForTest(agent: *Agent) !void {
+        try repairPairing(agent);
     }
-    try self.pending_imgs.?.append(m);
-}
 
-/// 回合结束:把暂存的图像消息 append 到历史尾部(user 帧,不破坏 tool 配对流)。
-fn flushPendingImgs(self: *Agent) void {
-    const l = self.pending_imgs orelse return;
-    for (l.items) |m| {
-        self.messages.append(m) catch break;
+    /// 暂存图像消息(快压帧/工具图片):回合内先挂起,回合末统一落位。
+    fn queuePending(self: *Agent, m: ai.Message) !void {
+        if (self.pending_imgs == null) {
+            self.pending_imgs = std.array_list.Managed(ai.Message).init(self.alloc);
+        }
+        try self.pending_imgs.?.append(m);
     }
-    self.pending_imgs = null;
-    l.deinit();
-}
 
-/// 测试入口。
-pub fn flushImgsForTest(agent: *Agent) !void {
-    agent.flushPendingImgs();
-}
+    /// 回合结束:把暂存的图像消息 append 到历史尾部(user 帧,不破坏 tool 配对流)。
+    fn flushPendingImgs(self: *Agent) void {
+        const l = self.pending_imgs orelse return;
+        for (l.items) |m| {
+            self.messages.append(m) catch break;
+        }
+        self.pending_imgs = null;
+        l.deinit();
+    }
 
-pub fn queuePendingForTest(agent: *Agent, m: ai.Message) !void {
-    try queuePending(agent, m);
-}
+    /// 测试入口。
+    pub fn flushImgsForTest(agent: *Agent) !void {
+        agent.flushPendingImgs();
+    }
 
-pub fn send(self: *Agent, user_text: []const u8) !ai.RunResult {
+    pub fn queuePendingForTest(agent: *Agent, m: ai.Message) !void {
+        try queuePending(agent, m);
+    }
+
+    pub fn send(self: *Agent, user_text: []const u8) !ai.RunResult {
         return self.sendWithImage(user_text, null, "");
     }
 

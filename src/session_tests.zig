@@ -187,7 +187,8 @@ test "session title + list + setTitle" {
     // 中文不能切在多字节序列中间 —— 那样读回来是非法 UTF-8,JSON 也就坏了
     try s1.setTitle("标题" ** 500);
     const zh = (try Session.open(a, s1.path)).title.?;
-    try t.expect(zh.len <= MAX_TITLE_BYTES);    try t.expect(std.unicode.utf8ValidateSlice(zh));
+    try t.expect(zh.len <= MAX_TITLE_BYTES);
+    try t.expect(std.unicode.utf8ValidateSlice(zh));
 
     // 上限内原样保留
     try s1.setTitle("正常标题");

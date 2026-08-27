@@ -69,7 +69,8 @@ const TaskSlot = struct {
     /// 活动名(workflow 传节点 id;空则 "task N")
     name: []const u8 = "",
     /// 摘要源(workflow 传节点 task;空则用 desc 首段)
-    brief: []const u8 = "",    read_only: bool = false,
+    brief: []const u8 = "",
+    read_only: bool = false,
     child_plugins: u16 = 0,
     tool_allow: []const []const u8 = &.{},
 
