@@ -22,11 +22,7 @@ const usage =
 ;
 
 /// 内置 provider 表(选择器排序;models.json 里配置过的会追加)。
-const builtin = [_]struct {
-    name: []const u8,
-    oauth: bool, // 订阅/OAuth 可用(在 web UI)
-    note: []const u8,
-}{
+const builtin = [_]BuiltinProvider{
     .{ .name = "openai", .oauth = true, .note = "Codex 订阅(OAuth)或 API key" },
     .{ .name = "anthropic", .oauth = false, .note = "API key" },
     .{ .name = "xai", .oauth = true, .note = "Grok 订阅(web)或 API key" },
@@ -40,6 +36,18 @@ const builtin = [_]struct {
     .{ .name = "moonshotai", .oauth = false, .note = "API key" },
     .{ .name = "zai", .oauth = false, .note = "API key" },
 };
+
+/// TUI /login 选择器用:内置表条目(name/note/oauth 能力)。
+pub const BuiltinProvider = struct { name: []const u8, oauth: bool, note: []const u8 };
+pub const builtinProviders: []const BuiltinProvider = &builtin;
+
+/// provider 是否支持订阅/OAuth(指路 web UI)。
+pub fn providerOAuth(name: []const u8) bool {
+    for (builtin) |b| {
+        if (std.mem.eql(u8, b.name, name)) return b.oauth;
+    }
+    return false;
+}
 
 fn inTable(name: []const u8) bool {
     for (builtin) |b| {

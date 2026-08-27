@@ -243,3 +243,56 @@ pub fn openResumePicker(app: *App) void {
     }
     tuiOk("tui.picker", app.tui.openPicker("resume", "sessions", items.items, sel));
 }
+// ---- /login 交互登录:provider 选择器 → 凭据方式分流 → 掩码收 key ----
+// cmd_login.zig 的 builtin 表与 providerOAuth 是数据源;已配置的标 ✓。
+
+/// provider 是否已配置凭据(cfg.providers 里 api_key 非空)。
+fn providerConfigured(app: *App, name: []const u8) bool {
+    for (app.cfg.providers) |p| {
+        if (std.mem.eql(u8, p.name, name)) {
+            if (p.api_key) |k| return k.len > 0;
+            return false;
+        }
+    }
+    return false;
+}
+
+pub fn openLoginPicker(app: *App) void {
+    const loginmod = @import("cmd_login.zig");
+    var items = std.array_list.Managed(tui_mod.PickerItem).init(app.alloc);
+    var sel: usize = 0;
+    for (loginmod.builtinProviders, 0..) |b, i| {
+        const mark = if (providerConfigured(app, b.name)) " ✓" else "";
+        const label = std.fmt.allocPrint(app.alloc, "{s}{s}", .{ b.name, mark }) catch b.name;
+        const hint = std.fmt.allocPrint(app.alloc, "{s}{s}", .{ b.note, if (b.oauth) " · 订阅走 web" else "" }) catch b.note;
+        items.append(.{ .label = label, .hint = hint, .value = b.name }) catch continue;
+        if (std.mem.eql(u8, b.name, app.agent.provider.name)) sel = i;
+    }
+    // models.json 里配置过但不在内置表的,追加在尾
+    for (app.cfg.providers) |p| {
+        var known = false;
+        for (loginmod.builtinProviders) |b| {
+            if (std.mem.eql(u8, b.name, p.name)) {
+                known = true;
+                break;
+            }
+        }
+        if (known) continue;
+        const mark = if (providerConfigured(app, p.name)) " ✓" else "";
+        const label = std.fmt.allocPrint(app.alloc, "{s}{s}", .{ p.name, mark }) catch p.name;
+        items.append(.{ .label = label, .hint = "自定义 provider", .value = p.name }) catch continue;
+    }
+    if (items.items.len == 0) return;
+    tuiOk("picker.login", app.tui.openPicker("login", "login — 选择 provider", items.items, sel));
+}
+
+/// 凭据方式分流:OAuth 可用的给两个选项(confirm 落 /login <name> --apikey|--oauth)。
+pub fn openLoginMethodPicker(app: *App, provider: []const u8) void {
+    const api_label = std.fmt.allocPrint(app.alloc, "{s} --apikey", .{provider}) catch return;
+    const oauth_label = std.fmt.allocPrint(app.alloc, "{s} --oauth", .{provider}) catch return;
+    const items = [_]tui_mod.PickerItem{
+        .{ .label = "API key", .hint = "掩码输入,写 auth.json", .value = api_label },
+        .{ .label = "订阅 / OAuth", .hint = "piz web → Settings → Account", .value = oauth_label },
+    };
+    tuiOk("picker.login2", app.tui.openPicker("login", "login — 凭据方式", &items, 0));
+}

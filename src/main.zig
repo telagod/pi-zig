@@ -371,6 +371,10 @@ pub const openThinkPicker = app_pickers.openThinkPicker;
 pub const refreshProviderModels = app_pickers.refreshProviderModels;
 pub const openModelPicker = app_pickers.openModelPicker;
 pub const openResumePicker = app_pickers.openResumePicker;
+pub const openLoginPicker = app_pickers.openLoginPicker;
+pub const openLoginMethodPicker = app_pickers.openLoginMethodPicker;
+pub const saveLogin = app_worker.saveLogin;
+pub const logoutLogin = app_worker.logoutLogin;
 
 pub fn tuiOk(comptime where: []const u8, result: anyerror!void) void {
     result catch |err| util.debugCatch(where, err);
@@ -637,12 +641,9 @@ pub fn runInteractive(alloc: std.mem.Allocator, cfg: *cfgmod.Config, cwd: []cons
 
     // agent
     var agent = try agentmod.Agent.initOpts(alloc, cfg, opts.provider_name, opts.model_name, abs_cwd, .{ .read_only = opts.read_only, .system_override = opts.system_override, .depth = pluginsmod.processBaseDepth() });
-    if (agent.key == null) {
-        var up: [64]u8 = undefined;
-        const upname = std.ascii.upperString(up[0..@min(agent.provider.name.len, 63)], agent.provider.name);
-        std.debug.print("piz: no API key for provider '{s}'. Set ~/.piz/auth.json, models.json apiKey, or {s}_API_KEY env.\n", .{ agent.provider.name, upname });
-        std.process.exit(1);
-    }
+    // 无 key 不再拒启:进 TUI,首条消息才会撞 401;/login 交互收 key 热生效。
+    // (原 exit(1) 与 /login 互成死锁:没 key 进不了 TUI,进不了 TUI 就没法 /login)
+    const no_key_at_start = agent.key == null;
     const loaded = try sess.loadMessages();
     try agent.messages.appendSlice(loaded);
 
@@ -757,6 +758,14 @@ pub fn runInteractive(alloc: std.mem.Allocator, cfg: *cfgmod.Config, cwd: []cons
 
     showWelcome(&app, loaded.len);
     replayTranscript(&tui, loaded);
+    if (no_key_at_start) {
+        var up: [64]u8 = undefined;
+        const upname = std.ascii.upperString(up[0..@min(agent.provider.name.len, 63)], agent.provider.name);
+        var bw = std.Io.Writer.Allocating.init(alloc);
+        defer bw.deinit();
+        tuiOk("tui.wr", bw.writer.print("no API key for {s} — /login 交互配置,或写 ~/.piz/auth.json / {s}_API_KEY", .{ agent.provider.name, upname }));
+        tuiNote(&app, "\x1b[33m", bw.written());
+    }
     // 欢迎卡已画(cells 非空)就不再多注一行引路:Recent sessions 已在卡里。
     if (loaded.len == 0 and opts.session_id == null and !opts.continue_session and tui.cells.items.len == 0) {
         // 新会话起手若有旧事可续,注一行引路(pi 极简:一句 dim,不摊两行)
@@ -786,6 +795,7 @@ pub fn runInteractive(alloc: std.mem.Allocator, cfg: *cfgmod.Config, cwd: []cons
         .on_doctor = tuiOnDoctor,
         .on_diff = tuiOnDiff,
         .on_log = tuiOnLog,
+        .on_secret = app_worker.onSecretLogin,
         .ctx = &app,
     });
 

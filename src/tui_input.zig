@@ -11,7 +11,8 @@ const wrapCursor = emit.wrapCursor;
 const wrapMoveVertical = emit.wrapMoveVertical;
 
 const Tui = tui.Tui;
-pub const Action = union(enum) { none, quit, abort, detach, submit: []const u8, think, copy, sandbox, jobs, usage, redo, doctor, diff, log };
+pub const SecretSubmit = struct { provider: []const u8, key: []const u8 };
+pub const Action = union(enum) { none, quit, abort, detach, submit: []const u8, secret: SecretSubmit, think, copy, sandbox, jobs, usage, redo, doctor, diff, log };
 const WheelDir = keys.WheelDir;
 const SlashRank = slash.SlashRank;
 const slashName = slash.slashName;
@@ -75,6 +76,24 @@ pub fn takePendingImage(self: *Tui) ?PendingImage {
 }
 
 pub fn takeSubmit(self: *Tui) !Action {
+    // 掩码密钥输入:整体截胡(不走 slash/历史/回显)
+    if (self.pending_secret) |provider| {
+        if (self.input.items.len == 0) return .none; // 空 key 不提交,Esc 取消
+        // provider 名义上转移给 Action(调用方用完不管——arena 无所谓,
+        // 测试分配器靠 deinit 兜底)——不行,直接复制一份给 Action,旧的现在就放
+        const s = SecretSubmit{ .provider = try self.alloc.dupe(u8, provider), .key = try self.alloc.dupe(u8, self.input.items) };
+        self.alloc.free(provider);
+        self.pending_secret = null;
+        self.input.clearRetainingCapacity();
+        self.cursor = 0;
+        self.hist_idx = null;
+        self.slash_sel = 0;
+        self.disarmQuit();
+        self.esc_armed = false;
+        self.shortcuts_open = false;
+        self.dirty.store(true, .release);
+        return .{ .secret = s };
+    }
     if (self.input.items.len == 0 and self.pending_image == null) return .none;
     const line = if (slashSubmitLine(self)) |picked|
         picked
@@ -301,6 +320,12 @@ pub fn handleInput(self: *Tui, bytes: []const u8) !Action {
                 self.cycleThink(true);
                 return .think;
             }
+            if (self.pending_secret != null) {
+                // 掩码输入中:Esc = 取消登录提示,不触发 abort/quit
+                self.cancelSecret();
+                i += 1;
+                continue;
+            }
             if (streaming) return .abort;
             if (self.input.items.len == 0) {
                 if (self.esc_armed) {
@@ -433,63 +458,63 @@ pub fn handleInput(self: *Tui, bytes: []const u8) !Action {
                 }
             },
             'g', 'G' => {
-                if (self.input.items.len == 0 and !streaming) {
+                if (self.input.items.len == 0 and !streaming and self.pending_secret == null) {
                     return .diff;
                 } else {
                     try insertByte(self, b);
                 }
             },
             'l', 'L' => {
-                if (self.input.items.len == 0 and !streaming) {
+                if (self.input.items.len == 0 and !streaming and self.pending_secret == null) {
                     return .log;
                 } else {
                     try insertByte(self, b);
                 }
             },
             'd', 'D' => {
-                if (self.input.items.len == 0 and !streaming) {
+                if (self.input.items.len == 0 and !streaming and self.pending_secret == null) {
                     return .doctor;
                 } else {
                     try insertByte(self, b);
                 }
             },
             'r', 'R' => {
-                if (self.input.items.len == 0 and !streaming) {
+                if (self.input.items.len == 0 and !streaming and self.pending_secret == null) {
                     return .redo;
                 } else {
                     try insertByte(self, b);
                 }
             },
             'u', 'U' => {
-                if (self.input.items.len == 0 and !streaming) {
+                if (self.input.items.len == 0 and !streaming and self.pending_secret == null) {
                     return .usage;
                 } else {
                     try insertByte(self, b);
                 }
             },
             'j', 'J' => {
-                if (self.input.items.len == 0 and !streaming) {
+                if (self.input.items.len == 0 and !streaming and self.pending_secret == null) {
                     return .jobs;
                 } else {
                     try insertByte(self, b);
                 }
             },
             's', 'S' => {
-                if (self.input.items.len == 0 and !streaming) {
+                if (self.input.items.len == 0 and !streaming and self.pending_secret == null) {
                     return .sandbox;
                 } else {
                     try insertByte(self, b);
                 }
             },
             'c', 'C' => {
-                if (self.input.items.len == 0 and !streaming) {
+                if (self.input.items.len == 0 and !streaming and self.pending_secret == null) {
                     return .copy;
                 } else {
                     try insertByte(self, b);
                 }
             },
             '?' => {
-                if (self.input.items.len == 0 and !streaming) {
+                if (self.input.items.len == 0 and !streaming and self.pending_secret == null) {
                     self.shortcuts_open = !self.shortcuts_open;
                     self.dirty.store(true, .release);
                 } else {

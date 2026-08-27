@@ -192,7 +192,8 @@ pub fn workerMain(wctx: *WorkerCtx) void {
 
 pub fn onSubmit(tui: *tui_mod.Tui, line: []const u8) anyerror!void {
     const app: *App = @ptrCast(@alignCast(tui.ctx orelse return));
-    app.tui.addHistory(line);
+    // /login /logout 可能带明文 key —— 不落 history.txt(掩码路径走 Action.secret,本就不经此)
+    if (!std.mem.startsWith(u8, line, "/login") and !std.mem.startsWith(u8, line, "/logout")) app.tui.addHistory(line);
     // 斜杠命令
     if (line.len > 0 and line[0] == '/') {
         const cmd = line[1..];
@@ -331,6 +332,76 @@ pub fn spawnWorker(app: *App, line: []const u8, is_compact: bool) void {
     };
     app.worker = thread;
     // 不 join:主循环退出时统一处理
+}
+
+// ---- /login 交互登录:落 auth.json + 热刷内存(当前 provider 立即生效,不重启) ----
+
+/// 写凭据并热更内存(cfg.providers 与 agent.key)。/login <name> <key> 与掩码提交共用。
+pub fn saveLogin(app: *App, name: []const u8, key: []const u8) void {
+    const key_t = std.mem.trim(u8, key, " \t\r\n");
+    if (key_t.len == 0) {
+        tuiNote(app, "\x1b[31m", "login failed: empty key");
+        return;
+    }
+    app.cfg.saveAuth(name, key_t) catch |e| {
+        var bw = std.Io.Writer.Allocating.init(app.alloc);
+        defer bw.deinit();
+        tuiOk("tui.wr", bw.writer.print("login failed: {s}", .{@errorName(e)}));
+        tuiNote(app, "\x1b[31m", bw.written());
+        return;
+    };
+    for (app.cfg.providers) |*p| {
+        if (std.mem.eql(u8, p.name, name)) {
+            p.api_key = app.alloc.dupe(u8, key_t) catch p.api_key;
+        }
+    }
+    // 当前 provider 直接换 key:不用重启即生效(agent.key 是会话开局解析的)
+    if (std.mem.eql(u8, app.agent.provider.name, name)) {
+        app.agent.key = app.alloc.dupe(u8, key_t) catch app.agent.key;
+    }
+    var bw = std.Io.Writer.Allocating.init(app.alloc);
+    defer bw.deinit();
+    const cur = if (std.mem.eql(u8, app.agent.provider.name, name)) "(当前 provider,已热生效)" else "";
+    tuiOk("tui.wr", bw.writer.print("saved {s} in auth.json {s}", .{ name, cur }));
+    tuiNote(app, "\x1b[2m", bw.written());
+    app.refreshFooter();
+}
+
+/// /logout <name>|--all:清凭据;当前 provider 的 agent.key 一并清。
+pub fn logoutLogin(app: *App, rest: []const u8) void {
+    if (std.mem.eql(u8, rest, "--all")) {
+        app.cfg.clearAuthAll() catch |e| {
+            tuiNote(app, "\x1b[31m", @errorName(e));
+            return;
+        };
+        for (app.cfg.providers) |*p| p.api_key = null;
+        app.agent.key = null;
+        tuiNote(app, "\x1b[2m", "cleared all credentials in auth.json");
+        app.refreshFooter();
+        return;
+    }
+    app.cfg.clearAuth(rest) catch |e| {
+        var bw = std.Io.Writer.Allocating.init(app.alloc);
+        defer bw.deinit();
+        tuiOk("tui.wr", bw.writer.print("logout failed: {s}", .{@errorName(e)}));
+        tuiNote(app, "\x1b[31m", bw.written());
+        return;
+    };
+    for (app.cfg.providers) |*p| {
+        if (std.mem.eql(u8, p.name, rest)) p.api_key = null;
+    }
+    if (std.mem.eql(u8, app.agent.provider.name, rest)) app.agent.key = null;
+    var bw = std.Io.Writer.Allocating.init(app.alloc);
+    defer bw.deinit();
+    tuiOk("tui.wr", bw.writer.print("cleared {s} from auth.json", .{rest}));
+    tuiNote(app, "\x1b[2m", bw.written());
+    app.refreshFooter();
+}
+
+/// 掩码输入提交回调(tui Action.secret → 这里;绕开 on_submit,不进历史/回显)。
+pub fn onSecretLogin(ctx: ?*anyopaque, provider: []const u8, key: []const u8) void {
+    const app: *App = @ptrCast(@alignCast(ctx orelse return));
+    saveLogin(app, provider, key);
 }
 
 // ---- !cmd / !!cmd:bash 进独立线程,主线程不再冻结 ----

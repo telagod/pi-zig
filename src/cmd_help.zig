@@ -153,7 +153,8 @@ pub const HelpItem = tui_mod.SlashItem;
 /// main 有测试盯着这份表与实际分发的一致性。TUI slash picker ranks this table.
 pub const SLASH_ITEMS = [_]HelpItem{
     .{ .cmd = "/help", .desc = "list commands" },
-    .{ .cmd = "/login", .desc = "save API key (piz login)" },
+    .{ .cmd = "/login", .desc = "provider picker → masked key (or /login p <key>)" },
+    .{ .cmd = "/logout", .desc = "clear API key (/logout <p> | --all)" },
     .{ .cmd = "/status", .desc = "session card" },
     .{ .cmd = "/doctor", .desc = "environment health check" },
     .{ .cmd = "/init", .desc = "write AGENTS.md if missing" },

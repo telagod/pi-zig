@@ -288,6 +288,9 @@ pub const Tui = struct {
     find_log: std.array_list.Managed([]u8),
     pending_image: ?[]u8 = null,
     pending_mime: []const u8 = "",
+    /// 掩码输入模式:/login 交互收 API key。非空即目标 provider 名;
+    /// 输入以 • 掩码显示,Enter 走 Action.secret(不进 on_submit/历史),Esc 取消。
+    pending_secret: ?[]const u8 = null,
     last_pin: usize = 0,
     /// 1-based 屏上行号,0=composer 滚出视口。
     composer_screen_row: usize = 0,
@@ -368,6 +371,7 @@ pub const Tui = struct {
         for (self.find_log.items) |s| self.alloc.free(s);
         self.find_log.deinit();
         if (self.pending_image) |img| self.alloc.free(img);
+        if (self.pending_secret) |s| self.alloc.free(s);
         tui_flow.resetFlow(self);
         self.flow_nodes.deinit(self.alloc);
     }
@@ -1039,14 +1043,17 @@ pub const Tui = struct {
             .pct = self.footer_pct,
             .hot = self.footer_hot,
         };
+        // 掩码输入:• 替字(等宽占位,真实内容不出屏)
+        var mask_buf: [2048]u8 = undefined;
+        const shown_input = if (self.pending_secret != null) maskSecret(&mask_buf, self.input.items) else self.input.items;
         if (bottom.boxed) {
             const box_w = composerBoxWidth(w);
             try footer.writeComposerTopEdge(&block_aw.writer, ident, box_w);
-            try emitComposer(&block_aw.writer, self.input.items, bottom.input_inner, bottom.comp_inner, view_skip);
+            try emitComposer(&block_aw.writer, shown_input, bottom.input_inner, bottom.comp_inner, view_skip);
             try writeBoxEdge(&block_aw.writer, "╰", "╯", box_w);
         } else {
             try block_aw.writer.writeAll(ANSI_DIM ++ "› " ++ ANSI_RESET);
-            try writeTrunc(&block_aw.writer, self.input.items, bottom.input_inner);
+            try writeTrunc(&block_aw.writer, shown_input, bottom.input_inner);
             try block_aw.writer.writeAll("\x1b[K\r\n");
         }
         const hint = footerHint(.{
@@ -1104,6 +1111,8 @@ pub const Tui = struct {
 
     pub const Handlers = struct {
         on_submit: *const fn (tui: *Tui, line: []const u8) anyerror!void,
+        /// 掩码输入提交(/login 收 API key):绕开 on_submit,不进历史、不回显。
+        on_secret: ?*const fn (ctx: ?*anyopaque, provider: []const u8, key: []const u8) void = null,
         is_quit: *const fn (ctx: ?*anyopaque) bool,
         on_abort: ?*const fn (ctx: ?*anyopaque) void = null,
         on_detach: ?*const fn (ctx: ?*anyopaque) void = null,
@@ -1126,6 +1135,7 @@ pub const Tui = struct {
     pub fn run(self: *Tui, h: Handlers) !void {
         const ctx = h.ctx;
         const on_submit = h.on_submit;
+        const on_secret = h.on_secret;
         const is_quit = h.is_quit;
         const on_abort = h.on_abort;
         const on_detach = h.on_detach;
@@ -1174,6 +1184,12 @@ pub const Tui = struct {
                             .quit => return,
                             .submit => |line| {
                                 try on_submit(self, line);
+                            },
+                            .secret => |s| {
+                                // 载荷是 takeSubmit 现 dupe 的;回调只读,用毕即放
+                                defer self.alloc.free(s.provider);
+                                defer self.alloc.free(s.key);
+                                if (on_secret) |f| f(ctx, s.provider, s.key);
                             },
                             .abort => {
                                 if (on_abort) |f| f(ctx);
@@ -1250,6 +1266,10 @@ pub const Tui = struct {
 
     pub fn takePendingImage(self: *Tui) ?tui_input.PendingImage {
         return tui_input.takePendingImage(self);
+    }
+
+    pub fn takeSubmit(self: *Tui) !tui_input.Action {
+        return tui_input.takeSubmit(self);
     }
 
     pub fn handleInput(self: *Tui, bytes: []const u8) !Action {
@@ -1372,6 +1392,30 @@ pub const Tui = struct {
         self.dirty.store(true, .release);
     }
 
+    /// 进入掩码密钥输入:清草稿、置目标 provider、画提示态。
+    pub fn openSecretPrompt(self: *Tui, provider: []const u8) !void {
+        self.mutex.lock(util.io) catch {};
+        defer self.mutex.unlock(util.io);
+        if (self.pending_secret) |old| self.alloc.free(old);
+        self.pending_secret = try self.alloc.dupe(u8, provider);
+        self.input.clearRetainingCapacity();
+        self.cursor = 0;
+        self.hist_idx = null;
+        self.shortcuts_open = false;
+        self.dirty.store(true, .release);
+    }
+
+    /// 取消掩码输入(Esc):清草稿退场。
+    pub fn cancelSecret(self: *Tui) void {
+        self.mutex.lock(util.io) catch {};
+        defer self.mutex.unlock(util.io);
+        if (self.pending_secret) |old| self.alloc.free(old);
+        self.pending_secret = null;
+        self.input.clearRetainingCapacity();
+        self.cursor = 0;
+        self.dirty.store(true, .release);
+    }
+
     pub fn addHistory(self: *Tui, line: []const u8) void {
         if (line.len == 0) return;
         if (self.history.items.len > 0 and std.mem.eql(u8, self.history.items[self.history.items.len - 1], line)) return;
@@ -1401,6 +1445,23 @@ pub const Tui = struct {
 
 pub fn nowNs() i64 {
     return @intCast(std.Io.Clock.now(.real, util.io).nanoseconds);
+}
+
+/// 掩码:每字符一个 •(• 为 3 字节单格;超缓冲截断显示,内容不丢——
+/// 提交走的是 input.items 本体,这里只管画)。
+pub fn maskSecret(buf: []u8, input: []const u8) []const u8 {
+    var n: usize = 0;
+    var i: usize = 0;
+    while (i < input.len) {
+        const cp = std.unicode.utf8ByteSequenceLength(input[i]) catch 1;
+        if (n + 3 > buf.len) break;
+        buf[n] = 0xE2;
+        buf[n + 1] = 0x80;
+        buf[n + 2] = 0xA2; // •
+        n += 3;
+        i += @as(usize, cp);
+    }
+    return buf[0..n];
 }
 
 /// 历史落盘转义:\n → \\n(不碰反斜杠,见 addHistory 注释)。

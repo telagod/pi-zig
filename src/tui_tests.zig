@@ -1745,3 +1745,61 @@ test "footer is one row at >=40 cols: host identity left, hint right" {
     try t.expect(std.mem.indexOf(u8, primary, "ctx") == null);
     try t.expectEqualStrings("", rows.secondary);
 }
+// ---- /login 掩码输入(Action.secret 路径)----
+
+test "secret prompt: takeSubmit yields secret action, not submit" {
+    const t = std.testing;
+    const a = t.allocator;
+    var ui = try Tui.init(a);
+    defer ui.deinit();
+    try ui.openSecretPrompt("deepseek");
+    try t.expect(ui.pending_secret != null);
+    for ("sk-test-123") |c| {
+        try ui.input.append(c);
+        ui.cursor += 1;
+    }
+    const act = try ui.takeSubmit();
+    // 载荷所有权归消费方(run 循环同规):用毕释放
+    defer a.free(act.secret.provider);
+    defer a.free(act.secret.key);
+    try t.expect(act == .secret);
+    try t.expectEqualStrings("deepseek", act.secret.provider);
+    try t.expectEqualStrings("sk-test-123", act.secret.key);
+    // 提交后退出掩码态,草稿清空
+    try t.expect(ui.pending_secret == null);
+    try t.expectEqual(@as(usize, 0), ui.input.items.len);
+}
+
+test "secret prompt: empty key not submittable, cancelSecret cleans up" {
+    const t = std.testing;
+    const a = t.allocator;
+    var ui = try Tui.init(a);
+    defer ui.deinit();
+    try ui.openSecretPrompt("xai");
+    const act = try ui.takeSubmit();
+    try t.expect(act == .none); // 空 key 不提交
+    try t.expect(ui.pending_secret != null); // 提示仍在
+    ui.cancelSecret();
+    try t.expect(ui.pending_secret == null);
+    try t.expectEqual(@as(usize, 0), ui.input.items.len);
+}
+
+test "maskSecret: bullets only, one per char, utf8-safe" {
+    const t = std.testing;
+    var buf: [128]u8 = undefined;
+    const m = tui.maskSecret(&buf, "sk-中12");
+    // 6 字符(ASCII×5 + 中×1)→ 6 个 •
+    try t.expectEqual(@as(usize, 6 * 3), m.len);
+    try t.expect(std.mem.indexOf(u8, m, "sk") == null);
+    try t.expect(std.mem.indexOf(u8, m, "中") == null);
+    var n: usize = 0;
+    var it = std.mem.tokenizeSequence(u8, m, "\u{2022}");
+    _ = &it;
+    // 直接数 • 出现次数
+    var i: usize = 0;
+    while (std.mem.indexOfPos(u8, m, i, "\u{2022}")) |p| {
+        n += 1;
+        i = p + 3;
+    }
+    try t.expectEqual(@as(usize, 6), n);
+}

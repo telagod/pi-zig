@@ -703,35 +703,45 @@ pub fn dispatch(tui: *tui_mod.Tui, app: *App, cmd: []const u8) anyerror!bool {
         return true;
     }
     if (std.mem.eql(u8, cmd, "login") or std.mem.startsWith(u8, cmd, "login ")) {
+        const loginmod = @import("cmd_login.zig");
         const rest = if (std.mem.startsWith(u8, cmd, "login ")) std.mem.trim(u8, cmd["login ".len..], " ") else "";
+        // /login:provider 选择器(对齐 piz login 交互流)
         if (rest.len == 0) {
-            tuiNote(app, "\x1b[2m", "usage: /login <provider> <api-key>  (or: piz login 交互选择;订阅/OAuth 走 piz web → Settings → Account)");
+            main_mod.openLoginPicker(app);
             return true;
         }
         var it = std.mem.tokenizeScalar(u8, rest, ' ');
         const name = it.next() orelse "";
-        const key = it.rest();
-        const key_t = std.mem.trim(u8, key, " ");
-        if (key_t.len == 0) {
-            tuiNote(app, "\x1b[2m", "usage: /login <provider> <api-key>  (or: piz login <provider> 交互;订阅/OAuth 走 piz web → Settings → Account)");
+        const tail = std.mem.trim(u8, it.rest(), " ");
+        // /login <name> --oauth:订阅指路 web
+        if (std.mem.eql(u8, tail, "--oauth")) {
+            tuiNote(app, "\x1b[2m", "订阅/OAuth 走 piz web → Settings → Account(CLI/TUI 只存 API key)");
             return true;
         }
-        app.cfg.saveAuth(name, key_t) catch |e| {
+        // /login <name> [--apikey]:掩码输入;OAuth 可用的先分流凭据方式
+        if (tail.len == 0 or std.mem.eql(u8, tail, "--apikey")) {
+            if (tail.len == 0 and loginmod.providerOAuth(name)) {
+                main_mod.openLoginMethodPicker(app, name);
+                return true;
+            }
+            tuiOk("tui.secret", app.tui.openSecretPrompt(name));
             var bw = std.Io.Writer.Allocating.init(app.alloc);
             defer bw.deinit();
-            tuiOk("tui.wr", bw.writer.print("login failed: {s}", .{@errorName(e)}));
-            tuiNote(app, "\x1b[31m", bw.written());
+            tuiOk("tui.wr", bw.writer.print("输入 {s} 的 API key(掩码不显示,Enter 提交,Esc 取消)", .{name}));
+            tuiNote(app, "\x1b[2m", bw.written());
             return true;
-        };
-        for (app.cfg.providers) |*p| {
-            if (std.mem.eql(u8, p.name, name)) {
-                p.api_key = app.alloc.dupe(u8, key_t) catch p.api_key;
-            }
         }
-        var bw = std.Io.Writer.Allocating.init(app.alloc);
-        defer bw.deinit();
-        tuiOk("tui.wr", bw.writer.print("saved {s} in auth.json", .{name}));
-        tuiNote(app, "\x1b[2m", bw.written());
+        // /login <name> <key>:一把写(脚本向;密钥不进 history.txt —— onSubmit 已滤)
+        main_mod.saveLogin(app, name, tail);
+        return true;
+    }
+    if (std.mem.eql(u8, cmd, "logout") or std.mem.startsWith(u8, cmd, "logout ")) {
+        const rest = if (std.mem.startsWith(u8, cmd, "logout ")) std.mem.trim(u8, cmd["logout ".len..], " ") else "";
+        if (rest.len == 0) {
+            tuiNote(app, "\x1b[2m", "usage: /logout <provider> | /logout --all");
+            return true;
+        }
+        main_mod.logoutLogin(app, rest);
         return true;
     }
     if (std.mem.eql(u8, cmd, "help")) {
