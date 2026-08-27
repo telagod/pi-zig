@@ -842,6 +842,9 @@ test "styled markdown is cached per cell until text or theme changes" {
     attachTheme(&th);
     _ = styledCached(a, &cell);
     try t.expect(cell.md_fp != fp_before);
+    // th 是栈变量,测试结束即销毁;theme_ptr 不得挂空(后续测试读 theme 会踩
+    // 死栈:垃圾 ink 长度把 formatToolStatus 的 bufPrint 撑爆,s3 只剩 "ok")。
+    attachTheme(&fallback_theme);
 }
 
 /// 多行草稿内纵向移动:同列(显示格)移到上/下一可视行;行短则钉行尾。

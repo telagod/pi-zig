@@ -55,6 +55,29 @@ pub const Cell = struct {
     row_valid: bool = false,
 };
 
+/// 欢迎卡 Recent sessions 一行(owned)。
+pub const RecentField = struct {
+    title: []u8,
+    when: []u8,
+};
+
+/// 开场欢迎卡专有载荷(owned);挂在 CardFields 上,kind 仍为 session_header。
+pub const WelcomeFields = struct {
+    provider: []u8 = &.{},
+    recents: []RecentField = &.{},
+    tip: []u8 = &.{},
+
+    pub fn deinit(self: WelcomeFields, alloc: std.mem.Allocator) void {
+        alloc.free(self.provider);
+        for (self.recents) |r| {
+            alloc.free(r.title);
+            alloc.free(r.when);
+        }
+        alloc.free(self.recents);
+        alloc.free(self.tip);
+    }
+};
+
 pub const CardFields = struct {
     version: []u8,
     model: []u8,
@@ -64,6 +87,7 @@ pub const CardFields = struct {
     perms: []u8 = &.{},
     context: []u8 = &.{},
     usage: []u8 = &.{},
+    welcome: ?WelcomeFields = null,
 
     pub fn deinit(self: CardFields, alloc: std.mem.Allocator) void {
         alloc.free(self.version);
@@ -74,5 +98,6 @@ pub const CardFields = struct {
         alloc.free(self.perms);
         alloc.free(self.context);
         alloc.free(self.usage);
+        if (self.welcome) |w| w.deinit(alloc);
     }
 };

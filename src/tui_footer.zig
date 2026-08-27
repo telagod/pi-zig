@@ -33,6 +33,20 @@ pub const SessionInfo = struct {
     session: []const u8,
 };
 
+/// 开场欢迎卡(omp home 屏对齐):左 logo + Welcome + 模型,右 Tips + Recent。
+pub const RecentSession = struct {
+    title: []const u8,
+    when: []const u8,
+};
+
+pub const WelcomeInfo = struct {
+    version: []const u8,
+    model: []const u8,
+    provider: []const u8,
+    recents: []const RecentSession = &.{},
+    tip: []const u8 = "",
+};
+
 pub const StatusInfo = struct {
     version: []const u8,
     model: []const u8,
@@ -588,6 +602,206 @@ pub fn formatSessionCard(alloc: std.mem.Allocator, info: SessionInfo, width: usi
     defer alloc.free(session);
     const lines = [_][]const u8{ title, "", model, dir, session, "", CARD_HINT };
     return formatCard(alloc, &lines, width);
+}
+
+/// piz 开场卡 logo:src/logo.svg 的 ink-Z 标记(块元素,14 列 × 5 行)。
+pub const WELCOME_LOGO = [_][]const u8{
+    "██████████████",
+    "         ▄▄█▀▀",
+    "     ▄▄█▀▀",
+    " ▄▄█▀▀",
+    "██████████████",
+};
+
+/// 双栏下限:低于 60 列退化为单栏(无右栏),与 omp home 卡降级一致。
+pub const WELCOME_WIDE_MIN: usize = 60;
+const WELCOME_LEFT_W: usize = 26;
+const WELCOME_MAX_RECENTS: usize = 3;
+
+/// 截到 target 列,补 RESET,再按 center 居左/居中补空格。返回 owned。
+fn padCardLine(alloc: std.mem.Allocator, raw: []const u8, target: usize, center: bool) ![]u8 {
+    const cut = truncateToVisible(raw, target);
+    const vis = visibleCols(cut);
+    const lead: usize = if (center and vis < target) (target - vis) / 2 else 0;
+    var w = std.Io.Writer.Allocating.init(alloc);
+    errdefer w.deinit();
+    var i: usize = 0;
+    while (i < lead) : (i += 1) try w.writer.writeByte(' ');
+    try w.writer.writeAll(cut);
+    try w.writer.writeAll(ANSI_RESET);
+    var pad = target - vis - lead;
+    while (pad > 0) : (pad -= 1) try w.writer.writeByte(' ');
+    return w.toOwnedSlice();
+}
+
+fn writeTitledEdge(wr: *std.Io.Writer, mu: []const u8, left: []const u8, right: []const u8, title: []const u8, inner: usize) !void {
+    try wr.writeAll(mu);
+    try wr.writeAll(left);
+    try wr.writeAll(ANSI_RESET);
+    const tcut = truncateToVisible(title, inner);
+    try wr.writeAll(tcut);
+    const fill = inner - visibleCols(tcut);
+    try wr.writeAll(mu);
+    var i: usize = 0;
+    while (i < fill) : (i += 1) try wr.writeAll("─");
+    try wr.writeAll(right);
+    try wr.writeAll(ANSI_RESET ++ "\n");
+}
+
+/// 底边;junction_at 非空则在那一列放 ┴(双栏分隔落到下沿,同 omp)。
+fn writeBottomEdge(wr: *std.Io.Writer, mu: []const u8, inner: usize, junction_at: ?usize) !void {
+    try wr.writeAll(mu);
+    try wr.writeAll("╰");
+    var i: usize = 0;
+    while (i < inner) : (i += 1) {
+        if (junction_at) |j| {
+            if (i == j) {
+                try wr.writeAll("┴");
+                continue;
+            }
+        }
+        try wr.writeAll("─");
+    }
+    try wr.writeAll("╯");
+    try wr.writeAll(ANSI_RESET ++ "\n");
+}
+
+/// 卡下轮换 Tip:dim,超宽硬折行,悬挂缩进对齐 " Tip: " 之后(同 omp)。
+fn writeWelcomeTip(wr: *std.Io.Writer, mu: []const u8, tip: []const u8, width: usize) !void {
+    if (tip.len == 0) return;
+    const limit = if (width > 8) width - 1 else width;
+    try wr.writeAll(mu);
+    try wr.writeAll(" Tip: ");
+    var col: usize = 6;
+    var i: usize = 0;
+    while (i < tip.len) {
+        const ch = measure.charCols(tip, i);
+        if (col + ch.cols > limit and i > 0) {
+            try wr.writeAll("\n      ");
+            col = 6;
+        }
+        try wr.writeAll(tip[i .. i + ch.n]);
+        col += ch.cols;
+        i += ch.n;
+    }
+    try wr.writeAll(ANSI_RESET);
+}
+
+/// 开场欢迎卡(omp home 屏):顶边带 piz v<版本>,左栏 logo + Welcome back + 模型,
+/// 右栏 Tips + Recent sessions;窄终端单栏;卡下挂一行轮换 Tip。色全走 theme token。
+pub fn formatWelcomeCard(alloc: std.mem.Allocator, info: WelcomeInfo, width: usize) ![]u8 {
+    const mu = theme().muted();
+    // 卡宽跟 composer 盒宽规则(tui.composerBoxWidth):末列触换行,盒宽 cols-1。
+    const box_w = if (width > 1) width - 1 else width;
+    var w = std.Io.Writer.Allocating.init(alloc);
+    errdefer w.deinit();
+    if (box_w < 16) {
+        // 极窄:画盒必崩,纯文本降级
+        try w.writer.print("{s}piz{s} {s}v{s}{s}\n", .{ ANSI_BOLD, ANSI_RESET, mu, info.version, ANSI_RESET });
+        try w.writer.print("{s}Welcome back!{s}\n", .{ ANSI_BOLD, ANSI_RESET });
+        try w.writer.print("{s}{s}", .{ truncateToVisible(info.model, box_w), ANSI_RESET });
+        if (info.provider.len > 0) try w.writer.print(" {s}{s}{s}", .{ mu, truncateToVisible(info.provider, box_w), ANSI_RESET });
+        try w.writer.writeByte('\n');
+        try writeWelcomeTip(&w.writer, mu, info.tip, box_w);
+        const raw0 = try w.toOwnedSlice();
+        if (raw0.len > 0 and raw0[raw0.len - 1] == '\n') {
+            const trimmed = try alloc.dupe(u8, raw0[0 .. raw0.len - 1]);
+            alloc.free(raw0);
+            return trimmed;
+        }
+        return raw0;
+    }
+    const inner = box_w - 2;
+    const wide = width >= WELCOME_WIDE_MIN and inner >= WELCOME_LEFT_W + 14;
+    const left_w: usize = if (wide) WELCOME_LEFT_W else inner;
+    const right_w: usize = if (wide) inner - left_w - 1 else 0;
+
+    const title = try std.fmt.allocPrint(alloc, "─── {s}piz{s} {s}v{s}{s} ", .{ ANSI_BOLD, ANSI_RESET, mu, info.version, ANSI_RESET });
+    defer alloc.free(title);
+    try writeTitledEdge(&w.writer, mu, "╭", "╮", title, inner);
+
+    // 左栏:Welcome + logo + 模型/provider(单栏时即全卡内容)
+    var left = std.array_list.Managed([]u8).init(alloc);
+    defer {
+        for (left.items) |s| alloc.free(s);
+        left.deinit();
+    }
+    try left.append(try padCardLine(alloc, "", left_w, false));
+    try left.append(try padCardLine(alloc, ANSI_BOLD ++ "Welcome back!", left_w, true));
+    try left.append(try padCardLine(alloc, "", left_w, false));
+    for (WELCOME_LOGO) |ln| try left.append(try padCardLine(alloc, ln, left_w, true));
+    try left.append(try padCardLine(alloc, "", left_w, false));
+    const model_b = try std.fmt.allocPrint(alloc, "{s}{s}", .{ ANSI_BOLD, info.model });
+    defer alloc.free(model_b);
+    try left.append(try padCardLine(alloc, model_b, left_w, true));
+    const prov_m = try std.fmt.allocPrint(alloc, "{s}{s}", .{ mu, info.provider });
+    defer alloc.free(prov_m);
+    try left.append(try padCardLine(alloc, prov_m, left_w, true));
+
+    // 右栏:Tips 常驻;Recent sessions 仅在有历史会话时出
+    var right = std.array_list.Managed([]u8).init(alloc);
+    defer {
+        for (right.items) |s| alloc.free(s);
+        right.deinit();
+    }
+    if (wide) {
+        try right.append(try padCardLine(alloc, " " ++ ANSI_BOLD ++ "Tips", right_w, false));
+        try right.append(try padCardLine(alloc, " / for commands", right_w, false));
+        try right.append(try padCardLine(alloc, " ? for shortcuts", right_w, false));
+        try right.append(try padCardLine(alloc, " ! to run bash", right_w, false));
+        try right.append(try padCardLine(alloc, " @ to embed files", right_w, false));
+        const div = try std.fmt.allocPrint(alloc, " {s}", .{mu});
+        defer alloc.free(div);
+        var dw = std.Io.Writer.Allocating.init(alloc);
+        defer dw.deinit();
+        try dw.writer.writeAll(div);
+        var di: usize = 1;
+        while (di + 1 < right_w) : (di += 1) try dw.writer.writeAll("─");
+        const div_s = try dw.toOwnedSlice();
+        try right.append(try padCardLine(alloc, div_s, right_w, false));
+        alloc.free(div_s);
+        if (info.recents.len > 0) {
+            try right.append(try padCardLine(alloc, " " ++ ANSI_BOLD ++ "Recent sessions", right_w, false));
+            const n = @min(WELCOME_MAX_RECENTS, info.recents.len);
+            for (info.recents[0..n]) |r| {
+                const entry = try std.fmt.allocPrint(alloc, " {s} {s}({s}){s}", .{ r.title, mu, r.when, ANSI_RESET });
+                try right.append(try padCardLine(alloc, entry, right_w, false));
+                alloc.free(entry);
+            }
+        }
+    }
+
+    const rows = @max(left.items.len, right.items.len);
+    var ri: usize = 0;
+    while (ri < rows) : (ri += 1) {
+        try w.writer.print("{s}│{s}", .{ mu, ANSI_RESET });
+        if (ri < left.items.len) {
+            try w.writer.writeAll(left.items[ri]);
+        } else {
+            var p: usize = 0;
+            while (p < left_w) : (p += 1) try w.writer.writeByte(' ');
+        }
+        if (wide) {
+            try w.writer.print("{s}│{s}", .{ mu, ANSI_RESET });
+            if (ri < right.items.len) {
+                try w.writer.writeAll(right.items[ri]);
+            } else {
+                var p: usize = 0;
+                while (p < right_w) : (p += 1) try w.writer.writeByte(' ');
+            }
+        }
+        try w.writer.print("{s}│{s}\n", .{ mu, ANSI_RESET });
+    }
+    try writeBottomEdge(&w.writer, mu, inner, if (wide) left_w else null);
+    try writeWelcomeTip(&w.writer, mu, info.tip, box_w);
+
+    const out = try w.toOwnedSlice();
+    if (out.len > 0 and out[out.len - 1] == '\n') {
+        const trimmed = try alloc.dupe(u8, out[0 .. out.len - 1]);
+        alloc.free(out);
+        return trimmed;
+    }
+    return out;
 }
 
 pub fn formatStatusCard(alloc: std.mem.Allocator, info: StatusInfo, width: usize) ![]u8 {

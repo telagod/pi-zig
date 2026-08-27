@@ -769,6 +769,144 @@ test "session card renders at paint width" {
     try t.expectEqual(idle.footer_rows, still.footer_rows);
 }
 
+test "welcome card renders two columns at 100 cols" {
+    const t = std.testing;
+    const a = t.allocator;
+    const info = tui.WelcomeInfo{
+        .version = "0.1.0",
+        .model = "deepseek/flash",
+        .provider = "deepseek",
+        .recents = &.{
+            .{ .title = "refactor session store", .when = "2d · 8t" },
+            .{ .title = "fix login flow", .when = "5d · 3t" },
+        },
+        .tip = "piz -c 续载上次会话",
+    };
+    const out = try tui.formatWelcomeCard(a, info, 100);
+    defer a.free(out);
+    try t.expect(std.mem.indexOf(u8, out, "╭") != null);
+    try t.expect(std.mem.indexOf(u8, out, "╰") != null);
+    try t.expect(std.mem.indexOf(u8, out, "┴") != null); // 双栏分隔落到下沿
+    try t.expect(std.mem.indexOf(u8, out, "piz") != null);
+    try t.expect(std.mem.indexOf(u8, out, "v0.1.0") != null);
+    try t.expect(std.mem.indexOf(u8, out, "Welcome back!") != null);
+    try t.expect(std.mem.indexOf(u8, out, "█") != null); // logo 块元素
+    try t.expect(std.mem.indexOf(u8, out, "Tips") != null);
+    try t.expect(std.mem.indexOf(u8, out, "/ for commands") != null);
+    try t.expect(std.mem.indexOf(u8, out, "? for shortcuts") != null);
+    try t.expect(std.mem.indexOf(u8, out, "! to run bash") != null);
+    try t.expect(std.mem.indexOf(u8, out, "@ to embed files") != null);
+    try t.expect(std.mem.indexOf(u8, out, "Recent sessions") != null);
+    try t.expect(std.mem.indexOf(u8, out, "refactor session store") != null);
+    try t.expect(std.mem.indexOf(u8, out, "2d · 8t") != null);
+    try t.expect(std.mem.indexOf(u8, out, "deepseek/flash") != null);
+    try t.expect(std.mem.indexOf(u8, out, " Tip: ") != null);
+    try t.expect(std.mem.indexOf(u8, out, "piz -c 续载上次会话") != null);
+    try t.expect(std.mem.indexOf(u8, out, ANSI_BOLD ++ "piz") != null);
+    const plain = try stripForTest(a, out);
+    defer a.free(plain);
+    var it = std.mem.splitScalar(u8, plain, '\n');
+    var first: ?[]const u8 = null;
+    var n: usize = 0;
+    while (it.next()) |line| {
+        if (first == null) first = line;
+        n += 1;
+        try t.expect(visibleCols(line) <= 100);
+    }
+    // 卡宽 = composerBoxWidth(100) = 99;顶边占满
+    try t.expectEqual(@as(usize, 99), visibleCols(first.?));
+    try t.expect(n >= 12); // 顶边 + 双栏行 + 底边 + tip
+
+    // 无会话时 Recent sessions 区省略
+    const bare = try tui.formatWelcomeCard(a, .{ .version = "0.1.0", .model = "m", .provider = "p" }, 100);
+    defer a.free(bare);
+    try t.expect(std.mem.indexOf(u8, bare, "Recent sessions") == null);
+    try t.expect(std.mem.indexOf(u8, bare, "Tips") != null);
+}
+
+test "welcome card degrades to single column at 50 cols" {
+    const t = std.testing;
+    const a = t.allocator;
+    const info = tui.WelcomeInfo{
+        .version = "0.1.0",
+        .model = "deepseek/flash",
+        .provider = "deepseek",
+        .recents = &.{.{ .title = "refactor session store", .when = "2d · 8t" }},
+        .tip = "!cmd 直跑 shell 并把输出喂给模型;!!cmd 只跑不喂",
+    };
+    const out = try tui.formatWelcomeCard(a, info, 50);
+    defer a.free(out);
+    try t.expect(std.mem.indexOf(u8, out, "╭") != null);
+    try t.expect(std.mem.indexOf(u8, out, "╰") != null);
+    try t.expect(std.mem.indexOf(u8, out, "┴") == null); // 单栏无分隔
+    try t.expect(std.mem.indexOf(u8, out, "Welcome back!") != null);
+    try t.expect(std.mem.indexOf(u8, out, "deepseek/flash") != null);
+    // 窄终端无右栏
+    try t.expect(std.mem.indexOf(u8, out, "Tips") == null);
+    try t.expect(std.mem.indexOf(u8, out, "Recent sessions") == null);
+    // 卡下 tip 仍在
+    try t.expect(std.mem.indexOf(u8, out, " Tip: ") != null);
+    const plain = try stripForTest(a, out);
+    defer a.free(plain);
+    var it = std.mem.splitScalar(u8, plain, '\n');
+    var first: ?[]const u8 = null;
+    while (it.next()) |line| {
+        if (first == null) first = line;
+        try t.expect(visibleCols(line) <= 50);
+    }
+    try t.expectEqual(@as(usize, 49), visibleCols(first.?)); // composerBoxWidth(50)
+
+    // 极窄:不画盒也不崩
+    const tiny = try tui.formatWelcomeCard(a, info, 12);
+    defer a.free(tiny);
+    try t.expect(std.mem.indexOf(u8, tiny, "╭") == null);
+    try t.expect(std.mem.indexOf(u8, tiny, "Welcome back!") != null);
+}
+
+test "welcome header paints via cells and session header replaces it" {
+    const t = std.testing;
+    const a = t.allocator;
+    var ui = try Tui.init(a);
+    defer ui.deinit();
+    try ui.setWelcomeHeader(.{
+        .version = "0.1.0",
+        .model = "deepseek/flash",
+        .provider = "deepseek",
+        .recents = &.{.{ .title = "old thread", .when = "1d · 2t" }},
+        .tip = "tip one",
+    });
+    try t.expectEqual(@as(usize, 1), ui.cells.items.len);
+    try t.expectEqual(CellKind.session_header, ui.cells.items[0].kind);
+    // 100 列快照:卡在 cells 0 号位,对话在其后(随对话上滚留存)
+    try ui.appendUser("hi");
+    const painted = try paintCellsForTest(a, &ui, 100);
+    defer a.free(painted);
+    const plain = try stripForTest(a, painted);
+    defer a.free(plain);
+    const card_at = std.mem.indexOf(u8, plain, "╭");
+    const user_at = std.mem.indexOf(u8, plain, "hi");
+    try t.expect(card_at != null);
+    try t.expect(user_at != null);
+    try t.expect(card_at.? < user_at.?);
+    try t.expect(std.mem.indexOf(u8, plain, "Welcome back!") != null);
+    try t.expect(std.mem.indexOf(u8, plain, "old thread") != null);
+    // 50 列快照:同一 cell 按新宽重画成单栏
+    const narrow = try paintCellsForTest(a, &ui, 50);
+    defer a.free(narrow);
+    const narrow_plain = try stripForTest(a, narrow);
+    defer a.free(narrow_plain);
+    try t.expect(std.mem.indexOf(u8, narrow_plain, "Welcome back!") != null);
+    try t.expect(std.mem.indexOf(u8, narrow_plain, "Tips") == null);
+    // 续载会话卡逻辑不受影响:setSessionHeader 覆盖 0 号位,渲染回 session 卡
+    try ui.setSessionHeader(.{ .version = "0.1.0", .model = "m", .think = "high", .cwd = "/tmp", .session = "sess" });
+    try t.expectEqual(@as(usize, 2), ui.cells.items.len);
+    try t.expect(ui.cells.items[0].card.?.welcome == null);
+    const swapped = try paintCellsForTest(a, &ui, 100);
+    defer a.free(swapped);
+    try t.expect(std.mem.indexOf(u8, swapped, "Welcome back!") == null);
+    try t.expect(std.mem.indexOf(u8, swapped, "model:") != null);
+}
+
 test "working rows are one status plus at most two subagent details" {
     const t = std.testing;
     try t.expectEqual(@as(usize, 0), workingRows(0, false, 0));

@@ -199,7 +199,8 @@ pub const App = struct {
         return std.fmt.bufPrint(buf, "{d}", .{n}) catch "?";
     }
 
-    /// 页脚身份:模型 / 思考档 / 占用 / 缓存 / 目录 / 会话。开场不再画卡片。
+    /// 页脚身份:模型 / 思考档 / 占用 / 缓存 / 目录 / 会话。开场欢迎卡由
+    /// showWelcome 画(cells 0 号位,omp home 屏对齐),此处只管页脚。
     /// Occupancy is `est_ctx / ctxWindow`. Cache is last-turn API usage
     /// (`ai.Usage.cache_read` / `input`) — null stays `cache —`, never faked.
     pub fn refreshFooter(self: *App) void {
@@ -764,7 +765,8 @@ pub fn runInteractive(alloc: std.mem.Allocator, cfg: *cfgmod.Config, cwd: []cons
 
     showWelcome(&app, loaded.len);
     replayTranscript(&tui, loaded);
-    if (loaded.len == 0 and opts.session_id == null and !opts.continue_session) {
+    // 欢迎卡已画(cells 非空)就不再多注一行引路:Recent sessions 已在卡里。
+    if (loaded.len == 0 and opts.session_id == null and !opts.continue_session and tui.cells.items.len == 0) {
         // 新会话起手若有旧事可续,注一行引路(pi 极简:一句 dim,不摊两行)
         if (sessionmod.Session.findLatest(alloc, abs_cwd) catch null) |prev| {
             var p = prev;

@@ -25,8 +25,42 @@ const tildePath = cmd_help.tildePath;
 const welcomeContext = cmd_help.welcomeContext;
 
 pub fn showWelcome(app: *App, n_msgs: usize) void {
-    _ = n_msgs;
     app.refreshFooter();
+    // 裸 piz(新会话、无历史)开场画欢迎卡:cells 0 号位,随对话上滚(omp home 屏)。
+    // 幂等:已画过/已有任何 cell 就只刷页脚(tuiOnThink 等后续调用走这里)。
+    if (n_msgs != 0 or app.tui.cells.items.len != 0) return;
+    const now_ns = std.Io.Clock.now(.real, util.io).nanoseconds;
+    var recents_buf: [3]tui_mod.RecentSession = undefined;
+    var descs: [3]?sessionmod.Session.Describe = .{ null, null, null };
+    defer for (descs) |d| {
+        if (d) |dd| {
+            var d2 = dd;
+            d2.deinit(app.alloc);
+        }
+    };
+    var n_recents: usize = 0;
+    const list = sessionmod.Session.list(app.alloc, app.agent.cwd) catch &.{};
+    defer for (list) |s| {
+        var s2 = s;
+        s2.deinit();
+    };
+    for (list) |s| {
+        if (n_recents >= recents_buf.len) break;
+        if (std.mem.eql(u8, s.path, app.sess.path)) continue; // 当前空会话不上榜
+        const d = s.describe(app.alloc, now_ns) catch continue;
+        descs[n_recents] = d;
+        recents_buf[n_recents] = .{ .title = d.headline, .when = d.hint };
+        n_recents += 1;
+    }
+    const secs = @as(usize, @intCast(@max(0, @divTrunc(now_ns, std.time.ns_per_s))));
+    const tip = cmd_help.WELCOME_TIPS[secs % cmd_help.WELCOME_TIPS.len];
+    app.tui.setWelcomeHeader(.{
+        .version = VERSION,
+        .model = app.agent.model,
+        .provider = app.agent.provider.name,
+        .recents = recents_buf[0..n_recents],
+        .tip = tip,
+    }) catch |err| util.debugCatch("tui.welcome", err);
 }
 
 pub fn replaceSession(app: *App) !void {

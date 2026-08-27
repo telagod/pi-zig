@@ -7,7 +7,9 @@
 //      dimmest. Overflow splits: row 1 metrics, row 2 cwd · session + hint.
 //      Collapse drops hint → think → cache label → ctx abs → session before
 //      cwd. Model is never dropped; cwd is truncated, not omitted.
-//   B. Status card: on-demand via /status only — never cell 0 at startup.
+//   B. Cards: bare `piz` paints a boxed welcome card (logo + tips + recent
+//      sessions) as cell 0, scrolling up with the conversation (omp home);
+//      `piz -c/-s` uses the session header; status card is on-demand /status.
 //   C. Turn blocks (paint-time, never baked into cell text):
 //        user      indent 0, bold, bar ▎ + bg — the request
 //        assistant indent 2, normal, no bar — the answer
@@ -108,6 +110,8 @@ const classifyCsi = keys.classifyCsi;
 
 pub const SessionInfo = footer.SessionInfo;
 pub const StatusInfo = footer.StatusInfo;
+pub const RecentSession = footer.RecentSession;
+pub const WelcomeInfo = footer.WelcomeInfo;
 
 /// 选择器一行。label 是看见的,value 是确认后拼进斜杠命令的参数。
 pub const PickerItem = slash.PickerItem;
@@ -143,6 +147,7 @@ pub const cardInner = footer.cardInner;
 pub const formatCard = footer.formatCard;
 pub const formatSessionCard = footer.formatSessionCard;
 pub const formatStatusCard = footer.formatStatusCard;
+pub const formatWelcomeCard = footer.formatWelcomeCard;
 
 /// skip = 从对话顶裁掉的行数。off=0 钉住底。
 pub fn scrollSkip(off: usize, total: usize, view: usize) usize {
@@ -709,6 +714,27 @@ pub const Tui = struct {
         self.mutex.lock(util.io) catch {};
         defer self.mutex.unlock(util.io);
         const fields = try dupeSession(self.alloc, info);
+        errdefer fields.deinit(self.alloc);
+        if (self.cells.items.len > 0 and self.cells.items[0].kind == .session_header) {
+            if (self.cells.items[0].card) |old| old.deinit(self.alloc);
+            invalidatePaint(&self.cells.items[0], self.alloc);
+            self.cells.items[0].card = fields;
+        } else {
+            try self.cells.insert(0, .{
+                .kind = .session_header,
+                .text = std.array_list.Managed(u8).init(self.alloc),
+                .card = fields,
+            });
+        }
+        self.dirty.store(true, .release);
+    }
+
+    /// 裸 piz 开场欢迎卡(omp home 屏):占 cells 0 号位,随对话上滚留存。
+    /// 续载会话仍走 setSessionHeader;二者同 kind,后写覆盖先写。
+    pub fn setWelcomeHeader(self: *Tui, info: WelcomeInfo) !void {
+        self.mutex.lock(util.io) catch {};
+        defer self.mutex.unlock(util.io);
+        const fields = try dupeWelcome(self.alloc, info);
         errdefer fields.deinit(self.alloc);
         if (self.cells.items.len > 0 and self.cells.items[0].kind == .session_header) {
             if (self.cells.items[0].card) |old| old.deinit(self.alloc);
@@ -1462,11 +1488,49 @@ fn dupeSession(alloc: std.mem.Allocator, info: SessionInfo) !CardFields {
     return dupeCard(alloc, info.version, info.model, info.think, info.cwd, info.session, "", "", "");
 }
 
+fn dupeWelcome(alloc: std.mem.Allocator, info: WelcomeInfo) !CardFields {
+    var fields = try dupeCard(alloc, info.version, info.model, "", "", "", "", "", "");
+    errdefer fields.deinit(alloc);
+    const provider = try alloc.dupe(u8, info.provider);
+    errdefer alloc.free(provider);
+    const tip = try alloc.dupe(u8, info.tip);
+    errdefer alloc.free(tip);
+    const recents = try alloc.alloc(types.RecentField, info.recents.len);
+    var n: usize = 0;
+    errdefer {
+        for (recents[0..n]) |r| {
+            alloc.free(r.title);
+            alloc.free(r.when);
+        }
+        alloc.free(recents);
+    }
+    for (info.recents) |r| {
+        const t = try alloc.dupe(u8, r.title);
+        errdefer alloc.free(t);
+        recents[n] = .{ .title = t, .when = try alloc.dupe(u8, r.when) };
+        n += 1;
+    }
+    fields.welcome = .{ .provider = provider, .recents = recents, .tip = tip };
+    return fields;
+}
+
 fn dupeStatus(alloc: std.mem.Allocator, info: StatusInfo) !CardFields {
     return dupeCard(alloc, info.version, info.model, info.think, info.cwd, info.session, info.perms, info.context, info.usage);
 }
 
 fn paintCard(alloc: std.mem.Allocator, kind: CellKind, card: CardFields, width: usize) ![]u8 {
+    if (card.welcome) |wc| {
+        const recents = try alloc.alloc(RecentSession, wc.recents.len);
+        defer alloc.free(recents);
+        for (wc.recents, 0..) |r, i| recents[i] = .{ .title = r.title, .when = r.when };
+        return formatWelcomeCard(alloc, .{
+            .version = card.version,
+            .model = card.model,
+            .provider = wc.provider,
+            .recents = recents,
+            .tip = wc.tip,
+        }, width);
+    }
     return switch (kind) {
         .status_card => formatStatusCard(alloc, .{
             .version = card.version,

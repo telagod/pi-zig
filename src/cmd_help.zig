@@ -95,6 +95,18 @@ pub fn welcomeNote(alloc: std.mem.Allocator, n_msgs: usize, title: ?[]const u8) 
     return std.fmt.allocPrint(alloc, "continued · {s} · {d}", .{ cut, n_msgs });
 }
 
+/// 开场卡下挂的轮换 Tip 池:只写真功能(omp "Tip: Did you know?" 位)。
+pub const WELCOME_TIPS = [_][]const u8{
+    "piz -c 续载上次会话;piz -s <id> 恢复指定会话(id 见 /sessions)",
+    "!cmd 直跑 shell 并把输出喂给模型;!!cmd 只跑不喂",
+    "@./path 把文件嵌进提示词,输入 @ 后 Tab 补全路径",
+    "/compact 快照压缩上下文,不耗 LLM;/undo 撤上一轮",
+    "? 空输入时开快捷键浮层;Ctrl+T 折叠思考,Ctrl+O 折叠工具输出",
+    "--sandbox workspace 给 bash 套 OS 隔离;/sandbox 运行中随时切",
+    "/export 把整段对话导出成 HTML;/copy 复制上条回复",
+    "/resume 弹出本目录会话切换器;/title 给当前会话起名",
+};
+
 pub fn tildePath(alloc: std.mem.Allocator, abs: []const u8) ![]u8 {
     const home = util.getEnv("HOME") orelse return alloc.dupe(u8, abs);
     if (home.len > 0 and std.mem.startsWith(u8, abs, home))
