@@ -317,12 +317,16 @@ test "full-file rewrites replace atomically, never truncate in place" {
     const leftover = try std.fmt.allocPrint(a, "{s}.tmp", .{sess1.path});
     try t.expectError(error.FileNotFound, std.Io.Dir.cwd().statFile(util.io, leftover, .{}));
 
-    // setTitle 走同一条原子路径
-    const ino2 = (try std.Io.Dir.cwd().statFile(util.io, sess1.path, .{})).inode;
+    // v2:setTitle 只改镜像,不再重写正文(见 sessions-v2.md 痛点 5)——
+    // 正文 inode 不变是新设计的签名;标题落在 <id>.meta.json
     try sess1.setTitle("renamed");
-    const ino3 = (try std.Io.Dir.cwd().statFile(util.io, sess1.path, .{})).inode;
-    try t.expect(ino2 != ino3);
+    const mp = try sess.mirrorPathFor(a, sess1.path);
+    const mraw = try std.Io.Dir.cwd().readFileAlloc(util.io, mp, a, .limited(64 * 1024));
+    try t.expect(std.mem.indexOf(u8, mraw, "\"title\":\"renamed\"") != null);
     try t.expectError(error.FileNotFound, std.Io.Dir.cwd().statFile(util.io, leftover, .{}));
+    // 正文不动,消息仍在
+    const msgs_after = try sess1.loadMessages();
+    try t.expectEqual(@as(usize, 2), msgs_after.len);
 }
 
 test "session listing, latest and lookup by id" {
@@ -463,26 +467,32 @@ test "web session rewrite is atomic, 0600, and tolerates a corrupt line" {
     const st = try std.Io.Dir.cwd().statFile(util.io, path, .{});
     try t.expectEqual(@as(u32, 0o600), @as(u32, @intFromEnum(st.permissions)) & 0o777);
 
-    // web 会话每轮都全量重写。原地覆盖会保持 inode;原子替换必然换掉 ——
-    // 直写的话写到一半被 kill 就是整份历史被截断。
-    const ino1 = st.inode;
+    // v2:消息变多走追加(每轮全量重写对超长会话是 O(size²),见 sessions-v2.md 痛点 4)
     const msgs2 = msgs ++ [_]ai.Message{.{ .role = "user", .content = "q2" }};
     try saveWeb(a, proj, "s1", "m", true, "t1", &msgs2);
+    const loaded = (try loadWeb(a, proj, "s1")).?;
+    try t.expectEqual(@as(usize, 3), loaded.msgs.len);
+    try t.expectEqualStrings("q2", loaded.msgs[2].content);
+
+    // 消息变短(undo/compact)才整体重写:必须 tmp+rename 原子替换 ——
+    // 原地覆盖保持 inode;原子替换必然换掉。直写的话写到一半被 kill
+    // 就是整份历史被截断。
+    const ino1 = (try std.Io.Dir.cwd().statFile(util.io, path, .{})).inode;
+    try saveWeb(a, proj, "s1", "m", true, "t1", &msgs);
     const ino2 = (try std.Io.Dir.cwd().statFile(util.io, path, .{})).inode;
     try t.expect(ino1 != ino2);
     // 临时文件不许残留
     try t.expectError(error.FileNotFound, std.Io.Dir.cwd().statFile(util.io, tmpfile, .{}));
-
-    const loaded = (try loadWeb(a, proj, "s1")).?;
-    try t.expectEqual(@as(usize, 3), loaded.msgs.len);
-    try t.expectEqualStrings("q2", loaded.msgs[2].content);
+    // 重写后权限仍是 0600
+    const st2 = try std.Io.Dir.cwd().statFile(util.io, path, .{});
+    try t.expectEqual(@as(u32, 0o600), @as(u32, @intFromEnum(st2.permissions)) & 0o777);
 
     // 末行被截断(崩溃留下的形态):跳过坏行,前面的消息仍读得回来,不整体失败
     const raw = try std.Io.Dir.cwd().readFileAlloc(util.io, path, a, .limited(1 << 20));
     const cut = try std.fmt.allocPrint(a, "{s}{{\"role\":\"assistant\",\"cont", .{raw});
     try std.Io.Dir.cwd().writeFile(util.io, .{ .sub_path = path, .data = cut });
     const after = (try loadWeb(a, proj, "s1")).?;
-    try t.expectEqual(@as(usize, 3), after.msgs.len);
+    try t.expectEqual(@as(usize, 2), after.msgs.len);
 }
 
 test "archiveWeb restoreWeb propagate missing-file errors" {
@@ -543,11 +553,13 @@ test "deriveTitle takes first line and clamps" {
 
 test "session window: tail-only load for oversized file" {
     const t = std.testing;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
     var arena = util.Arena.init(t.allocator);
     defer arena.deinit();
     const a = arena.allocator();
     const cwd_abs = try std.process.currentPathAlloc(util.io, a);
-    const tmp_path = try std.fmt.allocPrint(a, "{s}/.zig-cache/tmp/wintest", .{cwd_abs});
+    const tmp_path = try std.fmt.allocPrint(a, "{s}/.zig-cache/tmp/{s}", .{ cwd_abs, tmp.sub_path });
     try util.environ_map.?.put("PIZ_DIR", tmp_path);
     const dir = try util.configDir(a);
     _ = dir;
@@ -562,7 +574,7 @@ test "session window: tail-only load for oversized file" {
         try w.interface.writeAll("{\"cwd\":\"/x\",\"started\":1}\n");
         const filler = "y" ** 6000;
         for (0..70) |i| {
-            try w.interface.print("{{\"role\":\"user\",\"content\":\"{d}:{s}\"}}\n", .{ i, filler[0..2000] });
+            try w.interface.print("{{\"role\":\"user\",\"content\":\"{d}:{s}\"}}\n", .{ i, filler });
         }
         try w.interface.flush();
     }
@@ -594,7 +606,9 @@ test "web save appends; undo rewrites" {
     defer arena.deinit();
     const a = arena.allocator();
     const cwd_abs = try std.process.currentPathAlloc(util.io, a);
-    const tmp_path = try std.fmt.allocPrint(a, "{s}/.zig-cache/tmp/webtest", .{cwd_abs});
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try std.fmt.allocPrint(a, "{s}/.zig-cache/tmp/{s}", .{ cwd_abs, tmp.sub_path });
     try util.environ_map.?.put("PIZ_DIR", tmp_path);
     var msgs = [_]ai.Message{ mkMsg(a, "user", "a"), mkMsg(a, "assistant", "b"), mkMsg(a, "user", "c") };
     try sess.saveWebTs(a, "/work", "s1", "m1", false, "t", &msgs, 100);

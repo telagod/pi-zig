@@ -207,11 +207,13 @@ pub fn saveWebTs(alloc: std.mem.Allocator, cwd: []const u8, name: []const u8, mo
     }
 
     const st0 = std.Io.Dir.cwd().statFile(util.io, path, .{}) catch null;
-    if (count0 >= messages.len and st0 != null) {
-        // 消息没变多:只更新镜像(updated/title/auto 可能过了)
+    if (count0 == messages.len and st0 != null) {
+        // 消息数正好不变:只更新镜像(updated/title/auto 可能过了)
         try writeWebMirror(alloc, mp, model, auto, title orelse "", updated_ns, messages.len);
         return;
     }
+    // 消息变短(undo/compact):落到下方整体原子重写 —— 只更镜像会留下
+    // 比镜像多的旧消息,下次追加从错位的 count0 起写,历史即错乱。
 
     if (count0 > 0 and count0 < messages.len and st0 != null) {
         // 常规:追加新消息(messages[count0..])
@@ -326,10 +328,12 @@ pub fn loadWeb(alloc: std.mem.Allocator, cwd: []const u8, name: []const u8) !?st
     defer alloc.free(fname);
     const path = try util.joinPath(alloc, dir, fname);
     defer alloc.free(path);
-    const w = try loadSessionWindow(alloc, path, SESSION_FULL_LIMIT, SESSION_TAIL_BYTES);
-    defer alloc.free(w.body);
+    const w = loadSessionWindow(alloc, path, SESSION_FULL_LIMIT, SESSION_TAIL_BYTES) catch |err| switch (err) {
+        error.FileNotFound => return null,
+        else => return err,
+    };
+    defer w.deinit(alloc);
     const meta_line = w.meta_line orelse return null;
-    defer alloc.free(meta_line);
     var auto = true;
     var title: ?[]const u8 = null;
     var model: ?[]const u8 = null;
@@ -439,6 +443,12 @@ pub fn archiveWeb(alloc: std.mem.Allocator, cwd: []const u8, name: []const u8) !
     const dst = try util.joinPath(alloc, arch, fname);
     defer alloc.free(dst);
     try std.Io.Dir.renameAbsolute(src, dst, util.io);
+    // 镜像随行(best-effort):留档会变幽灵计数
+    const msrc = try std.fmt.allocPrint(alloc, "{s}.meta.json", .{src[0 .. src.len - ".jsonl".len]});
+    defer alloc.free(msrc);
+    const mdst = try std.fmt.allocPrint(alloc, "{s}.meta.json", .{dst[0 .. dst.len - ".jsonl".len]});
+    defer alloc.free(mdst);
+    std.Io.Dir.renameAbsolute(msrc, mdst, util.io) catch {};
 }
 
 /// 恢复归档会话:移回 <dir>/<name>.jsonl。
@@ -455,6 +465,11 @@ pub fn restoreWeb(alloc: std.mem.Allocator, cwd: []const u8, name: []const u8) !
     const dst = try util.joinPath(alloc, dir, fname);
     defer alloc.free(dst);
     try std.Io.Dir.renameAbsolute(src, dst, util.io);
+    const msrc = try std.fmt.allocPrint(alloc, "{s}.meta.json", .{src[0 .. src.len - ".jsonl".len]});
+    defer alloc.free(msrc);
+    const mdst = try std.fmt.allocPrint(alloc, "{s}.meta.json", .{dst[0 .. dst.len - ".jsonl".len]});
+    defer alloc.free(mdst);
+    std.Io.Dir.renameAbsolute(msrc, mdst, util.io) catch {};
 }
 
 /// 删除 web 会话文件(归档或活动)。
@@ -478,6 +493,13 @@ pub fn deleteWeb(alloc: std.mem.Allocator, cwd: []const u8, name: []const u8) !v
         n += 1;
     } else |_| {}
     if (n == 0) return error.FileNotFound;
+    // 孤儿镜像一并清(best-effort)
+    const base = fname[0 .. fname.len - ".jsonl".len];
+    for ([_][]const u8{ dir, arch }) |d| {
+        const m = std.fmt.allocPrint(alloc, "{s}/{s}.meta.json", .{ d, base }) catch continue;
+        defer alloc.free(m);
+        std.Io.Dir.cwd().deleteFile(util.io, m) catch {};
+    }
 }
 
 /// 列出归档会话名。
@@ -519,12 +541,19 @@ pub const SESSION_FULL_LIMIT: usize = 8 * 1024 * 1024;
 pub const SESSION_TAIL_BYTES: usize = 3 * 1024 * 1024;
 
 pub const SessionWindow = struct {
-    /// 文件首行(meta;小文件时与 body 同源,单独 dupe)
+    /// 文件首行(meta;小文件时与 body 同源,单独 dupe;调用方经 deinit 释放)
     meta_line: ?[]u8,
-    /// 消息区(已剥 meta 行;尾窗时从行边界起)
-    body: []u8,
+    /// body 的持有分配(body 是其子切片;释放只能 free buf,不得 free body)
+    buf: []u8,
+    /// 消息区(已剥 meta 行;尾窗时从行边界起;切片指向 buf)
+    body: []const u8,
     /// 是否折叠(前文省略)
     folded: bool,
+
+    pub fn deinit(self: SessionWindow, alloc: std.mem.Allocator) void {
+        alloc.free(self.buf);
+        if (self.meta_line) |ml| alloc.free(ml);
+    }
 };
 
 /// 会话读窗口:小文件全载;大文件只取尾 tail_bytes(行边界起)+ 首行 meta。
@@ -551,7 +580,7 @@ pub fn loadSessionWindow(alloc: std.mem.Allocator, path: []const u8, full_limit:
 
     if (len <= full_limit) {
         const whole = try r.interface.readAlloc(alloc, @intCast(len));
-        var body: []u8 = whole;
+        var body: []const u8 = whole;
         if (meta_line) |ml| {
             // 剥首行(逐字节定位;meta_line 长度即首行长度)
             if (whole.len > ml.len) {
@@ -559,20 +588,19 @@ pub fn loadSessionWindow(alloc: std.mem.Allocator, path: []const u8, full_limit:
                 if (skip < whole.len) body = whole[skip..];
             }
         }
-        return .{ .meta_line = meta_line, .body = body, .folded = false };
+        return .{ .meta_line = meta_line, .buf = whole, .body = body, .folded = false };
     }
 
-    if (meta_line) |ml| alloc.free(ml); // 尾窗:meta 仍要(调用方从首行取),重取?—— 保留:头部已在;返还
     // 尾窗:seek 到 len - tail(行边界修正:找窗口内首个 '\n' 后起)
     const start = len - @min(len, @as(u64, tail_bytes));
     try r.seekTo(start);
     const win = try r.interface.readAlloc(alloc, @intCast(@min(len - start, @as(u64, tail_bytes))));
     const nl = std.mem.indexOfScalar(u8, win, '\n');
-    const body = if (nl) |i|
-        if (i + 1 <= win.len) win[i + 1 ..] else win
+    const body: []const u8 = if (nl) |i|
+        (if (i + 1 <= win.len) win[i + 1 ..] else win)
     else
         win;
-    return .{ .meta_line = meta_line, .body = body, .folded = true };
+    return .{ .meta_line = meta_line, .buf = win, .body = body, .folded = true };
 }
 
 /// 镜像路径(文件级):<path 去 .jsonl>.meta.json。
@@ -1160,7 +1188,7 @@ pub const Session = struct {
     pub fn loadMessages(self: *Session) ![]ai.Message {
         var out = std.array_list.Managed(ai.Message).init(self.alloc);
         const w = try loadSessionWindow(self.alloc, self.path, SESSION_FULL_LIMIT, SESSION_TAIL_BYTES);
-        defer if (w.meta_line) |ml| self.alloc.free(ml);
+        defer w.deinit(self.alloc);
         try self.parseMessageLines(w.body, false, &out);
         if (w.folded) {
             // 折叠锚置首(在最前):历史被省,模型需知
