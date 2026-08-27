@@ -11,12 +11,12 @@
 | B 轮次分组 + 步骤摘要流 | ✅ | `chat.ts`:轮首时间戳、工具折叠步骤行(▸ N command,点击展开)、流式尾部隔离(`.stream-tail`)、长消息 fold-more |
 | C 压缩检查点行 | ✅ | `chat.ts` addCheckpoint(cp-* 行,悬停出展开,点开摘要) |
 | D 会话头谱系 + jobs | ✅ 简形 | `jobs.ts` lineage `/ N` 面包屑 + jobs 弹层(活跃升序/终态降序、终态弱化、Esc 还焦);谱系无祖先后代导航(后端无 lineage 字段,保留为后续) |
-| E 工具树 | ❌ 未做 | chat.ts 无 depth/子缩进渲染;需要后端补父子关系 |
-| F 输入区 dock | ✅ 大部 | composer dock 含队列行/pills/统计;todo 计划条(`webui.css` todo 计划条区);@ 候选未做 |
+| E 工具树 | ⊘ 不适用 | piz 设计取舍:subagent 活动不进 transcript(chat.ts:449,收进 jobs/活动条——正是 dsh 的 jobs 对齐项),transcript 内无嵌套源;若日后 workflow 节点要树形,另行立项 |
+| F 输入区 dock | ✅ | composer dock 含队列行/pills/统计;todo 计划条;`@` 候选已落(slash.ts scheduleFiles:@./ 文件经 /api/files,裸 @ 出运行中子代理插字面 @label) |
 | G 主题 token 化 | ✅ 变体 | 收敛为 `--color-*` 系统命名(非原拟 --bg-1/--tx-1),547 处 var() 引用;meta theme-color 跟随 |
 | H 侧栏微调 | ✅ 半 | 侧栏拖宽已落(sessions.ts initSideGrip,localStorage 记忆,200–420px,实拖验证 268→350);subagent ↳ 弱化无数据源(后端会话无 origin 字段,随 E 同批) |
 
-P2 剩余:E 工具树(需后端父子边 + 会话 origin 字段)、D 谱系祖先导航(同数据源)、F 的 @ 候选。
+P2 余量结论:E 工具树与 D 谱系祖先导航因「subagent 活动不进 transcript」的设计取舍而不适用(jobs/活动条已承载,与 dsh 收敛);F @ 候选、H 侧栏拖宽均已落地。**全部规划项关闭。**
 
 ## 对齐原则(取 dsh 之学,不搬其 React/slot 之形)
 
