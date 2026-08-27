@@ -14,9 +14,9 @@
 | E 工具树 | ❌ 未做 | chat.ts 无 depth/子缩进渲染;需要后端补父子关系 |
 | F 输入区 dock | ✅ 大部 | composer dock 含队列行/pills/统计;todo 计划条(`webui.css` todo 计划条区);@ 候选未做 |
 | G 主题 token 化 | ✅ 变体 | 收敛为 `--color-*` 系统命名(非原拟 --bg-1/--tx-1),547 处 var() 引用;meta theme-color 跟随 |
-| H 侧栏微调 | ❌ 未做 | 侧栏宽拖拽未做;subagent ↳ 缩进弱化未核 |
+| H 侧栏微调 | ✅ 半 | 侧栏拖宽已落(sessions.ts initSideGrip,localStorage 记忆,200–420px,实拖验证 268→350);subagent ↳ 弱化无数据源(后端会话无 origin 字段,随 E 同批) |
 
-P2 剩余:E 工具树(需后端父子边)、H 侧栏拖宽、D 谱系祖先导航、F 的 @ 候选。
+P2 剩余:E 工具树(需后端父子边 + 会话 origin 字段)、D 谱系祖先导航(同数据源)、F 的 @ 候选。
 
 ## 对齐原则(取 dsh 之学,不搬其 React/slot 之形)
 
