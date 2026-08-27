@@ -44,7 +44,7 @@ def main():
         lines.append("".join(spans).rstrip() or "&nbsp;")
     doc = f"""<!doctype html><meta charset=utf-8><style>
 body{{background:{BG};margin:0;padding:18px 20px;display:inline-block}}
-pre{{margin:0;color:{FG};font:14px/1.32 'DejaVu Sans Mono','Noto Sans Mono CJK SC',monospace;white-space:pre}}
+pre{{margin:0;color:{FG};font:15px/1.3 'JetBrains Mono','Noto Sans Mono CJK SC',monospace;white-space:pre}}
 </style><pre>{chr(10).join(lines)}</pre>"""
     open(out_path, "w").write(doc)
     print("wrote", out_path)

@@ -126,13 +126,20 @@ test "result json serialization" {
 
 pub fn runPrint(alloc: std.mem.Allocator, cfg: *cfgmod.Config, cwd: []const u8, prompt: []const u8, opts: RunOptions) !void {
     const abs_cwd = std.process.currentPathAlloc(util.io, alloc) catch cwd;
+    // 与交互模式同一语义:默认新会话(一次性问答);-c 续载,-s 指定,-t 起名
     var sess = if (opts.session_id) |id| blk: {
         const found = (try sessionmod.Session.findByIdOrIndex(alloc, abs_cwd, id)) orelse {
             std.debug.print("piz: session '{s}' not found in {s}\n", .{ id, abs_cwd });
             std.process.exit(1);
         };
         break :blk found;
-    } else (try sessionmod.Session.findLatest(alloc, abs_cwd)) orelse (try sessionmod.Session.fresh(alloc, abs_cwd));
+    } else if (opts.title != null)
+        (try sessionmod.Session.freshTitle(alloc, abs_cwd, opts.title))
+    else if (opts.continue_session)
+        (try sessionmod.Session.findLatest(alloc, abs_cwd)) orelse
+            (try sessionmod.Session.fresh(alloc, abs_cwd))
+    else
+        (try sessionmod.Session.fresh(alloc, abs_cwd));
     var agent = try agentmod.Agent.initOpts(alloc, cfg, opts.provider_name, opts.model_name, abs_cwd, .{ .read_only = opts.read_only, .system_override = opts.system_override, .depth = pluginsmod.processBaseDepth() });
     if (agent.key == null) {
         std.debug.print("piz: no API key for provider '{s}'. Set ~/.piz/auth.json, models.json apiKey, or env.\n", .{agent.provider.name});
