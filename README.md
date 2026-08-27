@@ -10,7 +10,7 @@
 <p align="center">
   <img src="docs/images/tui.png" width="720" alt="piz 交互模式：会话卡、对话、boxed composer">
 </p>
-<p align="center"><sub>交互模式。开场是会话卡，对话用 <code>›</code> / <code>•</code>，输入在底栏框。空框按 <code>?</code> 看快捷键。</sub></p>
+<p align="center"><sub>交互模式。开场是欢迎卡，用户消息亮竖线 <code>▎</code>、工具 <code>▸</code> 折叠行，输入在底栏框。空框按 <code>?</code> 看快捷键。</sub></p>
 
 <p align="center">
   <img src="docs/images/web.png" width="720" alt="piz Web UI：项目侧栏、对话、工具卡、斜杠命令">

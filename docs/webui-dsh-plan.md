@@ -1,7 +1,22 @@
-# WebUI 对齐 dsh · 设计稿(候批)
+# WebUI 对齐 dsh · 设计稿(已落地 P0/P1;P2 见末)
 
 参照:/tmp/dsh(DeepSeek Harness client,已读 ui-layout / ui-conversation / ui-subagent / ui-jobs 之行为约定)。
 现状截图:/tmp/web_now_empty.png(1400×900,有会话态)。
+
+## 落地状态(2026-08-28 核)
+
+| 块 | 状态 | 落点 |
+|---|---|---|
+| A Hero 空态 | ✅ | `main.ts` hero-card(项目 chip + 开始对话);`webui.css` #app.hero 单栏居中 |
+| B 轮次分组 + 步骤摘要流 | ✅ | `chat.ts`:轮首时间戳、工具折叠步骤行(▸ N command,点击展开)、流式尾部隔离(`.stream-tail`)、长消息 fold-more |
+| C 压缩检查点行 | ✅ | `chat.ts` addCheckpoint(cp-* 行,悬停出展开,点开摘要) |
+| D 会话头谱系 + jobs | ✅ 简形 | `jobs.ts` lineage `/ N` 面包屑 + jobs 弹层(活跃升序/终态降序、终态弱化、Esc 还焦);谱系无祖先后代导航(后端无 lineage 字段,保留为后续) |
+| E 工具树 | ❌ 未做 | chat.ts 无 depth/子缩进渲染;需要后端补父子关系 |
+| F 输入区 dock | ✅ 大部 | composer dock 含队列行/pills/统计;todo 计划条(`webui.css` todo 计划条区);@ 候选未做 |
+| G 主题 token 化 | ✅ 变体 | 收敛为 `--color-*` 系统命名(非原拟 --bg-1/--tx-1),547 处 var() 引用;meta theme-color 跟随 |
+| H 侧栏微调 | ❌ 未做 | 侧栏宽拖拽未做;subagent ↳ 缩进弱化未核 |
+
+P2 剩余:E 工具树(需后端父子边)、H 侧栏拖宽、D 谱系祖先导航、F 的 @ 候选。
 
 ## 对齐原则(取 dsh 之学,不搬其 React/slot 之形)
 
