@@ -142,14 +142,6 @@ pub const App = struct {
     } = .{},
     /// 会话起始时刻(ns,状态栏 t/s)
     start_ns: i128,
-    /// !cmd / !!cmd:bash 在独立线程跑,完成投槽,主循环 on_tick 消费——
-    /// 主线程不再同步等 bash(sleep 12 曾把 TUI 冻住秒级)。
-    bang: struct {
-        done: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
-        /// 待发「!cmd + Output」消息(page_allocator 所有,主循环消费后 free)
-        msg: ?[]const u8 = null,
-        mutex: std.Io.Mutex = .init,
-    } = .{},
 
     /// 队列消息入队(主线程调用)。失败须告诉用户,否则排队消息会无声消失。
     pub fn enqueue(self: *App, line: []const u8) bool {

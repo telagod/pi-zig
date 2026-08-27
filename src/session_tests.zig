@@ -145,11 +145,9 @@ test "session title + list + setTitle" {
     std.Io.Dir.cwd().deleteFile(util.io, s0.path) catch {};
     defer {
         std.Io.Dir.cwd().deleteFile(util.io, s1.path) catch {};
-        if (std.fmt.allocPrint(a, "{s}/sessions/--tmp--", .{tmp_path})) |sd1| {
-            std.Io.Dir.cwd().deleteDir(util.io, sd1) catch |e| std.debug.print("[sess-test] deleteDir1 {s}\n", .{@errorName(e)});
-        } else |_| {}
+        // 镜像 .meta.json 与正文同目录,deleteDir 必 DirNotEmpty;deleteTree 一把清
         if (std.fmt.allocPrint(a, "{s}/sessions", .{tmp_path})) |sd2| {
-            std.Io.Dir.cwd().deleteDir(util.io, sd2) catch |e| std.debug.print("[sess-test] deleteDir2 {s}\n", .{@errorName(e)});
+            std.Io.Dir.cwd().deleteTree(util.io, sd2) catch {};
         } else |_| {}
     }
     try s1.saveMessage(&.{ .role = "user", .content = "hi" });
@@ -253,11 +251,9 @@ test "session truncate" {
     defer {
         std.Io.Dir.cwd().deleteFile(util.io, sess1.path) catch {};
         // deleteTree 对空目录链静默失败,手动清 sessions 目录
-        if (std.fmt.allocPrint(a, "{s}/sessions/--tmp--", .{tmp_path})) |sd1| {
-            std.Io.Dir.cwd().deleteDir(util.io, sd1) catch |e| std.debug.print("[sess-test] deleteDir1 {s}\n", .{@errorName(e)});
-        } else |_| {}
+        // 镜像 .meta.json 与正文同目录,deleteDir 必 DirNotEmpty;deleteTree 一把清
         if (std.fmt.allocPrint(a, "{s}/sessions", .{tmp_path})) |sd2| {
-            std.Io.Dir.cwd().deleteDir(util.io, sd2) catch |e| std.debug.print("[sess-test] deleteDir2 {s}\n", .{@errorName(e)});
+            std.Io.Dir.cwd().deleteTree(util.io, sd2) catch {};
         } else |_| {}
     }
     try sess1.saveMessage(&.{ .role = "user", .content = "q1" });
