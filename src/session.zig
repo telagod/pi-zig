@@ -1019,7 +1019,8 @@ pub const Session = struct {
         // v2:user 消息维护镜像(preview/turns) —— 列表/描述零正文读
         if (std.mem.eql(u8, msg.role, "user")) {
             if (self.preview == null and msg.content.len > 0) {
-                const p = util.clampUtf8(msg.content, 60);
+                var pb: [64]u8 = undefined;
+                const p = cleanPreview(msg.content, &pb);
                 if (p.len > 0) self.preview = try self.alloc.dupe(u8, p);
             }
             self.turns += 1;
@@ -1055,7 +1056,7 @@ pub const Session = struct {
         var preview_owned: ?[]u8 = null;
         defer if (preview_owned) |p| alloc.free(p);
         if (self.mirror) {
-            preview = self.preview;
+            if (self.preview) |p| preview = cleanPreview(p, &preview_buf);
             turns = self.turns;
         } else if (std.Io.Dir.cwd().readFileAlloc(util.io, self.path, alloc, .limited(256 * 1024))) |content| {
             defer alloc.free(content);
@@ -1082,7 +1083,8 @@ pub const Session = struct {
             p
         else
             self.sessionId();
-        const headline = try alloc.dupe(u8, util.clampUtf8(raw, 48));
+        const raw1 = if (std.mem.indexOfScalar(u8, raw, '\n')) |i| raw[0..i] else raw;
+        const headline = try alloc.dupe(u8, util.clampUtf8(raw1, 48));
         errdefer alloc.free(headline);
 
         var age_buf: [16]u8 = undefined;
@@ -1189,7 +1191,8 @@ pub const Session = struct {
             // preview/turns 统计(镜像兜底)
             if (std.mem.eql(u8, role, "user")) {
                 if (self.preview == null and content_str.len > 0) {
-                    const p = util.clampUtf8(content_str, 60);
+                    var pb: [64]u8 = undefined;
+                    const p = cleanPreview(content_str, &pb);
                     if (p.len > 0) self.preview = try self.alloc.dupe(u8, p);
                 }
                 self.turns += 1;
@@ -1379,6 +1382,13 @@ fn flattenPreview(src: []const u8, buf: []u8) []const u8 {
         o += 1;
     }
     return buf[0..o];
+}
+
+/// preview 清洗:只取首行再 flatten(bang 消息 \n\nOutput:… 这类多行内容
+/// 直接进 preview 会把欢迎卡 Recent sessions 顶穿 —— 实机截图取证)。
+fn cleanPreview(src: []const u8, buf: []u8) []const u8 {
+    const first = if (std.mem.indexOfScalar(u8, src, '\n')) |i| src[0..i] else src;
+    return flattenPreview(first, buf);
 }
 
 pub fn formatAge(buf: []u8, now_ns: i128, then_ns: i128) []const u8 {
