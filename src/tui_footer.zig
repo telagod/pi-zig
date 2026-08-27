@@ -10,8 +10,6 @@ const ANSI_DIM = "\x1b[2m";
 
 const visibleCols = measure.visibleCols;
 const truncateToVisible = measure.truncateToVisible;
-const ellipsizeAlloc = measure.ellipsizeAlloc;
-const joinN = measure.joinN;
 
 var theme_ptr: ?*const theme_mod.Theme = null;
 
@@ -88,7 +86,8 @@ pub fn footerHint(s: FooterState) ?[]const u8 {
     return null;
 }
 
-/// Structured footer identity. Painted under the composer, not as a transcript card.
+/// Structured footer identity. Painted on the composer top edge (wide) or under
+/// it (narrow), never as a transcript card.
 /// `used`/`window` are occupancy (est. tokens in the live context / model window).
 /// `cache_read`/`prompt` are last-turn API usage — null means the provider did
 /// not report that field. Never invent a hit rate from missing numbers.
@@ -127,17 +126,134 @@ pub const FooterRows = struct {
     }
 };
 
-/// pi 式双行阈值:宽 >= 50 恒双行(行1 cwd (branch),行2 stats/model)。
-/// 窄端退化单行挤排,由 formatFooterRows 内 fitSingle 处置。
+/// pi 式双行阈值:双行 = 页脚自载 model/ctx(pi 式行1 cwd (branch),行2 stats/model)。
+/// >=50 旧约保留(直接调用方);<40 顶边纯线、信息落页脚,也双行;
+/// 40..49 拼接带单行。运行期 measureBottom 在 >=40 恒传单行,two_rows 只 <40 为真。
 pub fn footerNeedsTwoRows(ident: FooterIdent, hint: ?[]const u8, width: usize) bool {
     _ = ident;
     _ = hint;
-    return width >= 50;
+    return width >= 50 or width < 40;
 }
 
-/// pi 式双行:行 1 `cwd (branch) · session` muted,hint 右端 dimmest;
-/// 行 2 左 stats(ctx% 随占用变色、R cache),右 `model · think`。
-fn formatFooterPi(alloc: std.mem.Allocator, ident: FooterIdent, hint: ?[]const u8, width: usize) !FooterRows {
+fn edgeAppend(buf: []u8, len: *usize, s: []const u8) void {
+    const n = @min(s.len, buf.len - len.*);
+    @memcpy(buf[len.*..][0..n], s);
+    len.* += n;
+}
+
+/// 顶边一段排版的总列数:"── " + left + (" ── " + mid)? + (" ── " + right)? + " ─"。
+fn edgeNeed(left: []const u8, mid: []const u8, right: []const u8) usize {
+    var n: usize = 3 + visibleCols(left) + 2;
+    if (mid.len > 0) n += 4 + visibleCols(mid);
+    if (right.len > 0) n += 4 + visibleCols(right);
+    return n;
+}
+
+/// composer 顶边信息条(omp 形,piz 化,与页脚同源 FooterIdent):
+/// ╭── model · think ── cwd ↳ branch ── $cost · ctx N% (used/window) ──╮
+/// 色全走 theme().muted()。box_w < 39(终端 <40 列)纯线,信息留页脚双行;
+/// box_w < 59(终端 <60 列)只 model + ctx N%。无成本数据省略 $cost。
+/// 降级序:cost → cwd↳branch(先截后弃) → think/sandbox → ctx 绝对量 →
+/// 右段全弃 → 截 model;任何宽度都画出闭合盒(不画崩是底线)。
+pub fn writeComposerTopEdge(wr: *std.Io.Writer, ident: FooterIdent, box_w: usize) !void {
+    const mu = theme().muted();
+    if (box_w < 39) {
+        try wr.writeAll(ANSI_DIM);
+        try wr.writeAll("╭");
+        var i: usize = 2;
+        while (i < box_w) : (i += 1) try wr.writeAll("─");
+        try wr.writeAll("╮");
+        try wr.writeAll(ANSI_RESET ++ "\x1b[K\r\n");
+        return;
+    }
+    const budget = box_w - 2; // ╭ ╮ 之间
+    const wide = box_w >= 59;
+    // 左段:model · think · sandbox(<60 列只 model)
+    var left_b: [192]u8 = undefined;
+    var ln: usize = 0;
+    edgeAppend(&left_b, &ln, ident.model);
+    if (wide and ident.think.len > 0) {
+        edgeAppend(&left_b, &ln, " · ");
+        edgeAppend(&left_b, &ln, ident.think);
+    }
+    if (wide and ident.sandbox.len > 0) {
+        edgeAppend(&left_b, &ln, " · ");
+        edgeAppend(&left_b, &ln, ident.sandbox);
+    }
+    var left: []const u8 = left_b[0..ln];
+    // 中段:cwd ↳ branch(仅宽端)
+    var mid_b: [192]u8 = undefined;
+    var mn: usize = 0;
+    if (wide) {
+        edgeAppend(&mid_b, &mn, ident.cwd);
+        if (ident.branch.len > 0) {
+            if (ident.cwd.len > 0) edgeAppend(&mid_b, &mn, " ↳ ");
+            edgeAppend(&mid_b, &mn, ident.branch);
+        }
+    }
+    var mid: []const u8 = mid_b[0..mn];
+    // 右段:$cost · ctx N% (used/window),窄端起只 ctx N%
+    var used_b: [16]u8 = undefined;
+    var win_b: [16]u8 = undefined;
+    var ctx_full_b: [80]u8 = undefined;
+    const ctx_full: []const u8 = if (ident.window > 0)
+        std.fmt.bufPrint(&ctx_full_b, "ctx {d}% ({s}/{s})", .{ ident.pct, formatTok(&used_b, ident.used), formatTok(&win_b, ident.window) }) catch "ctx —"
+    else
+        std.fmt.bufPrint(&ctx_full_b, "ctx {d}%", .{ident.pct}) catch "ctx —";
+    var ctx_pct_b: [24]u8 = undefined;
+    const ctx_pct = std.fmt.bufPrint(&ctx_pct_b, "ctx {d}%", .{ident.pct}) catch "ctx —";
+    var cost_b: [40]u8 = undefined;
+    const cost_s: []const u8 = if (ident.cost) |c|
+        std.fmt.bufPrint(&cost_b, "${d:.2}", .{c}) catch ""
+    else if (ident.subscription)
+        "(sub)"
+    else
+        "";
+    var right_full_b: [128]u8 = undefined;
+    const right_full: []const u8 = if (cost_s.len > 0)
+        std.fmt.bufPrint(&right_full_b, "{s} · {s}", .{ cost_s, ctx_full }) catch ctx_full
+    else
+        ctx_full;
+    var right: []const u8 = if (wide) right_full else ctx_pct;
+    // 降级:cost → branch(先截后弃) → think/sandbox → ctx 绝对量 → 右段 → 截 model
+    if (edgeNeed(left, mid, right) > budget and wide and cost_s.len > 0) right = ctx_full;
+    if (edgeNeed(left, mid, right) > budget and mid.len > 0) {
+        const spare = budget -| edgeNeed(left, "", right) -| 4;
+        mid = if (spare >= 12) truncateToVisible(mid, spare) else "";
+    }
+    if (edgeNeed(left, mid, right) > budget and mid.len > 0) mid = "";
+    if (edgeNeed(left, mid, right) > budget and !std.mem.eql(u8, left, ident.model)) left = ident.model;
+    if (edgeNeed(left, mid, right) > budget and !std.mem.eql(u8, right, ctx_pct)) right = ctx_pct;
+    if (edgeNeed(left, mid, right) > budget) right = "";
+    if (edgeNeed(left, mid, right) > budget) left = truncateToVisible(left, budget -| 5);
+
+    try wr.writeAll(ANSI_DIM);
+    try wr.writeAll("╭");
+    try wr.writeAll(mu);
+    try wr.writeAll("── ");
+    try wr.writeAll(left);
+    var used: usize = 3 + visibleCols(left);
+    if (mid.len > 0) {
+        try wr.writeAll(" ── ");
+        try wr.writeAll(mid);
+        used += 4 + visibleCols(mid);
+    }
+    if (right.len > 0) {
+        try wr.writeAll(" ── ");
+        try wr.writeAll(right);
+        used += 4 + visibleCols(right);
+    }
+    try wr.writeAll(" ");
+    used += 1;
+    while (used < budget) : (used += 1) try wr.writeAll("─");
+    try wr.writeAll(ANSI_DIM);
+    try wr.writeAll("╮");
+    try wr.writeAll(ANSI_RESET ++ "\x1b[K\r\n");
+}
+
+/// 单行页脚:左 `cwd (branch) · session` host 身份 muted,右 hint dimmest。
+/// 宽端(>=40)model/think/ctx/cost 已在 composer 顶边,此行不重复。
+fn formatFooterPlaceRow(alloc: std.mem.Allocator, ident: FooterIdent, hint: ?[]const u8, width: usize) ![]u8 {
     const mu = theme().muted();
     // pi 式:`pwd (branch) • session`;session 非空才挂在 cwd 后
     const place = if (ident.branch.len > 0 and ident.session.len > 0)
@@ -149,14 +265,18 @@ fn formatFooterPi(alloc: std.mem.Allocator, ident: FooterIdent, hint: ?[]const u
     else
         try std.fmt.allocPrint(alloc, "  {s}{s}{s}", .{ ANSI_DIM, ident.cwd, ANSI_RESET });
     defer alloc.free(place);
-    var row1: []u8 = undefined;
     if (hint) |h| {
         const hint_s = try std.fmt.allocPrint(alloc, "{s}{s}{s}", .{ ANSI_DIM, h, ANSI_RESET });
         defer alloc.free(hint_s);
-        row1 = try layoutFooter(alloc, place, hint_s, width);
-    } else {
-        row1 = try alloc.dupe(u8, truncateToVisible(place, width));
+        return layoutFooter(alloc, place, hint_s, width);
     }
+    return alloc.dupe(u8, truncateToVisible(place, width));
+}
+
+/// pi 式双行:行 1 `cwd (branch) · session` muted,hint 右端 dimmest;
+/// 行 2 左 stats(ctx% 随占用变色、R cache),右 `model · think`。
+pub fn formatFooterPi(alloc: std.mem.Allocator, ident: FooterIdent, hint: ?[]const u8, width: usize) !FooterRows {
+    const row1 = try formatFooterPlaceRow(alloc, ident, hint, width);
 
     var used_buf: [16]u8 = undefined;
     var win_buf: [16]u8 = undefined;
@@ -283,64 +403,14 @@ fn formatFooterPi(alloc: std.mem.Allocator, ident: FooterIdent, hint: ?[]const u
     return .{ .primary = row1, .secondary = row2 };
 }
 
-/// Pack footer facts with single spaces. Prefer one row; split when
-/// `two_rows` is set *and* the full pack overflows (cwd · session on row 2).
-/// Collapse when forced onto one row: hint, think, cache label, ctx absolute,
-/// session; cwd last. Model is never dropped. Below ~40 cols, ellipsize cwd
-/// rather than omit it. Labels dim, numbers normal, model bold, hint dimmest.
+/// two_rows 且宽度落在双行带(footerNeedsTwoRows)走 pi 式双行;否则单行
+/// host 身份 + hint。运行期 measureBottom 只在 <40 列请求双行(顶边纯线,
+/// model/ctx 落页脚);>=40 列信息已上 composer 顶边,页脚不重复。
 pub fn formatFooterRows(alloc: std.mem.Allocator, ident: FooterIdent, hint: ?[]const u8, width: usize, two_rows: bool) !FooterRows {
-    const hint_s = if (hint) |h|
-        try std.fmt.allocPrint(alloc, "{s}{s}{s}", .{ ANSI_DIM, h, ANSI_RESET })
-    else
-        try alloc.dupe(u8, "");
-    defer alloc.free(hint_s);
-    const model_s = if (ident.model.len == 0)
-        try alloc.dupe(u8, "")
-    else
-        // pi 式:footer 一色全 dim,model 不另加粗(识别凭据靠位置,不靠色)
-        try std.fmt.allocPrint(alloc, "{s}{s}{s}", .{ ANSI_DIM, ident.model, ANSI_RESET });
-    defer alloc.free(model_s);
-    const think_s = if (ident.think.len == 0)
-        try alloc.dupe(u8, "")
-    else
-        try std.fmt.allocPrint(alloc, "{s}think {s}{s}", .{ ANSI_DIM, ANSI_RESET, ident.think });
-    defer alloc.free(think_s);
-    const ink: []const u8 = if (ident.hot) "\x1b[31m" else "";
-    const ink_end: []const u8 = if (ident.hot) ANSI_RESET else "";
-    var ctx_full_buf: [48]u8 = undefined;
-    var ctx_pct_buf: [48]u8 = undefined;
-    const ctx_full_raw = formatCtx(&ctx_full_buf, ident.used, ident.window, true);
-    const ctx_pct_raw = formatCtx(&ctx_pct_buf, ident.used, ident.window, false);
-    const ctx_full_nums = if (std.mem.startsWith(u8, ctx_full_raw, "ctx ")) ctx_full_raw[4..] else ctx_full_raw;
-    const ctx_pct_nums = if (std.mem.startsWith(u8, ctx_pct_raw, "ctx ")) ctx_pct_raw[4..] else ctx_pct_raw;
-    const ctx_full = try std.fmt.allocPrint(alloc, "{s}ctx {s}{s}{s}{s}", .{ ANSI_DIM, ANSI_RESET, ink, ctx_full_nums, ink_end });
-    defer alloc.free(ctx_full);
-    const ctx_pct = try std.fmt.allocPrint(alloc, "{s}ctx {s}{s}{s}{s}", .{ ANSI_DIM, ANSI_RESET, ink, ctx_pct_nums, ink_end });
-    defer alloc.free(ctx_pct);
-    var cache_full_buf: [32]u8 = undefined;
-    var cache_num_buf: [32]u8 = undefined;
-    const cache_full_raw = formatCache(&cache_full_buf, ident.cache_read, ident.prompt, true);
-    const cache_num_raw = formatCache(&cache_num_buf, ident.cache_read, ident.prompt, false);
-    const cache_full = try styleCacheToken(alloc, cache_full_raw);
-    defer alloc.free(cache_full);
-    const cache_num = try alloc.dupe(u8, cache_num_raw);
-    defer alloc.free(cache_num);
-    const place_full = try formatPlace(alloc, ident.cwd, ident.session);
-    defer alloc.free(place_full);
-    const place_cwd = try formatPlace(alloc, ident.cwd, "");
-    defer alloc.free(place_cwd);
     const split = two_rows and footerNeedsTwoRows(ident, hint, width);
     if (split) return formatFooterPi(alloc, ident, hint, width);
-    const primary = try fitSingle(alloc, model_s, think_s, ctx_full, ctx_pct, cache_full, cache_num, place_full, place_cwd, ident.cwd, hint_s, width);
+    const primary = try formatFooterPlaceRow(alloc, ident, hint, width);
     return .{ .primary = primary, .secondary = try alloc.dupe(u8, "") };
-}
-
-fn styleCacheToken(alloc: std.mem.Allocator, raw: []const u8) ![]u8 {
-    if (std.mem.startsWith(u8, raw, "cached "))
-        return std.fmt.allocPrint(alloc, "{s}cached {s}{s}", .{ ANSI_DIM, ANSI_RESET, raw[7..] });
-    if (std.mem.startsWith(u8, raw, "cache "))
-        return std.fmt.allocPrint(alloc, "{s}cache {s}{s}", .{ ANSI_DIM, ANSI_RESET, raw[6..] });
-    return std.fmt.allocPrint(alloc, "{s}{s}{s}", .{ ANSI_DIM, raw, ANSI_RESET });
 }
 
 /// Compact token count for the footer (`1.2k`, `128k`, `1M`).
@@ -397,128 +467,6 @@ pub fn formatCache(buf: *[32]u8, cache_read: ?u64, prompt: ?u64, labeled: bool) 
     }
     if (labeled) return "cache —";
     return "—";
-}
-
-fn formatPlace(alloc: std.mem.Allocator, cwd: []const u8, session: []const u8) ![]u8 {
-    if (cwd.len > 0 and session.len > 0)
-        return std.fmt.allocPrint(alloc, "{s}{s} · {s}{s}", .{ ANSI_DIM, cwd, session, ANSI_RESET });
-    if (session.len > 0)
-        return std.fmt.allocPrint(alloc, "{s}{s}{s}", .{ ANSI_DIM, session, ANSI_RESET });
-    if (cwd.len > 0)
-        return std.fmt.allocPrint(alloc, "{s}{s}{s}", .{ ANSI_DIM, cwd, ANSI_RESET });
-    return alloc.dupe(u8, "");
-}
-
-fn joinPacked(alloc: std.mem.Allocator, parts: []const []const u8) ![]u8 {
-    var buf: [12][]const u8 = undefined;
-    var n: usize = 0;
-    for (parts) |p| {
-        if (p.len == 0) continue;
-        if (n >= buf.len) break;
-        buf[n] = p;
-        n += 1;
-    }
-    return joinN(alloc, buf[0..n], " ");
-}
-
-fn fitPrimary(
-    alloc: std.mem.Allocator,
-    model_s: []const u8,
-    think_s: []const u8,
-    ctx_full: []const u8,
-    ctx_pct: []const u8,
-    cache_full: []const u8,
-    cache_num: []const u8,
-    width: usize,
-) ![]u8 {
-    const variants = [_][]const []const u8{
-        &.{ model_s, think_s, ctx_full, cache_full },
-        &.{ model_s, ctx_full, cache_full },
-        &.{ model_s, ctx_full, cache_num },
-        &.{ model_s, ctx_pct, cache_num },
-        &.{ model_s, ctx_pct },
-        &.{model_s},
-    };
-    for (variants) |parts| {
-        const joined = try joinPacked(alloc, parts);
-        if (visibleCols(joined) <= width) return joined;
-        alloc.free(joined);
-    }
-    return alloc.dupe(u8, truncateToVisible(model_s, width));
-}
-
-fn fitSecondary(alloc: std.mem.Allocator, cwd: []const u8, session: []const u8, hint: []const u8, width: usize) ![]u8 {
-    const place_full = try formatPlace(alloc, cwd, session);
-    defer alloc.free(place_full);
-    const place_cwd = try formatPlace(alloc, cwd, "");
-    defer alloc.free(place_cwd);
-    const variants = [_][]const []const u8{
-        &.{ place_full, hint },
-        &.{place_full},
-        &.{ place_cwd, hint },
-        &.{place_cwd},
-    };
-    for (variants) |parts| {
-        const joined = try joinPacked(alloc, parts);
-        if (visibleCols(joined) <= width) return joined;
-        alloc.free(joined);
-    }
-    if (cwd.len > 0 and width > 0) {
-        const short = try ellipsizeAlloc(alloc, cwd, width);
-        defer alloc.free(short);
-        return formatPlace(alloc, short, "");
-    }
-    if (hint.len > 0) return alloc.dupe(u8, truncateToVisible(hint, width));
-    return alloc.dupe(u8, "");
-}
-
-fn fitSingle(
-    alloc: std.mem.Allocator,
-    model_s: []const u8,
-    think_s: []const u8,
-    ctx_full: []const u8,
-    ctx_pct: []const u8,
-    cache_full: []const u8,
-    cache_num: []const u8,
-    place_full: []const u8,
-    place_cwd: []const u8,
-    cwd: []const u8,
-    hint: []const u8,
-    width: usize,
-) ![]u8 {
-    const variants = [_][]const []const u8{
-        &.{ model_s, think_s, ctx_full, cache_full, place_full, hint },
-        &.{ model_s, think_s, ctx_full, cache_full, place_full },
-        &.{ model_s, ctx_full, cache_full, place_full },
-        &.{ model_s, ctx_full, cache_num, place_full },
-        &.{ model_s, ctx_pct, cache_num, place_full },
-        &.{ model_s, ctx_pct, cache_num, place_cwd },
-        &.{ model_s, ctx_pct, place_cwd },
-        &.{ model_s, place_cwd },
-    };
-    for (variants) |parts| {
-        const joined = try joinPacked(alloc, parts);
-        if (visibleCols(joined) <= width) return joined;
-        alloc.free(joined);
-    }
-    if (cwd.len > 0) {
-        const model_cols = visibleCols(model_s);
-        const gap: usize = if (model_cols > 0) 1 else 0;
-        if (model_cols + gap < width) {
-            const short = try ellipsizeAlloc(alloc, cwd, width - model_cols - gap);
-            defer alloc.free(short);
-            const placed = try formatPlace(alloc, short, "");
-            defer alloc.free(placed);
-            const joined = try joinPacked(alloc, &.{ model_s, placed });
-            if (visibleCols(joined) <= width) return joined;
-            alloc.free(joined);
-        } else if (model_cols == 0) {
-            const short = try ellipsizeAlloc(alloc, cwd, width);
-            defer alloc.free(short);
-            return formatPlace(alloc, short, "");
-        }
-    }
-    return fitPrimary(alloc, model_s, think_s, ctx_full, ctx_pct, cache_full, cache_num, width);
 }
 
 /// 左提示 + 右上下文,宽不够先丢右边。

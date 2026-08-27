@@ -1476,7 +1476,7 @@ test "every slash command appears in /help" {
     try t.expect(std.mem.indexOf(u8, text, "keys") != null);
 }
 
-test "status card still builds; welcome is footer not a header cell" {
+test "status card still builds; welcome note feeds footer identity" {
     const t = std.testing;
     const note = try welcomeNote(t.allocator, 12, "refactor");
     defer t.allocator.free(note);

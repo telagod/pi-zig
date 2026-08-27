@@ -632,12 +632,30 @@ pub const Tui = struct {
         self.mutex.lock(util.io) catch {};
         defer self.mutex.unlock(util.io);
         const cell = self.firstRunningTool(name) orelse try self.pushCell(.tool);
+        try self.finishToolLocked(cell, name, "", is_error, body);
+    }
+
+    /// appendToolEnd 的 preview 匹配变体:bang 卡同名 "!",按 cmd 认卡,
+    /// 并发 `!cmd` 不至于把结果收进别人的卡。找不到则退 FIFO,再退新卡。
+    pub fn appendToolEndMatch(self: *Tui, name: []const u8, preview: []const u8, is_error: bool, body: []const u8) !void {
+        self.mutex.lock(util.io) catch {};
+        defer self.mutex.unlock(util.io);
+        const cell = self.firstRunningToolMatch(name, preview) orelse self.firstRunningTool(name) orelse try self.pushCell(.tool);
+        try self.finishToolLocked(cell, name, preview, is_error, body);
+    }
+
+    /// 卡收尾主体(调用方须持锁)。cell 无 tool 载荷时按 name/preview 新建。
+    fn finishToolLocked(self: *Tui, cell: *Cell, name: []const u8, preview: []const u8, is_error: bool, body: []const u8) !void {
         if (cell.tool == null) {
             const name_d = try self.alloc.dupe(u8, name);
             errdefer self.alloc.free(name_d);
-            const prev_d = try self.alloc.dupe(u8, "");
+            const prev_d = try self.alloc.dupe(u8, preview);
             errdefer self.alloc.free(prev_d);
             try cell.text.appendSlice(name);
+            if (preview.len > 0) {
+                try cell.text.appendSlice("  ");
+                try cell.text.appendSlice(preview);
+            }
             cell.tool = .{
                 .name = name_d,
                 .preview = prev_d,
@@ -669,6 +687,17 @@ pub const Tui = struct {
             if (c.kind != .tool) continue;
             if (c.tool) |*tm| {
                 if (tm.status == .running and std.mem.eql(u8, tm.name, name)) return c;
+            }
+        }
+        return null;
+    }
+
+    /// 同名卡在跑不止一张时按 preview 认卡(bang:`!cmd` 的卡名都是 "!")。
+    pub fn firstRunningToolMatch(self: *Tui, name: []const u8, preview: []const u8) ?*Cell {
+        for (self.cells.items) |*c| {
+            if (c.kind != .tool) continue;
+            if (c.tool) |*tm| {
+                if (tm.status == .running and std.mem.eql(u8, tm.name, name) and std.mem.eql(u8, tm.preview, preview)) return c;
             }
         }
         return null;
@@ -853,38 +882,8 @@ pub const Tui = struct {
         const min_inner: usize = 1;
         var working = workingRows(nact, streaming, subagentCount(views));
         const help_rows: usize = if (self.shortcuts_open) 2 else 0;
-        const ident = FooterIdent{
-            .model = self.footer_model.items,
-            .think = self.footer_think.items,
-            .cwd = self.footer_cwd.items,
-            .branch = self.footer_branch.items,
-            .session = self.footer_session.items,
-            .tok_in = self.footer_tok_in,
-            .tok_out = self.footer_tok_out,
-            .tok_cache_w = self.footer_tok_cache_w,
-            .tok_cache_r = self.footer_tok_cache_r,
-            .cost = self.footer_cost,
-            .subscription = self.footer_sub,
-            .used = self.footer_used,
-            .window = self.footer_window,
-            .cache_read = self.footer_cache_read,
-            .prompt = self.footer_prompt,
-            .pct = self.footer_pct,
-            .hot = self.footer_hot,
-        };
-        const hint = footerHint(.{
-            .perm = self.perm_prompt.load(.acquire) != null,
-            .picker = self.picker != null,
-            .slash = self.picker == null and (slashQuery(self.input.items) != null and self.slash_items.len > 0 or filesmod.atQuery(self.input.items) != null),
-            .quit_armed = self.quit_arm_ns != 0,
-            .esc_armed = self.esc_armed,
-            .scrolled = self.scroll_off > 0,
-            .shortcuts = self.shortcuts_open,
-            .has_draft = self.input.items.len > 0,
-            .running = streaming,
-            .image = self.pending_image != null,
-        });
-        var ident_rows: usize = if (footerNeedsTwoRows(ident, hint, w)) 2 else 1;
+        // 双行只留 <40 列:顶边纯线时 model/ctx 落页脚;>=40 信息上 composer 顶边。
+        var ident_rows: usize = if (w < 40) 2 else 1;
         const fixed = perm_rows + picker_rows + slash_rows + file_rows + help_rows;
         const composerOf = struct {
             fn go(is_boxed: bool, inner: usize) usize {
@@ -1021,9 +1020,28 @@ pub const Tui = struct {
         }
         const cur = wrapCursor(self.input.items, self.cursor, bottom.input_inner);
         const view_skip = composerSkip(cur.row, bottom.comp_inner);
+        const ident = FooterIdent{
+            .model = self.footer_model.items,
+            .think = self.footer_think.items,
+            .cwd = self.footer_cwd.items,
+            .branch = self.footer_branch.items,
+            .session = self.footer_session.items,
+            .tok_in = self.footer_tok_in,
+            .tok_out = self.footer_tok_out,
+            .tok_cache_w = self.footer_tok_cache_w,
+            .tok_cache_r = self.footer_tok_cache_r,
+            .cost = self.footer_cost,
+            .subscription = self.footer_sub,
+            .used = self.footer_used,
+            .window = self.footer_window,
+            .cache_read = self.footer_cache_read,
+            .prompt = self.footer_prompt,
+            .pct = self.footer_pct,
+            .hot = self.footer_hot,
+        };
         if (bottom.boxed) {
             const box_w = composerBoxWidth(w);
-            try writeBoxEdge(&block_aw.writer, "╭", "╮", box_w);
+            try footer.writeComposerTopEdge(&block_aw.writer, ident, box_w);
             try emitComposer(&block_aw.writer, self.input.items, bottom.input_inner, bottom.comp_inner, view_skip);
             try writeBoxEdge(&block_aw.writer, "╰", "╯", box_w);
         } else {
@@ -1043,25 +1061,7 @@ pub const Tui = struct {
             .running = streaming or nact > 0,
             .image = self.pending_image != null,
         });
-        const rows = try formatFooterRows(self.alloc, .{
-            .model = self.footer_model.items,
-            .think = self.footer_think.items,
-            .cwd = self.footer_cwd.items,
-            .branch = self.footer_branch.items,
-            .session = self.footer_session.items,
-            .tok_in = self.footer_tok_in,
-            .tok_out = self.footer_tok_out,
-            .tok_cache_w = self.footer_tok_cache_w,
-            .tok_cache_r = self.footer_tok_cache_r,
-            .cost = self.footer_cost,
-            .subscription = self.footer_sub,
-            .used = self.footer_used,
-            .window = self.footer_window,
-            .cache_read = self.footer_cache_read,
-            .prompt = self.footer_prompt,
-            .pct = self.footer_pct,
-            .hot = self.footer_hot,
-        }, hint, w, bottom.footer_ident_rows >= 2);
+        const rows = try formatFooterRows(self.alloc, ident, hint, w, bottom.footer_ident_rows >= 2);
         defer rows.deinit(self.alloc);
         try block_aw.writer.writeAll(rows.primary);
         try block_aw.writer.writeAll(ANSI_RESET ++ "\x1b[K\r\n");

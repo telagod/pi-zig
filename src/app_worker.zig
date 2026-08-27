@@ -115,7 +115,8 @@ pub fn workerMain(wctx: *WorkerCtx) void {
         } else {
             line = app.dequeue();
             if (line == null) break;
-            tuiOk("tui.user", app.tui.appendUser(line.?)); // 显示排队消息
+            // bang 完成消息提交时已回显 `!cmd` 一行,出队不再刷全文(显示/发送分离)
+            if (!isBangMessage(line.?)) tuiOk("tui.user", app.tui.appendUser(line.?)); // 显示排队消息
         }
         const msg = line.?;
         const n_before = app.agent.messages.items.len;
@@ -250,10 +251,13 @@ pub fn onSubmit(tui: *tui_mod.Tui, line: []const u8) anyerror!void {
     }
     // 正常消息:!cmd 运行并发送;!!cmd 运行不发送;@path 展开文件内容
     // (!cmd 已 worker 化:bash 进独立线程,主线程不再冻结;
-    //  结果行由 bang 线程直接 tuiNote,发模型的消息经 on_tick 投回)
+    //  结果走工具卡——这里先落 running 卡,on_tick 收尾;
+    //  发模型的完整「!cmd + Output」与 transcript 回显分离:只显 `!cmd` 一行)
     if (line.len > 1 and line[0] == '!') {
         const send_to_llm = !(line.len > 1 and line[1] == '!');
         const cmd = if (send_to_llm) line[1..] else line[2..];
+        if (send_to_llm) tuiOk("tui.user", app.tui.appendUser(line));
+        tuiOk("tui.tool", app.tui.appendTool("!", cmd));
         spawnBang(app, cmd, send_to_llm);
         return;
     }
@@ -332,94 +336,146 @@ pub fn spawnWorker(app: *App, line: []const u8, is_compact: bool) void {
 // ---- !cmd / !!cmd:bash 进独立线程,主线程不再冻结 ----
 //
 // 原状:onSubmit 主线程同步跑 bash handler(sleep 12 这种命令直接把 TUI 冻住
-// 秒级)。现在 spawn 一个短命线程:bash 在它里面跑(toolBash 自会登记 activity,转圈/计时/可 Ctrl+C),完成后两件事分两步走——
-//   1. 结果行:tuiNote(内部有锁,线程安全)
-//   2. send_to_llm:组装「!cmd + Output」消息,**不直接 spawnWorker**(app.alloc
-//      非线程安全,与主循环 create 竞争);改投 bang 槽,主循环 on_tick 消费>
-//      50ms 内接下,再 appendUser + spawnWorker。
+// 秒级)。现在 spawn 一个短命线程:bash 在它里面跑(toolBash 自会登记 activity,转圈/计时/可 Ctrl+C)。
+// 结果**不在 bang 线程碰 TUI / app.alloc**(非线程安全,与主循环 create 竞争):
+// 输出经模块级 bang 槽(page_allocator + 自有锁)投回,主循环 on_tick 消费——
+//   1. 工具卡收尾:提交时(onSubmit,主线程)已落 running 卡(appendTool("!", cmd)),
+//      on_tick 按 cmd 认卡 appendToolEndMatch,状态/耗时/输出全真实;
+//   2. send_to_llm:组装「!cmd + Output」全文发模型;transcript 只回显 `!cmd`
+//      一行(提交时已 appendUser,出队路径靠 isBangMessage 不再刷全文)。
 const BangCtx = struct {
     app: *App,
-    cmd: []const u8, // page_allocator 所有,线程退出时 free
+    cmd: []const u8, // page_allocator 所有,结果投槽时所有权移交 BangResult
     send_to_llm: bool,
 };
 
+/// bang 完成结果(全部 page_allocator 所有,主循环消费后 free)。
+const BangResult = struct {
+    cmd: []u8,
+    output: []u8,
+    is_error: bool,
+    send_to_llm: bool,
+};
+
+// 模块级 bang 槽:不进 App(main.zig 结构不动);page_allocator 线程安全。
+var bang_mu: std.Io.Mutex = .init;
+var bang_results: std.ArrayListUnmanaged(*BangResult) = .empty;
+var bang_ready: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+
 pub fn spawnBang(app: *App, cmd: []const u8, send_to_llm: bool) void {
-    const owned = std.heap.page_allocator.dupe(u8, cmd) catch return;
+    const owned = std.heap.page_allocator.dupe(u8, cmd) catch {
+        settleBangSpawnFail(app, cmd);
+        return;
+    };
     const ctx = std.heap.page_allocator.create(BangCtx) catch {
         std.heap.page_allocator.free(owned);
+        settleBangSpawnFail(app, cmd);
         return;
     };
     ctx.* = .{ .app = app, .cmd = owned, .send_to_llm = send_to_llm };
     const th = std.Thread.spawn(.{}, bangMain, .{ctx}) catch {
         std.heap.page_allocator.free(owned);
         std.heap.page_allocator.destroy(ctx);
-        tuiNote(app, "\x1b[31m", "failed to spawn bang worker");
+        settleBangSpawnFail(app, cmd);
         return;
     };
     th.detach();
 }
 
+/// 线程没起成:提交时落的 running 卡不能永远转圈,直接收尾成 err 卡。
+/// (spawnBang 只在主线程 onSubmit 路径被调,碰 TUI 安全)
+fn settleBangSpawnFail(app: *App, cmd: []const u8) void {
+    tuiOk("tui.tool", app.tui.appendToolEndMatch("!", cmd, true, "failed to spawn bang worker"));
+}
+
 fn bangMain(ctx: *BangCtx) void {
-    const app = ctx.app;
-    defer {
-        std.heap.page_allocator.free(ctx.cmd);
-        std.heap.page_allocator.destroy(ctx);
-    }
+    const pa = std.heap.page_allocator;
+    defer pa.destroy(ctx);
     // 专用 arena:bash 的输出与 Result 住这,退出即毁
-    var arena_mod = util.Arena.init(std.heap.page_allocator);
+    var arena_mod = util.Arena.init(pa);
     defer arena_mod.deinit();
     const arena = arena_mod.allocator();
-    const json_args = std.fmt.allocPrint(arena, "{{\"command\":{s},\"timeout\":30}}", .{util.jsonString(arena, ctx.cmd) catch "\"\""}) catch return;
+    const json_args = std.fmt.allocPrint(arena, "{{\"command\":{s},\"timeout\":30}}", .{util.jsonString(arena, ctx.cmd) catch "\"\""}) catch {
+        pa.free(ctx.cmd);
+        return;
+    };
     const res: toolsmod.Result = if (toolsmod.find("bash")) |tb|
         (tb.handler(arena, json_args) catch |err| toolsmod.crashResult(arena, "bash", err))
     else
         .{ .content = "no bash tool", .is_error = true };
-    tuiNote(app, if (res.is_error) "\x1b[31m" else "\x1b[2m", res.content);
-    if (!ctx.send_to_llm) return;
-    const msg = std.fmt.allocPrint(arena, "!{s}\n\nOutput:\n{s}", .{ ctx.cmd, res.content }) catch return;
-    const owned = std.heap.page_allocator.dupe(u8, msg) catch return;
-    app.bang.mutex.lockUncancelable(util.io);
-    // 只留一条未消费:再来的直接丢弃(旧消息尚未送出,极少并行 !cmd)
-    if (app.bang.msg != null) {
-        app.bang.mutex.unlock(util.io);
-        std.heap.page_allocator.free(owned);
+    // 投槽:cmd 所有权移交,output dupe 出 arena。全程不碰 TUI/app.alloc。
+    const br = pa.create(BangResult) catch {
+        pa.free(ctx.cmd);
         return;
-    }
-    app.bang.msg = owned;
-    app.bang.mutex.unlock(util.io);
-    app.bang.done.store(true, .release);
+    };
+    br.* = .{
+        .cmd = @constCast(ctx.cmd),
+        .output = pa.dupe(u8, res.content) catch {
+            pa.free(ctx.cmd);
+            pa.destroy(br);
+            return;
+        },
+        .is_error = res.is_error,
+        .send_to_llm = ctx.send_to_llm,
+    };
+    bang_mu.lockUncancelable(util.io);
+    bang_results.append(pa, br) catch {
+        bang_mu.unlock(util.io);
+        pa.free(br.cmd);
+        pa.free(br.output);
+        pa.destroy(br);
+        return;
+    };
+    bang_mu.unlock(util.io);
+    bang_ready.store(true, .release);
 }
 
-/// 主循环 on_tick(每 50ms):消费 !cmd 完成消息,交给 agent worker。
+fn popBangResult() ?*BangResult {
+    bang_mu.lockUncancelable(util.io);
+    defer bang_mu.unlock(util.io);
+    if (bang_results.items.len == 0) {
+        // 队列空才落 false:追加与判空同锁,bang_ready 不会漏置
+        bang_ready.store(false, .release);
+        return null;
+    }
+    return bang_results.orderedRemove(0);
+}
+
+/// bang 完成消息格式:!cmd\n\nOutput:\n…(提交时已回显 `!cmd` 一行,
+/// 出队不再把全文刷进 transcript)。
+pub fn isBangMessage(s: []const u8) bool {
+    return s.len > 1 and s[0] == '!' and std.mem.indexOf(u8, s, "\n\nOutput:\n") != null;
+}
+
+/// 主循环 on_tick(每 50ms):消费 bang 结果——收尾工具卡,按需发模型。
 pub fn tuiOnTick(ctx: ?*anyopaque) void {
     const app: *App = @ptrCast(@alignCast(ctx orelse return));
-    if (!app.bang.done.load(.acquire)) return;
-    app.bang.done.store(false, .release);
-    app.bang.mutex.lockUncancelable(util.io);
-    const msg = app.bang.msg;
-    app.bang.msg = null;
-    app.bang.mutex.unlock(util.io);
-    const m = msg orelse return;
-    defer std.heap.page_allocator.free(m);
-    // worker 忙:入队(main 循环里 !cmd 与普通消息同轨),轮次间自动投递
-    if (app.worker_active.load(.acquire)) {
-        if (!app.enqueue(m)) {
-            tuiNote(app, "\x1b[31m", "!cmd queue failed — message not queued");
-            return;
+    if (!bang_ready.load(.acquire)) return;
+    while (popBangResult()) |br| {
+        defer {
+            std.heap.page_allocator.free(br.cmd);
+            std.heap.page_allocator.free(br.output);
+            std.heap.page_allocator.destroy(br);
         }
-        var bw = std.Io.Writer.Allocating.init(app.alloc);
-        defer bw.deinit();
-        const head = m[0..@min(m.len, 72)];
-        tuiOk("tui.wr", bw.writer.print("→ 待发  {s}", .{head}));
-        tuiNote(app, "\x1b[2m", bw.written());
-        return;
+        // 卡收尾:按 cmd 认卡;找不到(running 卡被剪)则 appendToolEndMatch 自建
+        tuiOk("tui.tool", app.tui.appendToolEndMatch("!", br.cmd, br.is_error, br.output));
+        if (!br.send_to_llm) continue;
+        // app.alloc 是 arena,活到进程结束——worker 异步读它无 UAF(旧 m 须 dupe 的坑已消)
+        const msg = std.fmt.allocPrint(app.alloc, "!{s}\n\nOutput:\n{s}", .{ br.cmd, br.output }) catch continue;
+        // worker 忙:入队(main 循环里 !cmd 与普通消息同轨),轮次间自动投递
+        if (app.worker_active.load(.acquire)) {
+            if (!app.enqueue(msg)) {
+                tuiNote(app, "\x1b[31m", "!cmd queue failed — message not queued");
+                continue;
+            }
+            var bw = std.Io.Writer.Allocating.init(app.alloc);
+            defer bw.deinit();
+            tuiOk("tui.wr", bw.writer.print("→ 待发  !{s}", .{br.cmd}));
+            tuiNote(app, "\x1b[2m", bw.written());
+            continue;
+        }
+        spawnWorker(app, msg, false);
     }
-    // m 是 page_allocator 的、马上 free;spawnWorker/worker 读它须 dupe 到
-    // app.alloc(arena,活到进程结束)——直接传 m 是 UAF(实测消息丢失)。
-    const owned = app.alloc.dupe(u8, m) catch return;
-    // appendUser 深拷贝(owned 在 arena 上,亦安全);消息照进对话流与历史
-    tuiOk("tui.user", app.tui.appendUser(owned));
-    spawnWorker(app, owned, false);
 }
 
 /// 流建立后立刻把底层 fd 存进 agent(供 Esc 中断时 shutdown 打断阻塞读)。

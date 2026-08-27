@@ -357,10 +357,14 @@ test "Ctrl+O expands and folds tool body" {
     defer t.allocator.free(expanded);
     const exp_plain = try stripForTest(t.allocator, expanded);
     defer t.allocator.free(exp_plain);
-    try t.expect(std.mem.indexOf(u8, exp_plain, "    ▸ bash  zig build test") != null);
+    // 展开态升级为 omp 形盒子:╭─ 顶边 / │ 正文 │ / ╰─ 底边;旧 gutter └ 退场
+    try t.expect(std.mem.indexOf(u8, exp_plain, "╭─ bash") != null);
+    try t.expect(std.mem.indexOf(u8, exp_plain, "zig build test") != null);
     try t.expect(std.mem.indexOf(u8, exp_plain, "ok") != null);
-    try t.expect(std.mem.indexOf(u8, exp_plain, "      │ ok line") != null);
-    try t.expect(std.mem.indexOf(u8, exp_plain, "      └ SECRET_BODY") != null);
+    try t.expect(std.mem.indexOf(u8, exp_plain, "│ ok line") != null);
+    try t.expect(std.mem.indexOf(u8, exp_plain, "SECRET_BODY") != null);
+    try t.expect(std.mem.indexOf(u8, exp_plain, "└") == null);
+    try t.expect(std.mem.indexOf(u8, exp_plain, "╰─ Wall") != null);
 
     ui.toggleTools();
     try t.expect(ui.cells.items[0].tool.?.folded);
@@ -545,13 +549,13 @@ test "footer identity has hierarchy and never drops model" {
     defer t.allocator.free(br_p);
     try t.expect(std.mem.indexOf(u8, br_p, "~/桌面 (main)") != null);
 
-    // 窄端(<50)退化为单行挤排,model 不弃
+    // 极窄(<40)顶边纯线,页脚维持 pi 双行:地点截断不画崩,行 2 仍在
     const tight = try formatFooterRows(t.allocator, ident, "? for shortcuts", 18, true);
     defer tight.deinit(t.allocator);
     const tight_p = try stripForTest(t.allocator, tight.primary);
     defer t.allocator.free(tight_p);
-    try t.expect(std.mem.indexOf(u8, tight_p, "deepseek") != null);
-    try t.expectEqualStrings("", tight.secondary);
+    try t.expect(std.mem.indexOf(u8, tight_p, "~/") != null);
+    try t.expect(tight.secondary.len > 0);
 
     var ui = try Tui.init(t.allocator);
     defer ui.deinit();
@@ -590,12 +594,13 @@ test "footer pi-style: place row 1, stats/model row 2; narrow packs" {
         try t.expect(std.mem.indexOf(u8, plain, "ctx 9% 12k/128k") != null);
     }
 
-    // 窄端打包单行:cwd 与 model 皆在
+    // 宽端单行:host 身份(cwd · session),model 已上顶边不重复
     const packed90 = try footerPlain(t.allocator, ident, hint, 90, false);
     defer t.allocator.free(packed90);
     try t.expect(std.mem.indexOf(u8, packed90, "\n") == null);
     try t.expect(std.mem.indexOf(u8, packed90, "~/project/pi-zig") != null);
-    try t.expect(std.mem.indexOf(u8, packed90, "deepseek/v4-flash") != null);
+    try t.expect(std.mem.indexOf(u8, packed90, "1786748577703") != null);
+    try t.expect(std.mem.indexOf(u8, packed90, "deepseek/v4-flash") == null);
 
     const long_ident = FooterIdent{
         .model = "m",
@@ -616,7 +621,7 @@ test "footer pi-style: place row 1, stats/model row 2; narrow packs" {
         const bottom = ui.measureBottom(0, false, &.{});
         try t.expect(bottom.composer_rows >= 3);
         try t.expectEqual(composerBoxWidth(cols), if (cols > 1) cols - 1 else cols);
-        try t.expectEqual(@as(usize, 2), bottom.footer_ident_rows);
+        try t.expectEqual(@as(usize, 1), bottom.footer_ident_rows);
         const painted = try footerPlain(t.allocator, ident, hint, cols, bottom.footer_ident_rows >= 2);
         defer t.allocator.free(painted);
         try t.expect(std.mem.indexOf(u8, painted, "~/project/pi-zig") != null);
@@ -986,9 +991,9 @@ test "bottom pane is reserved before transcript" {
     const idle = ui.measureBottom(0, false, &.{});
     try t.expectEqual(@as(usize, 0), idle.working_rows);
     try t.expectEqual(@as(usize, 3), idle.composer_rows);
-    // pi 式:宽 >= 50 恒双行
-    try t.expectEqual(@as(usize, 2), idle.footer_rows);
-    try t.expectEqual(@as(usize, 2), idle.footer_ident_rows);
+    // >=40 列:信息上 composer 顶边,页脚恒单行
+    try t.expectEqual(@as(usize, 1), idle.footer_rows);
+    try t.expectEqual(@as(usize, 1), idle.footer_ident_rows);
     try t.expect(idle.composer_rows >= 3);
     try t.expect(idle.height() < 24);
     const busy = ui.measureBottom(5, true, &.{});
@@ -997,8 +1002,8 @@ test "bottom pane is reserved before transcript" {
     try t.expect(busy.composer_rows >= 3);
     ui.shortcuts_open = true;
     const help = ui.measureBottom(0, false, &.{});
-    try t.expectEqual(@as(usize, 4), help.footer_rows);
-    try t.expectEqual(@as(usize, 2), help.footer_ident_rows);
+    try t.expectEqual(@as(usize, 3), help.footer_rows);
+    try t.expectEqual(@as(usize, 1), help.footer_ident_rows);
     ui.shortcuts_open = false;
     try ui.setFooterIdentity(.{
         .model = "deepseek/v4-flash",
@@ -1015,13 +1020,17 @@ test "bottom pane is reserved before transcript" {
         .pct = 9,
     });
     const split = ui.measureBottom(0, false, &.{});
-    try t.expectEqual(@as(usize, 2), split.footer_ident_rows);
+    try t.expectEqual(@as(usize, 1), split.footer_ident_rows);
     ui.width = 120;
     const wide = ui.measureBottom(0, false, &.{});
-    try t.expectEqual(@as(usize, 2), wide.footer_ident_rows);
+    try t.expectEqual(@as(usize, 1), wide.footer_ident_rows);
     ui.width = 40;
     const narrow = ui.measureBottom(0, false, &.{});
     try t.expectEqual(@as(usize, 1), narrow.footer_ident_rows);
+    // <40 列:顶边纯线,页脚维持双行
+    ui.width = 39;
+    const tiny = ui.measureBottom(0, false, &.{});
+    try t.expectEqual(@as(usize, 2), tiny.footer_ident_rows);
 }
 
 test "footer format includes ctx occupancy and cache when usage is set" {
@@ -1470,4 +1479,269 @@ test "status indicator: retry mark and subagent overflow fold" {
     const out3 = fw3.written();
     try t.expect(std.mem.indexOf(u8, out3, "worker1") != null);
     try t.expect(std.mem.indexOf(u8, out3, "agent") == null);
+}
+// —— boxed 工具卡(W2 omp 对齐):展开 ╭─╮/│/╰─╯,折叠一行不变,窄屏退化 ——
+
+test "boxed tool card: expanded snapshot at 100 cols" {
+    const t = std.testing;
+    var ui = try Tui.init(t.allocator);
+    defer ui.deinit();
+    try ui.appendTool("bash", "echo hello && ls");
+    try ui.appendToolEnd("bash", false, "hello\nMakefile\nsrc\n");
+    ui.toggleTools();
+    try t.expect(!ui.cells.items[0].tool.?.folded);
+    const out = try paintCellsForTest(t.allocator, &ui, 100);
+    defer t.allocator.free(out);
+    const plain = try stripForTest(t.allocator, out);
+    defer t.allocator.free(plain);
+    var it = std.mem.splitScalar(u8, plain, '\n');
+    // 顶边:╭─ name · preview ─ status ─╮(status 含 ok + 耗时 + Nln)
+    const top = it.next() orelse return error.TestUnexpectedResult;
+    try t.expect(std.mem.startsWith(u8, top, "╭─ bash"));
+    try t.expect(std.mem.indexOf(u8, top, "· echo hello && ls") != null);
+    try t.expect(std.mem.indexOf(u8, top, "ok") != null);
+    try t.expect(std.mem.indexOf(u8, top, "3ln") != null);
+    try t.expect(std.mem.endsWith(u8, top, "─╮"));
+    // 正文:│ … │,左右边框齐
+    const b1 = it.next() orelse return error.TestUnexpectedResult;
+    try t.expect(std.mem.startsWith(u8, b1, "│ hello"));
+    try t.expect(std.mem.endsWith(u8, b1, " │"));
+    const b3 = it.next() orelse return error.TestUnexpectedResult; // Makefile 行跳过,直接第三行
+    _ = b3;
+    // 底边:╰─ Wall … · 3ln ─╯
+    var bottom: []const u8 = "";
+    while (it.next()) |ln| {
+        if (ln.len > 0) bottom = ln;
+    }
+    try t.expect(std.mem.startsWith(u8, bottom, "╰─ Wall"));
+    try t.expect(std.mem.indexOf(u8, bottom, "3ln") != null);
+    try t.expect(std.mem.endsWith(u8, bottom, "─╯"));
+    // 列纪律:剥码后每行 ≤ 100 列(盒宽 99 + 色带补白 1)
+    var rit = std.mem.splitScalar(u8, plain, '\n');
+    while (rit.next()) |ln| {
+        if (ln.len == 0) continue;
+        try t.expect(visibleCols(ln) <= 100);
+    }
+    // 状态色带与边框色(ok)仍在
+    try t.expect(std.mem.indexOf(u8, out, theme.bgTool(.ok)) != null);
+}
+
+test "folded tool card stays one line, never boxed" {
+    const t = std.testing;
+    var ui = try Tui.init(t.allocator);
+    defer ui.deinit();
+    try ui.appendTool("bash", "ls");
+    try ui.appendToolEnd("bash", false, "a\nb\nc\nd\ne\n");
+    const out = try paintCellsForTest(t.allocator, &ui, 100);
+    defer t.allocator.free(out);
+    const plain = try stripForTest(t.allocator, out);
+    defer t.allocator.free(plain);
+    try t.expect(std.mem.indexOf(u8, plain, "╭") == null);
+    try t.expect(std.mem.indexOf(u8, plain, "╰") == null);
+    try t.expect(std.mem.indexOf(u8, plain, "    ▸ bash  ls") != null);
+    try t.expect(std.mem.indexOf(u8, plain, "    · (3 more lines, ctrl+o)") != null);
+    try t.expect(countNonEmptyLines(plain) <= 2);
+}
+
+test "narrow terminal degrades box to gutter (<40 cols)" {
+    const t = std.testing;
+    var ui = try Tui.init(t.allocator);
+    defer ui.deinit();
+    try ui.appendTool("bash", "ls");
+    try ui.appendToolEnd("bash", false, "one\ntwo\n");
+    ui.toggleTools();
+    const out = try paintCellsForTest(t.allocator, &ui, 39);
+    defer t.allocator.free(out);
+    const plain = try stripForTest(t.allocator, out);
+    defer t.allocator.free(plain);
+    // 不画盒:gutter 形 │/└ 保留,不画崩
+    try t.expect(std.mem.indexOf(u8, plain, "╭") == null);
+    try t.expect(std.mem.indexOf(u8, plain, "      │ one") != null);
+    try t.expect(std.mem.indexOf(u8, plain, "      └ two") != null);
+    var rit = std.mem.splitScalar(u8, plain, '\n');
+    while (rit.next()) |ln| {
+        if (ln.len == 0) continue;
+        try t.expect(visibleCols(ln) <= 39);
+    }
+}
+
+test "boxed body truncates past 20 lines with tail row" {
+    const t = std.testing;
+    var ui = try Tui.init(t.allocator);
+    defer ui.deinit();
+    var body = std.array_list.Managed(u8).init(t.allocator);
+    defer body.deinit();
+    var i: usize = 1;
+    while (i <= 30) : (i += 1) {
+        var lb: [16]u8 = undefined;
+        try body.appendSlice(std.fmt.bufPrint(&lb, "line{d:0>2}\n", .{i}) catch "line?\n");
+    }
+    try ui.appendTool("bash", "seq 30");
+    try ui.appendToolEnd("bash", false, body.items);
+    ui.toggleTools();
+    // 行数:顶 1 + 19 正文 + 1 截断尾行 + 底 1 = 22
+    try t.expectEqual(@as(usize, 22), emit.toolRowCount(ui.cells.items[0].tool.?, 80));
+    const out = try paintCellsForTest(t.allocator, &ui, 80);
+    defer t.allocator.free(out);
+    const plain = try stripForTest(t.allocator, out);
+    defer t.allocator.free(plain);
+    try t.expect(std.mem.indexOf(u8, plain, "line19") != null);
+    try t.expect(std.mem.indexOf(u8, plain, "line20") == null);
+    try t.expect(std.mem.indexOf(u8, plain, "… (11 more lines)") != null);
+}
+
+test "bang result rides the boxed tool card, preview-matched finish" {
+    const t = std.testing;
+    var ui = try Tui.init(t.allocator);
+    defer ui.deinit();
+    // 并发两张同名 "!" 卡:appendToolEndMatch 按 cmd 认卡
+    try ui.appendTool("!", "echo one");
+    try ui.appendTool("!", "echo two");
+    try ui.appendToolEndMatch("!", "echo two", false, "two\n");
+    try t.expect(ui.cells.items[0].tool.?.status == .running);
+    try t.expect(ui.cells.items[1].tool.?.status == .ok);
+    try t.expectEqual(@as(usize, 1), ui.cells.items[1].tool.?.lines);
+    try ui.appendToolEndMatch("!", "echo one", true, "boom\n");
+    try t.expect(ui.cells.items[0].tool.?.status == .err);
+    // 折叠态:一行 ▸ ! cmd status(不动)
+    const folded = try paintCellsForTest(t.allocator, &ui, 100);
+    defer t.allocator.free(folded);
+    const fplain = try stripForTest(t.allocator, folded);
+    defer t.allocator.free(fplain);
+    try t.expect(std.mem.indexOf(u8, fplain, "    ▸ !  echo two") != null);
+    try t.expect(std.mem.indexOf(u8, fplain, "two") != null);
+    try t.expect(std.mem.indexOf(u8, fplain, "╭") == null);
+    // 展开态:bang 输出进盒
+    ui.toggleTools();
+    const out = try paintCellsForTest(t.allocator, &ui, 100);
+    defer t.allocator.free(out);
+    const plain = try stripForTest(t.allocator, out);
+    defer t.allocator.free(plain);
+    try t.expect(std.mem.indexOf(u8, plain, "╭─ ! · echo two") != null);
+    try t.expect(std.mem.indexOf(u8, plain, "│ two") != null);
+    try t.expect(std.mem.indexOf(u8, plain, "│ boom") != null);
+    try t.expect(std.mem.indexOf(u8, plain, "╰─ Wall") != null);
+}
+
+test "composer top edge embeds model dir cost ctx at 100 cols" {
+    const t = std.testing;
+    const a = t.allocator;
+    const ident = FooterIdent{
+        .model = "deepseek/v4-flash",
+        .think = "max",
+        .cwd = "~/project/pi-zig",
+        .branch = "main*",
+        .session = "1786748577703",
+        .used = 12_000,
+        .window = 128_000,
+        .cost = 0.009,
+        .pct = 9,
+    };
+    var aw = std.Io.Writer.Allocating.init(a);
+    defer aw.deinit();
+    try footer.writeComposerTopEdge(&aw.writer, ident, composerBoxWidth(100));
+    const stripped = try stripForTest(a, aw.written());
+    defer a.free(stripped);
+    const line = std.mem.trimEnd(u8, stripped, "\n");
+    // omp 形:╭── model · think ── cwd ↳ branch ── $cost · ctx% (u/w) ──╮
+    try t.expect(std.mem.startsWith(u8, line, "╭── deepseek/v4-flash · max"));
+    try t.expect(std.mem.endsWith(u8, line, "─╮"));
+    try t.expect(std.mem.indexOf(u8, line, "~/project/pi-zig ↳ main*") != null);
+    try t.expect(std.mem.indexOf(u8, line, "$0.01 · ctx 9% (12k/128k)") != null);
+    try t.expectEqual(composerBoxWidth(100), visibleCols(line));
+    // 无成本数据(定价缺失):省略 $cost,ctx 仍在,盒仍闭合等宽
+    var nocost = ident;
+    nocost.cost = null;
+    var aw2 = std.Io.Writer.Allocating.init(a);
+    defer aw2.deinit();
+    try footer.writeComposerTopEdge(&aw2.writer, nocost, composerBoxWidth(100));
+    const stripped2 = try stripForTest(a, aw2.written());
+    defer a.free(stripped2);
+    const line2 = std.mem.trimEnd(u8, stripped2, "\n");
+    try t.expect(std.mem.indexOf(u8, line2, "$") == null);
+    try t.expect(std.mem.indexOf(u8, line2, "ctx 9% (12k/128k)") != null);
+    try t.expectEqual(composerBoxWidth(100), visibleCols(line2));
+}
+
+test "composer top edge degrades: <60 model+ctx only, <39 pure line" {
+    const t = std.testing;
+    const a = t.allocator;
+    const ident = FooterIdent{
+        .model = "deepseek/v4-flash",
+        .think = "max",
+        .cwd = "~/project/pi-zig",
+        .branch = "main*",
+        .used = 12_000,
+        .window = 128_000,
+        .cost = 0.009,
+        .pct = 9,
+    };
+    // 56 列终端(box_w 55):只 model + ctx%,think/branch/cost 不上边
+    var aw = std.Io.Writer.Allocating.init(a);
+    defer aw.deinit();
+    try footer.writeComposerTopEdge(&aw.writer, ident, composerBoxWidth(56));
+    const s56 = try stripForTest(a, aw.written());
+    defer a.free(s56);
+    const l56 = std.mem.trimEnd(u8, s56, "\n");
+    try t.expect(std.mem.indexOf(u8, l56, "deepseek/v4-flash") != null);
+    try t.expect(std.mem.indexOf(u8, l56, "ctx 9%") != null);
+    try t.expect(std.mem.indexOf(u8, l56, "max") == null);
+    try t.expect(std.mem.indexOf(u8, l56, "↳") == null);
+    try t.expect(std.mem.indexOf(u8, l56, "$") == null);
+    try t.expectEqual(composerBoxWidth(56), visibleCols(l56));
+    // 40 列终端(box_w 39):最小信息条,长模型也不丢 model、不画崩
+    var long = ident;
+    long.model = "deepseek/v4-flash-vision-exp";
+    var aw2 = std.Io.Writer.Allocating.init(a);
+    defer aw2.deinit();
+    try footer.writeComposerTopEdge(&aw2.writer, long, composerBoxWidth(40));
+    const s40 = try stripForTest(a, aw2.written());
+    defer a.free(s40);
+    const l40 = std.mem.trimEnd(u8, s40, "\n");
+    try t.expect(std.mem.indexOf(u8, l40, "deepseek/v4-flash-vision-exp") != null);
+    try t.expect(std.mem.endsWith(u8, l40, "╮"));
+    try t.expectEqual(composerBoxWidth(40), visibleCols(l40));
+    // 39 列终端(box_w 38):纯线,信息留页脚双行
+    var aw3 = std.Io.Writer.Allocating.init(a);
+    defer aw3.deinit();
+    try footer.writeComposerTopEdge(&aw3.writer, ident, composerBoxWidth(39));
+    const s39 = try stripForTest(a, aw3.written());
+    defer a.free(s39);
+    const l39 = std.mem.trimEnd(u8, s39, "\n");
+    try t.expect(std.mem.indexOf(u8, l39, "deepseek") == null);
+    try t.expect(std.mem.indexOf(u8, l39, "ctx") == null);
+    try t.expectEqual(composerBoxWidth(39), visibleCols(l39));
+}
+
+test "footer is one row at >=40 cols: host identity left, hint right" {
+    const t = std.testing;
+    const a = t.allocator;
+    const ident = FooterIdent{
+        .model = "deepseek/v4-flash",
+        .think = "max",
+        .cwd = "~/project/pi-zig",
+        .branch = "main*",
+        .session = "1786748577703",
+        .used = 12_000,
+        .window = 128_000,
+        .pct = 9,
+    };
+    var ui = try Tui.init(a);
+    defer ui.deinit();
+    ui.width = 100;
+    ui.height = 34;
+    try ui.setFooterIdentity(ident);
+    const bottom = ui.measureBottom(0, false, &.{});
+    try t.expectEqual(@as(usize, 1), bottom.footer_ident_rows);
+    try t.expectEqual(@as(usize, 1), bottom.footer_rows);
+    const rows = try formatFooterRows(a, ident, "? for shortcuts", 100, bottom.footer_ident_rows >= 2);
+    defer rows.deinit(a);
+    const primary = try stripForTest(a, rows.primary);
+    defer a.free(primary);
+    // host 身份 + hint;model/ctx 已上顶边,不重复
+    try t.expect(std.mem.indexOf(u8, primary, "~/project/pi-zig (main*) · 1786748577703") != null);
+    try t.expect(std.mem.indexOf(u8, primary, "? for shortcuts") != null);
+    try t.expect(std.mem.indexOf(u8, primary, "deepseek") == null);
+    try t.expect(std.mem.indexOf(u8, primary, "ctx") == null);
+    try t.expectEqualStrings("", rows.secondary);
 }

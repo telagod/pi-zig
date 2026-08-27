@@ -174,8 +174,38 @@ const TOOL_BODY_LAST = "      └ ";
 const TOOL_BODY_REST = "        ";
 const TOOL_BODY_PAD: usize = 8;
 
+// —— boxed 展开卡(omp 形):╭─ 顶边 / │ 正文 │ / ╰─ 底边。
+// 折叠一行与窄屏(<40 列)维持旧 gutter 形;workflow/todo 特例逻辑不动。
+const TOOL_BOX_MIN_WIDTH: usize = 40;
+const TOOL_BOX_BODY_MAX: usize = 20;
+
 fn toolBodyInner(width: usize) usize {
     return if (width > TOOL_BODY_PAD) width - TOOL_BODY_PAD else 1;
+}
+
+/// 盒宽跟 composerBoxWidth 规则(cols-1:auto-margin 终端末列触换行)。
+/// tui_*.zig 不回引 tui.zig(向下单向),规则就地镜像。
+fn toolBoxWidth(width: usize) usize {
+    return if (width > 1) width - 1 else width;
+}
+
+/// "│ " + " │" 占 4 列,余为正文。
+fn toolBoxInner(box_w: usize) usize {
+    return if (box_w > 4) box_w - 4 else 1;
+}
+
+/// 展开且够宽 → boxed;折叠/窄屏 → 旧 gutter 形。
+fn toolBoxed(meta: ToolMeta, width: usize) bool {
+    return !meta.folded and width >= TOOL_BOX_MIN_WIDTH;
+}
+
+/// 边框随状态色:ok/err 用状态色,running 退 muted(转圈本身已在状态段)。
+fn toolBorderInk(status: ToolStatus) []const u8 {
+    const t = theme();
+    return switch (status) {
+        .running => t.muted(),
+        .ok, .err => t.fgStatus(paintStatus(status)),
+    };
 }
 
 fn isWorkflowTool(meta: ToolMeta) bool {
@@ -243,12 +273,34 @@ fn todoLine(input: []const u8, out: *[SAN_TODO]u8) []const u8 {
     return out[0..n];
 }
 
+/// boxed 卡行数:顶边 1 + 正文(超 20 行截断 + 「… (N more lines)」尾行)+ 底边 1。
+/// 计数与 emitToolBoxed 同规则(todo 行不换形再计,沿用旧 gutter 的口径)。
+fn toolBoxRowCount(meta: ToolMeta, width: usize) usize {
+    const inner = toolBoxInner(toolBoxWidth(width));
+    var rows: usize = 2; // 顶边 + 底边
+    const view = bodyView(meta.body.items);
+    if (view.len == 0) return rows;
+    const n = countContentLines(view);
+    var it = std.mem.splitScalar(u8, view, '\n');
+    var i: usize = 0;
+    while (it.next()) |part| {
+        i += 1;
+        if (n > TOOL_BOX_BODY_MAX and i == TOOL_BOX_BODY_MAX) {
+            rows += 1; // 截断尾行
+            break;
+        }
+        rows += wrapRowCount(part, inner);
+    }
+    return rows;
+}
+
 pub fn toolRowCount(meta: ToolMeta, width: usize) usize {
     if (isWorkflowTool(meta)) {
         var rows: usize = 1;
         if (meta.body.items.len > 0) rows += countContentLines(meta.body.items);
         return rows;
     }
+    if (toolBoxed(meta, width)) return toolBoxRowCount(meta, width);
     var tb: [512]u8 = undefined;
     const title = toolTitle(meta, &tb, nowMs());
     var rows = wrapRowCount(title, gutterInner(.tool, width));
@@ -363,9 +415,229 @@ fn emitFlow(wr: *std.Io.Writer, meta: ToolMeta, width: usize, skip: usize, limit
     return emitted;
 }
 
+/// 顶边:`╭─ name · preview ─── status ─╮`(name 粗体,preview dim 斜体,
+/// status 带 ok/err 色 + 耗时 + Nln;running 态卡内转圈 ⠋ 走 formatToolStatus)。
+/// 可见宽恒为 box_w:preview 超长截断(缀 …),名字过长也截,中缝至少 1  dash。
+fn paintBoxTop(buf: []u8, meta: ToolMeta, box_w: usize, now_ms: i64) []const u8 {
+    var wr = std.Io.Writer.fixed(buf);
+    paintBoxTopInto(&wr, meta, box_w, now_ms) catch {
+        // 超宽终端撑爆缓冲:退化为纯名字(调用侧照样成 row,不画崩)
+        return meta.name;
+    };
+    return wr.buffered();
+}
+
+fn paintBoxTopInto(wr: *std.Io.Writer, meta: ToolMeta, box_w: usize, now_ms: i64) !void {
+    const border = toolBorderInk(meta.status);
+    var sb: [64]u8 = undefined;
+    const status = formatToolStatus(&sb, meta, now_ms, now_ms);
+    const svis = visibleCols(status);
+    const name = truncateToVisible(meta.name, box_w -| 9 -| svis);
+    const nvis = visibleCols(name);
+    // preview 预算:╭─ (3) + name + 「 · 」(3) + 缝(1)+fill(1)+缝(1) + status + 「 ─╮」(3)
+    var preview: []const u8 = "";
+    var cut = false;
+    const pvis_max = box_w -| 12 -| nvis -| svis;
+    if (meta.preview.len > 0 and pvis_max >= 6) {
+        preview = truncateToVisible(meta.preview, pvis_max - 1);
+        cut = preview.len != meta.preview.len;
+    }
+    const pvis = if (preview.len > 0) visibleCols(preview) + @intFromBool(cut) else 0;
+    const used = 3 + nvis + (if (pvis > 0) 3 + pvis else 0) + 2 + svis + 3;
+    // 预算(name/preview 截断)保证 used ≤ box_w-1,故 fill ≥ 1(中缝至少 1 dash)
+    const fill = box_w -| used;
+    try wr.writeAll(border);
+    try wr.writeAll("╭─ ");
+    try wr.writeAll(ANSI_RESET ++ ANSI_BOLD);
+    try wr.writeAll(name);
+    try wr.writeAll(ANSI_RESET);
+    if (pvis > 0) {
+        try wr.writeAll(" " ++ ANSI_DIM ++ ANSI_ITALIC ++ "· ");
+        try wr.writeAll(preview);
+        if (cut) try wr.writeAll("…");
+        try wr.writeAll(ANSI_RESET);
+    }
+    try wr.writeAll(border);
+    try wr.writeByte(' ');
+    var f = fill;
+    while (f > 1) : (f -= 1) try wr.writeAll("─");
+    try wr.writeAll("─ ");
+    try wr.writeAll(ANSI_RESET);
+    try wr.writeAll(status);
+    try wr.writeAll(border);
+    try wr.writeAll(" ─╮" ++ ANSI_RESET);
+}
+
+/// 底边:`╰─ Wall 0.4s · 8ln ─╯`(meta dim,虚线补满)。
+fn paintBoxBottom(buf: []u8, meta: ToolMeta, box_w: usize, now_ms: i64) []const u8 {
+    var wr = std.Io.Writer.fixed(buf);
+    paintBoxBottomInto(&wr, meta, box_w, now_ms) catch return "╰";
+    return wr.buffered();
+}
+
+fn paintBoxBottomInto(wr: *std.Io.Writer, meta: ToolMeta, box_w: usize, now_ms: i64) !void {
+    const border = toolBorderInk(meta.status);
+    var eb: [24]u8 = undefined;
+    const et = activity.formatElapsed(&eb, toolElapsedMs(meta, now_ms));
+    var mb: [48]u8 = undefined;
+    const mtext = std.fmt.bufPrint(&mb, "Wall {s} · {d}ln", .{ et, meta.lines }) catch "Wall ?";
+    const mvis = visibleCols(mtext);
+    const fill = box_w -| 6 -| mvis; // ╰─ (3) + meta + 「 ─」(2) + ╯(1)
+    try wr.writeAll(border);
+    try wr.writeAll("╰─ ");
+    try wr.writeAll(ANSI_RESET ++ ANSI_DIM);
+    try wr.writeAll(mtext);
+    try wr.writeAll(ANSI_RESET);
+    try wr.writeAll(border);
+    try wr.writeAll(" ─");
+    var f = fill -| 1; // 「 ─」已写 1 根
+    while (f > 0) : (f -= 1) try wr.writeAll("─");
+    try wr.writeAll("╯" ++ ANSI_RESET);
+}
+
+/// 整框行(顶/底边)落屏:可见宽 box_w,band 非空时补白至屏宽(色带达屏缘)。
+fn emitBoxFrame(wr: *std.Io.Writer, band: []const u8, row: []const u8, width: usize, skipped: *usize, emitted: *usize, limit: usize) !void {
+    if (emitted.* >= limit) return;
+    if (skipped.* > 0) {
+        skipped.* -= 1;
+        return;
+    }
+    if (band.len > 0) try wr.writeAll(band);
+    try wr.writeAll(row);
+    try wr.writeAll(ANSI_RESET);
+    if (band.len > 0) {
+        var p = visibleCols(row);
+        while (p < width) : (p += 1) try wr.writeByte(' ');
+    }
+    try wr.writeAll(ANSI_RESET ++ "\x1b[K\r\n");
+    emitted.* += 1;
+}
+
+/// 正文一行(已按 inner 折好的一个 chunk):`│ chunk…pad │`,
+/// reband = band+ink,chunk 内部 RESET 后复披(todo 换形行尾自带 RESET)。
+fn writeBoxBodyRow(wr: *std.Io.Writer, border: []const u8, reband: []const u8, band: []const u8, chunk: []const u8, cols: usize, inner: usize, width: usize, box_w: usize) !void {
+    if (band.len > 0) try wr.writeAll(band);
+    try wr.writeAll(border);
+    try wr.writeAll("│ ");
+    try wr.writeAll(ANSI_RESET);
+    if (reband.len > 0) try wr.writeAll(reband);
+    try writeReband(wr, chunk, reband);
+    try wr.writeAll(ANSI_RESET);
+    if (band.len > 0) try wr.writeAll(band);
+    var p = cols;
+    while (p < inner) : (p += 1) try wr.writeByte(' ');
+    try wr.writeAll(border);
+    try wr.writeAll(" │" ++ ANSI_RESET);
+    if (band.len > 0) {
+        var q = box_w;
+        while (q < width) : (q += 1) try wr.writeByte(' ');
+    }
+    try wr.writeAll(ANSI_RESET ++ "\x1b[K\r\n");
+}
+
+/// emitWrappedGutter 的 boxed 版:软折规则一致(同 wrapRowCount),每行收右边框。
+fn emitBoxWrapped(wr: *std.Io.Writer, border: []const u8, ink: []const u8, band: []const u8, line: []const u8, inner: usize, width: usize, box_w: usize, skip: usize, limit: usize) !usize {
+    if (limit == 0) return 0;
+    const w = @max(inner, 1);
+    var emitted: usize = 0;
+    var skipped: usize = 0;
+    var cols: usize = 0;
+    var row_from: usize = 0;
+    var i: usize = 0;
+    var rb_buf: [64]u8 = undefined;
+    var reband: []const u8 = ink;
+    if (band.len > 0 and band.len + ink.len <= rb_buf.len) {
+        @memcpy(rb_buf[0..band.len], band);
+        @memcpy(rb_buf[band.len..][0..ink.len], ink);
+        reband = rb_buf[0 .. band.len + ink.len];
+    }
+    while (i < line.len) {
+        const next = skipAnsi(line, i);
+        if (next != i) {
+            i = next;
+            continue;
+        }
+        const ch = charCols(line, i);
+        if (cols > 0 and cols + ch.cols > w) {
+            if (skipped < skip) {
+                skipped += 1;
+            } else {
+                try writeBoxBodyRow(wr, border, reband, band, line[row_from..i], cols, w, width, box_w);
+                emitted += 1;
+                if (emitted == limit) return emitted;
+            }
+            row_from = i;
+            cols = 0;
+        }
+        cols += ch.cols;
+        i += ch.n;
+    }
+    if (skipped < skip) return emitted;
+    try writeBoxBodyRow(wr, border, reband, band, line[row_from..line.len], cols, w, width, box_w);
+    return emitted + 1;
+}
+
+/// boxed 展开卡:╭─ 顶边 / │ 正文 │(超 20 行截断)/ ╰─ 底边。
+fn emitToolBoxed(wr: *std.Io.Writer, meta: ToolMeta, width: usize, skip: usize, limit: usize) !usize {
+    if (limit == 0) return 0;
+    var skipped = skip;
+    var emitted: usize = 0;
+    const now = nowMs();
+    const box_w = toolBoxWidth(width);
+    const inner = toolBoxInner(box_w);
+    const band = theme().bgTool(paintStatus(meta.status));
+    const border = toolBorderInk(meta.status);
+    {
+        var top_buf: [4096]u8 = undefined;
+        const top = paintBoxTop(&top_buf, meta, box_w, now);
+        try emitBoxFrame(wr, band, top, width, &skipped, &emitted, limit);
+    }
+    const view = bodyView(meta.body.items);
+    if (view.len > 0) {
+        const n = countContentLines(view);
+        const body_ink: []const u8 = if (meta.status == .err) theme().fg_err else theme().fg_output;
+        const todo = isTodoTool(meta);
+        var it = std.mem.splitScalar(u8, view, '\n');
+        var i: usize = 0;
+        while (it.next()) |part| {
+            if (emitted >= limit) break;
+            i += 1;
+            if (n > TOOL_BOX_BODY_MAX and i == TOOL_BOX_BODY_MAX) {
+                // 截断尾行:`… (N more lines)`(dim)
+                var tail_buf: [64]u8 = undefined;
+                const tail = std.fmt.bufPrint(&tail_buf, "… ({d} more lines)", .{n - TOOL_BOX_BODY_MAX + 1}) catch "… (more lines)";
+                if (skipped > 0) {
+                    skipped -= 1;
+                } else {
+                    try writeBoxBodyRow(wr, border, ANSI_DIM, band, tail, visibleCols(tail), inner, width, box_w);
+                    emitted += 1;
+                }
+                break;
+            }
+            var tb2: [SAN_TODO]u8 = undefined;
+            const line: []const u8 = if (todo) todoLine(part, &tb2) else part;
+            const nrows = wrapRowCount(line, inner);
+            if (skipped >= nrows) {
+                skipped -= nrows;
+                continue;
+            }
+            const local = skipped;
+            skipped = 0;
+            emitted += try emitBoxWrapped(wr, border, body_ink, band, line, inner, width, box_w, local, limit - emitted);
+        }
+    }
+    {
+        var bot_buf: [2048]u8 = undefined;
+        const bot = paintBoxBottom(&bot_buf, meta, box_w, now);
+        try emitBoxFrame(wr, band, bot, width, &skipped, &emitted, limit);
+    }
+    return emitted;
+}
+
 fn emitTool(wr: *std.Io.Writer, meta: ToolMeta, width: usize, skip: usize, limit: usize) !usize {
     if (isWorkflowTool(meta)) return emitFlow(wr, meta, width, skip, limit);
     if (limit == 0) return 0;
+    if (toolBoxed(meta, width)) return emitToolBoxed(wr, meta, width, skip, limit);
     var skipped = skip;
     var emitted: usize = 0;
     var tb: [512]u8 = undefined;
