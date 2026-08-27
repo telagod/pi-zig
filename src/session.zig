@@ -715,8 +715,6 @@ pub const Session = struct {
         return true;
     }
 
-
-
     pub fn sessionsDir(self: *Session) ![]u8 {
         const cfg_dir = try util.configDir(self.alloc);
         return util.joinPath(self.alloc, cfg_dir, "sessions");
@@ -1106,6 +1104,22 @@ pub const Session = struct {
             if (std.mem.endsWith(u8, base, ".jsonl") and std.mem.eql(u8, base[0 .. base.len - ".jsonl".len], id)) return s;
         }
         return null;
+    }
+
+    /// id 精确优先;未中且为短数字(≤6 位)则按 `piz sessions` 清单序号(1-based,
+    /// mtime 降序同一数据源)解析 —— 清单行首序号可直接喂 -s。
+    /// 时间戳 id 是 13 位,与序号撞不上。
+    pub fn findByIdOrIndex(alloc: std.mem.Allocator, cwd: []const u8, id: []const u8) !?Session {
+        if (try findById(alloc, cwd, id)) |s| return s;
+        if (id.len == 0 or id.len > 6) return null;
+        for (id) |c| {
+            if (!std.ascii.isDigit(c)) return null;
+        }
+        const n = std.fmt.parseInt(usize, id, 10) catch return null;
+        if (n < 1) return null;
+        const all = try list(alloc, cwd);
+        if (n > all.len) return null;
+        return all[n - 1];
     }
 
     /// 解析消息行(跳过 skip_first 行),追加到 out。恢复 seq/last_id;统计

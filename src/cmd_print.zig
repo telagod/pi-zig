@@ -127,7 +127,7 @@ test "result json serialization" {
 pub fn runPrint(alloc: std.mem.Allocator, cfg: *cfgmod.Config, cwd: []const u8, prompt: []const u8, opts: RunOptions) !void {
     const abs_cwd = std.process.currentPathAlloc(util.io, alloc) catch cwd;
     var sess = if (opts.session_id) |id| blk: {
-        const found = (try sessionmod.Session.findById(alloc, abs_cwd, id)) orelse {
+        const found = (try sessionmod.Session.findByIdOrIndex(alloc, abs_cwd, id)) orelse {
             std.debug.print("piz: session '{s}' not found in {s}\n", .{ id, abs_cwd });
             std.process.exit(1);
         };

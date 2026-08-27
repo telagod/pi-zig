@@ -25,7 +25,7 @@ pub const USAGE =
     \\      --ask        危险工具先问(Codex on-request)
     \\      --sandbox M  bash OS 隔离:off|workspace|strict
     \\  -i, --input FILE 从文件读提示词(print 模式)
-    \\  -s, --session ID  恢复指定会话(id 见退出提示、/sessions 或 -a 输出)
+    \\  -s, --session ID  恢复指定会话(id 或 sessions 清单序号;id 见退出提示、/sessions、-a)
     \\  -a, --async       print 模式后台运行,立即返回会话 id 与日志路径
     \\  -o, --output FMT  print 模式输出格式:text|json|jsonl(默认 text)
     \\      --system TEXT 自定义系统提示(替代默认)

@@ -15,7 +15,7 @@ pub const RunOptions = struct {
     continue_session: bool = false,
     title: ?[]const u8 = null,
     output_format: OutputFormat = .text,
-    /// -s:恢复指定会话(id 为文件名去 .jsonl)
+    /// -s:恢复指定会话(id 为文件名去 .jsonl,或 sessions 清单 1-based 序号)
     session_id: ?[]const u8 = null,
     /// -a:异步后台运行(仅 print 模式)
     async_run: bool = false,

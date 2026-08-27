@@ -505,7 +505,7 @@ fn mergeModelsSync(app: *App) void {
     if (added > 0 or fail > 0) {
         const msg = std.fmt.allocPrint(app.alloc, "模型表已同步: +{d}{s}", .{ added, if (fail > 0) "(有供应商取败)" else "" }) catch return;
         defer app.alloc.free(msg);
-        // 极简:同步是内部事务,打 stderr 不入 transcript(pi 式:启动细则 console) 
+        // 极简:同步是内部事务,打 stderr 不入 transcript(pi 式:启动细则 console)
         std.debug.print("{s}\n", .{msg});
     }
 }
@@ -629,7 +629,7 @@ pub fn runInteractive(alloc: std.mem.Allocator, cfg: *cfgmod.Config, cwd: []cons
 
     // 会话:指定 id → 恢复;-c → 续载最新;默认新会话(不带旧上下文开工)
     var sess = if (opts.session_id) |id| blk: {
-        const found = (try sessionmod.Session.findById(alloc, abs_cwd, id)) orelse {
+        const found = (try sessionmod.Session.findByIdOrIndex(alloc, abs_cwd, id)) orelse {
             std.debug.print("piz: session '{s}' not found in {s}\n", .{ id, abs_cwd });
             std.process.exit(1);
         };
@@ -1069,7 +1069,8 @@ pub fn main(init: std.process.Init) !void {
                 defer if (d) |info| info.deinit(alloc);
                 const head = if (d) |info| info.headline else s.sessionId();
                 const meta = if (d) |info| info.hint else "";
-                std.debug.print("{d}. {s}  {s}\n", .{ i + 1, head, meta });
+                // 序号可直接喂 -s(见下方 session_id 解析);长 id 也给出,脚本好拷
+                std.debug.print("{d}. {s}  {s}  {s}\n", .{ i + 1, head, meta, s.sessionId() });
             }
             std.process.exit(0);
         } else if (std.mem.eql(u8, arg, "plugins")) {

@@ -247,7 +247,7 @@ piz web [选项]                 # Web UI
 | `-c`, `--continue` | 续载最近会话 |
 | `-n`, `--new` | 新会话（默认行为，每次启动都是新会话） |
 | `-t`, `--title <T>` | 新会话并设置标题（隐含 `-n`） |
-| `-s`, `--session <ID>` | 恢复指定会话，id 见退出提示、`/sessions` 或 `-a` 输出 |
+| `-s`, `--session <ID>` | 恢复指定会话；吃 `piz sessions` 清单的序号或 id（见退出提示、`/sessions`、`-a` 输出） |
 
 ### 工具与插件
 
