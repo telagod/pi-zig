@@ -195,7 +195,7 @@ fn composerSkip(cursor_row: usize, view_rows: usize) usize {
 
 /// 文档流里 composer 顶行(1-based)。nvis=已画消息行,skip=0 时即屏上顶行。
 pub fn composerTopRow(nvis: usize, bottom: BottomPane) usize {
-    return nvis + bottom.working_rows + bottom.perm_rows + bottom.picker_rows + bottom.slash_rows + 1;
+    return nvis + bottom.working_rows + bottom.perm_rows + bottom.picker_rows + bottom.slash_rows + bottom.gap_rows + 1;
 }
 
 pub fn composerInputRow(top: usize, bottom: BottomPane, cursor_row: usize) usize {
@@ -214,12 +214,14 @@ pub const BottomPane = struct {
     composer_rows: usize = 0,
     footer_rows: usize = 0,
     footer_ident_rows: usize = 1,
+    /// 对话区与 composer 之间的呼吸行(omp 式留白;非盒态 0)
+    gap_rows: usize = 0,
     boxed: bool = true,
     input_inner: usize = 1,
     comp_inner: usize = 1,
 
     pub fn height(self: BottomPane) usize {
-        return self.working_rows + self.perm_rows + self.picker_rows + self.slash_rows + self.composer_rows + self.footer_rows;
+        return self.working_rows + self.perm_rows + self.picker_rows + self.slash_rows + self.composer_rows + self.footer_rows + self.gap_rows;
     }
 };
 
@@ -880,6 +882,7 @@ pub const Tui = struct {
         else
             0;
         const boxed = w >= 8;
+        const gap: usize = if (boxed) 1 else 0;
         const input_inner = composerInnerWidth(boxed, w);
         const wrap_n = wrapRowCount(self.input.items, input_inner);
         const cap = @max(1, h / 4);
@@ -898,13 +901,13 @@ pub const Tui = struct {
         // Overflow: shrink wrap-grown composer (never below 3), then drop
         // footer row 2 (one-row pack still keeps cwd), then working details.
         // Composer stays a closed box.
-        while (working + fixed + composerOf(boxed, comp_inner) + ident_rows > h and comp_inner > min_inner) {
+        while (working + fixed + composerOf(boxed, comp_inner) + ident_rows + gap > h and comp_inner > min_inner) {
             comp_inner -= 1;
         }
-        if (working + fixed + composerOf(boxed, comp_inner) + ident_rows > h and ident_rows > 1) {
+        if (working + fixed + composerOf(boxed, comp_inner) + ident_rows + gap > h and ident_rows > 1) {
             ident_rows = 1;
         }
-        while (working + fixed + composerOf(boxed, comp_inner) + ident_rows > h and working > 1) {
+        while (working + fixed + composerOf(boxed, comp_inner) + ident_rows + gap > h and working > 1) {
             working -= 1;
         }
         const composer_rows = composerOf(boxed, comp_inner);
@@ -916,6 +919,7 @@ pub const Tui = struct {
             .composer_rows = composer_rows,
             .footer_rows = ident_rows + help_rows,
             .footer_ident_rows = ident_rows,
+            .gap_rows = gap,
             .boxed = boxed,
             .input_inner = input_inner,
             .comp_inner = comp_inner,
@@ -993,7 +997,7 @@ pub const Tui = struct {
         }
         const nvis_doc = total_vis - composer_block;
         const prefix_rows = bottom.working_rows + bottom.perm_rows + bottom.picker_rows + bottom.slash_rows;
-        const composer_doc = nvis_doc + prefix_rows;
+        const composer_doc = nvis_doc + prefix_rows + bottom.gap_rows;
         const doc_skip = pin - self.scroll_off;
         self.composer_screen_row = if (composer_doc >= doc_skip) row_blk: {
             const row = composer_doc - doc_skip + top_gap + 1;
@@ -1047,6 +1051,7 @@ pub const Tui = struct {
         };
         if (bottom.boxed) {
             const box_w = composerBoxWidth(w);
+            if (bottom.gap_rows > 0) try block_aw.writer.writeAll("\x1b[K\r\n");
             try footer.writeComposerTopEdge(&block_aw.writer, ident, box_w);
             try emitComposer(&block_aw.writer, self.input.items, bottom.input_inner, bottom.comp_inner, view_skip);
             try writeBoxEdge(&block_aw.writer, "╰", "╯", box_w);

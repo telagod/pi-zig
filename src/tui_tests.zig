@@ -765,7 +765,9 @@ test "session card renders at paint width" {
     try t.expect(idle.composer_rows >= 3);
     try t.expect(idle.footer_rows >= 1);
     try t.expect(idle.height() < 24);
-    try t.expectEqual(@as(usize, 1), composerTopRow(0, idle));
+    // 对话区与 composer 之间恒留 1 呼吸行(gap_rows):空转录时顶行是 gap
+    try t.expectEqual(@as(usize, 1), idle.gap_rows);
+    try t.expectEqual(@as(usize, 2), composerTopRow(0, idle));
     try t.expectEqual(@as(usize, 0), idle.working_rows);
     ui.toggleTools();
     const still = ui.measureBottom(2, true, &.{});
@@ -1198,14 +1200,14 @@ test "measureBottom keeps a 3-row composer above the footer" {
         try t.expect(idle.boxed);
         try t.expect(idle.height() <= 24);
         const top = composerTopRow(0, idle);
-        try t.expectEqual(@as(usize, 1), top);
+        try t.expectEqual(@as(usize, 2), top); // 1 呼吸行 + 顶边
         try t.expect(idle.footer_rows >= 1);
 
         const busy = ui.measureBottom(5, true, &.{});
         try t.expect(busy.composer_rows >= 3);
         try t.expect(busy.height() <= 24);
         const busy_top = composerTopRow(0, busy);
-        try t.expectEqual(@as(usize, 1 + busy.working_rows), busy_top);
+        try t.expectEqual(@as(usize, 2 + busy.working_rows), busy_top); // gap + working + 顶边
     }
 }
 
