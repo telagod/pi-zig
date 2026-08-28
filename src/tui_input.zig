@@ -76,24 +76,6 @@ pub fn takePendingImage(self: *Tui) ?PendingImage {
 }
 
 pub fn takeSubmit(self: *Tui) !Action {
-    // 掩码密钥输入:整体截胡(不走 slash/历史/回显)
-    if (self.pending_secret) |provider| {
-        if (self.input.items.len == 0) return .none; // 空 key 不提交,Esc 取消
-        // provider 名义上转移给 Action(调用方用完不管——arena 无所谓,
-        // 测试分配器靠 deinit 兜底)——不行,直接复制一份给 Action,旧的现在就放
-        const s = SecretSubmit{ .provider = try self.alloc.dupe(u8, provider), .key = try self.alloc.dupe(u8, self.input.items) };
-        self.alloc.free(provider);
-        self.pending_secret = null;
-        self.input.clearRetainingCapacity();
-        self.cursor = 0;
-        self.hist_idx = null;
-        self.slash_sel = 0;
-        self.disarmQuit();
-        self.esc_armed = false;
-        self.shortcuts_open = false;
-        self.dirty.store(true, .release);
-        return .{ .secret = s };
-    }
     if (self.input.items.len == 0 and self.pending_image == null) return .none;
     const line = if (slashSubmitLine(self)) |picked|
         picked
@@ -218,6 +200,7 @@ pub fn insertByte(self: *Tui, b: u8) !void {
 }
 
 pub fn handleInput(self: *Tui, bytes: []const u8) !Action {
+    if (self.modal_secret != null) return handleSecretInput(self, bytes);
     if (self.picker != null) return handlePickerInput(self, bytes);
     var i: usize = 0;
     while (i < bytes.len) {
@@ -319,12 +302,6 @@ pub fn handleInput(self: *Tui, bytes: []const u8) !Action {
                 self.esc_armed = false;
                 self.cycleThink(true);
                 return .think;
-            }
-            if (self.pending_secret != null) {
-                // 掩码输入中:Esc = 取消登录提示,不触发 abort/quit
-                self.cancelSecret();
-                i += 1;
-                continue;
             }
             if (streaming) return .abort;
             if (self.input.items.len == 0) {
@@ -458,63 +435,63 @@ pub fn handleInput(self: *Tui, bytes: []const u8) !Action {
                 }
             },
             'g', 'G' => {
-                if (self.input.items.len == 0 and !streaming and self.pending_secret == null) {
+                if (self.input.items.len == 0 and !streaming) {
                     return .diff;
                 } else {
                     try insertByte(self, b);
                 }
             },
             'l', 'L' => {
-                if (self.input.items.len == 0 and !streaming and self.pending_secret == null) {
+                if (self.input.items.len == 0 and !streaming) {
                     return .log;
                 } else {
                     try insertByte(self, b);
                 }
             },
             'd', 'D' => {
-                if (self.input.items.len == 0 and !streaming and self.pending_secret == null) {
+                if (self.input.items.len == 0 and !streaming) {
                     return .doctor;
                 } else {
                     try insertByte(self, b);
                 }
             },
             'r', 'R' => {
-                if (self.input.items.len == 0 and !streaming and self.pending_secret == null) {
+                if (self.input.items.len == 0 and !streaming) {
                     return .redo;
                 } else {
                     try insertByte(self, b);
                 }
             },
             'u', 'U' => {
-                if (self.input.items.len == 0 and !streaming and self.pending_secret == null) {
+                if (self.input.items.len == 0 and !streaming) {
                     return .usage;
                 } else {
                     try insertByte(self, b);
                 }
             },
             'j', 'J' => {
-                if (self.input.items.len == 0 and !streaming and self.pending_secret == null) {
+                if (self.input.items.len == 0 and !streaming) {
                     return .jobs;
                 } else {
                     try insertByte(self, b);
                 }
             },
             's', 'S' => {
-                if (self.input.items.len == 0 and !streaming and self.pending_secret == null) {
+                if (self.input.items.len == 0 and !streaming) {
                     return .sandbox;
                 } else {
                     try insertByte(self, b);
                 }
             },
             'c', 'C' => {
-                if (self.input.items.len == 0 and !streaming and self.pending_secret == null) {
+                if (self.input.items.len == 0 and !streaming) {
                     return .copy;
                 } else {
                     try insertByte(self, b);
                 }
             },
             '?' => {
-                if (self.input.items.len == 0 and !streaming and self.pending_secret == null) {
+                if (self.input.items.len == 0 and !streaming) {
                     self.shortcuts_open = !self.shortcuts_open;
                     self.dirty.store(true, .release);
                 } else {
@@ -540,6 +517,69 @@ pub fn handleInput(self: *Tui, bytes: []const u8) !Action {
                     continue;
                 }
             },
+        }
+        i += 1;
+    }
+    return .none;
+}
+
+/// 密钥弹窗输入:字符入弹窗输入行(掩码显示),Enter 出 Action.secret,
+/// Esc/Ctrl+C 取消;bracketed paste 可用(API key 多为粘贴)。不进 composer/历史。
+pub fn handleSecretInput(self: *Tui, bytes: []const u8) !Action {
+    var i: usize = 0;
+    while (i < bytes.len) {
+        const b = bytes[i];
+        // 退格
+        if (b == 0x7f or b == 0x08) {
+            if (self.modal_secret) |*sm| {
+                // 按 UTF-8 码点退(key 多为 ASCII,防御多字节)
+                if (sm.input.items.len > 0) {
+                    var cut = sm.input.items.len - 1;
+                    while (cut > 0 and (sm.input.items[cut] & 0xC0) == 0x80) cut -= 1;
+                    sm.input.shrinkRetainingCapacity(cut);
+                }
+            }
+            self.dirty.store(true, .release);
+            i += 1;
+            continue;
+        }
+        // Enter:非空才提交
+        if (b == '\r' or b == '\n') {
+            if (self.modal_secret) |*sm| {
+                if (sm.input.items.len > 0) {
+                    const s = SecretSubmit{
+                        .provider = try self.alloc.dupe(u8, sm.provider),
+                        .key = try self.alloc.dupe(u8, sm.input.items),
+                    };
+                    self.closeSecretModal();
+                    return .{ .secret = s };
+                }
+            }
+            i += 1;
+            continue;
+        }
+        // Esc / Ctrl+C:取消
+        if (b == 0x1b or b == 0x03) {
+            // 多字节 CSI(方向键等)整个跳过,不当取消
+            if (b == 0x1b and i + 1 < bytes.len and bytes[i + 1] == '[') {
+                i += 2;
+                while (i < bytes.len and (bytes[i] < '@' or bytes[i] > '~')) i += 1;
+                if (i < bytes.len) i += 1;
+                continue;
+            }
+            self.closeSecretModal();
+            return .none;
+        }
+        // 可打印字符(含 UTF-8 序列):追加
+        if (b >= 0x20) {
+            const word = std.unicode.utf8ByteSequenceLength(b) catch 1;
+            const avail = @min(word, bytes.len - i);
+            if (self.modal_secret) |*sm| {
+                sm.input.appendSlice(bytes[i .. i + avail]) catch {};
+            }
+            self.dirty.store(true, .release);
+            i += avail;
+            continue;
         }
         i += 1;
     }
@@ -594,6 +634,40 @@ pub fn handlePickerInput(self: *Tui, bytes: []const u8) !Action {
             self.closePicker();
             return .none;
         }
+        // modal 弹窗(登录):字符进搜索,导航只认方向键/Ctrl+P/N
+        const is_modal = if (self.picker) |*p| p.modal else false;
+        if (is_modal) {
+            if (b == '\n' or b == '\r') return try confirmPicker(self);
+            if (b == 0x7f or b == 0x08) {
+                if (self.picker) |*p| {
+                    if (p.search.items.len > 0) {
+                        _ = p.search.pop();
+                        p.applySearch(self.alloc) catch {};
+                    }
+                }
+                self.dirty.store(true, .release);
+                i += 1;
+                continue;
+            }
+            if (b == 0x10) {
+                if (self.picker) |*p| p.move(-1);
+            } else if (b == 0x0e) {
+                if (self.picker) |*p| p.move(1);
+            } else if (b >= 0x20) {
+                const word = std.unicode.utf8ByteSequenceLength(b) catch 1;
+                const avail = @min(word, bytes.len - i);
+                if (self.picker) |*p| {
+                    p.search.appendSlice(bytes[i .. i + avail]) catch {};
+                    p.applySearch(self.alloc) catch {};
+                }
+                self.dirty.store(true, .release);
+                i += avail;
+                continue;
+            }
+            self.dirty.store(true, .release);
+            i += 1;
+            continue;
+        }
         switch (b) {
             '\n', '\r' => return try confirmPicker(self),
             'k', 'K', 0x10 => if (self.picker) |*p| p.move(-1),
@@ -601,7 +675,7 @@ pub fn handlePickerInput(self: *Tui, bytes: []const u8) !Action {
             '1'...'9' => {
                 const n: usize = b - '1';
                 if (self.picker) |*p| {
-                    if (n < p.items.len) p.sel = n;
+                    if (n < p.visibleLen()) p.sel = n;
                 }
             },
             else => {},

@@ -284,6 +284,7 @@ pub fn openLoginPicker(app: *App) void {
     }
     if (items.items.len == 0) return;
     tuiOk("picker.login", app.tui.openPicker("login", "login — 选择 provider", items.items, sel));
+    if (app.tui.picker) |*p| p.modal = true;
 }
 
 /// 凭据方式分流:OAuth 可用的给两个选项(confirm 落 /login <name> --apikey|--oauth)。
@@ -295,4 +296,5 @@ pub fn openLoginMethodPicker(app: *App, provider: []const u8) void {
         .{ .label = "订阅 / OAuth", .hint = "piz web → Settings → Account", .value = oauth_label },
     };
     tuiOk("picker.login2", app.tui.openPicker("login", "login — 凭据方式", &items, 0));
+    if (app.tui.picker) |*p| p.modal = true;
 }

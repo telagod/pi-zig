@@ -724,11 +724,7 @@ pub fn dispatch(tui: *tui_mod.Tui, app: *App, cmd: []const u8) anyerror!bool {
                 main_mod.openLoginMethodPicker(app, name);
                 return true;
             }
-            tuiOk("tui.secret", app.tui.openSecretPrompt(name));
-            var bw = std.Io.Writer.Allocating.init(app.alloc);
-            defer bw.deinit();
-            tuiOk("tui.wr", bw.writer.print("输入 {s} 的 API key(掩码不显示,Enter 提交,Esc 取消)", .{name}));
-            tuiNote(app, "\x1b[2m", bw.written());
+            tuiOk("tui.secret", app.tui.openSecretModal(name));
             return true;
         }
         // /login <name> <key>:一把写(脚本向;密钥不进 history.txt —— onSubmit 已滤)

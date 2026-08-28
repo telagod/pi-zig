@@ -1747,41 +1747,68 @@ test "footer is one row at >=40 cols: host identity left, hint right" {
 }
 // ---- /login 掩码输入(Action.secret 路径)----
 
-test "secret prompt: takeSubmit yields secret action, not submit" {
+test "secret modal: typed key submits as secret action, never as submit" {
     const t = std.testing;
     const a = t.allocator;
     var ui = try Tui.init(a);
     defer ui.deinit();
-    try ui.openSecretPrompt("deepseek");
-    try t.expect(ui.pending_secret != null);
-    for ("sk-test-123") |c| {
-        try ui.input.append(c);
-        ui.cursor += 1;
-    }
-    const act = try ui.takeSubmit();
+    try ui.openSecretModal("deepseek");
+    try t.expect(ui.modal_secret != null);
+    const act0 = try ui.handleInput("sk-test-123");
+    try t.expect(act0 == .none);
+    // 弹窗输入行收到明文,composer 未染
+    try t.expectEqualStrings("sk-test-123", ui.modal_secret.?.input.items);
+    try t.expectEqual(@as(usize, 0), ui.input.items.len);
+    const act = try ui.handleInput("\r");
     // 载荷所有权归消费方(run 循环同规):用毕释放
     defer a.free(act.secret.provider);
     defer a.free(act.secret.key);
     try t.expect(act == .secret);
     try t.expectEqualStrings("deepseek", act.secret.provider);
     try t.expectEqualStrings("sk-test-123", act.secret.key);
-    // 提交后退出掩码态,草稿清空
-    try t.expect(ui.pending_secret == null);
-    try t.expectEqual(@as(usize, 0), ui.input.items.len);
+    // 提交后弹窗关闭
+    try t.expect(ui.modal_secret == null);
 }
 
-test "secret prompt: empty key not submittable, cancelSecret cleans up" {
+test "secret modal: empty key not submittable, Esc cancels" {
     const t = std.testing;
     const a = t.allocator;
     var ui = try Tui.init(a);
     defer ui.deinit();
-    try ui.openSecretPrompt("xai");
-    const act = try ui.takeSubmit();
+    try ui.openSecretModal("xai");
+    const act = try ui.handleInput("\r");
     try t.expect(act == .none); // 空 key 不提交
-    try t.expect(ui.pending_secret != null); // 提示仍在
-    ui.cancelSecret();
-    try t.expect(ui.pending_secret == null);
-    try t.expectEqual(@as(usize, 0), ui.input.items.len);
+    try t.expect(ui.modal_secret != null); // 弹窗仍在
+    const act2 = try ui.handleInput("\x1b");
+    try t.expect(act2 == .none);
+    try t.expect(ui.modal_secret == null); // Esc 关窗
+}
+
+test "modal picker: search filters items, confirm takes filtered" {
+    const t = std.testing;
+    const a = t.allocator;
+    var ui = try Tui.init(a);
+    defer ui.deinit();
+    const items = [_]PickerItem{
+        .{ .label = "openai", .hint = "", .value = "openai" },
+        .{ .label = "anthropic", .hint = "", .value = "anthropic" },
+        .{ .label = "deepseek", .hint = "", .value = "deepseek" },
+    };
+    try ui.openPicker("login", "login", &items, 0);
+    if (ui.picker) |*p| p.modal = true;
+    _ = try ui.handleInput("deep");
+    try t.expectEqual(@as(usize, 1), ui.picker.?.visibleLen());
+    const act = try ui.confirmPicker();
+    defer a.free(act.submit);
+    try t.expectEqualStrings("/login deepseek", act.submit);
+    // 清空搜索回全量
+    _ = try ui.handleInput("\x7f\x7f\x7f\x7f");
+    // 重开选择器再验(confirm 已关)
+    try ui.openPicker("login", "login", &items, 0);
+    if (ui.picker) |*p| p.modal = true;
+    _ = try ui.handleInput("zzz");
+    try t.expectEqual(@as(usize, 0), ui.picker.?.visibleLen());
+    ui.closePicker();
 }
 
 test "maskSecret: bullets only, one per char, utf8-safe" {

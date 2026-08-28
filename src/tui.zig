@@ -288,9 +288,9 @@ pub const Tui = struct {
     find_log: std.array_list.Managed([]u8),
     pending_image: ?[]u8 = null,
     pending_mime: []const u8 = "",
-    /// 掩码输入模式:/login 交互收 API key。非空即目标 provider 名;
-    /// 输入以 • 掩码显示,Enter 走 Action.secret(不进 on_submit/历史),Esc 取消。
-    pending_secret: ?[]const u8 = null,
+    /// omp 式居中弹窗收 API key(/login):输入在弹窗内以 • 掩码,
+    /// Enter 走 Action.secret(不进 on_submit/历史),Esc 取消。
+    modal_secret: ?SecretModal = null,
     last_pin: usize = 0,
     /// 1-based 屏上行号,0=composer 滚出视口。
     composer_screen_row: usize = 0,
@@ -371,7 +371,7 @@ pub const Tui = struct {
         for (self.find_log.items) |s| self.alloc.free(s);
         self.find_log.deinit();
         if (self.pending_image) |img| self.alloc.free(img);
-        if (self.pending_secret) |s| self.alloc.free(s);
+        if (self.modal_secret) |*s| s.deinit(self.alloc);
         tui_flow.resetFlow(self);
         self.flow_nodes.deinit(self.alloc);
     }
@@ -871,7 +871,8 @@ pub const Tui = struct {
                 if (c == '\n') perm_rows += 1;
             }
         }
-        const picker_rows: usize = if (self.picker) |*p| p.displayRows(h) else 0;
+        // modal 弹窗(登录)是覆层,不占底栏行
+        const picker_rows: usize = if (self.picker) |*p| (if (p.modal) 0 else p.displayRows(h)) else 0;
         tui_input.ensureAtFiles(self);
         const slash_rows: usize = if (self.picker == null) slashDisplayRows(self.input.items, self.slash_items, h) else 0;
         const file_rows: usize = if (self.picker == null and filesmod.atQuery(self.input.items) != null)
@@ -1015,8 +1016,9 @@ pub const Tui = struct {
                 try block_aw.writer.writeAll(ANSI_RESET ++ "\x1b[K\r\n");
             }
         }
-        if (self.picker) |*p| {
-            try writePicker(&block_aw.writer, p, h, w);
+        // modal 选择器不在底栏画(居中覆层在帧末 writeModalPicker)
+        if (self.picker != null and !self.picker.?.modal) {
+            try writePicker(&block_aw.writer, &self.picker.?, h, w);
         } else if (filesmod.atQuery(self.input.items) != null) {
             try writeFilePicker(&block_aw.writer, self.file_items, &self.file_sel, h, w);
         } else if (slashQuery(self.input.items)) |q| {
@@ -1043,17 +1045,14 @@ pub const Tui = struct {
             .pct = self.footer_pct,
             .hot = self.footer_hot,
         };
-        // 掩码输入:• 替字(等宽占位,真实内容不出屏)
-        var mask_buf: [2048]u8 = undefined;
-        const shown_input = if (self.pending_secret != null) maskSecret(&mask_buf, self.input.items) else self.input.items;
         if (bottom.boxed) {
             const box_w = composerBoxWidth(w);
             try footer.writeComposerTopEdge(&block_aw.writer, ident, box_w);
-            try emitComposer(&block_aw.writer, shown_input, bottom.input_inner, bottom.comp_inner, view_skip);
+            try emitComposer(&block_aw.writer, self.input.items, bottom.input_inner, bottom.comp_inner, view_skip);
             try writeBoxEdge(&block_aw.writer, "╰", "╯", box_w);
         } else {
             try block_aw.writer.writeAll(ANSI_DIM ++ "› " ++ ANSI_RESET);
-            try writeTrunc(&block_aw.writer, shown_input, bottom.input_inner);
+            try writeTrunc(&block_aw.writer, self.input.items, bottom.input_inner);
             try block_aw.writer.writeAll("\x1b[K\r\n");
         }
         const hint = footerHint(.{
@@ -1099,7 +1098,20 @@ pub const Tui = struct {
             }
         }
         try fw.writer.writeAll("\x1b[J");
-        if (self.composer_screen_row == 0) {
+        // omp 式居中弹窗(登录):覆画在帧末,光标进弹窗输入位
+        var modal_cur: ?draw.ModalCursor = null;
+        if (self.modal_secret) |*sm| {
+            var mask_buf: [2048]u8 = undefined;
+            const masked = maskSecret(&mask_buf, sm.input.items);
+            var tbuf: [96]u8 = undefined;
+            const mtitle = std.fmt.bufPrint(&tbuf, "login — {s}", .{sm.provider}) catch "login";
+            modal_cur = try draw.writeModalSecret(&fw.writer, mtitle, "粘贴 API key,Enter 提交(输入以 • 掩码):", masked, w, h);
+        } else if (self.picker != null and self.picker.?.modal) {
+            modal_cur = try draw.writeModalPicker(&fw.writer, &self.picker.?, w, h);
+        }
+        if (modal_cur) |mc| {
+            try fw.writer.print("\x1b[{d};{d}H\x1b[?25h", .{ mc.row, mc.col });
+        } else if (self.composer_screen_row == 0) {
             try fw.writer.writeAll("\x1b[?25l");
         } else {
             const input_row = composerInputRow(self.composer_screen_row, bottom, cur.row);
@@ -1272,6 +1284,10 @@ pub const Tui = struct {
         return tui_input.takeSubmit(self);
     }
 
+    pub fn confirmPicker(self: *Tui) !tui_input.Action {
+        return tui_input.confirmPicker(self);
+    }
+
     pub fn handleInput(self: *Tui, bytes: []const u8) !Action {
         return tui_input.handleInput(self, bytes);
     }
@@ -1392,27 +1408,24 @@ pub const Tui = struct {
         self.dirty.store(true, .release);
     }
 
-    /// 进入掩码密钥输入:清草稿、置目标 provider、画提示态。
-    pub fn openSecretPrompt(self: *Tui, provider: []const u8) !void {
+    /// 打开密钥弹窗(omp login 形):置目标 provider,空输入开场。
+    pub fn openSecretModal(self: *Tui, provider: []const u8) !void {
         self.mutex.lock(util.io) catch {};
         defer self.mutex.unlock(util.io);
-        if (self.pending_secret) |old| self.alloc.free(old);
-        self.pending_secret = try self.alloc.dupe(u8, provider);
-        self.input.clearRetainingCapacity();
-        self.cursor = 0;
-        self.hist_idx = null;
-        self.shortcuts_open = false;
+        if (self.modal_secret) |*old| old.deinit(self.alloc);
+        self.modal_secret = .{
+            .provider = try self.alloc.dupe(u8, provider),
+            .input = std.array_list.Managed(u8).init(self.alloc),
+        };
         self.dirty.store(true, .release);
     }
 
-    /// 取消掩码输入(Esc):清草稿退场。
-    pub fn cancelSecret(self: *Tui) void {
+    /// 关闭密钥弹窗(提交/取消同路)。
+    pub fn closeSecretModal(self: *Tui) void {
         self.mutex.lock(util.io) catch {};
         defer self.mutex.unlock(util.io);
-        if (self.pending_secret) |old| self.alloc.free(old);
-        self.pending_secret = null;
-        self.input.clearRetainingCapacity();
-        self.cursor = 0;
+        if (self.modal_secret) |*old| old.deinit(self.alloc);
+        self.modal_secret = null;
         self.dirty.store(true, .release);
     }
 
@@ -1446,6 +1459,17 @@ pub const Tui = struct {
 pub fn nowNs() i64 {
     return @intCast(std.Io.Clock.now(.real, util.io).nanoseconds);
 }
+
+/// 密钥弹窗状态(omp login 输入框)。
+pub const SecretModal = struct {
+    provider: []u8,
+    input: std.array_list.Managed(u8),
+
+    pub fn deinit(self: *SecretModal, alloc: std.mem.Allocator) void {
+        alloc.free(self.provider);
+        self.input.deinit();
+    }
+};
 
 /// 掩码:每字符一个 •(• 为 3 字节单格;超缓冲截断显示,内容不丢——
 /// 提交走的是 input.items 本体,这里只管画)。

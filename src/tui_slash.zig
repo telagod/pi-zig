@@ -150,6 +150,12 @@ pub const Picker = struct {
     items: []Item,
     sel: usize = 0,
     scroll: usize = 0,
+    /// omp 式居中弹窗(登录流):不占底栏行、可搜索;false = 底栏选择器(原行为)
+    modal: bool = false,
+    /// 搜索过滤(modal 态键入字符进这;空 = 全量可见)
+    search: std.array_list.Managed(u8),
+    /// 过滤后可见下标(null = 全量);applySearch 重建
+    filtered: ?[]usize = null,
 
     pub const Item = struct {
         label: []u8,
@@ -188,6 +194,7 @@ pub const Picker = struct {
             .title = title_owned,
             .items = owned,
             .sel = if (items.len == 0) 0 else @min(selected, items.len - 1),
+            .search = std.array_list.Managed(u8).init(alloc),
         };
     }
 
@@ -200,32 +207,79 @@ pub const Picker = struct {
         alloc.free(self.items);
         alloc.free(self.cmd);
         alloc.free(self.title);
+        self.search.deinit();
+        if (self.filtered) |f| alloc.free(f);
         self.* = undefined;
     }
 
+    /// 可见项数(搜索过滤后)。
+    pub fn visibleLen(self: *const Picker) usize {
+        return if (self.filtered) |f| f.len else self.items.len;
+    }
+
+    /// 第 i 个可见项(过滤序)。
+    pub fn visibleItem(self: *const Picker, i: usize) *const Item {
+        const idx = if (self.filtered) |f| f[i] else i;
+        return &self.items[idx];
+    }
+
+    /// 键入字符 → 子串过滤(label/value,大小写不敏感);sel 收回 0。
+    pub fn applySearch(self: *Picker, alloc: std.mem.Allocator) !void {
+        if (self.filtered) |f| alloc.free(f);
+        self.filtered = null;
+        const q = std.mem.trim(u8, self.search.items, " ");
+        if (q.len == 0) {
+            self.sel = 0;
+            self.scroll = 0;
+            return;
+        }
+        var out = std.array_list.Managed(usize).init(alloc);
+        errdefer out.deinit();
+        for (self.items, 0..) |it, i| {
+            if (containsFold(it.label, q) or containsFold(it.value, q)) {
+                try out.append(i);
+            }
+        }
+        self.filtered = try out.toOwnedSlice();
+        self.sel = 0;
+        self.scroll = 0;
+    }
+
+    fn containsFold(hay: []const u8, needle: []const u8) bool {
+        if (needle.len == 0) return true;
+        if (hay.len < needle.len) return false;
+        var i: usize = 0;
+        while (i + needle.len <= hay.len) : (i += 1) {
+            if (std.ascii.eqlIgnoreCase(hay[i .. i + needle.len], needle)) return true;
+        }
+        return false;
+    }
+
     pub fn move(self: *Picker, delta: isize) void {
-        if (self.items.len == 0) return;
+        const n = self.visibleLen();
+        if (n == 0) return;
         if (delta < 0) {
             const d: usize = @intCast(-delta);
             self.sel = if (self.sel >= d) self.sel - d else 0;
         } else {
             const d: usize = @intCast(delta);
-            self.sel = @min(self.items.len - 1, self.sel + d);
+            self.sel = @min(n - 1, self.sel + d);
         }
     }
 
     pub fn confirmLine(self: *const Picker, alloc: std.mem.Allocator) ![]u8 {
-        const value = if (self.items.len == 0) "" else self.items[self.sel].value;
+        const value = if (self.visibleLen() == 0) "" else self.visibleItem(self.sel).value;
         return std.fmt.allocPrint(alloc, "/{s} {s}", .{ self.cmd, value });
     }
 
     pub fn displayRows(self: *const Picker, height: usize) usize {
-        if (self.items.len == 0) return 0;
-        return 1 + @min(self.items.len, itemCap(height));
+        const n = self.visibleLen();
+        if (n == 0) return 0;
+        return 1 + @min(n, itemCap(height));
     }
 
     pub fn window(self: *Picker, height: usize) struct { start: usize, count: usize } {
-        const n = self.items.len;
+        const n = self.visibleLen();
         const cap = itemCap(height);
         if (n <= cap) {
             self.scroll = 0;
