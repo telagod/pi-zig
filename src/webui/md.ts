@@ -69,7 +69,7 @@ export function mdInline(s: string) {
   s = s.replace(/`([^`]+)`/g, (_m, c) => "\u0000" + (spans.push("<code>" + esc(c) + "</code>") - 1) + "\u0000");
   s = esc(s);
   s = s.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
-  s = s.replace(/(^|[^*])\*([^*]+)\*(?!\*)/g, "$1<em>$2</em>");
+  s = s.replace(/(^|[^*])\*(?!\s|\*)([^*]*[^\s*])\*(?!\*)/g, "$1<em>$2</em>");
   s = s.replace(/~~(.+?)~~/g, "<del>$1</del>");
   s = s.replace(
     /\[([^\]]+)\]\((https?:[^)\s]+)\)/g,

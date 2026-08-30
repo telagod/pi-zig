@@ -2877,7 +2877,7 @@ function codeBlock(lang, body) {
   s = s.replace(/`([^`]+)`/g, (_m, c) => "\u0000" + (spans.push("<code>" + _util.esc.call(void 0, c) + "</code>") - 1) + "\u0000");
   s = _util.esc.call(void 0, s);
   s = s.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
-  s = s.replace(/(^|[^*])\*([^*]+)\*(?!\*)/g, "$1<em>$2</em>");
+  s = s.replace(/(^|[^*])\*(?!\s|\*)([^*]*[^\s*])\*(?!\*)/g, "$1<em>$2</em>");
   s = s.replace(/~~(.+?)~~/g, "<del>$1</del>");
   s = s.replace(
     /\[([^\]]+)\]\((https?:[^)\s]+)\)/g,
