@@ -1076,12 +1076,17 @@
         padding: 0;
         color: var(--color-text);
       }
+      .md a,
       .insp-md a {
-        color: var(--color-accent);
-        text-decoration: none;
-      }
-      .insp-md a:hover {
+        color: var(--color-text);
         text-decoration: underline;
+        text-decoration-color: var(--color-text-faint);
+        text-underline-offset: 3px;
+        transition: text-decoration-color 0.12s;
+      }
+      .md a:hover,
+      .insp-md a:hover {
+        text-decoration-color: var(--color-text);
       }
       .diff-view {
         font: 12.5px/1.55 var(--mono);
@@ -1364,7 +1369,7 @@
         max-width: 42em;
       }
       .u-bub {
-        flex: 1;
+        flex: 0 1 auto;
         min-width: 0;
         background: var(--color-surface-sunken);
         color: var(--color-text);
@@ -1448,7 +1453,7 @@
       .a-msg {
         width: 100%;
         font-size: var(--content-font-size);
-        line-height: 1.55;
+        line-height: 1.62;
       }
       .a-msg .md {
         white-space: normal;
@@ -1747,11 +1752,14 @@
         background: transparent;
         color: var(--color-text-faint);
         font-size: 13px;
-        padding: 2px 0;
+        padding: 3px 8px;
+        margin-left: -8px;
+        border-radius: var(--radius-sm);
         cursor: pointer;
       }
       .think-sum:hover {
         color: var(--color-text-muted);
+        background: var(--hover);
       }
       .think-sum:focus {
         outline: none;
@@ -1784,11 +1792,14 @@
         background: transparent;
         color: var(--color-text-faint);
         font: 13px/1.45 var(--mono);
-        padding: 2px 0;
+        padding: 3px 8px;
+        margin-left: -8px;
+        border-radius: var(--radius-sm);
         cursor: pointer;
       }
       .work-sum:hover {
         color: var(--color-text-muted);
+        background: var(--hover);
       }
       .work-sum:focus {
         outline: none;
@@ -1925,7 +1936,9 @@
         align-items: center;
         gap: 8px;
         min-height: 24px;
-        padding: 1px 0;
+        padding: 3px 8px;
+        margin: 0 -8px;
+        border-radius: var(--radius-sm);
         cursor: pointer;
         font: 12.5px/1.4 var(--mono);
         color: var(--color-text-muted);
@@ -1933,6 +1946,7 @@
       .tcall.open .bh,
       .tcall .bh:hover {
         color: var(--color-text);
+        background: var(--hover);
       }
       .tcall.err .bh {
         color: var(--color-danger);
@@ -2850,6 +2864,28 @@
         .a-msg {
           font-size: 15px;
         }
+        /* 工具栏药丸单行横滑,不叠行 */
+        .toolbar {
+          padding-bottom: 10px;
+          gap: 8px;
+        }
+        .toolbar-left {
+          overflow-x: auto;
+          flex: 1;
+          min-width: 0;
+          scrollbar-width: none;
+          mask-image: linear-gradient(90deg, #000 88%, transparent);
+        }
+        .toolbar-left::-webkit-scrollbar {
+          display: none;
+        }
+        .toolbar-left > * {
+          flex: none;
+          white-space: nowrap;
+        }
+        .turn-meta {
+          display: none;
+        }
       }
       html[data-accent="blue"] {
         --accent-primary: #6b7c99;
@@ -3443,9 +3479,10 @@
         padding: 44px 56px 34px;
         width: 100%;
         max-width: 540px;
-        border: 1px dashed var(--color-line-strong);
+        border: 1px solid var(--color-line);
         border-radius: var(--radius-xl);
         background: var(--color-surface);
+        box-shadow: var(--shadow-sm);
       }
       .hero-start {
         min-height: 34px;
@@ -3508,16 +3545,21 @@
       .a-turn.gen .md::after {
         content: "";
         display: inline-block;
-        width: 2px;
-        height: 1em;
-        margin-left: 2px;
+        width: 7px;
+        height: 1.05em;
+        margin-left: 3px;
         vertical-align: -2px;
-        background: var(--color-text-faint);
-        animation: piz-blink 1.1s steps(2, start) infinite;
+        border-radius: 2px;
+        background: var(--color-text-muted);
+        animation: piz-blink 1s ease-in-out infinite;
       }
       @keyframes piz-blink {
-        to {
-          visibility: hidden;
+        0%,
+        100% {
+          opacity: 1;
+        }
+        50% {
+          opacity: 0.15;
         }
       }
       .work.live .work-sum .work-caret {

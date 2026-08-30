@@ -45,10 +45,19 @@ class H(BaseHTTPRequestHandler):
                 out.append(sse(chunk("m2", {"role": "assistant", "content": wseg}, None)))
             out.append(sse(chunk("m2", {}, "stop")))
         else:
-            out.append(sse(chunk("m1", {"role": "assistant", "content": "先看下目录。"}, None)))
+            last_user = next((m.get("content") or "" for m in reversed(msgs) if m.get("role") == "user"), "")
+            if "fail" in last_user.lower():
+                tool_name, args = "bash", {"command": "ls /nonexistent-piz-dir"}
+                pre = "试一个会失败的命令。"
+            elif "改文件" in last_user:
+                tool_name, args = "write", {"path": "/tmp/piz_mock_demo.md", "content": "# demo\n\nhello piz\n"}
+                pre = "写一个文件看看。"
+            else:
+                tool_name, args = "bash", {"command": "echo hello-from-mock-tool && ls | head -3"}
+                pre = "先看下目录。"
+            out.append(sse(chunk("m1", {"role": "assistant", "content": pre}, None)))
             out.append(sse(chunk("m1", {"tool_calls": [{"index": 0, "id": "call_1",
-                "type": "function", "function": {"name": "bash", "arguments": json.dumps(
-                    {"command": "echo hello-from-mock-tool && ls | head -3"})}}]}, None)))
+                "type": "function", "function": {"name": tool_name, "arguments": json.dumps(args)}}]}, None)))
             out.append(sse(chunk("m1", {}, "tool_calls")))
         out.append(b"data: [DONE]\n\n")
         for b in out:

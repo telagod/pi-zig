@@ -36,6 +36,7 @@ const setPath = process.env.HOME + '/.piz/settings.json';
 const setBak = readFileSync(setPath, 'utf8');
 const setObj = JSON.parse(setBak);
 setObj.defaultProvider = 'mock'; setObj.defaultModel = 'mock-slow';
+if (opts.settings) Object.assign(setObj, opts.settings);
 writeFileSync(setPath, JSON.stringify(setObj, null, 1));
 process.on('exit', () => writeFileSync(setPath, setBak));
 const web = sh('./zig-out/bin/piz', ['web', '--port', String(PORT), '--token', TOK, '--no-open']);
@@ -72,6 +73,45 @@ if (scenario === 'chat') {
   await send('用 markdown 展示一下这个项目');
   await page.waitForSelector('.a-turn', { timeout: 30000 });
   await waitIdle(2500);
+} else if (scenario === 'fail') {
+  await send('跑个会 fail 的命令');
+  await page.waitForSelector('.a-turn', { timeout: 30000 });
+  await waitIdle(2000);
+  await page.evaluate(() => {
+    document.querySelectorAll('.work:not(.open) > .work-sum').forEach((e) => (e).click());
+  });
+  await sleep(500);
+} else if (scenario === 'write') {
+  await send('改文件试试');
+  await page.waitForSelector('.a-turn', { timeout: 30000 });
+  await waitIdle(2000);
+  await page.evaluate(() => {
+    document.querySelectorAll('.work:not(.open) > .work-sum').forEach((e) => (e).click());
+    const rows = document.querySelectorAll('.tcall .bh');
+    if (rows.length) (rows[rows.length - 1]).click();
+  });
+  await sleep(1200);
+} else if (scenario === 'inspect') {
+  await send('帮我看下这个目录里有什么');
+  await page.waitForSelector('.a-turn', { timeout: 30000 });
+  await waitIdle(2000);
+  await page.evaluate(() => {
+    const rows = document.querySelectorAll('.tcall .bh');
+    if (rows.length) (rows[rows.length - 1]).click();
+  });
+  await sleep(1200);
+} else if (scenario === 'think') {
+  await send('帮我看下这个目录里有什么');
+  await page.waitForSelector('.a-turn', { timeout: 30000 });
+  await waitIdle(2000);
+  await page.evaluate(() => {
+    document.querySelectorAll('.think:not(.open) > .think-sum').forEach((e) => (e).click());
+  });
+  await sleep(600);
+} else if (scenario === 'approve') {
+  await send('帮我看下这个目录里有什么');
+  await page.waitForSelector('.ap, .approval, [class*="appr"]', { timeout: 30000 }).catch(() => {});
+  await sleep(2500);
 } else if (scenario === 'welcome' || scenario === 'snap') {
   await sleep(Number(opts.wait || 800));
 }
