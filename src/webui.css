@@ -2326,9 +2326,33 @@
       #app.hero #qbox {
         display: none;
       }
-      #app.hero .empty-keys,
-      #app.hero .empty-hint-text {
+      #app.hero .empty-keys {
         display: none;
+      }
+      .hero-sugs {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: center;
+        gap: 8px;
+        margin-top: 4px;
+      }
+      .hero-sug {
+        border: 1px solid var(--color-line);
+        border-radius: var(--radius-full);
+        background: transparent;
+        color: var(--color-text-muted);
+        font-size: 12.5px;
+        padding: 5px 14px;
+        cursor: pointer;
+        transition:
+          color 0.12s,
+          border-color 0.12s,
+          background 0.12s;
+      }
+      .hero-sug:hover {
+        color: var(--color-text);
+        border-color: var(--color-line-strong);
+        background: var(--hover);
       }
       #cmp > * {
         position: relative;
@@ -3475,8 +3499,8 @@
         display: flex;
         flex-direction: column;
         align-items: center;
-        gap: 12px;
-        padding: 44px 56px 34px;
+        gap: 14px;
+        padding: 40px 48px 30px;
         width: 100%;
         max-width: 540px;
         border: 1px solid var(--color-line);

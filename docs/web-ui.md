@@ -225,7 +225,7 @@ Origin 校验挡的是浏览器发起的跨源请求，挡不住直接构造的 
 | --- | --- |
 | `state.ts` | URL 参数(session/ws)、prefs 本地偏好、sessUrl |
 | `util.ts` | 纯工具:DOM/转义/格式化、工具分类与图标、斜杠打分 |
-| `md.ts` | 极简 markdown / ansi / diff / todo 渲染(字符串→HTML) |
+| `md.ts` | 块级 markdown(表格/任务列表/嵌套列表/引用,围栏代码带轻量语法着色)/ ansi / diff / todo 渲染(字符串→HTML) |
 | `render.ts` | 设置面板 HTML 构造器(seg/auth/资源包/插件行) |
 | `net.ts` | 服务器凭证、fetch 全局包装(Bearer/401)、登录页;`setOnAuthed` 迟绑 boot 解循环 |
 | `ui.ts` | toast、对话框(openDlg/askText/askYes/dlgCancel)、seg/auth 绑定、外观方案(setScheme/applyScheme);`dlgHooks` 迟绑收菜单钩 |

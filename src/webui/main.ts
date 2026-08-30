@@ -74,6 +74,11 @@
         '<span class="empty-hint-title">piz</span></div>' +
         '<button type="button" class="ws-chip" id="heroWs"><span class="ws-chip-ic">⌂</span><span id="heroWsLbl">项目</span><span class="ws-chip-chev">▾</span></button>' +
         '<button type="button" class="hero-start" id="heroStart">＋ 开始对话</button>' +
+        '<div class="hero-sugs">' +
+        '<button type="button" class="hero-sug" data-q="这个项目是做什么的?">这个项目是做什么的?</button>' +
+        '<button type="button" class="hero-sug" data-q="帮我跑一下测试">帮我跑一下测试</button>' +
+        '<button type="button" class="hero-sug" data-q="最近改了什么?">最近改了什么?</button>' +
+        '</div>' +
         '<div class="empty-hint-text">读、改、跑。工具默认先问你。</div>' +
         '<div class="empty-keys"><span><kbd>/</kbd> 命令</span><span><kbd>j</kbd> 任务</span><span><kbd>u</kbd> 用量</span><span><kbd>s</kbd> 沙箱</span><span><kbd>?</kbd> 快捷键</span></div>' +
         '</div>';
@@ -86,6 +91,15 @@
           openWsMenu(e.currentTarget);
         };
         $("heroStart").onclick = () => $("newBtn").click();
+        welcome.querySelectorAll(".hero-sug").forEach((b) => {
+          (b as HTMLElement).onclick = () => {
+            const inp = $("inp") as HTMLTextAreaElement | null;
+            if (!inp) return;
+            inp.value = (b as HTMLElement).dataset.q || "";
+            inp.dispatchEvent(new Event("input"));
+            inp.focus();
+          };
+        });
       }
       initSideFilter();
       initSideGrip();
