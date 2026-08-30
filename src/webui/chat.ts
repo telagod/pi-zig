@@ -24,8 +24,8 @@ let stick = true;
 document.addEventListener("click", (e: any) => {
   const b = e.target && e.target.closest ? e.target.closest(".pre-cp") : null;
   if (!b) return;
-  const pre = b.parentElement;
-  const code = pre && pre.querySelector("code");
+  const box = b.closest(".cb") || b.parentElement;
+  const code = box && box.querySelector("code");
   clipText(code ? code.textContent || "" : "", "已复制", "复制失败");
 });
 // 回到底部:非贴底且有溢出时现身

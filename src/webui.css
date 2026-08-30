@@ -1451,7 +1451,7 @@
         line-height: 1.55;
       }
       .a-msg .md {
-        white-space: pre-wrap;
+        white-space: normal;
         word-break: break-word;
       }
       .a-msg pre {
@@ -1466,11 +1466,8 @@
         word-break: break-word;
         position: relative;
       }
-      /* 代码块复制钮:悬停/聚焦方现 */
+      /* 代码块复制钮:头部栏内,悬停/聚焦方现 */
       .pre-cp {
-        position: absolute;
-        top: 6px;
-        right: 6px;
         border: 1px solid var(--color-line);
         border-radius: 6px;
         background: var(--color-surface-raised);
@@ -1482,7 +1479,7 @@
         opacity: 0;
         transition: opacity 0.12s;
       }
-      .a-msg pre:hover .pre-cp,
+      .cb:hover .pre-cp,
       .insp-md pre:hover .pre-cp,
       .pre-cp:focus-visible {
         opacity: 1;
@@ -1493,6 +1490,236 @@
       .pre-cp:hover {
         color: var(--color-accent);
         border-color: var(--color-accent-bd);
+      }
+      /* ---- 块级 markdown(助手消息 + inspect) ---- */
+      .md > :first-child,
+      .insp-md > :first-child {
+        margin-top: 0;
+      }
+      .md > :last-child,
+      .insp-md > :last-child {
+        margin-bottom: 0;
+      }
+      .md p,
+      .insp-md p {
+        margin: 7px 0;
+      }
+      .md h1,
+      .md h2,
+      .md h3,
+      .md h4,
+      .md h5,
+      .md h6,
+      .insp-md h1,
+      .insp-md h2,
+      .insp-md h3,
+      .insp-md h4,
+      .insp-md h5,
+      .insp-md h6 {
+        margin: 16px 0 6px;
+        line-height: 1.35;
+        font-weight: var(--weight-semibold);
+        color: var(--color-text);
+      }
+      .md h1,
+      .insp-md h1 {
+        font-size: 1.32em;
+        padding-bottom: 4px;
+        border-bottom: 1px solid var(--color-line);
+      }
+      .md h2,
+      .insp-md h2 {
+        font-size: 1.18em;
+        padding-bottom: 3px;
+        border-bottom: 1px solid var(--color-line);
+      }
+      .md h3,
+      .insp-md h3 {
+        font-size: 1.06em;
+      }
+      .md h4,
+      .md h5,
+      .md h6,
+      .insp-md h4,
+      .insp-md h5,
+      .insp-md h6 {
+        font-size: 1em;
+      }
+      .md ul,
+      .md ol,
+      .insp-md ul,
+      .insp-md ol {
+        margin: 6px 0;
+        padding-left: 1.5em;
+      }
+      .md li,
+      .insp-md li {
+        margin: 3px 0;
+      }
+      .md li::marker,
+      .insp-md li::marker {
+        color: var(--color-text-faint);
+      }
+      .md li.task,
+      .insp-md li.task {
+        list-style: none;
+        margin-left: -1.5em;
+        display: flex;
+        align-items: baseline;
+        gap: 7px;
+      }
+      .task-box {
+        flex: none;
+        width: 14px;
+        height: 14px;
+        border: 1.5px solid var(--color-line-strong);
+        border-radius: 4px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 10px;
+        line-height: 1;
+        color: #fff;
+        transform: translateY(1.5px);
+      }
+      .task.done .task-box {
+        background: var(--color-success);
+        border-color: var(--color-success);
+      }
+      .task.done > span:last-child {
+        color: var(--color-text-muted);
+      }
+      .md blockquote,
+      .insp-md blockquote {
+        margin: 8px 0;
+        padding: 2px 0 2px 12px;
+        border-left: 3px solid var(--color-line-strong);
+        color: var(--color-text-muted);
+      }
+      .md blockquote > :first-child,
+      .insp-md blockquote > :first-child {
+        margin-top: 0;
+      }
+      .md blockquote > :last-child,
+      .insp-md blockquote > :last-child {
+        margin-bottom: 0;
+      }
+      .md hr,
+      .insp-md hr {
+        border: none;
+        border-top: 1px solid var(--color-line);
+        margin: 14px 0;
+      }
+      .tbl {
+        margin: 8px 0;
+        overflow-x: auto;
+        border: 1px solid var(--color-line);
+        border-radius: var(--radius-md);
+      }
+      .tbl table {
+        border-collapse: collapse;
+        width: 100%;
+        font-size: 0.94em;
+      }
+      .tbl th,
+      .tbl td {
+        padding: 6px 12px;
+        border-bottom: 1px solid var(--color-line);
+      }
+      .tbl tbody tr:last-child td {
+        border-bottom: none;
+      }
+      .tbl th {
+        background: var(--color-surface);
+        font-weight: var(--weight-medium);
+        color: var(--color-text);
+        white-space: nowrap;
+      }
+      .tbl tbody tr:nth-child(even) {
+        background: color-mix(in srgb, var(--color-surface) 45%, transparent);
+      }
+      /* ---- 围栏代码块:头部栏 + 体 ---- */
+      .cb {
+        margin: 8px 0;
+        border: 1px solid var(--color-line);
+        border-radius: var(--radius-md);
+        background: var(--color-surface);
+        overflow: hidden;
+      }
+      .cb-hd {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        padding: 4px 8px 4px 12px;
+        border-bottom: 1px solid var(--color-line);
+        background: var(--color-surface);
+        min-height: 26px;
+      }
+      .cb-lang {
+        font: 11px/1.4 var(--mono);
+        color: var(--color-text-faint);
+        letter-spacing: 0.02em;
+      }
+      .cb pre {
+        margin: 0;
+        border: none;
+        border-radius: 0;
+        background: transparent;
+        padding: 10px 12px;
+        overflow-x: auto;
+        font: 12.5px/1.65 var(--mono);
+        white-space: pre;
+        word-break: normal;
+      }
+      /* 语法着色(GitHub 双色) */
+      .tk-k {
+        color: #cf222e;
+      }
+      .tk-s {
+        color: #0a3069;
+      }
+      .tk-c {
+        color: #6e7781;
+        font-style: italic;
+      }
+      .tk-n {
+        color: #0550ae;
+      }
+      .tk-f {
+        color: #8250df;
+      }
+      html[data-color-scheme="dark"] .tk-k {
+        color: #ff7b72;
+      }
+      html[data-color-scheme="dark"] .tk-s {
+        color: #a5d6ff;
+      }
+      html[data-color-scheme="dark"] .tk-c {
+        color: #8b949e;
+      }
+      html[data-color-scheme="dark"] .tk-n {
+        color: #79c0ff;
+      }
+      html[data-color-scheme="dark"] .tk-f {
+        color: #d2a8ff;
+      }
+      @media (prefers-color-scheme: dark) {
+        html[data-color-scheme="system"] .tk-k {
+          color: #ff7b72;
+        }
+        html[data-color-scheme="system"] .tk-s {
+          color: #a5d6ff;
+        }
+        html[data-color-scheme="system"] .tk-c {
+          color: #8b949e;
+        }
+        html[data-color-scheme="system"] .tk-n {
+          color: #79c0ff;
+        }
+        html[data-color-scheme="system"] .tk-f {
+          color: #d2a8ff;
+        }
       }
       .a-msg code {
         font: 12.5px var(--mono);

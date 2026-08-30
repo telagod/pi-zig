@@ -22,17 +22,24 @@ class H(BaseHTTPRequestHandler):
             self.send_header("content-length", str(len(body))); self.end_headers(); self.wfile.write(body)
             return
         self.send_response(404); self.end_headers()
+    MD_DOC = "# 项目结构总览\n\n这是一个 **Zig** 编写的 *AI agent* 命令行工具,支持三种运行形态。详见 [架构文档](https://example.com/docs)。\n\n## 核心能力\n\n- 交互式 TUI(默认)\n- print 模式(`-p` 一次性问答)\n- Web UI(`piz web`)\n\n### 构建步骤\n\n1. 安装 Zig 0.15+\n2. 运行 `zig build`\n3. 产物在 `zig-out/bin/piz`\n\n| 模块 | 职责 | 测试 |\n| --- | --- | --- |\n| core | 会话与事件 | 120 |\n| tui | 终端界面 | 96 |\n| webui | 浏览器前端 | 44 |\n\n> 会话池上限 4 个并发会话,每个会话独立的 Agent 实例与工作线程。\n\n```zig\nconst std = @import(\"std\");\n\npub fn main() !void {\n    const stdout = std.io.getStdOut().writer();\n    try stdout.print(\"hello, {s}!\\n\", .{\"piz\"});\n}\n```\n\n- [x] 流式渲染\n- [x] 工具卡片折叠\n- [ ] 语法高亮\n\n---\n\n**注意**:`--no-token` 仅用于可信单机环境。"
+
     def do_POST(self):
         n = int(self.headers.get("content-length", 0))
         req = json.loads(self.rfile.read(n) or b"{}")
         msgs = req.get("messages", [])
         has_tool_result = any(m.get("role") == "tool" for m in msgs)
+        want_md = any("markdown" in (m.get("content") or "").lower() for m in msgs if m.get("role") == "user") and not has_tool_result
         self.send_response(200)
         self.send_header("content-type", "text/event-stream")
         self.send_header("cache-control", "no-cache")
         self.end_headers()
         out = []
-        if has_tool_result:
+        if want_md:
+            for seg in self.MD_DOC.split("\n"):
+                out.append(sse(chunk("m3", {"role": "assistant", "content": seg + "\n"}, None)))
+            out.append(sse(chunk("m3", {}, "stop")))
+        elif has_tool_result:
             words = "工具结果已收到。以上是 mock 的最终答复,覆盖流式渲染路径。".split("，")
             for i, wseg in enumerate(words):
                 out.append(sse(chunk("m2", {"role": "assistant", "content": wseg}, None)))
