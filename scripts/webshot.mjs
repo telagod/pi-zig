@@ -112,6 +112,10 @@ if (scenario === 'chat') {
   await send('帮我看下这个目录里有什么');
   await page.waitForSelector('.ap, .approval, [class*="appr"]', { timeout: 30000 }).catch(() => {});
   await sleep(2500);
+} else if (scenario === 'running') {
+  await send('跑个慢命令看看');
+  await page.waitForSelector('.a-turn, .work', { timeout: 30000 });
+  await sleep(2600); // 工具在跑:活动条/jobs badge 应可见
 } else if (scenario === 'welcome' || scenario === 'snap') {
   await sleep(Number(opts.wait || 800));
 }

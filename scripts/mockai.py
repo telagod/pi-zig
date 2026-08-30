@@ -46,7 +46,10 @@ class H(BaseHTTPRequestHandler):
             out.append(sse(chunk("m2", {}, "stop")))
         else:
             last_user = next((m.get("content") or "" for m in reversed(msgs) if m.get("role") == "user"), "")
-            if "fail" in last_user.lower():
+            if "慢" in last_user:
+                tool_name, args = "bash", {"command": "sleep 6 && echo slow-done"}
+                pre = "跑个慢命令。"
+            elif "fail" in last_user.lower():
                 tool_name, args = "bash", {"command": "ls /nonexistent-piz-dir"}
                 pre = "试一个会失败的命令。"
             elif "改文件" in last_user:
