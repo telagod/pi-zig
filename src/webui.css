@@ -2369,7 +2369,26 @@
         color: var(--color-faint, #888);
         font-variant-numeric: tabular-nums;
       }
-      .act-chip.bg { opacity: 0.7; }
+      .act-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .act-chip::before {
+        content: "";
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: var(--color-success);
+        animation: piz-pulse 1.2s ease-in-out infinite;
+      }
+      .act-chip.bg {
+        opacity: 0.7;
+      }
+      .act-chip.bg::before {
+        background: var(--color-text-faint);
+        animation: none;
+      }
       .cmp-row {
         max-width: var(--p-content-max);
         width: 100%;
