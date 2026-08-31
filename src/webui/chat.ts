@@ -456,7 +456,6 @@ export function finishWork() {
     const g = d.querySelector(".st-glyph");
     if (g) {
       g.className = "st-glyph ok";
-      g.textContent = "✓";
     }
   });
   refreshWorkSum(false);
@@ -798,12 +797,13 @@ export function addTool(name: string, args?: string) {
   d.dataset.ty = ty;
   d.innerHTML =
     '<div class="bh">' +
+    '<span class="st-glyph run"></span>' +
     ico(icoKind(name)) +
     '<span class="a">' +
     esc(name) +
     '</span><span class="p">' +
     esc(argsPreview(args || "")) +
-    '</span><span class="rt"><span class="st-glyph run"></span></span></div><div class="bb"><div class="bb-pad"></div></div>';
+    '</span></div><div class="bb"><div class="bb-pad"></div></div>';
   (d.querySelector(".bh") as HTMLElement).onclick = () => inspect.open(d);
   const w = ensureWork();
   workCounts[workKind(name)]++;
@@ -874,7 +874,6 @@ export function toolDone(name: string, err?: boolean, summary?: string) {
   const g = d.querySelector(".st-glyph");
   if (g) {
     g.className = "st-glyph " + (err ? "err" : "ok");
-    g.textContent = err ? "✗" : "✓";
   }
   c.out = summary || "";
   c.done = true;

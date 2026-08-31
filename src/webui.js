@@ -3093,33 +3093,26 @@ function listHtml(lines, start) {
   return mdBlocks(String(_nullishCoalesce(src, () => ( ""))));
 } exports.renderMd = renderMd;
 
-// ---- ANSI(工具终端输出) ----
+// ---- ANSI(工具终端输出):语义类名,浅深两套色板在 webui.css ----
 const AC = {
-  "30": "#333",
-  "31": "#f85149",
-  "32": "#3fb950",
-  "33": "#d29922",
-  "34": "#58a6ff",
-  "35": "#bc8cff",
-  "36": "#39c5cf",
-  "37": "#c9d1d9",
-  "90": "#8b949e",
-  "91": "#ff7b72",
-  "92": "#7ee787",
-  "93": "#e3b341",
-  "94": "#79c0ff",
-  "95": "#d2a8ff",
-  "96": "#76e3ea",
-  "97": "#e6edf3",
+  "30": "30", "31": "31", "32": "32", "33": "33", "34": "34", "35": "35",
+  "36": "36", "37": "37", "90": "90", "91": "91", "92": "92", "93": "93",
+  "94": "94", "95": "95", "96": "96", "97": "97",
 };
  function ansiHtml(t) {
+  // 逐段包 span:颜色切换处收前段、开新段(旧实现把整段染成末尾色)
   let o = "",
     last = 0,
     fg = null;
   const re = /\x1b\[([0-9;]*)m/g;
   let m;
+  const flush = (end) => {
+    const seg = _util.esc.call(void 0, t.slice(last, end));
+    if (!seg) return;
+    o += fg ? '<span class="ansi-' + fg + '">' + seg + "</span>" : seg;
+  };
   while ((m = re.exec(t)) !== null) {
-    o += _util.esc.call(void 0, t.slice(last, m.index));
+    flush(m.index);
     const c = m[1].split(";").filter(Boolean);
     if (c.includes("0") || c.length === 0) fg = null;
     else {
@@ -3128,8 +3121,8 @@ const AC = {
     }
     last = m.index + m[0].length;
   }
-  o += _util.esc.call(void 0, t.slice(last));
-  return fg ? '<span style="color:' + fg + '">' + o + "</span>" : o;
+  flush(t.length);
+  return o;
 } exports.ansiHtml = ansiHtml;
 
 // ---- diff / todo(工具卡) ----
@@ -3934,7 +3927,6 @@ function ensureWork() {
     const g = d.querySelector(".st-glyph");
     if (g) {
       g.className = "st-glyph ok";
-      g.textContent = "✓";
     }
   });
   refreshWorkSum(false);
@@ -4276,12 +4268,13 @@ const pendingByName = {};
   d.dataset.ty = ty;
   d.innerHTML =
     '<div class="bh">' +
+    '<span class="st-glyph run"></span>' +
     _util.ico.call(void 0, _util.icoKind.call(void 0, name)) +
     '<span class="a">' +
     _util.esc.call(void 0, name) +
     '</span><span class="p">' +
     _util.esc.call(void 0, _util.argsPreview.call(void 0, args || "")) +
-    '</span><span class="rt"><span class="st-glyph run"></span></span></div><div class="bb"><div class="bb-pad"></div></div>';
+    '</span></div><div class="bb"><div class="bb-pad"></div></div>';
   (d.querySelector(".bh") ).onclick = () => exports.inspect.open(d);
   const w = ensureWork();
   workCounts[_util.workKind.call(void 0, name)]++;
@@ -4352,7 +4345,6 @@ const pendingByName = {};
   const g = d.querySelector(".st-glyph");
   if (g) {
     g.className = "st-glyph " + (err ? "err" : "ok");
-    g.textContent = err ? "✗" : "✓";
   }
   c.out = summary || "";
   c.done = true;
