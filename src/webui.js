@@ -578,7 +578,7 @@ let dlgPrevFocus = null;
       save.onclick = () => {
         const key = (inp && inp.value) || "";
         if (!key) {
-          showToast("paste an API key");
+          showToast("请粘贴 API key");
           return;
         }
         fetch("/api/config", {
@@ -588,10 +588,10 @@ let dlgPrevFocus = null;
         })
           .then((r) => r.json())
           .then((j) => {
-            showToast(j && j.ok ? "saved " + name : "save failed");
+            showToast(j && j.ok ? "已保存 " + name : "保存失败");
             if (inp) inp.value = "";
           })
-          .catch(() => showToast("save failed"));
+          .catch(() => showToast("保存失败"));
       };
     if (oauthBtn)
       oauthBtn.onclick = async () => {
@@ -604,7 +604,7 @@ let dlgPrevFocus = null;
           });
           const j = await r.json();
           if (!j || !j.ok) {
-            showToast("oauth start failed");
+            showToast("OAuth 启动失败");
             return;
           }
           if (j.user_code) {
@@ -616,33 +616,33 @@ let dlgPrevFocus = null;
             showToast("code " + j.user_code);
           } else if (j.url) {
             window.open(j.url, "_blank");
-            showToast("finish sign-in in the new tab");
+            showToast("请在新标签页完成登录");
           } else {
-            showToast("oauth start failed");
+            showToast("OAuth 启动失败");
             return;
           }
           const path = j.user_code ? "/api/oauth/poll?state=" : "/api/oauth/status?state=";
           const t0 = Date.now();
           const tick = async () => {
             if (Date.now() - t0 > 180000) {
-              showToast("oauth timed out");
+              showToast("OAuth 超时");
               return;
             }
             const s = await fetch(path + encodeURIComponent(j.state)).then((x) => x.json());
             if (s && s.done && s.ok) {
-              showToast("signed in");
+              showToast("已登录");
               if (hint) hint.hidden = true;
               return;
             }
             if (s && s.done && !s.ok) {
-              showToast("sign-in failed");
+              showToast("登录失败");
               return;
             }
             setTimeout(tick, 1500);
           };
           setTimeout(tick, 1500);
         } catch (e3) {
-          showToast("oauth start failed");
+          showToast("OAuth 启动失败");
         }
       };
   });
@@ -1195,7 +1195,7 @@ document.addEventListener("click", (e) => {
         }
       }
     })
-    .catch(() => _ui.showToast.call(void 0, "sessions load failed"));
+    .catch(() => _ui.showToast.call(void 0, "会话加载失败"));
 } exports.loadSessions = loadSessions;
 // 搜索框过滤态:内联侧栏过滤输入(loadSessions 的 show 读它)
 let sideQ = "";
@@ -1230,7 +1230,7 @@ let sideFilterEl = null;
     .then((j) => {
       if (then) then(j);
     })
-    .catch(() => _ui.showToast.call(void 0, "action failed"));
+    .catch(() => _ui.showToast.call(void 0, "操作失败"));
 } exports.act = act;
 
 };
@@ -1344,14 +1344,14 @@ const runSlash = (...a) => exports.modelH.runSlash(...a);
     );
     const j = await r.json().catch(() => ({}));
     if (!r.ok || j.ok === false || !j.model) {
-      _ui.showToast.call(void 0, j.error || "switch model failed");
+      _ui.showToast.call(void 0, j.error || "切换模型失败");
       return false;
     }
     exports.curModel = j.model;
     renderModel();
     return true;
   } catch (e2) {
-    _ui.showToast.call(void 0, "switch model failed");
+    _ui.showToast.call(void 0, "切换模型失败");
     return false;
   }
 } exports.applySessionModel = applySessionModel;
@@ -1372,7 +1372,7 @@ const runSlash = (...a) => exports.modelH.runSlash(...a);
       }
       _sessions.openAt.call(void 0, "modelMenu", sel);
     })
-    .catch(() => _ui.showToast.call(void 0, "models load failed"));
+    .catch(() => _ui.showToast.call(void 0, "模型列表加载失败"));
 } exports.loadModels = loadModels;
  function modelShort(m) {
   if (!m) return "模型";
@@ -1413,7 +1413,7 @@ const runSlash = (...a) => exports.modelH.runSlash(...a);
     });
     const j = await r.json().catch(() => ({}));
     if (!r.ok || j.ok === false) {
-      _ui.showToast.call(void 0, j.error || "switch think failed");
+      _ui.showToast.call(void 0, j.error || "切换思考等级失败");
       return false;
     }
     if (j && j.defaultThinkingLevel) {
@@ -1422,7 +1422,7 @@ const runSlash = (...a) => exports.modelH.runSlash(...a);
     }
     return true;
   } catch (e3) {
-    _ui.showToast.call(void 0, "switch think failed");
+    _ui.showToast.call(void 0, "切换思考等级失败");
     return false;
   }
 } exports.setThink = setThink;
@@ -1707,7 +1707,7 @@ const runSlash = (...a) => exports.modelH.runSlash(...a);
     );
     const j = await r.json().catch(() => ({}));
     if (!r.ok || j.ok === false || j.title === undefined) {
-      _ui.showToast.call(void 0, j.error || "set title failed");
+      _ui.showToast.call(void 0, j.error || "设置标题失败");
       return false;
     }
     exports.curTitle = j.title;
@@ -1715,7 +1715,7 @@ const runSlash = (...a) => exports.modelH.runSlash(...a);
     _sessions.loadSessions.call(void 0, );
     return true;
   } catch (e6) {
-    _ui.showToast.call(void 0, "set title failed");
+    _ui.showToast.call(void 0, "设置标题失败");
     return false;
   }
 } exports.applySessionTitle = applySessionTitle;
@@ -1871,7 +1871,7 @@ const clipText = (...a) => exports.slashH.clipText(...a);
   return fetch("/api/help?" + _state.wsp + "session=" + encodeURIComponent(_state.sess))
     .then((r) => r.json())
     .then(applyHelpCatalog)
-    .catch(() => _ui.showToast.call(void 0, "help catalog load failed"));
+    .catch(() => _ui.showToast.call(void 0, "帮助目录加载失败"));
 } exports.loadHelpCatalog = loadHelpCatalog;
 let SLASH = [
   { name: "/help", desc: "list commands" },
@@ -2200,7 +2200,7 @@ let slashItems = [],
       })
         .then((r) => r.json())
         .then((j) => _ui.showToast.call(void 0, j && j.ok ? "saved " + name : "login failed"))
-        .catch(() => _ui.showToast.call(void 0, "login failed"));
+        .catch(() => _ui.showToast.call(void 0, "登录失败"));
       break;
     }
     case "/quit":
@@ -3678,7 +3678,7 @@ function workBitsHtml(live) {
   if (workCounts.todo) bits.push(_util.ico.call(void 0, "todo") + "<span>" + _util.nunit.call(void 0, workCounts.todo, "plan") + "</span>");
   if (workCounts.agent) bits.push(_util.ico.call(void 0, "agent") + "<span>" + _util.nunit.call(void 0, workCounts.agent, "agent") + "</span>");
   if (workCounts.other) bits.push(_util.ico.call(void 0, "tool") + "<span>" + _util.nunit.call(void 0, workCounts.other, "tool") + "</span>");
-  if (!bits.length) return live ? "Working" : "Worked";
+  if (!bits.length) return live ? "正在工作" : "已完成";
   return bits.map((b) => '<span class="work-chip">' + b + "</span>").join('<span class="work-dot">·</span>');
 }
 function refreshWorkSum(live) {
@@ -3693,7 +3693,7 @@ function ensureWork() {
   const el = document.createElement("div");
   el.className = "work live";
   el.innerHTML =
-    '<button type="button" class="work-sum"><span class="work-caret">▸</span><span class="work-bits">Working</span></button><div class="work-list"></div>';
+    '<button type="button" class="work-sum"><span class="work-caret">▸</span><span class="work-bits">正在工作</span></button><div class="work-list"></div>';
   (el.querySelector(".work-sum") ).onclick = () => el.classList.toggle("open");
   exports.th.appendChild(el);
   workEl = el;
@@ -4093,7 +4093,7 @@ let mdTimer = 0;
     el.innerHTML =
       '<button type="button" class="think-sum"><span class="work-caret">▸</span>' +
       _util.ico.call(void 0, "think") +
-      '<span class="think-txt">Thinking</span></button><pre class="tk"></pre>';
+      '<span class="think-txt">思考中</span></button><pre class="tk"></pre>';
     (el.querySelector(".think-sum") ).onclick = () => el.classList.toggle("open");
     exports.th.appendChild(el);
     rsnEl = el;
@@ -5194,10 +5194,10 @@ document.addEventListener("paste", async (ev) => {
     );
     const j = await r.json().catch(() => ({}));
     if (!r.ok || j.ok === false) {
-      _ui.showToast.call(void 0, j.error || "send failed");
+      _ui.showToast.call(void 0, j.error || "发送失败");
     } else ok = true;
   } catch (e8) {
-    _ui.showToast.call(void 0, "send failed");
+    _ui.showToast.call(void 0, "发送失败");
   }
   if (!ok) {
     // 失败不吞草稿:文本塞回输入框,图也还回 pending。
@@ -5551,9 +5551,9 @@ var _composer = require('./composer');
       })
         .then((r) => r.json().catch(() => ({})))
         .then((j) => {
-          if (j && j.ok === false) _ui.showToast.call(void 0, j.error || "save default model failed");
+          if (j && j.ok === false) _ui.showToast.call(void 0, j.error || "保存默认模型失败");
         })
-        .catch(() => _ui.showToast.call(void 0, "save default model failed"));
+        .catch(() => _ui.showToast.call(void 0, "保存默认模型失败"));
     };
   _ui.bindSeg.call(void 0, "think", (v) => _model.setThink.call(void 0, v || "high"));
   _ui.bindSeg.call(void 0, "sessappr", (v) => _model.setApproval.call(void 0, v || "ask"));
@@ -5565,9 +5565,9 @@ var _composer = require('./composer');
     })
       .then((r) => r.json().catch(() => ({})))
       .then((j) => {
-        if (j && j.ok === false) _ui.showToast.call(void 0, j.error || "save approval failed");
+        if (j && j.ok === false) _ui.showToast.call(void 0, j.error || "保存默认授权失败");
       })
-      .catch(() => _ui.showToast.call(void 0, "save approval failed"));
+      .catch(() => _ui.showToast.call(void 0, "保存默认授权失败"));
   });
   _ui.bindSeg.call(void 0, "sandbox", (v) => {
     _model.setSandbox.call(void 0, v || "off");
@@ -5761,7 +5761,8 @@ document.addEventListener("keydown", (e) => {
 __modules["evolve"] = function(module, exports, require) {
 "use strict";Object.defineProperty(exports, "__esModule", {value: true}); function _optionalChain(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }// evolve.ts —— 自演化观测(采集端)。
 // 前端运行时错误 → POST /api/evolve/sink → 服务器落 ~/.piz/evolve/queue.jsonl。
-// 发送用 sendBeacon:不阻塞、页面关闭也送达;失败静默,不干扰用户。
+// 发送用 fetch keepalive:不阻塞、页面关闭也送达;失败静默,不干扰用户。
+// (曾用 sendBeacon —— 它带不了 Authorization 头,默认 token 模式下全线 401,管道静默失效。)
 // 去重:60 秒内同签名(where|msg 前 200 字符)只发一次。
 
 const SINK = "/api/evolve/sink";
@@ -5786,7 +5787,14 @@ function sink(kind, where, msg, stack) {
       session: "", // 调用时补
       ua: String(navigator.userAgent || "").slice(0, 200),
     });
-    navigator.sendBeacon(SINK, new Blob([payload], { type: "application/json" }));
+    // window.fetch 已被 net.ts 包装:自动带 Bearer;keepalive 等价 sendBeacon 的
+    // 「页面关闭也送达」,且能过鉴权。失败静默(采集不能成为缺陷)。
+    fetch(SINK, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: payload,
+      keepalive: true,
+    }).catch(() => {});
   } catch (e2) {}
 }
 
@@ -5867,7 +5875,7 @@ __modules["main"] = function(module, exports, require) {
           if (s.running) _composer.setRun.call(void 0, true);
           _model.applyBootState.call(void 0, s);
         })
-        .catch(() => _ui.showToast.call(void 0, "state load failed"));
+        .catch(() => _ui.showToast.call(void 0, "状态加载失败"));
       _model.setModeBtn.call(void 0, );
       _model.setSandboxBtn.call(void 0, );
       fetch("/api/config")
@@ -5877,7 +5885,7 @@ __modules["main"] = function(module, exports, require) {
           if (cfg && cfg.sandboxBackend) window.sandboxBackend = cfg.sandboxBackend;
           _model.setSandboxBtn.call(void 0, );
         })
-        .catch(() => _ui.showToast.call(void 0, "config load failed"));
+        .catch(() => _ui.showToast.call(void 0, "配置加载失败"));
       _slash.loadHelpCatalog.call(void 0, );
       // todo 计划条插槽(dsh input dock 计划条):actStrip 之后、队列行之前
       const ps = document.createElement("div");

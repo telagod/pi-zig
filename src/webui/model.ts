@@ -38,14 +38,14 @@ export async function applySessionModel(md: string) {
     );
     const j = await r.json().catch(() => ({}));
     if (!r.ok || j.ok === false || !j.model) {
-      showToast(j.error || "switch model failed");
+      showToast(j.error || "切换模型失败");
       return false;
     }
     curModel = j.model;
     renderModel();
     return true;
   } catch {
-    showToast("switch model failed");
+    showToast("切换模型失败");
     return false;
   }
 }
@@ -66,7 +66,7 @@ export function loadModels(sel: any) {
       }
       openAt("modelMenu", sel);
     })
-    .catch(() => showToast("models load failed"));
+    .catch(() => showToast("模型列表加载失败"));
 }
 export function modelShort(m: string) {
   if (!m) return "模型";
@@ -107,7 +107,7 @@ export async function setThink(level: string) {
     });
     const j = await r.json().catch(() => ({}));
     if (!r.ok || j.ok === false) {
-      showToast(j.error || "switch think failed");
+      showToast(j.error || "切换思考等级失败");
       return false;
     }
     if (j && j.defaultThinkingLevel) {
@@ -116,7 +116,7 @@ export async function setThink(level: string) {
     }
     return true;
   } catch {
-    showToast("switch think failed");
+    showToast("切换思考等级失败");
     return false;
   }
 }
@@ -401,7 +401,7 @@ export async function applySessionTitle(t: string, hdr?: boolean) {
     );
     const j = await r.json().catch(() => ({}));
     if (!r.ok || j.ok === false || j.title === undefined) {
-      showToast(j.error || "set title failed");
+      showToast(j.error || "设置标题失败");
       return false;
     }
     curTitle = j.title;
@@ -409,7 +409,7 @@ export async function applySessionTitle(t: string, hdr?: boolean) {
     loadSessions();
     return true;
   } catch {
-    showToast("set title failed");
+    showToast("设置标题失败");
     return false;
   }
 }

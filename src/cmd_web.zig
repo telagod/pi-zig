@@ -924,6 +924,42 @@ fn poolSlashHook(ctx: ?*anyopaque, cwd: []const u8, session: []const u8, name: [
         out.writeAll(text) catch return false;
         return true;
     }
+    // /logout <provider> | /logout --all:TUI 同义(cmd_slash 经 app_worker.logoutLogin,
+    // Web 无 App,这里直改 cfg —— 与 app_worker 逻辑一致,只是结果走 out 文本)。
+    if (std.mem.eql(u8, name, "logout")) {
+        const rest = std.mem.trim(u8, args, " ");
+        if (rest.len == 0) {
+            out.writeAll("用法:/logout <provider> | /logout --all") catch return false;
+            return true;
+        }
+        const all = std.mem.eql(u8, rest, "--all");
+        const ok = if (all) pool.cfg.clearAuthAll() else pool.cfg.clearAuth(rest);
+        ok catch {
+            out.writeAll("logout failed") catch return false;
+            return true;
+        };
+        pool.mutex.lock(util.io) catch {};
+        for (pool.cfg.providers) |*p| {
+            if (all or std.mem.eql(u8, p.name, rest)) p.api_key = null;
+        }
+        if (all or std.mem.eql(u8, ses.agent.provider.name, rest)) ses.agent.key = null;
+        pool.mutex.unlock(util.io);
+        out.writeAll(if (all) "cleared all credentials in auth.json" else "cleared credential") catch return false;
+        return true;
+    }
+    // /extensions:TUI 同义(cmd_slash.showExtensions),列 jsrt 装载情况与命令/工具。
+    if (std.mem.eql(u8, name, "extensions")) {
+        if (!jsrt.enabled) {
+            out.writeAll("js extensions disabled (built without -Dquickjs)") catch return false;
+            return true;
+        }
+        out.print("js extensions: {d} file(s) loaded, {d} error(s)", .{ jsrt.loadedCount(), jsrt.loadErrorCount() }) catch return false;
+        for (jsrt.jsTools()) |t| out.print("\n  tool     {s} — {s}", .{ t.name, t.desc }) catch return false;
+        for (jsrt.jsCommands()) |cm| out.print("\n  /{s}  {s}", .{ cm.name, cm.desc }) catch return false;
+        if (jsrt.jsTools().len == 0 and jsrt.jsCommands().len == 0 and jsrt.loadedCount() > 0)
+            out.writeAll("\n  (只挂了事件处理器)\n") catch return false;
+        return true;
+    }
     const res = pluginsmod.dispatchSlash(ses.agent.plugins, ses.agent, name, args) orelse {
         // JS 扩展命令(注册于 QuickJS 运行时)。
         if (jsrt.enabled) {
@@ -1351,6 +1387,18 @@ pub fn poolActionHook(ctx: ?*anyopaque, cwd: []const u8, session: []const u8, ac
         return "{\"ok\":true,\"act\":\"delete\"}";
     }
     const ses = pool.getOrCreate(session, cwd2) orelse return null;
+    // rename:改会话标题(侧栏 kebab「重命名」走 /api/action;头部改名走 /api/title,殊途同归)
+    if (std.mem.eql(u8, act, "rename")) {
+        const t = name orelse "";
+        const trimmed = std.mem.trim(u8, t, " \t");
+        ses.agent.title = if (trimmed.len > 0) (std.heap.page_allocator.dupe(u8, trimmed) catch null) else null;
+        ses.updated_ns = std.Io.Clock.now(.real, util.io).nanoseconds;
+        sessionmod.saveWebTs(alloc, cwd2, session, ses.agent.model, sessionIsYolo(ses), ses.agent.title, ses.agent.messages.items, ses.updated_ns) catch |err| {
+            util.debugCatch("saveWebTs", err);
+            return "{\"ok\":false,\"act\":\"rename\"}";
+        };
+        return std.fmt.allocPrint(alloc, "{{\"ok\":true,\"act\":\"rename\",\"title\":{s}}}", .{util.jsonString(alloc, ses.agent.title orelse "") catch "\"\""}) catch null;
+    }
     if (std.mem.eql(u8, act, "fork")) {
         if (ses.busy.cmpxchgWeak(0, 2, .acq_rel, .acquire) != null) return "{\"ok\":false,\"act\":\"fork\",\"error\":\"busy\"}";
         defer ses.busy.store(0, .release);

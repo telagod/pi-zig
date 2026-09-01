@@ -207,7 +207,7 @@ function workBitsHtml(live: boolean) {
   if (workCounts.todo) bits.push(ico("todo") + "<span>" + nunit(workCounts.todo, "plan") + "</span>");
   if (workCounts.agent) bits.push(ico("agent") + "<span>" + nunit(workCounts.agent, "agent") + "</span>");
   if (workCounts.other) bits.push(ico("tool") + "<span>" + nunit(workCounts.other, "tool") + "</span>");
-  if (!bits.length) return live ? "Working" : "Worked";
+  if (!bits.length) return live ? "正在工作" : "已完成";
   return bits.map((b) => '<span class="work-chip">' + b + "</span>").join('<span class="work-dot">·</span>');
 }
 function refreshWorkSum(live: boolean) {
@@ -222,7 +222,7 @@ function ensureWork() {
   const el = document.createElement("div");
   el.className = "work live";
   el.innerHTML =
-    '<button type="button" class="work-sum"><span class="work-caret">▸</span><span class="work-bits">Working</span></button><div class="work-list"></div>';
+    '<button type="button" class="work-sum"><span class="work-caret">▸</span><span class="work-bits">正在工作</span></button><div class="work-list"></div>';
   (el.querySelector(".work-sum") as HTMLElement).onclick = () => el.classList.toggle("open");
   th.appendChild(el);
   workEl = el;
@@ -622,7 +622,7 @@ export function addRsn(txt: string) {
     el.innerHTML =
       '<button type="button" class="think-sum"><span class="work-caret">▸</span>' +
       ico("think") +
-      '<span class="think-txt">Thinking</span></button><pre class="tk"></pre>';
+      '<span class="think-txt">思考中</span></button><pre class="tk"></pre>';
     (el.querySelector(".think-sum") as HTMLElement).onclick = () => el.classList.toggle("open");
     th.appendChild(el);
     rsnEl = el;

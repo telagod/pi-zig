@@ -181,9 +181,9 @@ export async function openSettings() {
       })
         .then((r) => r.json().catch(() => ({})))
         .then((j) => {
-          if (j && j.ok === false) showToast(j.error || "save default model failed");
+          if (j && j.ok === false) showToast(j.error || "保存默认模型失败");
         })
-        .catch(() => showToast("save default model failed"));
+        .catch(() => showToast("保存默认模型失败"));
     };
   bindSeg("think", (v) => setThink(v || "high"));
   bindSeg("sessappr", (v) => setApproval(v || "ask"));
@@ -195,9 +195,9 @@ export async function openSettings() {
     })
       .then((r) => r.json().catch(() => ({})))
       .then((j) => {
-        if (j && j.ok === false) showToast(j.error || "save approval failed");
+        if (j && j.ok === false) showToast(j.error || "保存默认授权失败");
       })
-      .catch(() => showToast("save approval failed"));
+      .catch(() => showToast("保存默认授权失败"));
   });
   bindSeg("sandbox", (v) => {
     setSandbox(v || "off");

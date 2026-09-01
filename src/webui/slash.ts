@@ -45,7 +45,7 @@ export function loadHelpCatalog() {
   return fetch("/api/help?" + wsp + "session=" + encodeURIComponent(sess))
     .then((r) => r.json())
     .then(applyHelpCatalog)
-    .catch(() => showToast("help catalog load failed"));
+    .catch(() => showToast("帮助目录加载失败"));
 }
 let SLASH: any[] = [
   { name: "/help", desc: "list commands" },
@@ -374,7 +374,7 @@ export async function runSlash(item: any, arg?: string) {
       })
         .then((r) => r.json())
         .then((j) => showToast(j && j.ok ? "saved " + name : "login failed"))
-        .catch(() => showToast("login failed"));
+        .catch(() => showToast("登录失败"));
       break;
     }
     case "/quit":

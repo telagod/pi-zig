@@ -1,6 +1,7 @@
 // evolve.ts —— 自演化观测(采集端)。
 // 前端运行时错误 → POST /api/evolve/sink → 服务器落 ~/.piz/evolve/queue.jsonl。
-// 发送用 sendBeacon:不阻塞、页面关闭也送达;失败静默,不干扰用户。
+// 发送用 fetch keepalive:不阻塞、页面关闭也送达;失败静默,不干扰用户。
+// (曾用 sendBeacon —— 它带不了 Authorization 头,默认 token 模式下全线 401,管道静默失效。)
 // 去重:60 秒内同签名(where|msg 前 200 字符)只发一次。
 
 const SINK = "/api/evolve/sink";
@@ -25,7 +26,14 @@ function sink(kind: string, where: string, msg: string, stack: string) {
       session: "", // 调用时补
       ua: String(navigator.userAgent || "").slice(0, 200),
     });
-    navigator.sendBeacon(SINK, new Blob([payload], { type: "application/json" }));
+    // window.fetch 已被 net.ts 包装:自动带 Bearer;keepalive 等价 sendBeacon 的
+    // 「页面关闭也送达」,且能过鉴权。失败静默(采集不能成为缺陷)。
+    fetch(SINK, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: payload,
+      keepalive: true,
+    }).catch(() => {});
   } catch {}
 }
 

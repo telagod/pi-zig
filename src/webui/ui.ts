@@ -178,7 +178,7 @@ export function bindAuthPanel() {
       save.onclick = () => {
         const key = (inp && inp.value) || "";
         if (!key) {
-          showToast("paste an API key");
+          showToast("请粘贴 API key");
           return;
         }
         fetch("/api/config", {
@@ -188,10 +188,10 @@ export function bindAuthPanel() {
         })
           .then((r) => r.json())
           .then((j) => {
-            showToast(j && j.ok ? "saved " + name : "save failed");
+            showToast(j && j.ok ? "已保存 " + name : "保存失败");
             if (inp) inp.value = "";
           })
-          .catch(() => showToast("save failed"));
+          .catch(() => showToast("保存失败"));
       };
     if (oauthBtn)
       oauthBtn.onclick = async () => {
@@ -204,7 +204,7 @@ export function bindAuthPanel() {
           });
           const j = await r.json();
           if (!j || !j.ok) {
-            showToast("oauth start failed");
+            showToast("OAuth 启动失败");
             return;
           }
           if (j.user_code) {
@@ -216,33 +216,33 @@ export function bindAuthPanel() {
             showToast("code " + j.user_code);
           } else if (j.url) {
             window.open(j.url, "_blank");
-            showToast("finish sign-in in the new tab");
+            showToast("请在新标签页完成登录");
           } else {
-            showToast("oauth start failed");
+            showToast("OAuth 启动失败");
             return;
           }
           const path = j.user_code ? "/api/oauth/poll?state=" : "/api/oauth/status?state=";
           const t0 = Date.now();
           const tick = async () => {
             if (Date.now() - t0 > 180000) {
-              showToast("oauth timed out");
+              showToast("OAuth 超时");
               return;
             }
             const s = await fetch(path + encodeURIComponent(j.state)).then((x) => x.json());
             if (s && s.done && s.ok) {
-              showToast("signed in");
+              showToast("已登录");
               if (hint) hint.hidden = true;
               return;
             }
             if (s && s.done && !s.ok) {
-              showToast("sign-in failed");
+              showToast("登录失败");
               return;
             }
             setTimeout(tick, 1500);
           };
           setTimeout(tick, 1500);
         } catch {
-          showToast("oauth start failed");
+          showToast("OAuth 启动失败");
         }
       };
   });

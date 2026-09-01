@@ -425,7 +425,7 @@ export function loadSessions() {
         }
       }
     })
-    .catch(() => showToast("sessions load failed"));
+    .catch(() => showToast("会话加载失败"));
 }
 // 搜索框过滤态:内联侧栏过滤输入(loadSessions 的 show 读它)
 let sideQ = "";
@@ -460,5 +460,5 @@ export function act(body: any, then?: (j: any) => void) {
     .then((j) => {
       if (then) then(j);
     })
-    .catch(() => showToast("action failed"));
+    .catch(() => showToast("操作失败"));
 }

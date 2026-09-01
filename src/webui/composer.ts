@@ -476,10 +476,10 @@ export async function sendPlain(t: string) {
     );
     const j = await r.json().catch(() => ({}));
     if (!r.ok || j.ok === false) {
-      showToast(j.error || "send failed");
+      showToast(j.error || "发送失败");
     } else ok = true;
   } catch {
-    showToast("send failed");
+    showToast("发送失败");
   }
   if (!ok) {
     // 失败不吞草稿:文本塞回输入框,图也还回 pending。

@@ -46,7 +46,7 @@
           if (s.running) setRun(true);
           applyBootState(s);
         })
-        .catch(() => showToast("state load failed"));
+        .catch(() => showToast("状态加载失败"));
       setModeBtn();
       setSandboxBtn();
       fetch("/api/config")
@@ -56,7 +56,7 @@
           if (cfg && cfg.sandboxBackend) window.sandboxBackend = cfg.sandboxBackend;
           setSandboxBtn();
         })
-        .catch(() => showToast("config load failed"));
+        .catch(() => showToast("配置加载失败"));
       loadHelpCatalog();
       // todo 计划条插槽(dsh input dock 计划条):actStrip 之后、队列行之前
       const ps = document.createElement("div");
