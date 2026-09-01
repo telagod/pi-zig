@@ -268,6 +268,20 @@ pub const WebServer = struct {
         var tcp: ?net.Server = null;
         while (tcp == null) {
             const addr = net.IpAddress.parseIp4("127.0.0.1", port) catch unreachable;
+            // 先探活再 listen:reuse_address 在 Linux 上连带开 SO_REUSEPORT,
+            // 两个实例能同绑一端口、内核轮流分发连接 —— 后启动的 token 在前一个
+            // 进程上全部 401,表现为「启动带的 token 进不了 webui」。
+            // 试连成功 = 已有监听者:显式端口直接报 PortBusy,自动模式跳下一端口。
+            if (net.IpAddress.parseIp4("127.0.0.1", port)) |probe| {
+                if (probe.connect(util.io, .{ .mode = .stream })) |s| {
+                    var c = s;
+                    c.close(util.io);
+                    if (opts.port != 0) return error.PortBusy;
+                    if (port >= 5503) return error.PortBusy;
+                    port += 1;
+                    continue;
+                } else |_| {}
+            } else |_| {}
             tcp = addr.listen(util.io, .{ .reuse_address = true }) catch |err| blk: {
                 if (opts.port != 0) return err;
                 if (port >= 5503) return err;

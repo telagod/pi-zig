@@ -94,6 +94,12 @@ pub fn runWebCmd(alloc: std.mem.Allocator, args: *std.process.Args.Iterator) voi
     // 锁外的 allocPrint 需要线程安全分配器 —— arena 会被并发分配直接踩坏。
     var hub = webui_mod.EventHub.init(std.heap.page_allocator);
     var ws = webui_mod.WebServer.start(sync_arena.allocator(), wopts, &hub) catch |err| {
+        if (err == error.PortBusy) {
+            std.debug.print("piz web: 端口 {d} 已被占用 —— 可能已有一个 piz web 在运行。\n" ++
+                "     上次启动信息(pid/token)见: ~/.piz/web.launch.json\n" ++
+                "     停掉旧实例后重试,或用 --port 换端口。\n", .{if (wopts.port != 0) wopts.port else 5494});
+            std.process.exit(1);
+        }
         std.debug.print("piz web: cannot listen: {t}\n", .{err});
         std.process.exit(1);
     };
