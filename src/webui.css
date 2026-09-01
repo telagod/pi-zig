@@ -104,6 +104,8 @@
         --z-sticky: 100;
         --z-dropdown: 200;
         --z-modal: 300;
+        /* 锚定菜单在弹窗之上打开(弹窗内的下拉,如设置的模型选择) */
+        --z-menu-over-modal: 350;
         --z-toast: 400;
         --z-gate: 500;
         --weight-regular: 400;
@@ -2644,11 +2646,14 @@
         background: var(--color-warning-soft);
       }
       /* ==== 菜单 ==== */
+      /* ==== 锚定菜单(dsh Menu 原语:r12 卡片 + 4px 内衬 + 反色描边 + lv3 阴影) ==== */
       .menu {
         position: fixed;
         min-width: 200px;
+        max-height: calc(100vh - 16px);
+        overflow-y: auto;
         background: var(--color-surface-raised);
-        border: 1px solid var(--color-line);
+        border: 1px solid var(--color-line-strong);
         border-radius: var(--radius-lg);
         padding: 4px;
         box-shadow: var(--shadow-lg);
@@ -2658,13 +2663,24 @@
       .menu.open {
         display: block;
       }
+      /* 弹窗(#overlay.open)在场时,菜单抬到弹窗之上(菜单与 overlay 是 body 下兄弟) */
+      body:has(#overlay.open) .menu.open {
+        z-index: var(--z-menu-over-modal);
+      }
+      .menu-label {
+        padding: 8px 10px 4px;
+        font-size: 12px;
+        line-height: 16px;
+        color: var(--color-text-faint);
+        user-select: none;
+      }
       .mi {
         display: flex;
         align-items: center;
         gap: 8px;
         min-height: 34px;
         padding: 5px 10px;
-        border-radius: var(--radius-lg);
+        border-radius: var(--radius-md);
         cursor: pointer;
         font-size: 14px;
         line-height: 22px;
@@ -2672,6 +2688,28 @@
       }
       .mi:hover {
         background: var(--hover);
+      }
+      .mi .mi-ic {
+        flex: none;
+        width: 18px;
+        color: var(--color-text-faint);
+        text-align: center;
+      }
+      .mi .mi-tx {
+        flex: 1;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .mi .mi-hint {
+        flex: none;
+        color: var(--color-text-faint);
+        font-size: 12px;
+        max-width: 12em;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
       }
       .mi.danger:hover {
         background: var(--hover-danger);
@@ -2749,11 +2787,17 @@
         border-top: 1px solid var(--color-line);
         margin: 4px 6px;
       }
-      .mi.check::before {
+      .mi.check::after {
         content: "✓";
         color: var(--color-accent);
         flex: none;
-        font-size: 11px;
+        font-size: 12px;
+      }
+      /* 模型选择卡片:分组列表加宽(dsh ModelSelect 240-420px) */
+      .model-menu {
+        min-width: min(300px, calc(100vw - 32px));
+        max-width: min(420px, calc(100vw - 32px));
+        max-height: min(420px, 70vh);
       }
       /* ==== toast ==== */
       #toast {
@@ -3186,7 +3230,7 @@
         overflow: hidden;
       }
       .dlg.set {
-        width: min(460px, 100%);
+        width: min(520px, 100%);
       }
       .dlg.wide {
         width: min(var(--p-content-max), 100%);
@@ -3200,6 +3244,18 @@
         border-radius: var(--radius-md);
         padding: 6px 8px;
         font: inherit;
+      }
+      /* 会话模型下拉按钮:与 .set-sel 同形,尾随 ▾ */
+      .set-model-btn {
+        text-align: left;
+        cursor: pointer;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .set-model-btn::after {
+        content: " ▾";
+        color: var(--color-text-faint);
       }
       .cmp-hint {
         margin: 0 0 8px;
@@ -3350,34 +3406,72 @@
         border-bottom: 1px solid var(--color-line);
         font-size: 13px;
       }
-      .auth-row {
+      /* ==== 供应商凭证卡片(dsh settings-models rowCard 之形) ==== */
+      .prov-hint {
+        padding: 2px 0 10px;
+        font-size: 12px;
+        color: var(--color-text-faint);
+      }
+      .prov-cards {
+        display: flex;
         flex-direction: column;
-        align-items: stretch;
         gap: 8px;
       }
-      .auth-row .set-lab {
-        flex-direction: row;
-        align-items: baseline;
-        gap: 8px;
+      .prov-card {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        padding: 12px 14px;
+        border: 1px solid var(--color-line);
+        border-radius: var(--radius-lg);
+        background: var(--color-surface);
       }
-      .auth-row .set-lab .set-hint {
+      .prov-head {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-width: 0;
+      }
+      .cred-dot {
+        flex: none;
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+      }
+      .cred-ok {
+        background: var(--color-success);
+      }
+      .cred-miss {
+        background: var(--color-danger);
+      }
+      .prov-name {
+        font-size: 14px;
+        font-weight: 500;
+        line-height: 22px;
+        color: var(--color-text);
+      }
+      .prov-api {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
         white-space: nowrap;
+        font-size: 12px;
+        color: var(--color-text-faint);
       }
       .auth-actions {
         display: flex;
         align-items: center;
         gap: 8px;
       }
-      .auth-row .auth-key {
+      .prov-card .auth-key {
         flex: 1;
         max-width: none;
       }
-      /* OAuth 登录钮与提示行:与 .btn 同语汇 */
-      .auth-row .auth-oauth {
+      .prov-card .auth-oauth {
         flex: none;
       }
-      .auth-row .auth-dev {
-        margin-top: 4px;
+      .prov-card .auth-dev {
+        margin-top: 2px;
       }
       .set-row:last-child {
         border-bottom: 0;

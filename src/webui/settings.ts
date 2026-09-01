@@ -7,10 +7,10 @@ import {
   setScheme, applyScheme, clipText,
 } from "./ui";
 import { segHtml, authPanelHtml, packageRows, pluginRows } from "./render";
-import { sessData } from "./sessions";
+import { sessData, closeMenus } from "./sessions";
 import {
   THINK_LEVELS, APPROVALS, getThink, getCurModel, getApprovalMode,
-  applySessionModel, setThink, setApproval, setSandbox,
+  applySessionModel, setThink, setApproval, setSandbox, loadModels,
 } from "./model";
 import { th, inspect } from "./chat";
 import { getLastUser, sendPlain } from "./composer";
@@ -44,6 +44,14 @@ export async function openSettings() {
     const xs = list.slice();
     if (cur && xs.indexOf(cur) < 0) xs.unshift(cur);
     if (!xs.length) xs.push(cur || "");
+    // 会话模型列:点击弹分组卡片菜单(modelMenu);默认模型仍是原生 select(选项即值)
+    if (id === "setSessModel") {
+      return (
+        '<button type="button" class="set-sel set-model-btn" id="setSessModel" title="点击选择模型">' +
+        esc(cur || "选择模型") +
+        "</button>"
+      );
+    }
     return (
       '<select id="' +
       id +
@@ -63,26 +71,39 @@ export async function openSettings() {
       "</select>"
     );
   }
-  const provHtml =
-    (cfg.providers || [])
-      .map(
-        (p: any) =>
-          '<div class="set-row"><div class="set-lab">' +
-          esc(p.name || "") +
-          '<span class="set-hint">' +
-          esc(p.api || "") +
-          (p.hasKey ? " · 已配 key" : " · 无 key") +
-          "</span></div></div>",
-      )
-      .join("") ||
-    '<div class="set-row"><div class="set-lab">无自定义 provider<span class="set-hint">见 ~/.piz/models.json</span></div></div>';
+  // 自定义 provider(非内置目录)→ 账户 tab 底部卡片列表;内置键走 authPanelHtml
+  const builtin = new Set([
+    "deepseek", "openai", "anthropic", "xai", "openrouter", "groq",
+    "mistral", "together", "fireworks", "cerebras", "moonshotai",
+    "huggingface", "nvidia", "zai", "minimax",
+  ]);
+  const customs = (cfg.providers || []).filter((p: any) => !builtin.has(p.name));
+  const provHtml = customs.length
+    ? '<div class="prov-hint" style="margin-top:14px">自定义供应商(见 ~/.piz/models.json)</div>' +
+      '<div class="prov-cards">' +
+      customs
+        .map(
+          (p: any) =>
+            '<div class="prov-card"><div class="prov-head"><span class="cred-dot ' +
+            (p.hasKey ? "cred-ok" : "cred-miss") +
+            '"></span><span class="prov-name">' +
+            esc(p.name || "") +
+            "</span>" +
+            (p.api ? '<span class="prov-api">' + esc(p.api) + "</span>" : "") +
+            (p.models && p.models.length ? '<span class="prov-api">' + p.models.length + " 模型</span>" : "") +
+            "</div></div>",
+        )
+        .join("") +
+      "</div>"
+    : "";
   openDlg({
     cls: "set",
     title: "设置",
     body:
-      '<div class="set-tabs" id="setTabs"><button type="button" data-tab="auth" class="on">Account</button><button type="button" data-tab="look">外观</button><button type="button" data-tab="agent">智能体</button><button type="button" data-tab="note">通知</button><button type="button" data-tab="about">关于</button></div>' +
+      '<div class="set-tabs" id="setTabs"><button type="button" data-tab="auth" class="on">账户</button><button type="button" data-tab="look">外观</button><button type="button" data-tab="agent">智能体</button><button type="button" data-tab="note">通知</button><button type="button" data-tab="about">关于</button></div>' +
       '<div id="setAuth">' +
       authPanelHtml(cfg) +
+      provHtml +
       "</div>" +
       '<div id="setLook" hidden>' +
       '<div class="set-row"><div class="set-lab">配色</div>' +
@@ -132,7 +153,6 @@ export async function openSettings() {
       '<div id="setAbout" hidden>' +
       '<div class="set-row"><div class="set-lab">piz web<span class="set-hint">配置见 ~/.piz/</span></div></div>' +
       '<div class="set-row"><div class="set-lab">快捷键<span class="set-hint"><kbd>Ctrl</kbd><kbd>K</kbd> 搜会话 · <kbd>Ctrl</kbd><kbd>,</kbd> 设置 · <kbd>/</kbd> 命令 · <kbd>@./</kbd> 文件 · <kbd>!</kbd> 命令</span></div></div>' +
-      provHtml +
       "</div>",
   });
   const tabs = $("setTabs")!;
@@ -169,8 +189,10 @@ export async function openSettings() {
     applyScheme();
   });
   if ($("setSessModel"))
-    ($("setSessModel") as any).onchange = async () => {
-      await applySessionModel(($("setSessModel") as HTMLSelectElement).value);
+    ($("setSessModel") as HTMLElement).onclick = (ev: any) => {
+      ev.stopPropagation();
+      closeMenus();
+      loadModels(ev.currentTarget);
     };
   if ($("setDefModel"))
     ($("setDefModel") as any).onchange = () => {

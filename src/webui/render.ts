@@ -22,6 +22,9 @@ export function segHtml(name: string, opts: { v: string; l: string }[], cur: str
     "</div>"
   );
 }
+/// 供应商凭证卡片(dsh settings-models rowCard 之形):每 provider 一张卡 ——
+/// 头行(状态点 + 名称 + 协议 hint) + key 输入行 + OAuth 按钮。
+/// 已配 key = 绿实心点;未配 = 红实心点(dsh credentialDot 规范)。
 export function authPanelHtml(cfg: any) {
   const keysFirst = [
     "deepseek",
@@ -52,24 +55,34 @@ export function authPanelHtml(cfg: any) {
     openai: "Sign in with ChatGPT",
   };
   return (
-    '<div class="set-row"><div class="set-lab">API keys<span class="set-hint">Built-in providers. Paste a key and Save.</span></div></div>' +
+    '<div class="prov-hint">内置供应商,粘贴 API key 保存即用。绿点 = 已配置。</div>' +
+    '<div class="prov-cards">' +
     list
       .map((p) => {
         const oauthl = oauthLabel[p.name];
         return (
-          '<div class="set-row auth-row" data-prov="' +
+          '<div class="prov-card auth-row" data-prov="' +
           esc(p.name) +
-          '"><div class="set-lab">' +
+          '"><div class="prov-head"><span class="cred-dot ' +
+          (p.hasKey ? "cred-ok" : "cred-miss") +
+          '" title="' +
+          (p.hasKey ? "已配置" : "未配置") +
+          '"></span><span class="prov-name">' +
           esc(p.name) +
-          '<span class="set-hint">' +
-          (p.hasKey ? "key set" : "no key") +
-          '</span></div><div class="auth-actions"><input class="set-sel auth-key" type="password" placeholder="API key" autocomplete="off">' +
-          '<button type="button" class="btn auth-save">Save</button>' +
+          "</span>" +
+          (p.api ? '<span class="prov-api">' + esc(p.api) + "</span>" : "") +
+          "</div>" +
+          '<div class="auth-actions"><input class="set-sel auth-key" type="password" placeholder="' +
+          (p.hasKey ? "替换 API key" : "粘贴 API key") +
+          '" autocomplete="off">' +
+          '<button type="button" class="btn auth-save">保存</button>' +
           (oauthl ? '<button type="button" class="btn auth-oauth">' + oauthl + "</button>" : "") +
-          '</div><div class="set-hint auth-dev" hidden></div></div>'
+          "</div>" +
+          '<div class="set-hint auth-dev" hidden></div></div>'
         );
       })
-      .join("")
+      .join("") +
+    "</div>"
   );
 }
 export function packageRows(data: any) {

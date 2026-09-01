@@ -786,17 +786,65 @@ let openMenu = null;
     m.classList.remove("open");
   openMenu = null;
 } exports.closeMenus = closeMenus;
- function openAt(id, btn) {
+/// 统一锚定菜单(dsh Menu 原语之形):锚元素矩形 + 优先弹出方向/对齐。
+/// side: "bl"(默认 左下)| "br"(右下)| "tr"(右上)| "tl"(左上);
+/// 菜单卡片永远不越过视口(8px 边距),溢出时自动翻转。
+ function openAt(id, btn, side = "bl") {
   closeMenus();
   const m = _util.$.call(void 0, id);
   m.classList.add("open");
   const r = btn.getBoundingClientRect();
   const mw = m.offsetWidth,
     mh = m.offsetHeight;
-  m.style.left = Math.min(r.right - mw, innerWidth - mw - 8) + "px";
-  m.style.top = Math.min(r.bottom + 4, innerHeight - mh - 8) + "px";
+  const GAP = 4,
+    MARGIN = 8;
+  let left, top;
+  if (side === "bl" || side === "tl") left = Math.min(Math.max(r.left, MARGIN), innerWidth - mw - MARGIN);
+  else left = Math.min(Math.max(r.right - mw, MARGIN), innerWidth - mw - MARGIN);
+  if (side === "bl" || side === "br") {
+    top = r.bottom + GAP;
+    if (top + mh > innerHeight - MARGIN) top = Math.max(MARGIN, r.top - GAP - mh); // 翻上
+  } else {
+    top = r.top - GAP - mh;
+    if (top < MARGIN) top = Math.min(r.bottom + GAP, innerHeight - mh - MARGIN); // 翻下
+  }
+  m.style.left = left + "px";
+  m.style.top = top + "px";
   openMenu = m;
 } exports.openAt = openAt;
+/// 菜单内容构造器:与 openAt 配套,产出 dsh 式菜单行(label + hint + check + danger)。
+ function menuRow(opts
+
+
+
+
+
+
+) {
+  const d = document.createElement("div");
+  d.className = "mi" + (opts.check ? " check" : "") + (opts.danger ? " danger" : "");
+  d.innerHTML =
+    (opts.icon ? '<span class="mi-ic">' + opts.icon + "</span>" : "") +
+    '<span class="mi-tx">' + opts.label + "</span>" +
+    (opts.hint ? '<span class="mi-hint">' + opts.hint + "</span>" : "");
+  d.onclick = (e) => {
+    e.stopPropagation();
+    closeMenus();
+    opts.onclick();
+  };
+  return d;
+} exports.menuRow = menuRow;
+ function menuSep() {
+  const d = document.createElement("div");
+  d.className = "sep";
+  return d;
+} exports.menuSep = menuSep;
+ function menuLabel(text) {
+  const d = document.createElement("div");
+  d.className = "menu-label";
+  d.textContent = text;
+  return d;
+} exports.menuLabel = menuLabel;
 document.addEventListener("click", (e) => {
   if (
     !e.target.closest(".menu") &&
@@ -805,7 +853,9 @@ document.addEventListener("click", (e) => {
     !e.target.closest(".mode-pill") &&
     !e.target.closest(".ch-brand") &&
     !e.target.closest(".ws-chip") &&
-    !e.target.closest(".ch-ws")
+    !e.target.closest(".ch-ws") &&
+    !e.target.closest(".set-model-btn") &&
+    !e.target.closest(".kebab")
   )
     closeMenus();
 });
@@ -848,28 +898,28 @@ document.addEventListener("click", (e) => {
   const cur = _state.ws || (list[0] ? list[0].root : "");
   const m = _util.$.call(void 0, "wsmenu");
   m.innerHTML = "";
+  m.appendChild(menuLabel("项目"));
   for (const w of list) {
-    const d = document.createElement("div");
-    d.className = "mi" + (w.root === cur ? " check" : "");
-    d.textContent = (w.name || _util.projectName.call(void 0, w.root)) + " · " + w.root;
-    d.title = w.root;
-    d.onclick = () => {
-      if (w.root !== cur) location.href = _state.sessUrl.call(void 0, "default", w.root);
-    };
-    m.appendChild(d);
+    m.appendChild(
+      menuRow({
+        label: w.name || _util.projectName.call(void 0, w.root),
+        hint: w.root,
+        check: w.root === cur,
+        onclick: () => {
+          if (w.root !== cur) location.href = _state.sessUrl.call(void 0, "default", w.root);
+        },
+      }),
+    );
   }
-  const sep = document.createElement("div");
-  sep.className = "sep";
-  m.appendChild(sep);
-  const add = document.createElement("div");
-  add.className = "mi";
-  add.textContent = "＋ 添加项目…";
-  add.onclick = () => {
-    closeMenus();
-    addProject();
-  };
-  m.appendChild(add);
-  openAt("wsmenu", btn);
+  m.appendChild(menuSep());
+  m.appendChild(
+    menuRow({
+      label: "添加项目…",
+      icon: "＋",
+      onclick: () => addProject(),
+    }),
+  );
+  openAt("wsmenu", btn, "bl");
 } exports.openWsMenu = openWsMenu;
 // 侧栏内联过滤:搜索按钮原地变输入框(实时过滤会话;✕ 清空)
  function initSideFilter() {
@@ -992,80 +1042,84 @@ document.addEventListener("click", (e) => {
   const m = _util.$.call(void 0, "kmenu");
   m.innerHTML = "";
   if (!arch) {
-    const ren = document.createElement("div");
-    ren.className = "mi";
-    ren.textContent = "✎ 重命名";
-    ren.onclick = async () => {
-      closeMenus();
-      const t = await _ui.askText.call(void 0, "重命名会话", s.title || s.name, "会话标题");
-      if (t === null) return;
-      act({ act: "rename", name: t, session: s.name }, (j) => {
-        loadSessions();
-        _ui.showToast.call(void 0, j && j.ok ? "已重命名" : "失败");
-      });
-    };
-    m.appendChild(ren);
-    const fork = document.createElement("div");
-    fork.className = "mi";
-    fork.textContent = "✱ 派生会话";
-    fork.onclick = async () => {
-      closeMenus();
-      const n = await _ui.askText.call(void 0, "派生会话", "", "新会话名，留空自动");
-      if (n === null) return;
-      act({ act: "fork", name: n || "", session: s.name }, (j) => {
-        if (j && j.name) {
-          _ui.showToast.call(void 0, "已派生 " + j.name);
-          setTimeout(
-            () =>
-              (location.href = _state.sessUrl.call(void 0, j.name)),
-            600,
-          );
-        }
-      });
-    };
-    m.appendChild(fork);
-    const arc = document.createElement("div");
-    arc.className = "mi";
-    arc.textContent = "🗄 归档";
-    arc.onclick = () => {
-      closeMenus();
-      act({ act: "archive", session: s.name }, (j) => {
-        if (j && j.ok) {
-          _ui.showToast.call(void 0, "已归档");
-          if (s.name === _state.sess)
-            setTimeout(() => (location.href = _state.sessUrl.call(void 0, "default")), 400);
-        }
-        loadSessions();
-      });
-    };
-    m.appendChild(arc);
-    const sep = document.createElement("div");
-    sep.className = "sep";
-    m.appendChild(sep);
+    m.appendChild(
+      menuRow({
+        label: "重命名",
+        icon: "✎",
+        onclick: async () => {
+          const t = await _ui.askText.call(void 0, "重命名会话", s.title || s.name, "会话标题");
+          if (t === null) return;
+          act({ act: "rename", name: t, session: s.name }, (j) => {
+            loadSessions();
+            _ui.showToast.call(void 0, j && j.ok ? "已重命名" : "失败");
+          });
+        },
+      }),
+    );
+    m.appendChild(
+      menuRow({
+        label: "派生会话",
+        icon: "✱",
+        onclick: async () => {
+          const n = await _ui.askText.call(void 0, "派生会话", "", "新会话名，留空自动");
+          if (n === null) return;
+          act({ act: "fork", name: n || "", session: s.name }, (j) => {
+            if (j && j.name) {
+              _ui.showToast.call(void 0, "已派生 " + j.name);
+              setTimeout(
+                () =>
+                  (location.href = _state.sessUrl.call(void 0, j.name)),
+                600,
+              );
+            }
+          });
+        },
+      }),
+    );
+    m.appendChild(
+      menuRow({
+        label: "归档",
+        icon: "🗄",
+        onclick: () => {
+          act({ act: "archive", session: s.name }, (j) => {
+            if (j && j.ok) {
+              _ui.showToast.call(void 0, "已归档");
+              if (s.name === _state.sess)
+                setTimeout(() => (location.href = _state.sessUrl.call(void 0, "default")), 400);
+            }
+            loadSessions();
+          });
+        },
+      }),
+    );
+    m.appendChild(menuSep());
   }
-  const del = document.createElement("div");
-  del.className = "mi danger";
-  del.textContent = arch ? "永久删除" : "删除";
-  del.onclick = async () => {
-    closeMenus();
-    if (!(await _ui.askYes.call(void 0, "删除会话", "永久删除 " + s.name + "？"))) return;
-    act({ act: "delete", session: s.name }, () => {
-      loadSessions();
-    });
-  };
-  m.appendChild(del);
+  m.appendChild(
+    menuRow({
+      label: arch ? "永久删除" : "删除",
+      icon: "🗑",
+      danger: true,
+      onclick: async () => {
+        if (!(await _ui.askYes.call(void 0, "删除会话", "永久删除 " + s.name + "？"))) return;
+        act({ act: "delete", session: s.name }, () => {
+          loadSessions();
+        });
+      },
+    }),
+  );
   if (arch) {
-    const res = document.createElement("div");
-    res.className = "mi";
-    res.textContent = "↩ 恢复";
-    res.onclick = () => {
-      closeMenus();
-      act({ act: "restore", session: s.name }, () => {
-        loadSessions();
-        _ui.showToast.call(void 0, "已恢复 " + s.name);
-      });
-    };
-    m.prepend(res);
+    m.prepend(
+      menuRow({
+        label: "恢复",
+        icon: "↩",
+        onclick: () => {
+          act({ act: "restore", session: s.name }, () => {
+            loadSessions();
+            _ui.showToast.call(void 0, "已恢复 " + s.name);
+          });
+        },
+      }),
+    );
   }
   openAt("kmenu", btn);
 } exports.openSessionMenu = openSessionMenu;
@@ -1354,22 +1408,45 @@ const runSlash = (...a) => exports.modelH.runSlash(...a);
     return false;
   }
 } exports.applySessionModel = applySessionModel;
+/// 模型选择卡片(dsh ModelSelect 之形):按 provider 分组 + sticky 组题 + 当前项尾勾。
+/// 模型 id 形如 "provider/model";无斜线的归「其他」组。向上弹出(锚在输入工具条)。
  function loadModels(sel) {
   fetch("/api/models")
     .then((r) => r.json())
     .then((list) => {
+      if (!Array.isArray(list)) list = [];
       const m = _util.$.call(void 0, "modelMenu");
       m.innerHTML = "";
+      // 分组:provider 前缀 → 模型列表
+      const groups = new Map();
       for (const md of list) {
-        const d = document.createElement("div");
-        d.className = "mi" + (md === exports.curModel ? " check" : "");
-        d.textContent = md;
-        d.onclick = async () => {
-          if (await applySessionModel(md)) _sessions.closeMenus.call(void 0, );
-        };
-        m.appendChild(d);
+        const prov = md.includes("/") ? md.slice(0, md.indexOf("/")) : "其他";
+        if (!groups.has(prov)) groups.set(prov, []);
+        groups.get(prov).push(md);
       }
-      _sessions.openAt.call(void 0, "modelMenu", sel);
+      const provs = [...groups.keys()].sort((a, b) => {
+        // 当前模型所在组置顶
+        const ca = exports.curModel.startsWith(a + "/") ? 0 : 1;
+        const cb = exports.curModel.startsWith(b + "/") ? 0 : 1;
+        return ca - cb || a.localeCompare(b);
+      });
+      for (const prov of provs) {
+        m.appendChild(_sessions.menuLabel.call(void 0, prov));
+        for (const md of groups.get(prov)) {
+          const short = md.includes("/") ? md.slice(md.indexOf("/") + 1) : md;
+          m.appendChild(
+            _sessions.menuRow.call(void 0, {
+              label: short,
+              check: md === exports.curModel,
+              onclick: async () => {
+                if (await applySessionModel(md)) _sessions.closeMenus.call(void 0, );
+              },
+            }),
+          );
+        }
+      }
+      if (!list.length) m.appendChild(_sessions.menuLabel.call(void 0, "无可用模型"));
+      _sessions.openAt.call(void 0, "modelMenu", sel, "tr");
     })
     .catch(() => _ui.showToast.call(void 0, "模型列表加载失败"));
 } exports.loadModels = loadModels;
@@ -1429,17 +1506,17 @@ const runSlash = (...a) => exports.modelH.runSlash(...a);
   e.stopPropagation();
   const m = _util.$.call(void 0, "thinkMenu");
   m.innerHTML = "";
+  m.appendChild(_sessions.menuLabel.call(void 0, "思考等级"));
   exports.THINK_LEVELS.forEach((lv) => {
-    const d = document.createElement("div");
-    d.className = "mi" + (lv === exports.curThink ? " check" : "");
-    d.textContent = lv;
-    d.onclick = () => {
-      m.hidden = true;
-      setThink(lv);
-    };
-    m.appendChild(d);
+    m.appendChild(
+      _sessions.menuRow.call(void 0, {
+        label: lv,
+        check: lv === exports.curThink,
+        onclick: () => setThink(lv),
+      }),
+    );
   });
-  _sessions.openAt.call(void 0, "thinkMenu", e.currentTarget);
+  _sessions.openAt.call(void 0, "thinkMenu", e.currentTarget, "tr");
 };
 // ---- 授权模式(Codex /permissions: yolo / ask / read-only) ----
  let approvalMode = "yolo"; exports.approvalMode = approvalMode;
@@ -1495,18 +1572,18 @@ const runSlash = (...a) => exports.modelH.runSlash(...a);
   e.stopPropagation();
   const m = _util.$.call(void 0, "permMenu");
   m.innerHTML = "";
+  m.appendChild(_sessions.menuLabel.call(void 0, "授权模式"));
   exports.APPROVALS.forEach((it) => {
-    const d = document.createElement("div");
-    d.className = "mi" + (it.id === exports.approvalMode ? " check" : "");
-    d.textContent = it.label + "  " + it.hint;
-    d.onclick = (ev) => {
-      ev.stopPropagation();
-      _sessions.closeMenus.call(void 0, );
-      setApproval(it.id);
-    };
-    m.appendChild(d);
+    m.appendChild(
+      _sessions.menuRow.call(void 0, {
+        label: it.label,
+        hint: it.hint,
+        check: it.id === exports.approvalMode,
+        onclick: () => setApproval(it.id),
+      }),
+    );
   });
-  _sessions.openAt.call(void 0, "permMenu", e.currentTarget);
+  _sessions.openAt.call(void 0, "permMenu", e.currentTarget, "tr");
 };
  let sandboxMode = "off"; exports.sandboxMode = sandboxMode;
  const SANDBOXES = [
@@ -1557,18 +1634,18 @@ const runSlash = (...a) => exports.modelH.runSlash(...a);
   e.stopPropagation();
   const m = _util.$.call(void 0, "sbMenu");
   m.innerHTML = "";
+  m.appendChild(_sessions.menuLabel.call(void 0, "bash 沙箱"));
   exports.SANDBOXES.forEach((it) => {
-    const d = document.createElement("div");
-    d.className = "mi" + (it.id === exports.sandboxMode ? " check" : "");
-    d.textContent = it.label + "  " + it.hint;
-    d.onclick = (ev) => {
-      ev.stopPropagation();
-      _sessions.closeMenus.call(void 0, );
-      setSandbox(it.id);
-    };
-    m.appendChild(d);
+    m.appendChild(
+      _sessions.menuRow.call(void 0, {
+        label: it.label,
+        hint: it.hint,
+        check: it.id === exports.sandboxMode,
+        onclick: () => setSandbox(it.id),
+      }),
+    );
   });
-  _sessions.openAt.call(void 0, "sbMenu", e.currentTarget);
+  _sessions.openAt.call(void 0, "sbMenu", e.currentTarget, "tr");
 };
 (_util.$.call(void 0, "modePill") ).onclick = () => {
   const i = _util.$.call(void 0, "inp") ;
@@ -1727,16 +1804,8 @@ const runSlash = (...a) => exports.modelH.runSlash(...a);
   e.stopPropagation();
   const m = _util.$.call(void 0, "kmenu");
   m.innerHTML = "";
-  const mi = (t, fn, danger) => {
-    const d = document.createElement("div");
-    d.className = "mi" + (danger ? " danger" : "");
-    d.textContent = t;
-    d.onclick = () => {
-      _sessions.closeMenus.call(void 0, );
-      fn();
-    };
-    m.appendChild(d);
-  };
+  const mi = (label, fn, danger) =>
+    m.appendChild(_sessions.menuRow.call(void 0, { label: label.replace(/^[^ ]+ /, ""), icon: label.slice(0, label.indexOf(" ")), danger, onclick: fn }));
   mi("⧉ 复制最后回复", () => runSlash({ name: "/copy" }, ""));
   mi("⎘ 导出 HTML", () => runSlash({ name: "/export" }, ""));
   mi("☰ 消息列表", () => runSlash({ name: "/tree" }, ""));
@@ -1764,9 +1833,7 @@ const runSlash = (...a) => exports.modelH.runSlash(...a);
       }
     });
   });
-  const se = document.createElement("div");
-  se.className = "sep";
-  m.appendChild(se);
+  m.appendChild(_sessions.menuSep.call(void 0, ));
   mi("↶ 撤销最后一条", () => {
     _sessions.act.call(void 0, { act: "undo" }, (j) => {
       _ui.showToast.call(void 0, j && j.ok ? "已撤销" : "无可撤销");
@@ -1779,9 +1846,7 @@ const runSlash = (...a) => exports.modelH.runSlash(...a);
       _ui.showToast.call(void 0, j && j.ok ? "压缩完成" : "压缩失败");
     });
   });
-  const se2 = document.createElement("div");
-  se2.className = "sep";
-  m.appendChild(se2);
+  m.appendChild(_sessions.menuSep.call(void 0, ));
   mi(
     "🗄 归档会话",
     () => {
@@ -1794,7 +1859,7 @@ const runSlash = (...a) => exports.modelH.runSlash(...a);
     },
     true,
   );
-  _sessions.openAt.call(void 0, "kmenu", e.currentTarget);
+  _sessions.openAt.call(void 0, "kmenu", e.currentTarget, "br");
 };
 (_util.$.call(void 0, "tbKebab") ).onclick = (e) => {
   e.stopPropagation();
@@ -5271,6 +5336,9 @@ var _util = require('./util');
     "</div>"
   );
 } exports.segHtml = segHtml;
+/// 供应商凭证卡片(dsh settings-models rowCard 之形):每 provider 一张卡 ——
+/// 头行(状态点 + 名称 + 协议 hint) + key 输入行 + OAuth 按钮。
+/// 已配 key = 绿实心点;未配 = 红实心点(dsh credentialDot 规范)。
  function authPanelHtml(cfg) {
   const keysFirst = [
     "deepseek",
@@ -5301,24 +5369,34 @@ var _util = require('./util');
     openai: "Sign in with ChatGPT",
   };
   return (
-    '<div class="set-row"><div class="set-lab">API keys<span class="set-hint">Built-in providers. Paste a key and Save.</span></div></div>' +
+    '<div class="prov-hint">内置供应商,粘贴 API key 保存即用。绿点 = 已配置。</div>' +
+    '<div class="prov-cards">' +
     list
       .map((p) => {
         const oauthl = oauthLabel[p.name];
         return (
-          '<div class="set-row auth-row" data-prov="' +
+          '<div class="prov-card auth-row" data-prov="' +
           _util.esc.call(void 0, p.name) +
-          '"><div class="set-lab">' +
+          '"><div class="prov-head"><span class="cred-dot ' +
+          (p.hasKey ? "cred-ok" : "cred-miss") +
+          '" title="' +
+          (p.hasKey ? "已配置" : "未配置") +
+          '"></span><span class="prov-name">' +
           _util.esc.call(void 0, p.name) +
-          '<span class="set-hint">' +
-          (p.hasKey ? "key set" : "no key") +
-          '</span></div><div class="auth-actions"><input class="set-sel auth-key" type="password" placeholder="API key" autocomplete="off">' +
-          '<button type="button" class="btn auth-save">Save</button>' +
+          "</span>" +
+          (p.api ? '<span class="prov-api">' + _util.esc.call(void 0, p.api) + "</span>" : "") +
+          "</div>" +
+          '<div class="auth-actions"><input class="set-sel auth-key" type="password" placeholder="' +
+          (p.hasKey ? "替换 API key" : "粘贴 API key") +
+          '" autocomplete="off">' +
+          '<button type="button" class="btn auth-save">保存</button>' +
           (oauthl ? '<button type="button" class="btn auth-oauth">' + oauthl + "</button>" : "") +
-          '</div><div class="set-hint auth-dev" hidden></div></div>'
+          "</div>" +
+          '<div class="set-hint auth-dev" hidden></div></div>'
         );
       })
-      .join("")
+      .join("") +
+    "</div>"
   );
 } exports.authPanelHtml = authPanelHtml;
  function packageRows(data) {
@@ -5413,6 +5491,14 @@ var _composer = require('./composer');
     const xs = list.slice();
     if (cur && xs.indexOf(cur) < 0) xs.unshift(cur);
     if (!xs.length) xs.push(cur || "");
+    // 会话模型列:点击弹分组卡片菜单(modelMenu);默认模型仍是原生 select(选项即值)
+    if (id === "setSessModel") {
+      return (
+        '<button type="button" class="set-sel set-model-btn" id="setSessModel" title="点击选择模型">' +
+        _util.esc.call(void 0, cur || "选择模型") +
+        "</button>"
+      );
+    }
     return (
       '<select id="' +
       id +
@@ -5432,26 +5518,39 @@ var _composer = require('./composer');
       "</select>"
     );
   }
-  const provHtml =
-    (cfg.providers || [])
-      .map(
-        (p) =>
-          '<div class="set-row"><div class="set-lab">' +
-          _util.esc.call(void 0, p.name || "") +
-          '<span class="set-hint">' +
-          _util.esc.call(void 0, p.api || "") +
-          (p.hasKey ? " · 已配 key" : " · 无 key") +
-          "</span></div></div>",
-      )
-      .join("") ||
-    '<div class="set-row"><div class="set-lab">无自定义 provider<span class="set-hint">见 ~/.piz/models.json</span></div></div>';
+  // 自定义 provider(非内置目录)→ 账户 tab 底部卡片列表;内置键走 authPanelHtml
+  const builtin = new Set([
+    "deepseek", "openai", "anthropic", "xai", "openrouter", "groq",
+    "mistral", "together", "fireworks", "cerebras", "moonshotai",
+    "huggingface", "nvidia", "zai", "minimax",
+  ]);
+  const customs = (cfg.providers || []).filter((p) => !builtin.has(p.name));
+  const provHtml = customs.length
+    ? '<div class="prov-hint" style="margin-top:14px">自定义供应商(见 ~/.piz/models.json)</div>' +
+      '<div class="prov-cards">' +
+      customs
+        .map(
+          (p) =>
+            '<div class="prov-card"><div class="prov-head"><span class="cred-dot ' +
+            (p.hasKey ? "cred-ok" : "cred-miss") +
+            '"></span><span class="prov-name">' +
+            _util.esc.call(void 0, p.name || "") +
+            "</span>" +
+            (p.api ? '<span class="prov-api">' + _util.esc.call(void 0, p.api) + "</span>" : "") +
+            (p.models && p.models.length ? '<span class="prov-api">' + p.models.length + " 模型</span>" : "") +
+            "</div></div>",
+        )
+        .join("") +
+      "</div>"
+    : "";
   _ui.openDlg.call(void 0, {
     cls: "set",
     title: "设置",
     body:
-      '<div class="set-tabs" id="setTabs"><button type="button" data-tab="auth" class="on">Account</button><button type="button" data-tab="look">外观</button><button type="button" data-tab="agent">智能体</button><button type="button" data-tab="note">通知</button><button type="button" data-tab="about">关于</button></div>' +
+      '<div class="set-tabs" id="setTabs"><button type="button" data-tab="auth" class="on">账户</button><button type="button" data-tab="look">外观</button><button type="button" data-tab="agent">智能体</button><button type="button" data-tab="note">通知</button><button type="button" data-tab="about">关于</button></div>' +
       '<div id="setAuth">' +
       _render.authPanelHtml.call(void 0, cfg) +
+      provHtml +
       "</div>" +
       '<div id="setLook" hidden>' +
       '<div class="set-row"><div class="set-lab">配色</div>' +
@@ -5501,7 +5600,6 @@ var _composer = require('./composer');
       '<div id="setAbout" hidden>' +
       '<div class="set-row"><div class="set-lab">piz web<span class="set-hint">配置见 ~/.piz/</span></div></div>' +
       '<div class="set-row"><div class="set-lab">快捷键<span class="set-hint"><kbd>Ctrl</kbd><kbd>K</kbd> 搜会话 · <kbd>Ctrl</kbd><kbd>,</kbd> 设置 · <kbd>/</kbd> 命令 · <kbd>@./</kbd> 文件 · <kbd>!</kbd> 命令</span></div></div>' +
-      provHtml +
       "</div>",
   });
   const tabs = _util.$.call(void 0, "setTabs");
@@ -5538,8 +5636,10 @@ var _composer = require('./composer');
     _ui.applyScheme.call(void 0, );
   });
   if (_util.$.call(void 0, "setSessModel"))
-    (_util.$.call(void 0, "setSessModel") ).onchange = async () => {
-      await _model.applySessionModel.call(void 0, (_util.$.call(void 0, "setSessModel") ).value);
+    (_util.$.call(void 0, "setSessModel") ).onclick = (ev) => {
+      ev.stopPropagation();
+      _sessions.closeMenus.call(void 0, );
+      _model.loadModels.call(void 0, ev.currentTarget);
     };
   if (_util.$.call(void 0, "setDefModel"))
     (_util.$.call(void 0, "setDefModel") ).onchange = () => {

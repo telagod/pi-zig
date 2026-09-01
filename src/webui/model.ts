@@ -4,7 +4,7 @@
 import { $, esc, fmtTok, projectName } from "./util";
 import { sess, wsp, ws, sessUrl } from "./state";
 import { showToast, askText } from "./ui";
-import { closeMenus, openAt, loadSessions, act, openWsMenu } from "./sessions";
+import { closeMenus, openAt, menuRow, menuLabel, menuSep, loadSessions, act, openWsMenu } from "./sessions";
 
 // runSlash 环引(slash↔model 为 build-web DFS 所禁),以钩袋迟取之。
 export const modelH: any = {};
@@ -49,22 +49,45 @@ export async function applySessionModel(md: string) {
     return false;
   }
 }
+/// 模型选择卡片(dsh ModelSelect 之形):按 provider 分组 + sticky 组题 + 当前项尾勾。
+/// 模型 id 形如 "provider/model";无斜线的归「其他」组。向上弹出(锚在输入工具条)。
 export function loadModels(sel: any) {
   fetch("/api/models")
     .then((r) => r.json())
-    .then((list) => {
+    .then((list: string[]) => {
+      if (!Array.isArray(list)) list = [];
       const m = $("modelMenu")!;
       m.innerHTML = "";
+      // 分组:provider 前缀 → 模型列表
+      const groups = new Map<string, string[]>();
       for (const md of list) {
-        const d = document.createElement("div");
-        d.className = "mi" + (md === curModel ? " check" : "");
-        d.textContent = md;
-        d.onclick = async () => {
-          if (await applySessionModel(md)) closeMenus();
-        };
-        m.appendChild(d);
+        const prov = md.includes("/") ? md.slice(0, md.indexOf("/")) : "其他";
+        if (!groups.has(prov)) groups.set(prov, []);
+        groups.get(prov)!.push(md);
       }
-      openAt("modelMenu", sel);
+      const provs = [...groups.keys()].sort((a, b) => {
+        // 当前模型所在组置顶
+        const ca = curModel.startsWith(a + "/") ? 0 : 1;
+        const cb = curModel.startsWith(b + "/") ? 0 : 1;
+        return ca - cb || a.localeCompare(b);
+      });
+      for (const prov of provs) {
+        m.appendChild(menuLabel(prov));
+        for (const md of groups.get(prov)!) {
+          const short = md.includes("/") ? md.slice(md.indexOf("/") + 1) : md;
+          m.appendChild(
+            menuRow({
+              label: short,
+              check: md === curModel,
+              onclick: async () => {
+                if (await applySessionModel(md)) closeMenus();
+              },
+            }),
+          );
+        }
+      }
+      if (!list.length) m.appendChild(menuLabel("无可用模型"));
+      openAt("modelMenu", sel, "tr");
     })
     .catch(() => showToast("模型列表加载失败"));
 }
@@ -124,17 +147,17 @@ export async function setThink(level: string) {
   e.stopPropagation();
   const m = $("thinkMenu")!;
   m.innerHTML = "";
+  m.appendChild(menuLabel("思考等级"));
   THINK_LEVELS.forEach((lv) => {
-    const d = document.createElement("div");
-    d.className = "mi" + (lv === curThink ? " check" : "");
-    d.textContent = lv;
-    d.onclick = () => {
-      m.hidden = true;
-      setThink(lv);
-    };
-    m.appendChild(d);
+    m.appendChild(
+      menuRow({
+        label: lv,
+        check: lv === curThink,
+        onclick: () => setThink(lv),
+      }),
+    );
   });
-  openAt("thinkMenu", e.currentTarget);
+  openAt("thinkMenu", e.currentTarget, "tr");
 };
 // ---- 授权模式(Codex /permissions: yolo / ask / read-only) ----
 export let approvalMode = "yolo";
@@ -190,18 +213,18 @@ export async function setApproval(mode: string) {
   e.stopPropagation();
   const m = $("permMenu")!;
   m.innerHTML = "";
+  m.appendChild(menuLabel("授权模式"));
   APPROVALS.forEach((it) => {
-    const d = document.createElement("div");
-    d.className = "mi" + (it.id === approvalMode ? " check" : "");
-    d.textContent = it.label + "  " + it.hint;
-    d.onclick = (ev: any) => {
-      ev.stopPropagation();
-      closeMenus();
-      setApproval(it.id);
-    };
-    m.appendChild(d);
+    m.appendChild(
+      menuRow({
+        label: it.label,
+        hint: it.hint,
+        check: it.id === approvalMode,
+        onclick: () => setApproval(it.id),
+      }),
+    );
   });
-  openAt("permMenu", e.currentTarget);
+  openAt("permMenu", e.currentTarget, "tr");
 };
 export let sandboxMode = "off";
 export const SANDBOXES = [
@@ -252,18 +275,18 @@ export async function setSandbox(mode: string) {
   e.stopPropagation();
   const m = $("sbMenu")!;
   m.innerHTML = "";
+  m.appendChild(menuLabel("bash 沙箱"));
   SANDBOXES.forEach((it) => {
-    const d = document.createElement("div");
-    d.className = "mi" + (it.id === sandboxMode ? " check" : "");
-    d.textContent = it.label + "  " + it.hint;
-    d.onclick = (ev: any) => {
-      ev.stopPropagation();
-      closeMenus();
-      setSandbox(it.id);
-    };
-    m.appendChild(d);
+    m.appendChild(
+      menuRow({
+        label: it.label,
+        hint: it.hint,
+        check: it.id === sandboxMode,
+        onclick: () => setSandbox(it.id),
+      }),
+    );
   });
-  openAt("sbMenu", e.currentTarget);
+  openAt("sbMenu", e.currentTarget, "tr");
 };
 ($("modePill") as HTMLElement).onclick = () => {
   const i = $("inp") as HTMLTextAreaElement;
@@ -422,16 +445,8 @@ export async function applySessionTitle(t: string, hdr?: boolean) {
   e.stopPropagation();
   const m = $("kmenu")!;
   m.innerHTML = "";
-  const mi = (t: string, fn: () => void, danger?: boolean) => {
-    const d = document.createElement("div");
-    d.className = "mi" + (danger ? " danger" : "");
-    d.textContent = t;
-    d.onclick = () => {
-      closeMenus();
-      fn();
-    };
-    m.appendChild(d);
-  };
+  const mi = (label: string, fn: () => void, danger?: boolean) =>
+    m.appendChild(menuRow({ label: label.replace(/^[^ ]+ /, ""), icon: label.slice(0, label.indexOf(" ")), danger, onclick: fn }));
   mi("⧉ 复制最后回复", () => runSlash({ name: "/copy" }, ""));
   mi("⎘ 导出 HTML", () => runSlash({ name: "/export" }, ""));
   mi("☰ 消息列表", () => runSlash({ name: "/tree" }, ""));
@@ -459,9 +474,7 @@ export async function applySessionTitle(t: string, hdr?: boolean) {
       }
     });
   });
-  const se = document.createElement("div");
-  se.className = "sep";
-  m.appendChild(se);
+  m.appendChild(menuSep());
   mi("↶ 撤销最后一条", () => {
     act({ act: "undo" }, (j: any) => {
       showToast(j && j.ok ? "已撤销" : "无可撤销");
@@ -474,9 +487,7 @@ export async function applySessionTitle(t: string, hdr?: boolean) {
       showToast(j && j.ok ? "压缩完成" : "压缩失败");
     });
   });
-  const se2 = document.createElement("div");
-  se2.className = "sep";
-  m.appendChild(se2);
+  m.appendChild(menuSep());
   mi(
     "🗄 归档会话",
     () => {
@@ -489,7 +500,7 @@ export async function applySessionTitle(t: string, hdr?: boolean) {
     },
     true,
   );
-  openAt("kmenu", e.currentTarget);
+  openAt("kmenu", e.currentTarget, "br");
 };
 ($("tbKebab") as HTMLElement).onclick = (e: any) => {
   e.stopPropagation();

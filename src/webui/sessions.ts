@@ -17,16 +17,64 @@ export function closeMenus() {
     m.classList.remove("open");
   openMenu = null;
 }
-export function openAt(id: string, btn: any) {
+/// 统一锚定菜单(dsh Menu 原语之形):锚元素矩形 + 优先弹出方向/对齐。
+/// side: "bl"(默认 左下)| "br"(右下)| "tr"(右上)| "tl"(左上);
+/// 菜单卡片永远不越过视口(8px 边距),溢出时自动翻转。
+export function openAt(id: string, btn: any, side: "bl" | "br" | "tr" | "tl" = "bl") {
   closeMenus();
   const m = $(id)!;
   m.classList.add("open");
   const r = btn.getBoundingClientRect();
   const mw = m.offsetWidth,
     mh = m.offsetHeight;
-  m.style.left = Math.min(r.right - mw, innerWidth - mw - 8) + "px";
-  m.style.top = Math.min(r.bottom + 4, innerHeight - mh - 8) + "px";
+  const GAP = 4,
+    MARGIN = 8;
+  let left: number, top: number;
+  if (side === "bl" || side === "tl") left = Math.min(Math.max(r.left, MARGIN), innerWidth - mw - MARGIN);
+  else left = Math.min(Math.max(r.right - mw, MARGIN), innerWidth - mw - MARGIN);
+  if (side === "bl" || side === "br") {
+    top = r.bottom + GAP;
+    if (top + mh > innerHeight - MARGIN) top = Math.max(MARGIN, r.top - GAP - mh); // 翻上
+  } else {
+    top = r.top - GAP - mh;
+    if (top < MARGIN) top = Math.min(r.bottom + GAP, innerHeight - mh - MARGIN); // 翻下
+  }
+  m.style.left = left + "px";
+  m.style.top = top + "px";
   openMenu = m;
+}
+/// 菜单内容构造器:与 openAt 配套,产出 dsh 式菜单行(label + hint + check + danger)。
+export function menuRow(opts: {
+  label: string;
+  hint?: string;
+  check?: boolean;
+  danger?: boolean;
+  icon?: string;
+  onclick: () => void;
+}): HTMLElement {
+  const d = document.createElement("div");
+  d.className = "mi" + (opts.check ? " check" : "") + (opts.danger ? " danger" : "");
+  d.innerHTML =
+    (opts.icon ? '<span class="mi-ic">' + opts.icon + "</span>" : "") +
+    '<span class="mi-tx">' + opts.label + "</span>" +
+    (opts.hint ? '<span class="mi-hint">' + opts.hint + "</span>" : "");
+  d.onclick = (e) => {
+    e.stopPropagation();
+    closeMenus();
+    opts.onclick();
+  };
+  return d;
+}
+export function menuSep(): HTMLElement {
+  const d = document.createElement("div");
+  d.className = "sep";
+  return d;
+}
+export function menuLabel(text: string): HTMLElement {
+  const d = document.createElement("div");
+  d.className = "menu-label";
+  d.textContent = text;
+  return d;
 }
 document.addEventListener("click", (e: any) => {
   if (
@@ -36,7 +84,9 @@ document.addEventListener("click", (e: any) => {
     !e.target.closest(".mode-pill") &&
     !e.target.closest(".ch-brand") &&
     !e.target.closest(".ws-chip") &&
-    !e.target.closest(".ch-ws")
+    !e.target.closest(".ch-ws") &&
+    !e.target.closest(".set-model-btn") &&
+    !e.target.closest(".kebab")
   )
     closeMenus();
 });
@@ -79,28 +129,28 @@ export async function openWsMenu(btn: any) {
   const cur = ws || (list[0] ? list[0].root : "");
   const m = $("wsmenu")!;
   m.innerHTML = "";
+  m.appendChild(menuLabel("项目"));
   for (const w of list) {
-    const d = document.createElement("div");
-    d.className = "mi" + (w.root === cur ? " check" : "");
-    d.textContent = (w.name || projectName(w.root)) + " · " + w.root;
-    d.title = w.root;
-    d.onclick = () => {
-      if (w.root !== cur) location.href = sessUrl("default", w.root);
-    };
-    m.appendChild(d);
+    m.appendChild(
+      menuRow({
+        label: w.name || projectName(w.root),
+        hint: w.root,
+        check: w.root === cur,
+        onclick: () => {
+          if (w.root !== cur) location.href = sessUrl("default", w.root);
+        },
+      }),
+    );
   }
-  const sep = document.createElement("div");
-  sep.className = "sep";
-  m.appendChild(sep);
-  const add = document.createElement("div");
-  add.className = "mi";
-  add.textContent = "＋ 添加项目…";
-  add.onclick = () => {
-    closeMenus();
-    addProject();
-  };
-  m.appendChild(add);
-  openAt("wsmenu", btn);
+  m.appendChild(menuSep());
+  m.appendChild(
+    menuRow({
+      label: "添加项目…",
+      icon: "＋",
+      onclick: () => addProject(),
+    }),
+  );
+  openAt("wsmenu", btn, "bl");
 }
 // 侧栏内联过滤:搜索按钮原地变输入框(实时过滤会话;✕ 清空)
 export function initSideFilter() {
@@ -223,80 +273,84 @@ export function openSessionMenu(btn: any, s: any, arch: boolean) {
   const m = $("kmenu")!;
   m.innerHTML = "";
   if (!arch) {
-    const ren = document.createElement("div");
-    ren.className = "mi";
-    ren.textContent = "✎ 重命名";
-    ren.onclick = async () => {
-      closeMenus();
-      const t = await askText("重命名会话", s.title || s.name, "会话标题");
-      if (t === null) return;
-      act({ act: "rename", name: t, session: s.name }, (j) => {
-        loadSessions();
-        showToast(j && j.ok ? "已重命名" : "失败");
-      });
-    };
-    m.appendChild(ren);
-    const fork = document.createElement("div");
-    fork.className = "mi";
-    fork.textContent = "✱ 派生会话";
-    fork.onclick = async () => {
-      closeMenus();
-      const n = await askText("派生会话", "", "新会话名，留空自动");
-      if (n === null) return;
-      act({ act: "fork", name: n || "", session: s.name }, (j) => {
-        if (j && j.name) {
-          showToast("已派生 " + j.name);
-          setTimeout(
-            () =>
-              (location.href = sessUrl(j.name)),
-            600,
-          );
-        }
-      });
-    };
-    m.appendChild(fork);
-    const arc = document.createElement("div");
-    arc.className = "mi";
-    arc.textContent = "🗄 归档";
-    arc.onclick = () => {
-      closeMenus();
-      act({ act: "archive", session: s.name }, (j) => {
-        if (j && j.ok) {
-          showToast("已归档");
-          if (s.name === sess)
-            setTimeout(() => (location.href = sessUrl("default")), 400);
-        }
-        loadSessions();
-      });
-    };
-    m.appendChild(arc);
-    const sep = document.createElement("div");
-    sep.className = "sep";
-    m.appendChild(sep);
+    m.appendChild(
+      menuRow({
+        label: "重命名",
+        icon: "✎",
+        onclick: async () => {
+          const t = await askText("重命名会话", s.title || s.name, "会话标题");
+          if (t === null) return;
+          act({ act: "rename", name: t, session: s.name }, (j) => {
+            loadSessions();
+            showToast(j && j.ok ? "已重命名" : "失败");
+          });
+        },
+      }),
+    );
+    m.appendChild(
+      menuRow({
+        label: "派生会话",
+        icon: "✱",
+        onclick: async () => {
+          const n = await askText("派生会话", "", "新会话名，留空自动");
+          if (n === null) return;
+          act({ act: "fork", name: n || "", session: s.name }, (j) => {
+            if (j && j.name) {
+              showToast("已派生 " + j.name);
+              setTimeout(
+                () =>
+                  (location.href = sessUrl(j.name)),
+                600,
+              );
+            }
+          });
+        },
+      }),
+    );
+    m.appendChild(
+      menuRow({
+        label: "归档",
+        icon: "🗄",
+        onclick: () => {
+          act({ act: "archive", session: s.name }, (j) => {
+            if (j && j.ok) {
+              showToast("已归档");
+              if (s.name === sess)
+                setTimeout(() => (location.href = sessUrl("default")), 400);
+            }
+            loadSessions();
+          });
+        },
+      }),
+    );
+    m.appendChild(menuSep());
   }
-  const del = document.createElement("div");
-  del.className = "mi danger";
-  del.textContent = arch ? "永久删除" : "删除";
-  del.onclick = async () => {
-    closeMenus();
-    if (!(await askYes("删除会话", "永久删除 " + s.name + "？"))) return;
-    act({ act: "delete", session: s.name }, () => {
-      loadSessions();
-    });
-  };
-  m.appendChild(del);
+  m.appendChild(
+    menuRow({
+      label: arch ? "永久删除" : "删除",
+      icon: "🗑",
+      danger: true,
+      onclick: async () => {
+        if (!(await askYes("删除会话", "永久删除 " + s.name + "？"))) return;
+        act({ act: "delete", session: s.name }, () => {
+          loadSessions();
+        });
+      },
+    }),
+  );
   if (arch) {
-    const res = document.createElement("div");
-    res.className = "mi";
-    res.textContent = "↩ 恢复";
-    res.onclick = () => {
-      closeMenus();
-      act({ act: "restore", session: s.name }, () => {
-        loadSessions();
-        showToast("已恢复 " + s.name);
-      });
-    };
-    m.prepend(res);
+    m.prepend(
+      menuRow({
+        label: "恢复",
+        icon: "↩",
+        onclick: () => {
+          act({ act: "restore", session: s.name }, () => {
+            loadSessions();
+            showToast("已恢复 " + s.name);
+          });
+        },
+      }),
+    );
   }
   openAt("kmenu", btn);
 }
