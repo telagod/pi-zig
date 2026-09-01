@@ -445,14 +445,19 @@ fn hostSettle(ctx_: ?*c.JSContext, _: c.JSValue, argc: c_int, argv: [*c]c.JSValu
     return c.JS_ThrowInternalError(cx, "promise never settles (no host async in piz extensions)");
 }
 
+/// 跨线程栈顶刷新:quickjs-ng 的栈深上限按 stack_top 绝对地址算,JS 入口
+/// 不在本线程刷新就误报 "Maximum call stack size exceeded"。callBridge 原已带
+/// (worker 线程,2026-08-20 实擒);eval 系(加载/重载,web 下跑在 HTTP 线程)
+/// 同病 —— reload 从 HTTP 线程重估 prelude 全军覆没即此因,统一在入口刷。
+fn syncStackTop() void {
+    if (rt) |r| c.JS_UpdateStackTop(r);
+}
+
 /// 取 globalThis.__piz 上的函数并调用,返回值转 Zig 串(dupe 到 arena)。
 /// 无此函数/异常/undefined 一律回 null。
 fn callBridge(arena: std.mem.Allocator, name: []const u8, args: []const []const u8) ?[]const u8 {
     const ctx_ = ctx orelse return null;
-    // 工具回调跑在 worker 线程上:ng 的栈深上限按 stack_top 地址差算,
-    // 不随线程刷新就在工作线程上误报 "Maximum call stack size exceeded"
-    // (e2e:js-ext block 在真 agent 循环里失效,2026-08-20 实擒)。
-    c.JS_UpdateStackTop(rt.?);
+    syncStackTop();
     const global = c.JS_GetGlobalObject(ctx_);
     defer c.JS_FreeValue(ctx_, global);
     const api = c.JS_GetPropertyStr(ctx_, global, "__piz");
@@ -522,14 +527,17 @@ pub fn init(alloc: std.mem.Allocator) void {
     defer mu.unlock(util.io);
     if (rt != null) return;
     gpa = alloc;
-    rt = c.JS_NewRuntime();
-    if (rt == null) return;
-    ctx = c.JS_NewContext(rt.?);
-    if (ctx == null) {
+    if (!newRuntime()) return;
+    if (!newContext()) {
         c.JS_FreeRuntime(rt.?);
         rt = null;
-        return;
     }
+}
+
+/// 建 runtime(rejection tracker + 模块加载器)。调用方持锁。失败自清 rt。
+fn newRuntime() bool {
+    rt = c.JS_NewRuntime();
+    if (rt == null) return false;
     // 静默 promise 拒绝打到 stderr(否则扩展里的异步错谁也看不见)。
     c.JS_SetHostPromiseRejectionTracker(rt.?, struct {
         fn f(ctx_: ?*c.JSContext, _: c.JSValueConst, reason: c.JSValueConst, handled: bool, _: ?*anyopaque) callconv(.c) void {
@@ -542,6 +550,15 @@ pub fn init(alloc: std.mem.Allocator) void {
     }.f, null);
     // 模块加载器:import './x.js' 由默认 normalizer 解相对路径,这里读盘编译。
     c.JS_SetModuleLoaderFunc(rt.?, null, moduleLoader, null);
+    return true;
+}
+
+/// 建 ctx(host 原语 + prelude)。调用方持锁;失败自清 ctx。
+/// reload 复用:换新 ctx 即换新全局词法环境 —— script 型扩展的顶层 const
+/// 才能重新声明(重 eval 旧 ctx 必报 redeclaration)。
+fn newContext() bool {
+    ctx = c.JS_NewContext(rt.?);
+    if (ctx == null) return false;
     // host 原语
     const global = c.JS_GetGlobalObject(ctx.?);
     defer c.JS_FreeValue(ctx.?, global);
@@ -569,7 +586,8 @@ pub fn init(alloc: std.mem.Allocator) void {
     _ = c.JS_SetPropertyStr(ctx.?, global, "__piz_host_exec", ex);
     const ff = c.JS_NewCFunction(ctx.?, hostFetch, "__piz_host_fetch", 2);
     _ = c.JS_SetPropertyStr(ctx.?, global, "__piz_host_fetch", ff);
-    // prelude
+    // prelude(跨线程入口,先刷栈顶 —— reload 路径不在建引擎的线程上)
+    syncStackTop();
     const pv = c.JS_Eval(ctx.?, PRELUDE.ptr, PRELUDE.len, "<prelude>", c.JS_EVAL_TYPE_GLOBAL);
     if (c.JS_IsException(pv)) {
         var tmp = std.heap.ArenaAllocator.init(std.heap.c_allocator);
@@ -578,12 +596,11 @@ pub fn init(alloc: std.mem.Allocator) void {
         std.debug.print("piz: js prelude failed: {s}\n", .{msg});
         c.JS_FreeValue(ctx.?, pv);
         c.JS_FreeContext(ctx.?);
-        c.JS_FreeRuntime(rt.?);
         ctx = null;
-        rt = null;
-        return;
+        return false;
     }
     c.JS_FreeValue(ctx.?, pv);
+    return true;
 }
 
 /// 进程退出前释放。可不调(进程寿终即回收),web 长驻/测试复初始化时有用。
@@ -628,6 +645,7 @@ pub fn deinit() void {
 fn evalFile(path: []const u8) bool {
     const ctx_ = ctx orelse return false;
     const a = gpa orelse return false;
+    syncStackTop(); // eval 系跨线程入口(web 的 reload 走 HTTP 线程)
     const raw = std.Io.Dir.cwd().readFileAlloc(util.io, path, a, .limited(MAX_EXT_FILE)) catch return false;
     defer a.free(raw);
     if (raw.len == 0) return true;
@@ -681,6 +699,10 @@ fn ensureTs() bool {
     if (ts_ready) return true;
     const ctx_ = ctx orelse return false;
     const a = gpa orelse return false;
+    syncStackTop();
+    // reload 重建 ctx 后 ts_ready 复位、此处重装:旧 sucrase_z 先放,勿泄漏
+    if (sucrase_z) |old| a.free(old);
+    sucrase_z = null;
     const z = a.dupeZ(u8, sucrase_src) catch return false; // 登记在 sucrase_z,deinit 时 free
     sucrase_z = z;
     const v = c.JS_Eval(ctx_, z.ptr, @intCast(sucrase_src.len), "sucrase.standalone.js", c.JS_EVAL_TYPE_GLOBAL);
@@ -699,6 +721,7 @@ fn ensureTs() bool {
 fn tsStripWith(a: std.mem.Allocator, src: []const u8, opt_src: []const u8) ?[]const u8 {
     if (!ensureTs()) return null;
     const ctx_ = ctx orelse return null;
+    syncStackTop();
     const global = c.JS_GetGlobalObject(ctx_);
     defer c.JS_FreeValue(ctx_, global);
     const s = c.JS_GetPropertyStr(ctx_, global, "Sucrase");
@@ -757,6 +780,7 @@ fn drainJobs() void {
 /// 模块支路:COMPILE_ONLY 编译 → EvalFunction 执行 → 取 default 导出,是函数则以 piz 对象为参调用。
 fn evalModule(path_z: [*:0]const u8, src_z: [*:0]const u8, len: usize) bool {
     const ctx_ = ctx orelse return false;
+    syncStackTop();
     const mv = c.JS_Eval(ctx_, src_z, @intCast(len), path_z, c.JS_EVAL_TYPE_MODULE | c.JS_EVAL_FLAG_COMPILE_ONLY);
     if (c.JS_IsException(mv)) {
         reportEx(ctx_, std.mem.span(path_z));
@@ -862,6 +886,7 @@ fn dirHasFile(path: ?[]const u8, name: []const u8) bool {
 fn evalBundled(name: []const u8, src: []const u8) bool {
     const ctx_ = ctx orelse return false;
     const a = gpa orelse return false;
+    syncStackTop();
     if (src.len == 0) return true;
     const src_z = a.dupeZ(u8, src) catch return false;
     defer a.free(src_z);
@@ -1231,18 +1256,39 @@ pub fn emitAgentEnd(arena: std.mem.Allocator, info: AgentEndInfo) void {
     _ = emit(arena, "agent_end", payload);
 }
 
-/// 热重载:重 eval prelude(JS 侧 handlers/tools/commands 清零,扩展全局态随之归零)
-/// 再重扫两处扩展目。引擎/ctx 不动;sucrase 全局保留。失败打 stderr,不致命。
+/// 热重载:重建 runtime+ctx(JS 侧 handlers/tools/commands 与扩展全局态一并归零)
+/// 再重扫两处扩展目。失败打 stderr,不致命。
+///
+/// 曾是「重 eval prelude + 重估扩展」:两条死路 —— ① web 下 reload 跑在 HTTP
+/// 线程,quickjs-ng 栈上限按绝对地址算,不刷栈顶则 prelude 重估必报
+/// "Maximum call stack size exceeded";② 旧 ctx 的全局词法环境不清零,script 型
+/// 扩展(todo.js 等顶层 const)重估必报 redeclaration。重建即两清。
+/// sucrase 亦随旧 ctx 归零(ts_ready 复位,下次按需重装)。
 pub fn reload(cfg_dir: []const u8, cwd: []const u8) void {
     if (!enabled) return;
     {
         mu.lockUncancelable(util.io);
         defer mu.unlock(util.io);
-        const ctx_ = ctx orelse return;
-        const v = c.JS_Eval(ctx_, PRELUDE.ptr, PRELUDE.len, "<prelude>", c.JS_EVAL_TYPE_GLOBAL);
-        if (c.JS_IsException(v)) reportEx(ctx_, "<prelude>");
-        c.JS_FreeValue(ctx_, v);
+        if (rt == null) return;
+        // 旧 ctx 上的残留 job 先跑完(free 后就没人能跑它们了)
+        syncStackTop();
         drainJobs();
+        if (ctx) |cx| {
+            c.JS_FreeContext(cx);
+            ctx = null;
+        }
+        c.JS_FreeRuntime(rt.?);
+        rt = null;
+        freeRegistry();
+        ts_ready = false;
+        loaded_files = 0;
+        load_errors = 0;
+        if (!newRuntime()) return;
+        if (!newContext()) {
+            c.JS_FreeRuntime(rt.?);
+            rt = null;
+            return;
+        }
     }
     loadExtensions(cfg_dir, cwd);
 }
