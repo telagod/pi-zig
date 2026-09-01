@@ -15,7 +15,7 @@ import {
 import { th, inspect } from "./chat";
 import { getLastUser, sendPlain } from "./composer";
 
-// 自 wired:设置钮(离 sheet 而居此,避 sheet↔settings 环)。
+// 自 wired:设置钮(侧栏底部 foot;绑定居此避环)。
 ($("setBtn") as HTMLElement).onclick = () => openSettings();
 
 export async function openSettings() {

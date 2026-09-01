@@ -625,6 +625,31 @@
         padding: 0 8px 8px;
         min-height: 0;
       }
+      /* 侧栏底 foot:设置入口(原居顶栏 ch-ib,迁此为通栏行钮) */
+      .side-foot {
+        flex: none;
+        padding: 8px 10px max(10px, env(safe-area-inset-bottom));
+        border-top: 1px solid var(--color-line);
+      }
+      .side-set {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        width: 100%;
+        min-height: 34px;
+        padding: 0 10px;
+        border-radius: var(--radius-md);
+        color: var(--color-text-muted);
+        font-size: 13px;
+      }
+      .side-set:hover {
+        background: var(--color-surface-sunken);
+        color: var(--color-text);
+      }
+      .side-set-ic {
+        flex: none;
+        font-size: 14px;
+      }
       .side-lab {
         font-size: 12px;
         color: var(--color-text-caption);
@@ -3148,25 +3173,6 @@
       #overlay.open {
         display: flex;
       }
-      #overlay.sheet {
-        justify-content: flex-end;
-        align-items: stretch;
-        padding: 0;
-        background: rgba(0, 0, 0, 0.45);
-      }
-      #overlay.sheet .dlg.set {
-        width: min(400px, 100vw);
-        max-height: none;
-        height: 100%;
-        border-radius: 0;
-        border: none;
-        border-left: 1px solid var(--color-line);
-        box-shadow: -12px 0 40px rgba(0, 0, 0, 0.18);
-      }
-      #overlay.sheet .dlg-bd {
-        flex: 1;
-        overflow: auto;
-      }
       .dlg {
         width: min(400px, 100%);
         max-height: min(80vh, 720px);
@@ -3180,7 +3186,7 @@
         overflow: hidden;
       }
       .dlg.set {
-        width: min(400px, 100%);
+        width: min(460px, 100%);
       }
       .dlg.wide {
         width: min(var(--p-content-max), 100%);

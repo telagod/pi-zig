@@ -28,7 +28,7 @@ export function dlgCancel() {
 let dlgPrevFocus: any = null;
 export function closeDlg() {
   const ov = $("overlay")!;
-  ov.classList.remove("open", "sheet");
+  ov.classList.remove("open");
   ov.innerHTML = "";
   dlgOnok = dlgOncancel = null;
   // 焦点还给弹出前的元素(还在文档里才还)。
@@ -43,7 +43,6 @@ export function openDlg(opts: any) {
   dlgHooks.hideBang?.();
   const ov = $("overlay")!;
   ov.classList.add("open");
-  if (opts.cls === "set") ov.classList.add("sheet");
   ov.innerHTML =
     '<div class="dlg ' +
     (opts.cls || "") +

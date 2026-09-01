@@ -428,7 +428,7 @@ let dlgOnok = null,
 let dlgPrevFocus = null;
  function closeDlg() {
   const ov = _util.$.call(void 0, "overlay");
-  ov.classList.remove("open", "sheet");
+  ov.classList.remove("open");
   ov.innerHTML = "";
   dlgOnok = dlgOncancel = null;
   // 焦点还给弹出前的元素(还在文档里才还)。
@@ -443,7 +443,6 @@ let dlgPrevFocus = null;
   _optionalChain([exports.dlgHooks, 'access', _5 => _5.hideBang, 'optionalCall', _6 => _6()]);
   const ov = _util.$.call(void 0, "overlay");
   ov.classList.add("open");
-  if (opts.cls === "set") ov.classList.add("sheet");
   ov.innerHTML =
     '<div class="dlg ' +
     (opts.cls || "") +
@@ -5385,7 +5384,7 @@ var _model = require('./model');
 var _chat = require('./chat');
 var _composer = require('./composer');
 
-// 自 wired:设置钮(离 sheet 而居此,避 sheet↔settings 环)。
+// 自 wired:设置钮(侧栏底部 foot;绑定居此避环)。
 (_util.$.call(void 0, "setBtn") ).onclick = () => openSettings();
 
  async function openSettings() {
