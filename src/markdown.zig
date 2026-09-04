@@ -39,7 +39,9 @@ pub fn render(alloc: std.mem.Allocator, t: *const Theme, src: []const u8) ![]u8 
         }
         if (headingOf(line)) |h| {
             try out.appendSlice(BOLD);
-            try writeStyled(&out, t.fg_md_heading, h);
+            if (t.fg_md_heading.len > 0) try out.appendSlice(t.fg_md_heading);
+            try writeInline(&out, t, h);
+            try out.appendSlice(RESET);
             continue;
         }
         if (quoteOf(line)) |q| {
@@ -331,4 +333,16 @@ test "markdown strike underscore escape indent fence comment" {
     try t.expect(std.mem.indexOf(u8, painted, STRIKE) != null);
     try t.expect(std.mem.indexOf(u8, painted, th.fg_md_code_border) != null); // 注释
     try t.expect(std.mem.indexOf(u8, painted, th.fg_md_code) != null); // 字符串
+}
+
+test "markdown heading with inline code" {
+    const t = std.testing;
+    const th = Theme{};
+    const src = "## Header with `code_sym` and **bold**";
+    const painted = try render(t.allocator, &th, src);
+    defer t.allocator.free(painted);
+    const plain = try stripAnsi(t.allocator, painted);
+    defer t.allocator.free(plain);
+    try t.expect(std.mem.indexOf(u8, plain, "Header with code_sym and bold") != null);
+    try t.expect(std.mem.indexOf(u8, painted, th.fg_md_code) != null);
 }

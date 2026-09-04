@@ -1218,6 +1218,8 @@ test "composer box closes and cursor stays on the inner row" {
     try t.expectEqual(@as(usize, 1), visibleCols("▸"));
     try t.expectEqual(@as(usize, 1), visibleCols("›"));
     try t.expectEqual(@as(usize, 2), visibleCols("桌"));
+    try t.expectEqual(@as(usize, 2), visibleCols("🚀"));
+    try t.expectEqual(@as(usize, 2), visibleCols("🤖"));
     try t.expectEqual(@as(usize, 79), composerBoxWidth(80));
     try t.expectEqual(@as(usize, 119), composerBoxWidth(120));
 

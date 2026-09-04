@@ -95,11 +95,30 @@ fn stripReadLineNums(arena: std.mem.Allocator, s: []const u8) []const u8 {
     return aw.toOwnedSlice() catch s;
 }
 
+fn stripCr(arena: std.mem.Allocator, s: []const u8) []const u8 {
+    if (std.mem.indexOfScalar(u8, s, '\r') == null) return s;
+    var out = std.array_list.Managed(u8).init(arena);
+    for (s) |b| {
+        if (b != '\r') out.append(b) catch return s;
+    }
+    return out.toOwnedSlice() catch s;
+}
+
 fn prepareEdit(arena: std.mem.Allocator, hay: []const u8, old_text: []const u8, new_text: []const u8) struct { old: []const u8, new: []const u8 } {
     if (countMatches(hay, old_text) > 0) return .{ .old = old_text, .new = new_text };
     const so = stripReadLineNums(arena, old_text);
-    if (std.mem.eql(u8, so, old_text)) return .{ .old = old_text, .new = new_text };
-    return .{ .old = so, .new = stripReadLineNums(arena, new_text) };
+    if (countMatches(hay, so) > 0) {
+        return .{ .old = so, .new = stripReadLineNums(arena, new_text) };
+    }
+    // CRLF 规范化容错: 若 hay 为纯 LF 且 old_text 带 \r, 剥离 \r 后再匹配
+    const nocr_old = stripCr(arena, so);
+    if (countMatches(hay, nocr_old) > 0) {
+        return .{ .old = nocr_old, .new = stripCr(arena, stripReadLineNums(arena, new_text)) };
+    }
+    if (!std.mem.eql(u8, so, old_text)) {
+        return .{ .old = so, .new = stripReadLineNums(arena, new_text) };
+    }
+    return .{ .old = old_text, .new = new_text };
 }
 
 fn firstNeedleLine(s: []const u8) []const u8 {

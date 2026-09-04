@@ -98,7 +98,7 @@ pub fn snapExcerpt(alloc: std.mem.Allocator, text: []const u8) ![]const u8 {
     errdefer out.deinit();
     try out.appendSlice(lineRange(text, 0, SNAP_HEAD_LINES));
     try out.append('\n');
-    try out.appendSlice(try std.fmt.allocPrint(alloc, "… ({d} lines elided; see image) …\n", .{total - SNAP_HEAD_LINES - SNAP_TAIL_LINES}));
+    try out.appendSlice(try std.fmt.allocPrint(alloc, "… ({d} lines elided; see image. To inspect or edit exact code, re-read slice using read with offset/limit) …\n", .{total - SNAP_HEAD_LINES - SNAP_TAIL_LINES}));
     try out.appendSlice(lineRange(text, total - SNAP_TAIL_LINES, SNAP_TAIL_LINES));
     return alloc.dupe(u8, util.clampUtf8(out.items, SNAP_EXCERPT_MAX));
 }

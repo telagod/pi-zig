@@ -30,9 +30,9 @@ pub fn writeHighlighted(wr: *std.Io.Writer, text: []const u8, hl_from: usize, hl
     if (hl_from > 0) try writeTrunc(wr, text[0..hl_from], width);
     const used = visibleCols(text[0..hl_from]);
     if (used >= width) return;
-    try wr.writeAll("\x1b[4m");
+    try wr.writeAll("\x1b[1;36m\x1b[4m");
     try writeTrunc(wr, text[hl_from..to], width - used);
-    try wr.writeAll("\x1b[24m");
+    try wr.writeAll("\x1b[24m\x1b[22m\x1b[39m");
     const used2 = used + visibleCols(text[hl_from..to]);
     if (used2 < width and to < text.len) {
         try writeTrunc(wr, text[to..], width - used2);
@@ -284,7 +284,6 @@ fn inlineSan(buf: *[SAN_CAP]u8, s: []const u8) []const u8 {
 }
 
 pub fn writeStatusIndicator(wr: *std.Io.Writer, views: []const activity.View, streaming: bool, frame_ms: i64, width: usize, max_rows: usize) !void {
-    _ = streaming;
     if (max_rows == 0) return;
     var san_buf: [SAN_CAP]u8 = undefined;
     // pi 式单行状态:⠋ Working · 12s · esc to interrupt(全 muted,无详情子行)
@@ -299,7 +298,11 @@ pub fn writeStatusIndicator(wr: *std.Io.Writer, views: []const activity.View, st
     const el = activity.formatElapsed(&eb, elapsed);
     try wr.writeAll(ANSI_DIM);
     try wr.writeAll(activity.spinnerFrame(frame_ms));
-    try wr.writeAll(" Working · ");
+    if (streaming and views.len == 0) {
+        try wr.writeAll(" Thinking · ");
+    } else {
+        try wr.writeAll(" Working · ");
+    }
     try wr.writeAll(el);
     if (retry_n > 1) {
         var rb: [16]u8 = undefined;
