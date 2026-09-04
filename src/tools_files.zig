@@ -55,6 +55,8 @@ pub fn isNoiseName(name: []const u8, show_hidden: bool) bool {
 }
 
 pub fn listWorkspaceFiles(alloc: std.mem.Allocator, root: []const u8, q: []const u8) ![]FileItem {
+    const real_root = try util.expandTilde(alloc, root);
+    defer alloc.free(real_root);
     const norm = try normalizeRel(alloc, q);
     const dir_rel, const name_prefix = blk: {
         if (norm.trail or norm.rel.len == 0) break :blk .{ norm.rel, @as([]const u8, "") };
@@ -63,10 +65,10 @@ pub fn listWorkspaceFiles(alloc: std.mem.Allocator, root: []const u8, q: []const
         break :blk .{ @as([]const u8, ""), norm.rel };
     };
     const show_hidden = name_prefix.len > 0 and name_prefix[0] == '.';
-    const abs_dir = if (dir_rel.len == 0) root else try util.joinPath(alloc, root, dir_rel);
-    const rules = fs_walk.ignoreRulesFor(alloc, root, dir_rel);
+    const abs_dir = if (dir_rel.len == 0) real_root else try util.joinPath(alloc, real_root, dir_rel);
+    const rules = fs_walk.ignoreRulesFor(alloc, real_root, dir_rel);
     const saved_root = tpath.currentRoot();
-    tpath.setRoot(root);
+    tpath.setRoot(real_root);
     defer tpath.setRoot(saved_root);
     var dir = std.Io.Dir.cwd().openDir(util.io, abs_dir, .{ .iterate = true }) catch return error.BadPath;
     defer dir.close(util.io);
@@ -215,4 +217,22 @@ test "listWorkspaceFiles includes in-workspace symlink and hides escape" {
         }
     }
     try t.expect(saw_alias);
+}
+
+test "listWorkspaceFiles expands tilde root" {
+    const t = std.testing;
+    try util.testInit();
+    const home = util.getEnv("HOME") orelse return error.SkipZigTest;
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cwd_abs = try std.process.currentPathAlloc(util.io, a);
+    if (!std.mem.startsWith(u8, cwd_abs, home)) return error.SkipZigTest;
+    const tilde_root = try std.fmt.allocPrint(a, "~{s}", .{cwd_abs[home.len..]});
+    const items = try listWorkspaceFiles(a, tilde_root, "build.zig");
+    var saw_build = false;
+    for (items) |it| {
+        if (std.mem.eql(u8, it.name, "build.zig")) saw_build = true;
+    }
+    try t.expect(saw_build);
 }

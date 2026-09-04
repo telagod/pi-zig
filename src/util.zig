@@ -120,6 +120,16 @@ pub fn homeDir(alloc: std.mem.Allocator) ![]u8 {
     return error.NoHomeDir;
 }
 
+pub fn expandTilde(alloc: std.mem.Allocator, path: []const u8) ![]u8 {
+    if (path.len == 0) return alloc.dupe(u8, path);
+    const home = getEnv("HOME") orelse getEnv("USERPROFILE") orelse return alloc.dupe(u8, path);
+    if (std.mem.eql(u8, path, "~")) return alloc.dupe(u8, home);
+    if (std.mem.startsWith(u8, path, "~/")) {
+        return std.fmt.allocPrint(alloc, "{s}{s}", .{ home, path[1..] });
+    }
+    return alloc.dupe(u8, path);
+}
+
 /// 执行命令并收集 stdout(截断 64KB;失败返回错误消息)。供插件工具使用。
 pub fn execShort(alloc: std.mem.Allocator, argv: []const []const u8) ![]u8 {
     return execShortTimeout(alloc, argv, 60);
@@ -698,6 +708,25 @@ test "joinPath" {
     try t.expectEqualStrings("/home/x/file", try joinPath(a, "/home/x", "file"));
     try t.expectEqualStrings("/home/x/file", try joinPath(a, "/home/x/", "file"));
     try t.expectEqualStrings("/abs", try joinPath(a, "/home/x", "/abs"));
+}
+
+test "expandTilde" {
+    const t = std.testing;
+    try testInit();
+    var arena = Arena.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const home = getEnv("HOME") orelse getEnv("USERPROFILE");
+    if (home) |h| {
+        const exp = try expandTilde(a, "~/foo/bar");
+        const expected = try std.fmt.allocPrint(a, "{s}/foo/bar", .{h});
+        try t.expectEqualStrings(expected, exp);
+
+        const exp_root = try expandTilde(a, "~");
+        try t.expectEqualStrings(h, exp_root);
+    }
+    const regular = try expandTilde(a, "/var/log");
+    try t.expectEqualStrings("/var/log", regular);
 }
 
 test "estTokens" {

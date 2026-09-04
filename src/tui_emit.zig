@@ -981,7 +981,7 @@ fn emitThink(wr: *std.Io.Writer, buf: []const u8, open: bool, width: usize, skip
     var emitted: usize = 0;
     if (!open) {
         var fold_buf: [80]u8 = undefined;
-        const fold = std.fmt.bufPrint(&fold_buf, "{s}{s}    ┆ thought{s}", .{ theme().fg_think, ANSI_ITALIC, ANSI_RESET }) catch "    ┆ thought";
+        const fold = std.fmt.bufPrint(&fold_buf, "{s}{s}    ┆ thought · [Ctrl+T]{s}", .{ theme().fg_think, ANSI_ITALIC, ANSI_RESET }) catch "    ┆ thought · [Ctrl+T]";
         try emitFrameLine(wr, fold, &skipped, &emitted, limit);
         return emitted;
     }

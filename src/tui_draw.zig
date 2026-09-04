@@ -53,7 +53,7 @@ pub fn writeSlashPicker(wr: *std.Io.Writer, items: []const SlashItem, query: []c
         const name = slashName(it.cmd);
         const selected = pi == sel.*;
         if (selected) {
-            try wr.writeAll(ANSI_DIM ++ "› " ++ ANSI_RESET ++ ANSI_REV ++ ANSI_BOLD);
+            try wr.writeAll("\x1b[1;36m▸ \x1b[0m\x1b[1m");
         } else {
             try wr.writeAll("  " ++ ANSI_BOLD);
         }
@@ -67,7 +67,7 @@ pub fn writeSlashPicker(wr: *std.Io.Writer, items: []const SlashItem, query: []c
         used += 1 + visibleCols(name);
         try wr.writeAll(ANSI_RESET);
         if (it.desc.len > 0 and used + 2 < width) {
-            try wr.writeAll(if (selected) ANSI_REV ++ ANSI_DIM ++ " " else ANSI_DIM ++ " ");
+            try wr.writeAll(ANSI_DIM ++ " ");
             used += 1;
             if (rank.kind == 2) {
                 try writeHighlighted(wr, it.desc, rank.hl_from, rank.hl_len, width - used);
@@ -94,9 +94,9 @@ pub fn writeFilePicker(wr: *std.Io.Writer, items: []const filesmod.FileItem, sel
         const it = items[pi];
         const selected = pi == sel.*;
         if (selected) {
-            try wr.writeAll(ANSI_DIM ++ "› " ++ ANSI_RESET ++ ANSI_REV ++ ANSI_BOLD);
+            try wr.writeAll("\x1b[1;36m▸ \x1b[0m\x1b[1m");
         } else {
-            try wr.writeAll("  " ++ ANSI_BOLD);
+            try wr.writeAll("  ");
         }
         try wr.writeAll("@./");
         var used: usize = 5;
@@ -105,7 +105,7 @@ pub fn writeFilePicker(wr: *std.Io.Writer, items: []const filesmod.FileItem, sel
         if (it.link) |tgt| {
             const arrow = " -> ";
             if (used + arrow.len < width) {
-                try wr.writeAll(if (selected) ANSI_REV ++ ANSI_DIM else ANSI_DIM);
+                try wr.writeAll(ANSI_DIM);
                 try wr.writeAll(arrow);
                 used += arrow.len;
                 try writeTrunc(wr, tgt, if (width > used) width - used else 0);
@@ -115,7 +115,7 @@ pub fn writeFilePicker(wr: *std.Io.Writer, items: []const filesmod.FileItem, sel
         try wr.writeAll(ANSI_RESET);
         const tag: []const u8 = if (it.link != null) " link" else if (it.dir) " dir" else " file";
         if (used + tag.len < width) {
-            try wr.writeAll(if (selected) ANSI_REV ++ ANSI_DIM else ANSI_DIM);
+            try wr.writeAll(ANSI_DIM);
             try wr.writeAll(tag);
         }
         try wr.writeAll(ANSI_RESET ++ "\x1b[K\r\n");
@@ -132,7 +132,7 @@ pub fn writePicker(wr: *std.Io.Writer, p: *Picker, height: usize, width: usize) 
         const it = p.visibleItem(pi).*;
         const selected = pi == p.sel;
         if (selected) {
-            try wr.writeAll(ANSI_DIM ++ "› " ++ ANSI_RESET ++ ANSI_REV);
+            try wr.writeAll("\x1b[1;36m▸ \x1b[0m\x1b[1m");
         } else {
             try wr.writeAll(ANSI_DIM ++ "  ");
         }
@@ -213,7 +213,7 @@ pub fn writeModalPicker(wr: *std.Io.Writer, p: *Picker, cols: usize, rows: usize
         var line_buf: [256]u8 = undefined;
         var fw = std.Io.Writer.fixed(&line_buf);
         if (selected) {
-            fw.writeAll(ANSI_BOLD ++ "› ") catch {};
+            fw.writeAll("\x1b[1;36m▸ \x1b[0m\x1b[1m") catch {};
         } else {
             fw.writeAll("  ") catch {};
         }

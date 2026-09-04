@@ -22,7 +22,19 @@ pub fn render(alloc: std.mem.Allocator, t: *const Theme, src: []const u8) ![]u8 
         first = false;
         if (isFence(line)) {
             in_fence = !in_fence;
-            try writeStyled(&out, t.fg_md_code_border, std.mem.trim(u8, line, " \t"));
+            const info = fenceInfo(line);
+            try out.appendSlice(info.indent);
+            if (in_fence) {
+                if (info.lang.len > 0) {
+                    var fence_buf: [128]u8 = undefined;
+                    const top = std.fmt.bufPrint(&fence_buf, "╭─ {s} ────────────────────", .{info.lang}) catch "╭────────────────────────";
+                    try writeStyled(&out, t.fg_md_code_border, top);
+                } else {
+                    try writeStyled(&out, t.fg_md_code_border, "╭────────────────────────");
+                }
+            } else {
+                try writeStyled(&out, t.fg_md_code_border, "╰────────────────────────");
+            }
             continue;
         }
         if (in_fence) {
@@ -74,6 +86,14 @@ fn writeStyled(out: *std.array_list.Managed(u8), ink: []const u8, s: []const u8)
 fn isFence(line: []const u8) bool {
     const s = std.mem.trimStart(u8, line, " \t");
     return std.mem.startsWith(u8, s, "```") or std.mem.startsWith(u8, s, "~~~");
+}
+
+fn fenceInfo(line: []const u8) struct { indent: []const u8, lang: []const u8 } {
+    const s = std.mem.trimStart(u8, line, " \t");
+    const indent = line[0 .. line.len - s.len];
+    const fence_chars = if (std.mem.startsWith(u8, s, "```")) "```" else "~~~";
+    const rest = s[fence_chars.len..];
+    return .{ .indent = indent, .lang = std.mem.trim(u8, rest, " \t") };
 }
 
 fn isHr(line: []const u8) bool {
@@ -345,4 +365,21 @@ test "markdown heading with inline code" {
     defer t.allocator.free(plain);
     try t.expect(std.mem.indexOf(u8, plain, "Header with code_sym and bold") != null);
     try t.expect(std.mem.indexOf(u8, painted, th.fg_md_code) != null);
+}
+
+test "markdown code fence card border" {
+    const t = std.testing;
+    const th = Theme{};
+    const src =
+        \\```zig
+        \\const a = 1;
+        \\```
+    ;
+    const painted = try render(t.allocator, &th, src);
+    defer t.allocator.free(painted);
+    const plain = try stripAnsi(t.allocator, painted);
+    defer t.allocator.free(plain);
+    try t.expect(std.mem.indexOf(u8, plain, "╭─ zig ────") != null);
+    try t.expect(std.mem.indexOf(u8, plain, "╰───") != null);
+    try t.expect(std.mem.indexOf(u8, plain, "const a = 1;") != null);
 }

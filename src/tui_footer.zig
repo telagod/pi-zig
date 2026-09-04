@@ -195,13 +195,15 @@ pub fn writeComposerTopEdge(wr: *std.Io.Writer, ident: FooterIdent, box_w: usize
     // 右段:$cost · ctx N% (used/window),窄端起只 ctx N%
     var used_b: [16]u8 = undefined;
     var win_b: [16]u8 = undefined;
-    var ctx_full_b: [80]u8 = undefined;
+    const ctx_ink = if (ident.hot) theme().fg_err else theme().fgCtx(ident.pct);
+    const ctx_rst = if (ctx_ink.len > 0) ANSI_RESET else "";
+    var ctx_full_b: [96]u8 = undefined;
     const ctx_full: []const u8 = if (ident.window > 0)
-        std.fmt.bufPrint(&ctx_full_b, "ctx {d}% ({s}/{s})", .{ ident.pct, formatTok(&used_b, ident.used), formatTok(&win_b, ident.window) }) catch "ctx —"
+        std.fmt.bufPrint(&ctx_full_b, "{s}ctx {d}% ({s}/{s}){s}", .{ ctx_ink, ident.pct, formatTok(&used_b, ident.used), formatTok(&win_b, ident.window), ctx_rst }) catch "ctx —"
     else
-        std.fmt.bufPrint(&ctx_full_b, "ctx {d}%", .{ident.pct}) catch "ctx —";
-    var ctx_pct_b: [24]u8 = undefined;
-    const ctx_pct = std.fmt.bufPrint(&ctx_pct_b, "ctx {d}%", .{ident.pct}) catch "ctx —";
+        std.fmt.bufPrint(&ctx_full_b, "{s}ctx {d}%{s}", .{ ctx_ink, ident.pct, ctx_rst }) catch "ctx —";
+    var ctx_pct_b: [32]u8 = undefined;
+    const ctx_pct = std.fmt.bufPrint(&ctx_pct_b, "{s}ctx {d}%{s}", .{ ctx_ink, ident.pct, ctx_rst }) catch "ctx —";
     var cost_b: [40]u8 = undefined;
     const cost_s: []const u8 = if (ident.cost) |c|
         std.fmt.bufPrint(&cost_b, "${d:.2}", .{c}) catch ""
@@ -241,6 +243,7 @@ pub fn writeComposerTopEdge(wr: *std.Io.Writer, ident: FooterIdent, box_w: usize
     if (right.len > 0) {
         try wr.writeAll(" ── ");
         try wr.writeAll(right);
+        try wr.writeAll(mu);
         used += 4 + visibleCols(right);
     }
     try wr.writeAll(" ");
