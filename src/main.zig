@@ -654,7 +654,8 @@ pub fn runInteractive(alloc: std.mem.Allocator, cfg: *cfgmod.Config, cwd: []cons
     if (util.configDir(alloc)) |cd| {
         defer alloc.free(cd);
         pluginsmod.pushGates(alloc, pluginsmod.defaultSet());
-        jsrt.loadExtensions(cd, abs_cwd);
+        const trusted = opts.trust_project or cfg.isWorkspaceTrusted(abs_cwd);
+        jsrt.loadExtensions(cd, abs_cwd, trusted);
     } else |_| {}
     if (jsrt.wantsSessionStart()) {
         var ea = util.Arena.init(alloc);
@@ -943,6 +944,8 @@ pub fn main(init: std.process.Init) !void {
             // 延后到配置加载与 --plugin 应用之后再打印,否则显示的是编译期默认
             // 而不是本次实际生效的状态,会误导用户。
             list_plugins = true;
+        } else if (std.mem.eql(u8, arg, "--trust-project") or std.mem.eql(u8, arg, "--trust")) {
+            opts.trust_project = true;
         } else if (std.mem.eql(u8, arg, "-v") or std.mem.eql(u8, arg, "--version")) {
             std.debug.print("piz v{s}\n", .{VERSION});
             std.process.exit(0);

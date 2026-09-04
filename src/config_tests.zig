@@ -650,3 +650,24 @@ test "providerIsSub: codex/kimi-coding 自动,显式标,普通 provider 否" {
     try t.expect(providerIsSub(&marked));
     try t.expect(!providerIsSub(&plain));
 }
+
+test "settings.json trustProjectExtensions and trustedWorkspaces" {
+    const t = std.testing;
+    var arena = util.Arena.init(t.allocator);
+    defer arena.deinit();
+    var c = Config{ .arena = &arena };
+    // 默认不信任
+    try t.expect(!c.isWorkspaceTrusted("/home/user/project"));
+    // trustProjectExtensions: true 全局放行
+    c.trust_project_extensions = true;
+    try t.expect(c.isWorkspaceTrusted("/home/user/project"));
+    // 关掉全局，走 trustedWorkspaces 列表
+    c.trust_project_extensions = false;
+    c.trusted_workspaces = &.{ "/home/user/trusted", "/opt/repos" };
+    try t.expect(c.isWorkspaceTrusted("/home/user/trusted"));
+    try t.expect(c.isWorkspaceTrusted("/home/user/trusted/subproj"));
+    try t.expect(!c.isWorkspaceTrusted("/home/user/other"));
+    // 通配符 *
+    c.trusted_workspaces = &.{"*"};
+    try t.expect(c.isWorkspaceTrusted("/any/random/path"));
+}

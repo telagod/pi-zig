@@ -167,7 +167,8 @@ pub fn runWebCmd(alloc: std.mem.Allocator, args: *std.process.Args.Iterator) voi
     if (util.configDir(alloc)) |cd| {
         defer alloc.free(cd);
         pluginsmod.pushGates(alloc, pluginsmod.defaultSet());
-        jsrt.loadExtensions(cd, abs_cwd);
+        const trusted = cfg.isWorkspaceTrusted(abs_cwd);
+        jsrt.loadExtensions(cd, abs_cwd, trusted);
     } else |_| {}
     // 启动即同步模型表:bg 纯取(GET /models),合账持 pool.mutex;无阻 listen。
     if (std.Thread.spawn(.{ .stack_size = 1 << 20 }, webModelsSyncThread, .{ pool.alloc, &cfg, &pool }) catch null) |th| th.detach();

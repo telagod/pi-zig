@@ -158,7 +158,8 @@ pub fn runPrint(alloc: std.mem.Allocator, cfg: *cfgmod.Config, cwd: []const u8, 
     if (util.configDir(alloc)) |cd| {
         defer alloc.free(cd);
         pluginsmod.pushGates(alloc, pluginsmod.defaultSet());
-        jsrt.loadExtensions(cd, abs_cwd);
+        const trusted = opts.trust_project or cfg.isWorkspaceTrusted(abs_cwd);
+        jsrt.loadExtensions(cd, abs_cwd, trusted);
     } else |_| {}
     if (jsrt.wantsSessionStart()) {
         var ea = util.Arena.init(alloc);

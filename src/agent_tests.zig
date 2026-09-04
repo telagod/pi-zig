@@ -653,7 +653,7 @@ test "ask_user stops the turn without another model call" {
         jsrt.deinit();
         jsrt.init(std.heap.c_allocator);
         jsrt.setGates(&.{ "usage-ledger", "artifact-store", "cross-session-memory", "concept-graph", "elicitation" });
-        jsrt.loadExtensions("", "/tmp");
+        jsrt.loadExtensions("", "/tmp", true);
     }
     const Hook = struct {
         var calls: usize = 0;
@@ -719,7 +719,7 @@ test "js pre_turn block/replace + request_error rescue(借 dsh pre-step/request-
     const ext_path = try std.fmt.allocPrint(a, "{s}/extensions/x.js", .{root});
     try std.Io.Dir.cwd().createDirPath(util.io, std.fs.path.dirname(ext_path).?);
     try std.Io.Dir.cwd().writeFile(util.io, .{ .sub_path = ext_path, .data = ext_src });
-    jsrt.loadExtensions(root, "/tmp");
+    jsrt.loadExtensions(root, "/tmp", true);
 
     const Hook = struct {
         var calls: usize = 0;

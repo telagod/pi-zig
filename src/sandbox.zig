@@ -307,6 +307,50 @@ pub fn buildArgv(
     const isolate_fs = workspace.len > 0 and !std.mem.eql(u8, workspace, "/");
     if (isolate_fs) {
         try list.appendSlice(&.{ "--ro-bind", "/", "/" });
+        // 敏感凭证遮蔽 (Sensitive Path Masking):
+        // 挂载 / 为只读虽阻断了写改,但在可出网模式下仍可通过网络外泄凭据。
+        // 对 SSH / 云凭据 / API key / 影子文件实施空挂载隔离。
+        if (util.getEnv("HOME")) |home| {
+            var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+            const sensitive_dirs = [_][]const u8{ ".ssh", ".aws", ".gnupg" };
+            for (sensitive_dirs) |sub| {
+                const target = std.fmt.bufPrint(&path_buf, "{s}/{s}", .{ home, sub }) catch continue;
+                if (!underPrefix(target, workspace) and util.dirExists(target)) {
+                    var in_extras = false;
+                    for (extras) |ep| {
+                        if (underPrefix(target, ep)) {
+                            in_extras = true;
+                            break;
+                        }
+                    }
+                    if (!in_extras) {
+                        try list.appendSlice(&.{ "--tmpfs", try arena.dupe(u8, target) });
+                    }
+                }
+            }
+            const sensitive_files = [_][]const u8{ ".piz/auth.json", ".piz/models.json" };
+            for (sensitive_files) |sub| {
+                const target = std.fmt.bufPrint(&path_buf, "{s}/{s}", .{ home, sub }) catch continue;
+                if (!underPrefix(target, workspace) and util.fileExists(target)) {
+                    var in_extras = false;
+                    for (extras) |ep| {
+                        if (underPrefix(target, ep)) {
+                            in_extras = true;
+                            break;
+                        }
+                    }
+                    if (!in_extras) {
+                        try list.appendSlice(&.{ "--ro-bind", "/dev/null", try arena.dupe(u8, target) });
+                    }
+                }
+            }
+        }
+        const sys_files = [_][]const u8{ "/etc/shadow", "/etc/sudoers" };
+        for (sys_files) |sf| {
+            if (!underPrefix(sf, workspace) and util.fileExists(sf)) {
+                try list.appendSlice(&.{ "--ro-bind", "/dev/null", sf });
+            }
+        }
     }
     try list.appendSlice(&.{ "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp" });
     if (isolate_fs) {
@@ -359,9 +403,11 @@ test "buildArgv off is plain sh" {
 
 test "buildArgv workspace binds root and not net" {
     const t = std.testing;
+    var arena = util.Arena.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
     const extras = [_][]const u8{"/home/u/.piz/artifacts"};
-    const argv = try buildArgv(t.allocator, .workspace, "/usr/bin/bwrap", "/proj", &extras, "make", "");
-    defer t.allocator.free(argv);
+    const argv = try buildArgv(a, .workspace, "/usr/bin/bwrap", "/proj", &extras, "make", "");
     try t.expectEqualStrings("/usr/bin/bwrap", argv[0]);
     var saw_ro = false;
     var saw_ws = false;
@@ -386,14 +432,16 @@ test "buildArgv workspace binds root and not net" {
 
 test "buildArgv strict unshares net and skips extra inside workspace" {
     const t = std.testing;
+    var arena = util.Arena.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
     const extras = [_][]const u8{"/proj/.piz/artifacts"};
-    const argv = try buildArgv(t.allocator, .strict, "/usr/bin/bwrap", "/proj", &extras, "curl x", "");
-    defer t.allocator.free(argv);
+    const argv = try buildArgv(a, .strict, "/usr/bin/bwrap", "/proj", &extras, "curl x", "");
     var saw_net = false;
     var saw_inner = false;
-    for (argv) |a| {
-        if (std.mem.eql(u8, a, "--unshare-net")) saw_net = true;
-        if (std.mem.eql(u8, a, "/proj/.piz/artifacts")) saw_inner = true;
+    for (argv) |arg| {
+        if (std.mem.eql(u8, arg, "--unshare-net")) saw_net = true;
+        if (std.mem.eql(u8, arg, "/proj/.piz/artifacts")) saw_inner = true;
     }
     try t.expect(saw_net);
     try t.expect(!saw_inner);
@@ -424,16 +472,17 @@ test "buildLandlockArgv uses sandbox-exec" {
 
 test "buildArgv chdir overrides workspace start" {
     const t = std.testing;
-    const argv = try buildArgv(t.allocator, .workspace, "/usr/bin/bwrap", "/proj", &.{}, "pwd", "/proj/src");
-    defer t.allocator.free(argv);
+    var arena = util.Arena.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const argv = try buildArgv(a, .workspace, "/usr/bin/bwrap", "/proj", &.{}, "pwd", "/proj/src");
     var saw = false;
     var i: usize = 0;
     while (i + 1 < argv.len) : (i += 1) {
         if (std.mem.eql(u8, argv[i], "--chdir") and std.mem.eql(u8, argv[i + 1], "/proj/src")) saw = true;
     }
     try t.expect(saw);
-    const ll = try buildLandlockArgv(t.allocator, "/opt/piz", .workspace, "/proj", &.{}, "pwd", "/proj/src");
-    defer t.allocator.free(ll);
+    const ll = try buildLandlockArgv(a, "/opt/piz", .workspace, "/proj", &.{}, "pwd", "/proj/src");
     var saw_ll = false;
     i = 0;
     while (i + 1 < ll.len) : (i += 1) {
@@ -463,4 +512,44 @@ test "describe names the live backend" {
     } else {
         try t.expectEqualStrings("workspace/none", ws);
     }
+}
+
+test "buildArgv masks sensitive files and directories" {
+    const t = std.testing;
+    try util.testInit();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = util.Arena.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cwd_abs = try std.process.currentPathAlloc(util.io, a);
+    const fake_home = try std.fmt.allocPrint(a, "{s}/.zig-cache/tmp/{s}/home", .{ cwd_abs, tmp.sub_path });
+    try std.Io.Dir.cwd().createDirPath(util.io, fake_home);
+
+    const ssh_dir = try std.fmt.allocPrint(a, "{s}/.ssh", .{fake_home});
+    try std.Io.Dir.cwd().createDirPath(util.io, ssh_dir);
+
+    const auth_file = try std.fmt.allocPrint(a, "{s}/.piz/auth.json", .{fake_home});
+    try std.Io.Dir.cwd().createDirPath(util.io, std.fs.path.dirname(auth_file).?);
+    try std.Io.Dir.cwd().writeFile(util.io, .{ .sub_path = auth_file, .data = "{}" });
+
+    try util.environ_map.?.put("HOME", fake_home);
+
+    const argv = try buildArgv(a, .workspace, "/usr/bin/bwrap", "/tmp/myproj", &.{}, "ls", "");
+
+    var masked_ssh = false;
+    var masked_auth = false;
+    var i: usize = 0;
+    while (i < argv.len) : (i += 1) {
+        if (std.mem.eql(u8, argv[i], "--tmpfs") and i + 1 < argv.len and std.mem.eql(u8, argv[i + 1], ssh_dir)) {
+            masked_ssh = true;
+        }
+        if (std.mem.eql(u8, argv[i], "--ro-bind") and i + 2 < argv.len and
+            std.mem.eql(u8, argv[i + 1], "/dev/null") and std.mem.eql(u8, argv[i + 2], auth_file))
+        {
+            masked_auth = true;
+        }
+    }
+    try t.expect(masked_ssh);
+    try t.expect(masked_auth);
 }

@@ -905,11 +905,27 @@ pub const Config = struct {
     theme: []const u8 = "auto",
     /// settings.json 的 `cacheRetention`:none|short|long。缺省 short。
     cache_retention: CacheRetention = .short,
+    /// settings.json 的 `trustProjectExtensions`: 是否信任并加载项目级 .piz/extensions。缺省 false (安全默认)。
+    trust_project_extensions: bool = false,
+    /// settings.json 的 `trustedWorkspaces`: 信任的工作区路径数组 (支持完整路径、前缀或 "*")。
+    trusted_workspaces: []const []const u8 = &.{},
     /// 加载时解析失败的配置文件名(不含路径)。
     ///
     /// 语法错误的配置会被静默当成不存在,于是用户看到的是「unknown provider」
     /// 之类的下游症状,完全猜不到是自己的 JSON 少了个逗号。记下来在启动时提示。
     broken_files: []const []const u8 = &.{},
+
+    /// 判定某工作区是否被信任加载本地扩展。
+    pub fn isWorkspaceTrusted(self: *const Config, cwd: []const u8) bool {
+        if (self.trust_project_extensions) return true;
+        if (cwd.len == 0) return false;
+        for (self.trusted_workspaces) |tw| {
+            if (std.mem.eql(u8, tw, "*")) return true;
+            if (std.mem.eql(u8, tw, cwd)) return true;
+            if (cwd.len > tw.len and std.mem.startsWith(u8, cwd, tw) and (tw[tw.len - 1] == '/' or cwd[tw.len] == '/')) return true;
+        }
+        return false;
+    }
 
     /// 启动时点名解析失败的配置文件。走 stderr:stdout 留给管道下游。
     pub fn warnBroken(self: *const Config) void {
@@ -1189,6 +1205,24 @@ pub const Config = struct {
                 if (getStr(root, "cacheRetention")) |s| {
                     if (CacheRetention.parse(s)) |r| self.cache_retention = r;
                 }
+                if (root.object.get("trustProjectExtensions")) |v| {
+                    if (v == .bool) {
+                        self.trust_project_extensions = v.bool;
+                    } else if (v == .string) {
+                        self.trust_project_extensions = std.mem.eql(u8, v.string, "true") or std.mem.eql(u8, v.string, "on") or std.mem.eql(u8, v.string, "yes");
+                    }
+                }
+                if (root.object.get("trustedWorkspaces")) |arr| {
+                    if (arr == .array) {
+                        var ws_list = std.array_list.Managed([]const u8).init(alloc);
+                        for (arr.array.items) |it| {
+                            if (it == .string and it.string.len > 0) {
+                                try ws_list.append(try alloc.dupe(u8, it.string));
+                            }
+                        }
+                        self.trusted_workspaces = try ws_list.toOwnedSlice();
+                    }
+                }
                 if (root.object.get("disabled_plugins")) |arr| {
                     if (arr == .array) {
                         var names = std.array_list.Managed([]const u8).init(alloc);
@@ -1383,6 +1417,24 @@ pub const Config = struct {
         }
         if (getStr(root, "cacheRetention")) |s| {
             if (CacheRetention.parse(s)) |r| self.cache_retention = r;
+        }
+        if (root.object.get("trustProjectExtensions")) |v| {
+            if (v == .bool) {
+                self.trust_project_extensions = v.bool;
+            } else if (v == .string) {
+                self.trust_project_extensions = std.mem.eql(u8, v.string, "true") or std.mem.eql(u8, v.string, "on") or std.mem.eql(u8, v.string, "yes");
+            }
+        }
+        if (root.object.get("trustedWorkspaces")) |arr| {
+            if (arr == .array) {
+                var ws_list = std.array_list.Managed([]const u8).init(alloc);
+                for (arr.array.items) |it| {
+                    if (it == .string and it.string.len > 0) {
+                        try ws_list.append(try alloc.dupe(u8, it.string));
+                    }
+                }
+                self.trusted_workspaces = try ws_list.toOwnedSlice();
+            }
         }
         if (root.object.get("disabled_plugins")) |arr| {
             if (arr == .array) {

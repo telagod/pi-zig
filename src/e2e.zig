@@ -242,7 +242,7 @@ pub fn testMemoryPipeline() !void {
         jsrt.init(std.heap.c_allocator);
         // 不 defer deinit:引擎全局,后续 e2e 共用;进程终即收
         jsrt.setGates(&.{ "usage-ledger", "artifact-store", "cross-session-memory", "concept-graph" });
-        jsrt.loadExtensions(tmp_path, "/tmp");
+        jsrt.loadExtensions(tmp_path, "/tmp", true);
     }
 
     // 手工 provider 指向 mock(记忆管线走密图折页,/compact 不调模型)

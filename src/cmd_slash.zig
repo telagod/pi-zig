@@ -491,7 +491,8 @@ pub fn dispatch(tui: *tui_mod.Tui, app: *App, cmd: []const u8) anyerror!bool {
             if (util.configDir(app.alloc)) |cd| {
                 defer app.alloc.free(cd);
                 pluginsmod.pushGates(app.alloc, app.agent.plugins);
-                jsrt.reload(cd, app.agent.cwd);
+                const trusted = app.agent.cfg.isWorkspaceTrusted(app.agent.cwd);
+                jsrt.reload(cd, app.agent.cwd, trusted);
                 tuiNote(app, "\x1b[2m", "js extensions reloaded");
             } else |_| {}
         }

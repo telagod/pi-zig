@@ -837,6 +837,7 @@ const bundled_exts = [_]struct { name: []const u8, gate: []const u8 = "", src: [
 var gate_names: []const []const u8 = &.{};
 var saved_cfg: ?[]u8 = null;
 var saved_cwd: ?[]u8 = null;
+var saved_trusted: bool = false;
 
 /// 内嵌门控:传入启用的插件名(静态串,dupe 容器;plugins.enabledNamesList 供)。
 pub fn setGates(names: []const []const u8) void {
@@ -865,10 +866,11 @@ pub fn reloadSaved() void {
     };
     const cd = if (saved_cfg) |s| a.dupe(u8, s) catch null else null;
     const cw = if (saved_cwd) |s| a.dupe(u8, s) catch null else null;
+    const tr = saved_trusted;
     mu.unlock(util.io);
     defer if (cd) |s| a.free(s);
     defer if (cw) |s| a.free(s);
-    if (cd) |d| reload(d, cw orelse "");
+    if (cd) |d| reload(d, cw orelse "", tr);
 }
 
 fn dirHasFile(path: ?[]const u8, name: []const u8) bool {
@@ -933,14 +935,29 @@ fn loadDir(path: []const u8) void {
     }
 }
 
-/// 发现并加载所有扩展:~/.piz/extensions/*.js,然后 <cwd>/.piz/extensions/*.js。
+fn dirHasAnyExt(path: ?[]const u8) bool {
+    const p = path orelse return false;
+    var d = std.Io.Dir.cwd().openDir(util.io, p, .{ .iterate = true }) catch return false;
+    defer d.close(util.io);
+    var it = d.iterate();
+    while (it.next(util.io) catch null) |ent| {
+        if (ent.kind != .file) continue;
+        if (std.mem.endsWith(u8, ent.name, ".js") or std.mem.endsWith(u8, ent.name, ".mjs") or
+            std.mem.endsWith(u8, ent.name, ".ts") or std.mem.endsWith(u8, ent.name, ".mts") or
+            std.mem.endsWith(u8, ent.name, ".cts")) return true;
+    }
+    return false;
+}
+
+/// 发现并加载所有扩展:~/.piz/extensions/*.js,若 trusted 为真则加载 <cwd>/.piz/extensions/*.js 与包扩展。
 /// 完成后把 JS 注册表物化到 Zig 侧(jsTools()/jsCommands())。
-pub fn loadExtensions(cfg_dir: []const u8, cwd: []const u8) void {
+pub fn loadExtensions(cfg_dir: []const u8, cwd: []const u8, trusted: bool) void {
     if (!enabled) return;
     mu.lockUncancelable(util.io);
     defer mu.unlock(util.io);
     if (rt == null) return;
     const a = gpa.?;
+    saved_trusted = trusted;
     // 存档装载目,reloadSaved 复用(开关抽离件后无 cwd 在手也能重扫)。
     if (saved_cfg) |s| a.free(s);
     saved_cfg = a.dupe(u8, cfg_dir) catch null;
@@ -971,8 +988,8 @@ pub fn loadExtensions(cfg_dir: []const u8, cwd: []const u8) void {
     // 内嵌档先行;gate 未开或同名见于用户/项目/包目则跳过。
     for (bundled_exts) |b| {
         if (b.gate.len > 0 and !gateOn(b.gate)) continue;
-        var overridden = dirHasFile(user_dir, b.name) or dirHasFile(proj_dir, b.name);
-        if (!overridden) for (pkg_ext.items) |pd| {
+        var overridden = dirHasFile(user_dir, b.name) or (trusted and dirHasFile(proj_dir, b.name));
+        if (!overridden and trusted) for (pkg_ext.items) |pd| {
             if (dirHasFile(pd, b.name)) {
                 overridden = true;
                 break;
@@ -982,8 +999,22 @@ pub fn loadExtensions(cfg_dir: []const u8, cwd: []const u8) void {
         if (evalBundled(b.name, b.src)) loaded_files += 1 else load_errors += 1;
     }
     if (user_dir) |p| loadDir(p);
-    if (proj_dir) |p| loadDir(p);
-    for (pkg_ext.items) |pd| loadDir(pd);
+    if (trusted) {
+        if (proj_dir) |p| loadDir(p);
+        for (pkg_ext.items) |pd| loadDir(pd);
+    } else {
+        const has_proj = dirHasAnyExt(proj_dir);
+        var has_pkg = false;
+        for (pkg_ext.items) |pd| {
+            if (dirHasAnyExt(pd)) {
+                has_pkg = true;
+                break;
+            }
+        }
+        if (has_proj or has_pkg) {
+            std.debug.print("piz: security: skipped untrusted local extensions in project (use --trust-project or trustedWorkspaces)\n", .{});
+        }
+    }
     refreshRegistry();
 }
 
@@ -1264,7 +1295,7 @@ pub fn emitAgentEnd(arena: std.mem.Allocator, info: AgentEndInfo) void {
 /// "Maximum call stack size exceeded";② 旧 ctx 的全局词法环境不清零,script 型
 /// 扩展(todo.js 等顶层 const)重估必报 redeclaration。重建即两清。
 /// sucrase 亦随旧 ctx 归零(ts_ready 复位,下次按需重装)。
-pub fn reload(cfg_dir: []const u8, cwd: []const u8) void {
+pub fn reload(cfg_dir: []const u8, cwd: []const u8, trusted: bool) void {
     if (!enabled) return;
     {
         mu.lockUncancelable(util.io);
@@ -1290,7 +1321,7 @@ pub fn reload(cfg_dir: []const u8, cwd: []const u8) void {
             return;
         }
     }
-    loadExtensions(cfg_dir, cwd);
+    loadExtensions(cfg_dir, cwd, trusted);
 }
 
 /// marker:JS 工具的 Tool.ctx_handler 占位 —— runToolSlot 凭它改走 runJsTool。
@@ -1681,7 +1712,7 @@ test "qjs bundled: usage-ledger 内嵌出厂,agent_end 携 usage 落账" {
     defer std.Io.Dir.cwd().deleteTree(util.io, root) catch {};
     try std.Io.Dir.cwd().createDirPath(util.io, root);
     setGates(&.{"usage-ledger"});
-    loadExtensions(root, "");
+    loadExtensions(root, "", false);
     try t.expect(hasHandlers("agent_end")); // 内嵌件在场(gate 已开)
     var arena_inst = util.Arena.init(a);
     defer arena_inst.deinit();
@@ -1728,7 +1759,7 @@ test "qjs bundled override: 同名文件顶替内嵌件" {
     defer a.free(op);
     try std.Io.Dir.cwd().writeFile(util.io, .{ .sub_path = op, .data = "piz.registerCommand(\"ovr\", { handler: () => \"OVR\" });\n" });
     setGates(&.{"usage-ledger"}); // gate 开但同名文件在,内嵌让位
-    loadExtensions(root, "");
+    loadExtensions(root, "", false);
     var arena_inst = util.Arena.init(a);
     defer arena_inst.deinit();
     try t.expectEqualStrings("OVR", runCommand(arena_inst.allocator(), "ovr", "", null).?);
@@ -1773,7 +1804,7 @@ test "qjs bundled gate: web-search 默认关,setGates 开后装载" {
     defer a.free(root);
     defer std.Io.Dir.cwd().deleteTree(util.io, root) catch {};
     try std.Io.Dir.cwd().createDirPath(util.io, root);
-    loadExtensions(root, "");
+    loadExtensions(root, "", false);
     try t.expect(findTool("web_search") == null); // 门控默认关
     try t.expect(!hasHandlers("agent_end")); // usage-ledger 亦带门,默认不在
     setGates(&.{ "usage-ledger", "web-search" });
@@ -1817,7 +1848,7 @@ test "qjs tool_result replace:artifact-store 外置大件,小件/read/已置不�
     defer std.Io.Dir.cwd().deleteTree(util.io, root) catch {};
     try std.Io.Dir.cwd().createDirPath(util.io, root);
     setGates(&.{"artifact-store"});
-    loadExtensions(root, "");
+    loadExtensions(root, "", false);
     try t.expect(hasHandlers("tool_result"));
     var arena_inst = util.Arena.init(a);
     defer arena_inst.deinit();
@@ -1856,7 +1887,7 @@ test "qjs bundled elicitation/todo: ask_user 文案 + todo 往返与 sid 隔离(
     defer std.Io.Dir.cwd().deleteTree(util.io, root) catch {};
     try std.Io.Dir.cwd().createDirPath(util.io, root);
     setGates(&.{ "elicitation", "todo" });
-    loadExtensions(root, "");
+    loadExtensions(root, "", false);
 
     // ask_user:文案逐字节同原 Zig 版
     const ask = try runJsTool(a, "ask_user", "{\"question\":\"Q?\"}", null);
@@ -1916,7 +1947,7 @@ test "qjs bundled git-awareness: 仓内取状" {
     defer std.Io.Dir.cwd().deleteTree(util.io, root) catch {};
     try std.Io.Dir.cwd().createDirPath(util.io, root);
     setGates(&.{"git-awareness"});
-    loadExtensions(root, "");
+    loadExtensions(root, "", false);
     // 测试进程 cwd = 项目仓(git 可用);非仓分支在原版亦无测(execShort 语义已由 util 担)
     const r = try runJsTool(a, "git_status", "{}", null);
     defer a.free(r.content);
@@ -1947,7 +1978,7 @@ test "qjs bundled skills: 列表/加载/名校验(parity)" {
     try std.Io.Dir.cwd().createDirPath(util.io, std.fs.path.dirname(pkg_md).?);
     try std.Io.Dir.cwd().writeFile(util.io, .{ .sub_path = pkg_md, .data = "description: D pkg\nBODY-PKG" });
     setGates(&.{"skills"});
-    loadExtensions(root, "");
+    loadExtensions(root, "", false);
     var arena_inst = util.Arena.init(a);
     defer arena_inst.deinit();
     const ar = arena_inst.allocator();
@@ -1979,7 +2010,7 @@ test "qjs bundled context-budget: 快照注人与文案 parity" {
     defer std.Io.Dir.cwd().deleteTree(util.io, root) catch {};
     try std.Io.Dir.cwd().createDirPath(util.io, root);
     setGates(&.{"context-budget"});
-    loadExtensions(root, "");
+    loadExtensions(root, "", false);
     const stats = "{\"window\":1000,\"used\":300,\"tools_share\":50,\"remaining\":700,\"hard_pct\":85,\"limit\":850,\"until_compact\":550}";
     const want = "Context budget: window 1000 tokens, used ~300 (of which ~50 is the fixed tool definitions), remaining ~700. Auto-compaction triggers at 85% (850 tokens) — ~550 tokens of headroom before that.";
     const r = try runJsTool(a, "get_context_remaining", "{}", stats);
@@ -2010,7 +2041,7 @@ test "qjs compact: memory 覆写 + concept 追加(parity)" {
     defer std.Io.Dir.cwd().deleteTree(util.io, root) catch {};
     try std.Io.Dir.cwd().createDirPath(util.io, root);
     setGates(&.{ "cross-session-memory", "concept-graph" });
-    loadExtensions(root, "");
+    loadExtensions(root, "", false);
     try t.expect(hasHandlers("compact"));
     var arena_inst = util.Arena.init(a);
     defer arena_inst.deinit();
@@ -2084,7 +2115,7 @@ test "qjs reload: registry resets, no double registration" {
         \\piz.registerCommand("cmdA", { handler: () => "A" });
         \\piz.on("tool_call", () => undefined);
     });
-    reload(root, "");
+    reload(root, "", false);
     try t.expect(h_tool_call);
     try t.expect(js_commands.len == 1);
     // 换装:删 a.js,加 b.js
@@ -2094,11 +2125,41 @@ test "qjs reload: registry resets, no double registration" {
     try std.Io.Dir.cwd().writeFile(util.io, .{ .sub_path = pb, .data =
         \\piz.registerCommand("cmdB", { handler: () => "B" });
     });
-    reload(root, "");
+    reload(root, "", false);
     try t.expect(!h_tool_call); // 旧事件处理器清零
     try t.expect(js_commands.len == 1); // cmdA 不在了,无双注册
     var arena_inst = util.Arena.init(a);
     defer arena_inst.deinit();
     try t.expectEqualStrings("B", runCommand(arena_inst.allocator(), "cmdB", "", null).?);
     try t.expect(runCommand(arena_inst.allocator(), "cmdA", "", null) == null);
+}
+
+test "qjs workspace trust: untrusted cwd skips local .piz/extensions" {
+    if (!enabled) return error.SkipZigTest;
+    const t = std.testing;
+    const a = t.allocator;
+    deinit();
+    init(a);
+    defer deinit();
+    const tmp_proj = try std.fmt.allocPrint(a, "/tmp/piz_trust_{d}", .{std.os.linux.getpid()});
+    defer a.free(tmp_proj);
+    defer std.Io.Dir.cwd().deleteTree(util.io, tmp_proj) catch {};
+    const proj_ext = try std.fmt.allocPrint(a, "{s}/.piz/extensions", .{tmp_proj});
+    defer a.free(proj_ext);
+    try std.Io.Dir.cwd().createDirPath(util.io, proj_ext);
+    const script = try std.fmt.allocPrint(a, "{s}/evil.js", .{proj_ext});
+    defer a.free(script);
+    try std.Io.Dir.cwd().writeFile(util.io, .{ .sub_path = script, .data = "piz.registerCommand(\"evil\", { handler: () => \"PWNED\" });\n" });
+
+    // 1. 未受信: 跳过执行
+    loadExtensions("", tmp_proj, false);
+    var ar1 = util.Arena.init(a);
+    defer ar1.deinit();
+    try t.expect(runCommand(ar1.allocator(), "evil", "", null) == null);
+
+    // 2. 显式受信: 允许加载
+    reload("", tmp_proj, true);
+    var ar2 = util.Arena.init(a);
+    defer ar2.deinit();
+    try t.expectEqualStrings("PWNED", runCommand(ar2.allocator(), "evil", "", null).?);
 }

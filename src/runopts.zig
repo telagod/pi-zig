@@ -21,4 +21,6 @@ pub const RunOptions = struct {
     async_run: bool = false,
     /// --system:自定义系统提示
     system_override: ?[]const u8 = null,
+    /// --trust-project / --trust: 显式信任当前工作区并允许加载项目级 .piz/extensions
+    trust_project: bool = false,
 };
