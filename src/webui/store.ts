@@ -92,7 +92,6 @@ export function getQuery(extra: Record<string, string> = {}): string {
   const params = new URLSearchParams();
   const s = activeSession();
   if (s) params.set("session", s);
-  // 空 ws 代表当前默认项目，非空时才传递给后端
   if (urlWs) params.set("ws", urlWs);
   for (const [k, v] of Object.entries(extra)) {
     if (v != null && v !== "") params.set(k, v);
@@ -352,7 +351,16 @@ export async function interrupt() {
   } catch (err) {
     console.warn("interrupt error:", err);
   } finally {
-    isStreaming.set(false);
+    batch(() => {
+      isStreaming.set(false);
+      const curId = streamingTurnId();
+      if (curId) {
+        turns.update((prev) =>
+          prev.map((t) => (t.id === curId ? { ...t, isStreaming: false } : t))
+        );
+      }
+      streamingTurnId.set(null);
+    });
   }
 }
 
@@ -360,7 +368,7 @@ export async function approve(id: string, allow: boolean) {
   try {
     await apiFetch("/api/approve", {
       method: "POST",
-      body: JSON.stringify({ id, allow }),
+      body: JSON.stringify({ id: Number(id) || 0, allow }),
     });
     pendingApproval.set(null);
   } catch (err) {
@@ -397,10 +405,13 @@ export async function sendMessage(text: string) {
   });
 
   try {
-    await apiFetch(`/api/chat${getQuery()}`, {
+    const res = await apiFetch(`/api/chat${getQuery()}`, {
       method: "POST",
-      body: JSON.stringify({ message: text.trim() }),
+      body: JSON.stringify({ text: text.trim(), message: text.trim() }),
     });
+    if (res && res.ok === false) {
+      throw new Error(res.error || "Request rejected by server");
+    }
   } catch (err) {
     console.error("sendMessage failed:", err);
     batch(() => {
@@ -417,157 +428,202 @@ export async function sendMessage(text: string) {
   }
 }
 
-// 核心 SSE 事件调度
-export function handleSseEvent(event: { type: string; data: any }) {
-  const { type, data } = event;
+// 核心 SSE 事件调度（精准对齐后端真实事件契约）
+export function handleSseEvent(evt: any) {
+  if (!evt || !evt.type) return;
 
-  switch (type) {
-    case "stream_start":
+  // 会话隔离检查：如果事件带有 session 且不匹配当前激活会话，跳过
+  if (evt.session && evt.session !== activeSession()) return;
+
+  function ensureAssistantTurn(): string {
+    const cur = streamingTurnId();
+    if (cur) return cur;
+    const list = turns();
+    const last = list[list.length - 1];
+    if (last && last.role === "assistant") {
+      streamingTurnId.set(last.id);
+      return last.id;
+    }
+    const newId = `a_${Date.now()}`;
+    streamingTurnId.set(newId);
+    turns.update((prev) => [
+      ...prev,
+      {
+        id: newId,
+        role: "assistant",
+        content: "",
+        thought: "",
+        steps: [],
+        timestamp: Date.now(),
+        isStreaming: true,
+      },
+    ]);
+    return newId;
+  }
+
+  switch (evt.type) {
+    case "user_message": {
       isStreaming.set(true);
       break;
+    }
 
-    case "stream": {
-      const chunk = typeof data === "string" ? data : data?.chunk || "";
-      const curId = streamingTurnId();
-      if (curId) {
-        turns.update((prev) =>
-          prev.map((t) =>
-            t.id === curId ? { ...t, content: (t.content || "") + chunk } : t
-          )
-        );
-      }
+    case "reasoning": {
+      // 思考流增量
+      const chunk = evt.text || "";
+      if (!chunk) break;
+      isStreaming.set(true);
+      const targetId = ensureAssistantTurn();
+      turns.update((prev) =>
+        prev.map((t) =>
+          t.id === targetId ? { ...t, thought: (t.thought || "") + chunk, isStreaming: true } : t
+        )
+      );
       break;
     }
 
-    case "thought": {
-      const thoughtChunk = typeof data === "string" ? data : data?.chunk || "";
-      const curId = streamingTurnId();
-      if (curId) {
-        turns.update((prev) =>
-          prev.map((t) =>
-            t.id === curId ? { ...t, thought: (t.thought || "") + thoughtChunk } : t
-          )
-        );
-      }
+    case "message": {
+      // 回答正文增量
+      const chunk = evt.text || "";
+      if (!chunk) break;
+      isStreaming.set(true);
+      const targetId = ensureAssistantTurn();
+      turns.update((prev) =>
+        prev.map((t) =>
+          t.id === targetId ? { ...t, content: (t.content || "") + chunk, isStreaming: true } : t
+        )
+      );
       break;
     }
 
-    case "step_start": {
-      const curId = streamingTurnId();
+    case "tool_call": {
+      isStreaming.set(true);
+      let argsObj: any = evt.args;
+      if (typeof evt.args === "string") {
+        try { argsObj = JSON.parse(evt.args); } catch (_) {}
+      }
+
       const step: StepItem = {
-        id: data.id || `st_${Date.now()}`,
-        name: data.name || "Task Step",
-        desc: data.desc,
+        id: `st_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        name: evt.name || "Tool",
+        desc: typeof evt.args === "string" ? evt.args : JSON.stringify(evt.args),
         status: "running",
         startedAt: Date.now(),
-        args: data.args,
+        args: argsObj,
       };
-      if (curId) {
-        turns.update((prev) =>
-          prev.map((t) =>
-            t.id === curId ? { ...t, steps: [...t.steps, step] } : t
-          )
-        );
-      }
-      appendTerminalLine(`▶ [Step] ${step.name}: ${step.desc || ""}`, "cmd");
+
+      const targetId = ensureAssistantTurn();
+      turns.update((prev) =>
+        prev.map((t) =>
+          t.id === targetId ? { ...t, steps: [...t.steps, step], isStreaming: true } : t
+        )
+      );
+      appendTerminalLine(`▶ [Tool] ${evt.name}: ${typeof evt.args === "string" ? evt.args : JSON.stringify(evt.args)}`, "cmd");
       break;
     }
 
-    case "step_end": {
-      const curId = streamingTurnId();
-      if (curId && data.id) {
-        turns.update((prev) =>
-          prev.map((t) =>
-            t.id === curId
-              ? {
-                  ...t,
-                  steps: t.steps.map((st) =>
-                    st.id === data.id
-                      ? {
-                          ...st,
-                          status: data.error ? "error" : "done",
-                          durationMs: Date.now() - st.startedAt,
-                          result: data.result,
-                          error: data.error,
-                        }
-                      : st
-                  ),
-                }
-              : t
-          )
-        );
-      }
-      break;
-    }
+    case "tool_result": {
+      const isError = evt.error === true || evt.error === "true";
+      const summary = evt.summary || "";
 
-    case "tool_diff": {
-      if (data && data.diff) {
-        const parsed = parseUnifiedDiff(data.diff);
-        diffs.set(parsed);
+      turns.update((prev) =>
+        prev.map((t) => {
+          if (!t.steps || t.steps.length === 0) return t;
+          const steps = [...t.steps];
+          for (let i = steps.length - 1; i >= 0; i--) {
+            if (steps[i].name === evt.name && steps[i].status === "running") {
+              steps[i] = {
+                ...steps[i],
+                status: isError ? "error" : "done",
+                durationMs: Date.now() - steps[i].startedAt,
+                result: summary,
+                error: isError ? summary : undefined,
+              };
+              break;
+            }
+          }
+          return { ...t, steps };
+        })
+      );
+
+      // 提取代码 diff
+      if (summary.includes("diff --git") || summary.includes("@@ -")) {
+        const parsed = parseUnifiedDiff(summary);
         if (parsed.length > 0) {
+          diffs.set(parsed);
           activeDiffPath.set(parsed[0].path);
           setDeckTab("diffs");
         }
       }
+
+      appendTerminalLine(summary, isError ? "stderr" : "stdout");
       break;
     }
 
-    case "terminal_out": {
-      const text = typeof data === "string" ? data : data?.text || "";
-      appendTerminalLine(text, data?.stream === "stderr" ? "stderr" : "stdout");
+    case "permission": {
+      pendingApproval.set({
+        id: String(evt.id),
+        type: evt.name || "execute",
+        command: typeof evt.args === "string" ? evt.args : JSON.stringify(evt.args),
+        desc: `Operation '${evt.name}' requires authorization`,
+      });
       break;
     }
 
-    case "job_update": {
-      if (data && data.id) {
-        jobs.update((prev) => {
-          const idx = prev.findIndex((j) => j.id === data.id);
-          const item: JobItem = {
-            id: data.id,
-            name: data.name || "Background Job",
-            role: data.role,
-            status: data.status || "running",
-            startedAt: data.startedAt || Date.now(),
-            finishedAt: data.finishedAt,
-            summary: data.summary,
-          };
-          if (idx >= 0) {
-            const next = [...prev];
-            next[idx] = { ...next[idx], ...item };
-            return next;
-          }
-          return [...prev, item];
-        });
+    case "permission_result": {
+      if (pendingApproval() && pendingApproval()!.id === String(evt.id)) {
+        pendingApproval.set(null);
       }
       break;
     }
 
-    case "permission_request": {
-      if (data && data.id) {
-        pendingApproval.set({
-          id: data.id,
-          type: data.type || "execute",
-          command: data.command,
-          desc: data.desc,
-          path: data.path,
-        });
+    case "subagent": {
+      const item: JobItem = {
+        id: `sub_${evt.idx || 0}`,
+        name: `Subagent #${evt.idx || 0}`,
+        role: evt.kind,
+        status: "running",
+        startedAt: Date.now(),
+        summary: evt.text,
+      };
+      jobs.update((prev) => {
+        const idx = prev.findIndex((j) => j.id === item.id);
+        if (idx >= 0) {
+          const next = [...prev];
+          next[idx] = { ...next[idx], ...item };
+          return next;
+        }
+        return [...prev, item];
+      });
+      break;
+    }
+
+    case "status": {
+      batch(() => {
+        if (typeof evt.pct === "number") pct.set(evt.pct);
+        if (evt.model) model.set(evt.model);
+      });
+      break;
+    }
+
+    case "title": {
+      if (evt.title) {
+        loadSessions();
       }
       break;
     }
 
-    case "stream_end":
+    case "turn_end": {
+      // 本轮彻底完成，解开流式锁定！
       batch(() => {
         isStreaming.set(false);
-        const curId = streamingTurnId();
-        if (curId) {
-          turns.update((prev) =>
-            prev.map((t) => (t.id === curId ? { ...t, isStreaming: false } : t))
-          );
-        }
+        turns.update((prev) =>
+          prev.map((t) => (t.isStreaming ? { ...t, isStreaming: false } : t))
+        );
         streamingTurnId.set(null);
       });
       loadState();
       break;
+    }
   }
 }
 

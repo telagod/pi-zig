@@ -1,5 +1,5 @@
 // topbar.ts —— 顶栏工作台导航与全局状态指示
-import { tags, h } from "./dom";
+import { tags } from "./dom";
 import {
   wsName,
   branch,
@@ -23,6 +23,19 @@ import {
   renameSession,
 } from "./store";
 import { AppMode } from "./types";
+import {
+  iconSidebar,
+  iconDeck,
+  iconSearch,
+  iconSun,
+  iconMoon,
+  iconSettings,
+  iconBolt,
+  iconQuestion,
+  iconCompass,
+  iconBranch,
+  iconBot,
+} from "./icons";
 
 export function renderTopBar(): HTMLElement {
   return tags.header(
@@ -36,11 +49,7 @@ export function renderTopBar(): HTMLElement {
           title: "Toggle Sidebar (Ctrl+B)",
           onclick: toggleSidebar,
         },
-        tags.svg(
-          { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2" },
-          tags.path({ d: "M3 3h18v18H3z" }),
-          tags.path({ d: "M9 3v18" })
-        )
+        iconSidebar(15)
       ),
       tags.div(
         { class: "tb-brand" },
@@ -60,7 +69,11 @@ export function renderTopBar(): HTMLElement {
         const ch = changesCount();
         const branchPart = b ? ` (${b})` : "";
         const chPart = ch > 0 ? ` · ${ch}Δ` : "";
-        return tags.span({ class: "tb-ws-badge", title: `Workspace: ${w}${branchPart}` }, `${w}${branchPart}${chPart}`);
+        return tags.span(
+          { class: "tb-ws-badge", title: `Workspace: ${w}${branchPart}` },
+          iconBranch(12, "tb-branch-icon"),
+          tags.span({}, `${w}${branchPart}${chPart}`)
+        );
       },
       tags.span({ class: "tb-sep" }, "/"),
       tags.button(
@@ -86,9 +99,9 @@ export function renderTopBar(): HTMLElement {
       { class: "tb-center" },
       tags.div(
         { class: "mode-pill" },
-        renderModeBtn("yolo", "⚡ YOLO", "Full auto-execution"),
-        renderModeBtn("ask", "🛡 Ask", "Ask before destructive operations"),
-        renderModeBtn("plan", "📋 Plan", "Analysis & plan only, no write")
+        renderModeBtn("yolo", iconBolt, "YOLO", "Full auto-execution"),
+        renderModeBtn("ask", iconQuestion, "ASK", "Ask before destructive operations"),
+        renderModeBtn("plan", iconCompass, "PLAN", "Analysis & plan only, no write")
       )
     ),
 
@@ -102,7 +115,7 @@ export function renderTopBar(): HTMLElement {
           title: "Search / Command Palette (Ctrl+K)",
           onclick: () => showSearchModal.set(true),
         },
-        tags.span({ class: "search-icon" }, "⌕"),
+        iconSearch(13),
         tags.span({ class: "search-key" }, "⌘K")
       ),
       // 模型下拉
@@ -146,11 +159,7 @@ export function renderTopBar(): HTMLElement {
           title: "Toggle Workspace Deck (Diffs/Terminal/Jobs)",
           onclick: toggleDeck,
         },
-        tags.svg(
-          { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2" },
-          tags.path({ d: "M3 3h18v18H3z" }),
-          tags.path({ d: "M15 3v18" })
-        ),
+        iconDeck(14),
         tags.span({ class: "tb-deck-label" }, "Deck")
       ),
       // 主题切换
@@ -160,7 +169,7 @@ export function renderTopBar(): HTMLElement {
           title: "Toggle Theme",
           onclick: toggleTheme,
         },
-        () => (theme() === "dark" ? "☀" : "🌙")
+        () => (theme() === "dark" ? iconSun(15) : iconMoon(15))
       ),
       // 设置按钮
       tags.button(
@@ -169,7 +178,7 @@ export function renderTopBar(): HTMLElement {
           title: "Settings",
           onclick: () => showSettingsModal.set(true),
         },
-        "⚙"
+        iconSettings(15)
       ),
       // 网络状态指示灯
       tags.span({
@@ -180,13 +189,19 @@ export function renderTopBar(): HTMLElement {
   );
 }
 
-function renderModeBtn(m: AppMode, label: string, title: string): HTMLElement {
+function renderModeBtn(
+  m: AppMode,
+  iconFn: (size: number, cls: string) => SVGElement,
+  label: string,
+  title: string
+): HTMLElement {
   return tags.button(
     {
       class: () => `mode-btn ${mode() === m ? "is-active" : ""}`,
       title,
       onclick: () => switchMode(m),
     },
-    label
+    iconFn(12, "mode-btn-icon"),
+    tags.span({ class: "mode-btn-label" }, label)
   );
 }

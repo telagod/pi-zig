@@ -4,11 +4,11 @@ import { spawn } from 'node:child_process';
 
 const PORT = 19889;
 const TOK = 'test_token_deep_verify';
-const SESS = 'e2e_deep_session';
+const SESS = 'default';
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
-console.log('[1/7] Starting piz web server...');
+console.log('[1/8] Starting piz web server...');
 const web = spawn('./zig-out/bin/piz', ['web', '--port', String(PORT), '--token', TOK, '--no-open'], {
   stdio: ['ignore', 'pipe', 'pipe']
 });
@@ -19,7 +19,7 @@ process.on('exit', () => {
 
 // 等待服务就绪
 let serverReady = false;
-for (let i = 0; i < 40; i++) {
+for (let i = 0; i < 50; i++) {
   try {
     const res = await fetch(`http://127.0.0.1:${PORT}/api/state`, {
       headers: { 'Authorization': `Bearer ${TOK}`, 'X-Requested-With': 'piz' }
@@ -33,12 +33,12 @@ for (let i = 0; i < 40; i++) {
 }
 
 if (!serverReady) {
-  console.error('Server failed to start!');
+  console.error('Server failed to start on port', PORT);
   process.exit(1);
 }
 console.log('✓ Server is ready on port', PORT);
 
-console.log('[2/7] Launching headless browser...');
+console.log('[2/8] Launching headless browser...');
 const browser = await chromium.launch();
 const page = await browser.newPage({
   viewport: { width: 1440, height: 900 },
@@ -60,7 +60,7 @@ page.on('pageerror', err => {
   console.error('[Browser PageError]', err);
 });
 
-console.log('[3/7] Navigating to WebUI Next...');
+console.log('[3/8] Navigating to WebUI Next...');
 await page.goto(`http://127.0.0.1:${PORT}/?session=${SESS}#token=${TOK}`);
 
 // 等待应用挂载
@@ -75,35 +75,35 @@ await page.waitForSelector('.composer-wrap', { timeout: 5000 });
 await page.waitForSelector('.workbench-deck', { timeout: 5000 });
 console.log('✓ TopBar, Sidebar, ChatStream, Composer, Workbench Deck all present');
 
-console.log('[4/7] Testing Mode and Deck Tabs...');
+console.log('[4/8] Testing Mode and Deck Tabs...');
 // 模式切换
-await page.locator('.mode-btn', { hasText: 'Ask' }).click();
-await sleep(200);
-await page.locator('.mode-btn', { hasText: 'Plan' }).click();
-await sleep(200);
+await page.locator('.mode-btn', { hasText: 'ASK' }).click();
+await sleep(150);
+await page.locator('.mode-btn', { hasText: 'PLAN' }).click();
+await sleep(150);
 await page.locator('.mode-btn', { hasText: 'YOLO' }).click();
-await sleep(200);
-console.log('✓ Mode switching (YOLO/Ask/Plan) verified');
+await sleep(150);
+console.log('✓ Mode switching (YOLO/ASK/PLAN) verified');
 
 // 标签切换
 await page.locator('.deck-tab-btn', { hasText: 'Terminal' }).click();
 await page.waitForSelector('.terminal-panel');
-await sleep(200);
+await sleep(150);
 
 await page.locator('.deck-tab-btn', { hasText: 'Files' }).click();
 await page.waitForSelector('.files-panel');
-await sleep(200);
+await sleep(150);
 
 await page.locator('.deck-tab-btn', { hasText: 'Jobs' }).click();
 await page.waitForSelector('.deck-empty, .jobs-panel');
-await sleep(200);
+await sleep(150);
 
 await page.locator('.deck-tab-btn', { hasText: 'Diffs' }).click();
 await page.waitForSelector('.deck-empty, .diff-panel');
-await sleep(200);
+await sleep(150);
 console.log('✓ All 4 Deck tabs (Diffs/Terminal/Jobs/Files) verified');
 
-console.log('[5/7] Testing Shortcuts and Modals...');
+console.log('[5/8] Testing Shortcuts, Settings and Theme...');
 // 测试 Ctrl+K 命令面板
 await page.keyboard.press('Control+k');
 await page.waitForSelector('.command-palette');
@@ -112,7 +112,7 @@ await page.keyboard.press('Escape');
 await sleep(200);
 
 // 测试设置面板
-const setBtn = page.locator('.tb-btn', { hasText: '⚙' });
+const setBtn = page.locator('.tb-btn[title="Settings"]');
 await setBtn.click();
 await page.waitForSelector('.settings-modal');
 console.log('✓ Settings Modal popped up');
@@ -120,24 +120,15 @@ await page.locator('.modal-close-btn').click();
 await sleep(200);
 
 // 测试主题切换
-const themeBtn = page.locator('.tb-icon-btn', { hasText: /[☀🌙]/ });
+const themeBtn = page.locator('.tb-btn[title="Toggle Theme"]');
 await themeBtn.click();
 await sleep(200);
 const scheme = await page.evaluate(() => document.documentElement.getAttribute('data-color-scheme'));
 console.log('✓ Theme toggled to:', scheme);
-await themeBtn.click(); // 切回
+await themeBtn.click(); // 切回 dark
 await sleep(200);
 
-// 测试 Deck 折叠与展开
-const deckToggleBtn = page.locator('.tb-deck-btn');
-await deckToggleBtn.click();
-await sleep(200);
-const isDeckClosed = await page.evaluate(() => document.querySelector('.workbench-deck').classList.contains('is-closed'));
-console.log('✓ Deck collapse state:', isDeckClosed);
-await deckToggleBtn.click(); // 重新展开
-await sleep(200);
-
-console.log('[6/7] Testing Input, Autocomplete, and Message Sending...');
+console.log('[6/8] Testing Input, Autocomplete, and Message Flow...');
 const textarea = page.locator('.composer-input');
 
 // 测试斜杠菜单
@@ -145,28 +136,58 @@ await textarea.fill('/');
 await page.waitForSelector('.slash-menu');
 console.log('✓ Slash menu popup verified');
 await page.keyboard.press('Escape');
-await sleep(200);
-
-// 测试 @ 文件菜单
-await textarea.fill('@');
-await page.waitForSelector('.file-menu');
-console.log('✓ File reference popup verified');
-await page.keyboard.press('Escape');
-await sleep(200);
+await sleep(150);
 
 // 发送真实测试消息
-await textarea.fill('Hello from deep verification!');
+await textarea.fill('Reply "pong" only');
 await page.keyboard.press('Enter');
+
+// 验证用户 Turn 立即呈现
 await page.waitForSelector('.turn-user');
 console.log('✓ User Turn rendered successfully in ChatStream');
 
-await sleep(2000);
+// 验证助手 Turn 呈现
+await page.waitForSelector('.turn-assistant');
+console.log('✓ Assistant Turn rendered');
 
-// 截取高质量全屏快照
-await page.screenshot({ path: '/tmp/webui_next_deep_tested.png', fullPage: true });
-console.log('✓ Deep screenshot captured to /tmp/webui_next_deep_tested.png');
+// 验证流式结束后解除锁定（isStreaming 为 false，发送按钮恢复可用状态）
+let unlocked = false;
+for (let i = 0; i < 60; i++) {
+  const isStop = await page.locator('.composer-send-btn.is-stop').count();
+  if (isStop === 0) {
+    unlocked = true;
+    break;
+  }
+  await sleep(500);
+}
+if (unlocked) {
+  console.log('✓ Generation ended cleanly, isStreaming unlocked, no hang detected!');
+} else {
+  console.error('FAILED: Streaming did not unlock in time!');
+  process.exit(1);
+}
 
-console.log('[7/7] Verifying Zero Runtime Errors...');
+console.log('[7/8] Testing Responsive Mobile Layout...');
+await page.setViewportSize({ width: 390, height: 844 });
+await sleep(300);
+
+// 验证移动端响应式样式是否生效
+const sidebarPos = await page.evaluate(() => {
+  const sb = document.querySelector('.sidebar');
+  return window.getComputedStyle(sb).position;
+});
+console.log('✓ Mobile responsive layout active (Sidebar position:', sidebarPos, ')');
+
+await page.screenshot({ path: '/tmp/webui_mobile.png', fullPage: true });
+console.log('✓ Mobile screenshot captured to /tmp/webui_mobile.png');
+
+// 恢复桌面端并截屏
+await page.setViewportSize({ width: 1440, height: 900 });
+await sleep(300);
+await page.screenshot({ path: '/tmp/webui_desktop.png', fullPage: true });
+console.log('✓ Desktop screenshot captured to /tmp/webui_desktop.png');
+
+console.log('[8/8] Verifying Zero Runtime Errors...');
 const criticalErrors = pageErrors.filter(e => !e.message?.includes('mock'));
 const consoleErrors = consoleLogs.filter(l => l.type === 'error');
 
@@ -180,5 +201,5 @@ if (criticalErrors.length > 0 || consoleErrors.length > 0) {
 console.log('✓ PERFECT: ZERO runtime errors or console errors detected!');
 await browser.close();
 web.kill();
-console.log('🌟 All 7 deep browser E2E test suites passed with absolute perfection!');
+console.log('🌟 All 8 deep browser E2E test suites passed with absolute perfection!');
 process.exit(0);

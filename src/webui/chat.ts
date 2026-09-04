@@ -1,9 +1,24 @@
 // chat.ts —— 对话流视图 (Turn 境界、思考流折叠、步骤轨迹与 Markdown 渲染)
-import { tags, each, h } from "./dom";
+import { tags, each } from "./dom";
 import { turns, isStreaming, appendTerminalLine, setDeckTab } from "./store";
 import { renderMarkdown } from "./md";
 import { Turn, StepItem } from "./types";
 import { signal, effect } from "./signal";
+import {
+  iconBot,
+  iconUser,
+  iconSpinner,
+  iconCheck,
+  iconClose,
+  iconChevronRight,
+  iconChevronDown,
+  iconChevronUp,
+  iconCopy,
+  iconTerminal,
+  iconBolt,
+  iconDiff,
+  iconShield,
+} from "./icons";
 
 export function renderChatStream(): HTMLElement {
   let userScrolledUp = false;
@@ -36,7 +51,6 @@ export function renderChatStream(): HTMLElement {
 
   // 自动滚动到底部
   effect(() => {
-    // 触发依赖
     turns();
     isStreaming();
     if (!userScrolledUp) {
@@ -54,31 +68,38 @@ function renderEmptyState(): HTMLElement {
     { class: "chat-empty-state" },
     tags.div(
       { class: "empty-brand" },
-      tags.svg(
-        { class: "empty-logo", viewBox: "0 0 24 18", fill: "currentColor" },
-        tags.path({
-          d: "M2.4 1.8h17.2a1.7 1.7 0 0 1 0 3.4H10l10 8.2A1.8 1.8 0 0 1 18.65 16.45H3.2a1.7 1.7 0 0 1 0-3.4h9.4L2.7 4.9A1.8 1.8 0 0 1 4.1 1.8z",
-        })
-      ),
-      tags.h2({ class: "empty-title" }, "piz - Agentic Workspace"),
+      tags.div({ class: "empty-logo-wrap" }, iconBot(28, "empty-logo-icon")),
+      tags.h2({ class: "empty-title" }, "piz workspace"),
       tags.p({ class: "empty-subtitle" }, "极速、安全的下一代自律型智能体工作台")
     ),
     tags.div(
       { class: "empty-prompts" },
       tags.div(
         { class: "prompt-card" },
-        tags.div({ class: "prompt-card-title" }, "⚡ 快速诊断与修复"),
-        tags.div({ class: "prompt-card-desc" }, "分析编译报错、内存泄漏或逻辑缺陷并立即提出补丁")
+        tags.div({ class: "prompt-card-icon" }, iconBolt(18)),
+        tags.div(
+          { class: "prompt-card-text" },
+          tags.div({ class: "prompt-card-title" }, "任务驱动与自动编码"),
+          tags.div({ class: "prompt-card-desc" }, "自动分解目标，阅读依赖，编写代码并运行验证")
+        )
       ),
       tags.div(
         { class: "prompt-card" },
-        tags.div({ class: "prompt-card-title" }, "🛠 代码审查与 Diff"),
-        tags.div({ class: "prompt-card-desc" }, "在右侧检视台实时审查变更行数、Hunk 差异与终端输出")
+        tags.div({ class: "prompt-card-icon" }, iconDiff(18)),
+        tags.div(
+          { class: "prompt-card-text" },
+          tags.div({ class: "prompt-card-title" }, "代码审查与检视台"),
+          tags.div({ class: "prompt-card-desc" }, "在右侧实时检视变更行数、Hunk 差异与终端输出")
+        )
       ),
       tags.div(
         { class: "prompt-card" },
-        tags.div({ class: "prompt-card-title" }, "🛡 安全审计与攻防"),
-        tags.div({ class: "prompt-card-desc" }, "污点分析、权限防范、最小权限原则审查与闭环验证")
+        tags.div({ class: "prompt-card-icon" }, iconShield(18)),
+        tags.div(
+          { class: "prompt-card-text" },
+          tags.div({ class: "prompt-card-title" }, "安全审计与授权把关"),
+          tags.div({ class: "prompt-card-desc" }, "命令防护拦截、权限确认与严格的沙箱隔离")
+        )
       )
     )
   );
@@ -89,7 +110,7 @@ function renderUserTurn(turn: Turn): HTMLElement {
     { class: "turn turn-user", id: turn.id },
     tags.div(
       { class: "turn-inner" },
-      tags.div({ class: "turn-avatar user-avatar" }, "U"),
+      tags.div({ class: "turn-avatar user-avatar" }, iconUser(15)),
       tags.div(
         { class: "turn-body" },
         tags.div({ class: "user-bubble" }, turn.content)
@@ -100,12 +121,13 @@ function renderUserTurn(turn: Turn): HTMLElement {
 
 function renderAssistantTurn(turn: Turn): HTMLElement {
   const thoughtCollapsed = signal<boolean>(!turn.isStreaming && Boolean(turn.content));
+  const copied = signal<boolean>(false);
 
   return tags.div(
     { class: "turn turn-assistant", id: turn.id },
     tags.div(
       { class: "turn-inner" },
-      tags.div({ class: "turn-avatar assistant-avatar" }, "π"),
+      tags.div({ class: "turn-avatar assistant-avatar" }, iconBot(15)),
       tags.div(
         { class: "turn-body" },
         // 1. 思考流折叠
@@ -114,7 +136,7 @@ function renderAssistantTurn(turn: Turn): HTMLElement {
           if (!turn.thought && turn.isStreaming && turn.steps.length === 0) {
             return tags.div(
               { class: "thought-panel is-thinking" },
-              tags.span({ class: "thought-spinner" }),
+              iconSpinner(13, "thought-spinner"),
               tags.span({ class: "thought-label" }, "Thinking...")
             );
           }
@@ -132,7 +154,7 @@ function renderAssistantTurn(turn: Turn): HTMLElement {
                 onclick: () => thoughtCollapsed.set(!thoughtCollapsed()),
               },
               tags.span({ class: "thought-chevron" }, () =>
-                thoughtCollapsed() ? "▸" : "▾"
+                thoughtCollapsed() ? iconChevronRight(12) : iconChevronDown(12)
               ),
               tags.span({ class: "thought-title" }, `Thinking Process${durationText}`),
               turn.isStreaming
@@ -159,7 +181,10 @@ function renderAssistantTurn(turn: Turn): HTMLElement {
         () => {
           const content = turn.content || "";
           if (!content && turn.isStreaming) {
-            return tags.div({ class: "markdown-body is-generating" }, tags.span({ class: "typing-cursor" }));
+            return tags.div(
+              { class: "markdown-body is-generating" },
+              tags.span({ class: "typing-cursor" })
+            );
           }
 
           const html = renderMarkdown(content);
@@ -171,6 +196,27 @@ function renderAssistantTurn(turn: Turn): HTMLElement {
             el.appendChild(cursor);
           }
           return el;
+        },
+
+        // 4. 底部操作微栏 (复制等)
+        () => {
+          if (!turn.content || turn.isStreaming) return null;
+          return tags.div(
+            { class: "turn-footer-actions" },
+            tags.button(
+              {
+                class: "turn-action-btn",
+                title: "Copy reply",
+                onclick: () => {
+                  navigator.clipboard.writeText(turn.content || "");
+                  copied.set(true);
+                  setTimeout(() => copied.set(false), 2000);
+                },
+              },
+              () => (copied() ? iconCheck(12) : iconCopy(12)),
+              tags.span({}, () => (copied() ? "Copied" : "Copy"))
+            )
+          );
         }
       )
     )
@@ -179,6 +225,7 @@ function renderAssistantTurn(turn: Turn): HTMLElement {
 
 function renderStepCard(step: StepItem): HTMLElement {
   const isExpanded = signal<boolean>(false);
+  const stepCopied = signal<boolean>(false);
 
   return tags.div(
     {
@@ -190,9 +237,9 @@ function renderStepCard(step: StepItem): HTMLElement {
         onclick: () => isExpanded.set(!isExpanded()),
       },
       tags.span({ class: "step-status-icon" }, () => {
-        if (step.status === "running") return "⟳";
-        if (step.status === "error") return "✕";
-        return "✓";
+        if (step.status === "running") return iconSpinner(13);
+        if (step.status === "error") return iconClose(13);
+        return iconCheck(13);
       }),
       tags.span({ class: "step-name" }, step.name),
       step.desc ? tags.span({ class: "step-desc" }, step.desc) : null,
@@ -200,7 +247,9 @@ function renderStepCard(step: StepItem): HTMLElement {
         { class: "step-time" },
         step.durationMs ? `${(step.durationMs / 1000).toFixed(2)}s` : "..."
       ),
-      tags.span({ class: "step-chevron" }, () => (isExpanded() ? "▴" : "▾"))
+      tags.span({ class: "step-chevron" }, () =>
+        isExpanded() ? iconChevronUp(12) : iconChevronDown(12)
+      )
     ),
     // 展开查看详情
     () => {
@@ -239,11 +288,28 @@ function renderStepCard(step: StepItem): HTMLElement {
             {
               class: "step-deck-btn",
               onclick: () => {
-                appendTerminalLine(`=== Step ${step.name} ===\n${step.result || step.error || ""}`, "system");
+                const text = step.result || step.error || "";
+                navigator.clipboard.writeText(text);
+                stepCopied.set(true);
+                setTimeout(() => stepCopied.set(false), 2000);
+              },
+            },
+            () => (stepCopied() ? iconCheck(12) : iconCopy(12)),
+            tags.span({}, () => (stepCopied() ? "Copied" : "Copy"))
+          ),
+          tags.button(
+            {
+              class: "step-deck-btn",
+              onclick: () => {
+                appendTerminalLine(
+                  `=== Step ${step.name} ===\n${step.result || step.error || ""}`,
+                  "system"
+                );
                 setDeckTab("terminal");
               },
             },
-            "Send to Terminal"
+            iconTerminal(12),
+            tags.span({}, "Send to Terminal")
           )
         )
       );

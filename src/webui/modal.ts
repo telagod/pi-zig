@@ -1,5 +1,5 @@
 // modal.ts —— 权限审批弹窗、命令面板与设置弹窗
-import { tags, h } from "./dom";
+import { tags } from "./dom";
 import {
   pendingApproval,
   approve,
@@ -10,7 +10,6 @@ import {
   switchSession,
   createSession,
   setDeckTab,
-  switchMode,
   models,
   model,
   switchModel,
@@ -18,6 +17,16 @@ import {
 } from "./store";
 import { setToken, getToken } from "./net";
 import { signal } from "./signal";
+import {
+  iconShield,
+  iconSearch,
+  iconPlus,
+  iconDiff,
+  iconTerminal,
+  iconClose,
+  iconKey,
+  iconCheck,
+} from "./icons";
 
 export function renderModals(): HTMLElement {
   const container = tags.div({ class: "modals-layer" });
@@ -37,7 +46,7 @@ export function renderModals(): HTMLElement {
           { class: "modal-card permission-modal" },
           tags.div(
             { class: "modal-hdr" },
-            tags.span({ class: "perm-icon" }, "🛡"),
+            tags.span({ class: "perm-icon" }, iconShield(18)),
             tags.h3({ class: "modal-title" }, "Permission Approval Required")
           ),
           tags.div(
@@ -57,14 +66,16 @@ export function renderModals(): HTMLElement {
                 class: "btn btn-deny",
                 onclick: () => approve(req.id, false),
               },
-              "Deny"
+              iconClose(13),
+              tags.span({}, "Deny")
             ),
             tags.button(
               {
                 class: "btn btn-allow",
                 onclick: () => approve(req.id, true),
               },
-              "Allow Execution"
+              iconCheck(13),
+              tags.span({}, "Allow Execution")
             )
           )
         );
@@ -95,7 +106,7 @@ export function renderModals(): HTMLElement {
           { class: "modal-card command-palette" },
           tags.div(
             { class: "palette-input-box" },
-            tags.span({ class: "palette-icon" }, "⌕"),
+            iconSearch(15, "palette-icon"),
             tags.input({
               class: "palette-input",
               placeholder: "Type a command or search sessions...",
@@ -119,7 +130,7 @@ export function renderModals(): HTMLElement {
                   showSearchModal.set(false);
                 },
               },
-              tags.span({ class: "palette-item-icon" }, "＋"),
+              tags.span({ class: "palette-item-icon" }, iconPlus(14)),
               tags.span({}, "Create New Session")
             ),
             tags.div(
@@ -130,7 +141,7 @@ export function renderModals(): HTMLElement {
                   showSearchModal.set(false);
                 },
               },
-              tags.span({ class: "palette-item-icon" }, "⌥"),
+              tags.span({ class: "palette-item-icon" }, iconDiff(14)),
               tags.span({}, "View Code Diffs")
             ),
             tags.div(
@@ -141,7 +152,7 @@ export function renderModals(): HTMLElement {
                   showSearchModal.set(false);
                 },
               },
-              tags.span({ class: "palette-item-icon" }, "⌨"),
+              tags.span({ class: "palette-item-icon" }, iconTerminal(14)),
               tags.span({}, "Open Terminal Viewer")
             ),
             // 会话列表匹配
@@ -157,7 +168,6 @@ export function renderModals(): HTMLElement {
                     showSearchModal.set(false);
                   },
                 },
-                tags.span({ class: "palette-item-icon" }, "💬"),
                 tags.span({ class: "palette-item-title" }, s.title || s.name),
                 tags.span({ class: "palette-item-badge" }, `${s.messageCount} msgs`)
               )
@@ -181,7 +191,11 @@ export function renderModals(): HTMLElement {
 
         return tags.div(
           { class: "modal-card auth-modal" },
-          tags.h3({ class: "modal-title" }, "Authentication Required"),
+          tags.div(
+            { class: "modal-hdr" },
+            iconKey(18, "auth-icon"),
+            tags.h3({ class: "modal-title" }, "Authentication Required")
+          ),
           tags.p({ class: "auth-desc" }, "Please enter your server token to access piz."),
           tags.input({
             type: "password",
@@ -235,7 +249,7 @@ export function renderModals(): HTMLElement {
                 class: "modal-close-btn",
                 onclick: () => showSettingsModal.set(false),
               },
-              "✕"
+              iconClose(14)
             )
           ),
           tags.div(

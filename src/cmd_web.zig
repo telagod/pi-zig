@@ -679,10 +679,24 @@ fn webWorker(ses: *WebSession) void {
         defer ses.busy.store(0, .release);
         ses.agent.aborted.store(false, .release);
         ses.updated_ns = std.Io.Clock.now(.real, util.io).nanoseconds;
+        var err_buf: [256]u8 = undefined;
+        var send_err: ?[]const u8 = null;
         const result = if (img) |im|
-            ses.agent.sendWithImage(text orelse item.text, im, mime) catch null
+            ses.agent.sendWithImage(text orelse item.text, im, mime) catch |err| blk: {
+                send_err = std.fmt.bufPrint(&err_buf, "Agent error: {s}", .{@errorName(err)}) catch "Agent error";
+                break :blk null;
+            }
         else
-            ses.agent.send(text orelse item.text) catch null;
+            ses.agent.send(text orelse item.text) catch |err| blk: {
+                send_err = std.fmt.bufPrint(&err_buf, "Agent error: {s}", .{@errorName(err)}) catch "Agent error";
+                break :blk null;
+            };
+        if (send_err) |se| {
+            ses.hub.push("{{\"type\":\"message\",\"session\":{s},\"text\":{s}}}", .{
+                util.jsonString(ses.agent.alloc, ses.name) catch "\"\"",
+                util.jsonString(ses.agent.alloc, se) catch "\"\"",
+            });
+        }
         if (result) |r| {
             const u = r.usage;
             ses.tokens_total += (u.input orelse 0) + (u.output orelse 0) + (u.cache_read orelse 0);

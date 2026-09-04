@@ -891,7 +891,6 @@ const urlParams = new URLSearchParams(window.location.search);
   const params = new URLSearchParams();
   const s = exports.activeSession.call(void 0, );
   if (s) params.set("session", s);
-  // 空 ws 代表当前默认项目，非空时才传递给后端
   if (exports.urlWs) params.set("ws", exports.urlWs);
   for (const [k, v] of Object.entries(extra)) {
     if (v != null && v !== "") params.set(k, v);
@@ -1151,7 +1150,16 @@ const urlParams = new URLSearchParams(window.location.search);
   } catch (err) {
     console.warn("interrupt error:", err);
   } finally {
-    exports.isStreaming.set(false);
+    _signal.batch.call(void 0, () => {
+      exports.isStreaming.set(false);
+      const curId = exports.streamingTurnId.call(void 0, );
+      if (curId) {
+        exports.turns.update((prev) =>
+          prev.map((t) => (t.id === curId ? { ...t, isStreaming: false } : t))
+        );
+      }
+      exports.streamingTurnId.set(null);
+    });
   }
 } exports.interrupt = interrupt;
 
@@ -1159,7 +1167,7 @@ const urlParams = new URLSearchParams(window.location.search);
   try {
     await _net.apiFetch.call(void 0, "/api/approve", {
       method: "POST",
-      body: JSON.stringify({ id, allow }),
+      body: JSON.stringify({ id: Number(id) || 0, allow }),
     });
     exports.pendingApproval.set(null);
   } catch (err) {
@@ -1196,10 +1204,13 @@ const urlParams = new URLSearchParams(window.location.search);
   });
 
   try {
-    await _net.apiFetch.call(void 0, `/api/chat${getQuery()}`, {
+    const res = await _net.apiFetch.call(void 0, `/api/chat${getQuery()}`, {
       method: "POST",
-      body: JSON.stringify({ message: text.trim() }),
+      body: JSON.stringify({ text: text.trim(), message: text.trim() }),
     });
+    if (res && res.ok === false) {
+      throw new Error(res.error || "Request rejected by server");
+    }
   } catch (err) {
     console.error("sendMessage failed:", err);
     _signal.batch.call(void 0, () => {
@@ -1216,157 +1227,202 @@ const urlParams = new URLSearchParams(window.location.search);
   }
 } exports.sendMessage = sendMessage;
 
-// 核心 SSE 事件调度
- function handleSseEvent(event) {
-  const { type, data } = event;
+// 核心 SSE 事件调度（精准对齐后端真实事件契约）
+ function handleSseEvent(evt) {
+  if (!evt || !evt.type) return;
 
-  switch (type) {
-    case "stream_start":
+  // 会话隔离检查：如果事件带有 session 且不匹配当前激活会话，跳过
+  if (evt.session && evt.session !== exports.activeSession.call(void 0, )) return;
+
+  function ensureAssistantTurn() {
+    const cur = exports.streamingTurnId.call(void 0, );
+    if (cur) return cur;
+    const list = exports.turns.call(void 0, );
+    const last = list[list.length - 1];
+    if (last && last.role === "assistant") {
+      exports.streamingTurnId.set(last.id);
+      return last.id;
+    }
+    const newId = `a_${Date.now()}`;
+    exports.streamingTurnId.set(newId);
+    exports.turns.update((prev) => [
+      ...prev,
+      {
+        id: newId,
+        role: "assistant",
+        content: "",
+        thought: "",
+        steps: [],
+        timestamp: Date.now(),
+        isStreaming: true,
+      },
+    ]);
+    return newId;
+  }
+
+  switch (evt.type) {
+    case "user_message": {
       exports.isStreaming.set(true);
       break;
+    }
 
-    case "stream": {
-      const chunk = typeof data === "string" ? data : _optionalChain([data, 'optionalAccess', _10 => _10.chunk]) || "";
-      const curId = exports.streamingTurnId.call(void 0, );
-      if (curId) {
-        exports.turns.update((prev) =>
-          prev.map((t) =>
-            t.id === curId ? { ...t, content: (t.content || "") + chunk } : t
-          )
-        );
-      }
+    case "reasoning": {
+      // 思考流增量
+      const chunk = evt.text || "";
+      if (!chunk) break;
+      exports.isStreaming.set(true);
+      const targetId = ensureAssistantTurn();
+      exports.turns.update((prev) =>
+        prev.map((t) =>
+          t.id === targetId ? { ...t, thought: (t.thought || "") + chunk, isStreaming: true } : t
+        )
+      );
       break;
     }
 
-    case "thought": {
-      const thoughtChunk = typeof data === "string" ? data : _optionalChain([data, 'optionalAccess', _11 => _11.chunk]) || "";
-      const curId = exports.streamingTurnId.call(void 0, );
-      if (curId) {
-        exports.turns.update((prev) =>
-          prev.map((t) =>
-            t.id === curId ? { ...t, thought: (t.thought || "") + thoughtChunk } : t
-          )
-        );
-      }
+    case "message": {
+      // 回答正文增量
+      const chunk = evt.text || "";
+      if (!chunk) break;
+      exports.isStreaming.set(true);
+      const targetId = ensureAssistantTurn();
+      exports.turns.update((prev) =>
+        prev.map((t) =>
+          t.id === targetId ? { ...t, content: (t.content || "") + chunk, isStreaming: true } : t
+        )
+      );
       break;
     }
 
-    case "step_start": {
-      const curId = exports.streamingTurnId.call(void 0, );
+    case "tool_call": {
+      exports.isStreaming.set(true);
+      let argsObj = evt.args;
+      if (typeof evt.args === "string") {
+        try { argsObj = JSON.parse(evt.args); } catch (_) {}
+      }
+
       const step = {
-        id: data.id || `st_${Date.now()}`,
-        name: data.name || "Task Step",
-        desc: data.desc,
+        id: `st_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        name: evt.name || "Tool",
+        desc: typeof evt.args === "string" ? evt.args : JSON.stringify(evt.args),
         status: "running",
         startedAt: Date.now(),
-        args: data.args,
+        args: argsObj,
       };
-      if (curId) {
-        exports.turns.update((prev) =>
-          prev.map((t) =>
-            t.id === curId ? { ...t, steps: [...t.steps, step] } : t
-          )
-        );
-      }
-      appendTerminalLine(`▶ [Step] ${step.name}: ${step.desc || ""}`, "cmd");
+
+      const targetId = ensureAssistantTurn();
+      exports.turns.update((prev) =>
+        prev.map((t) =>
+          t.id === targetId ? { ...t, steps: [...t.steps, step], isStreaming: true } : t
+        )
+      );
+      appendTerminalLine(`▶ [Tool] ${evt.name}: ${typeof evt.args === "string" ? evt.args : JSON.stringify(evt.args)}`, "cmd");
       break;
     }
 
-    case "step_end": {
-      const curId = exports.streamingTurnId.call(void 0, );
-      if (curId && data.id) {
-        exports.turns.update((prev) =>
-          prev.map((t) =>
-            t.id === curId
-              ? {
-                  ...t,
-                  steps: t.steps.map((st) =>
-                    st.id === data.id
-                      ? {
-                          ...st,
-                          status: data.error ? "error" : "done",
-                          durationMs: Date.now() - st.startedAt,
-                          result: data.result,
-                          error: data.error,
-                        }
-                      : st
-                  ),
-                }
-              : t
-          )
-        );
-      }
-      break;
-    }
+    case "tool_result": {
+      const isError = evt.error === true || evt.error === "true";
+      const summary = evt.summary || "";
 
-    case "tool_diff": {
-      if (data && data.diff) {
-        const parsed = _diff.parseUnifiedDiff.call(void 0, data.diff);
-        exports.diffs.set(parsed);
+      exports.turns.update((prev) =>
+        prev.map((t) => {
+          if (!t.steps || t.steps.length === 0) return t;
+          const steps = [...t.steps];
+          for (let i = steps.length - 1; i >= 0; i--) {
+            if (steps[i].name === evt.name && steps[i].status === "running") {
+              steps[i] = {
+                ...steps[i],
+                status: isError ? "error" : "done",
+                durationMs: Date.now() - steps[i].startedAt,
+                result: summary,
+                error: isError ? summary : undefined,
+              };
+              break;
+            }
+          }
+          return { ...t, steps };
+        })
+      );
+
+      // 提取代码 diff
+      if (summary.includes("diff --git") || summary.includes("@@ -")) {
+        const parsed = _diff.parseUnifiedDiff.call(void 0, summary);
         if (parsed.length > 0) {
+          exports.diffs.set(parsed);
           exports.activeDiffPath.set(parsed[0].path);
           setDeckTab("diffs");
         }
       }
+
+      appendTerminalLine(summary, isError ? "stderr" : "stdout");
       break;
     }
 
-    case "terminal_out": {
-      const text = typeof data === "string" ? data : _optionalChain([data, 'optionalAccess', _12 => _12.text]) || "";
-      appendTerminalLine(text, _optionalChain([data, 'optionalAccess', _13 => _13.stream]) === "stderr" ? "stderr" : "stdout");
+    case "permission": {
+      exports.pendingApproval.set({
+        id: String(evt.id),
+        type: evt.name || "execute",
+        command: typeof evt.args === "string" ? evt.args : JSON.stringify(evt.args),
+        desc: `Operation '${evt.name}' requires authorization`,
+      });
       break;
     }
 
-    case "job_update": {
-      if (data && data.id) {
-        exports.jobs.update((prev) => {
-          const idx = prev.findIndex((j) => j.id === data.id);
-          const item = {
-            id: data.id,
-            name: data.name || "Background Job",
-            role: data.role,
-            status: data.status || "running",
-            startedAt: data.startedAt || Date.now(),
-            finishedAt: data.finishedAt,
-            summary: data.summary,
-          };
-          if (idx >= 0) {
-            const next = [...prev];
-            next[idx] = { ...next[idx], ...item };
-            return next;
-          }
-          return [...prev, item];
-        });
+    case "permission_result": {
+      if (exports.pendingApproval.call(void 0, ) && exports.pendingApproval.call(void 0, ).id === String(evt.id)) {
+        exports.pendingApproval.set(null);
       }
       break;
     }
 
-    case "permission_request": {
-      if (data && data.id) {
-        exports.pendingApproval.set({
-          id: data.id,
-          type: data.type || "execute",
-          command: data.command,
-          desc: data.desc,
-          path: data.path,
-        });
+    case "subagent": {
+      const item = {
+        id: `sub_${evt.idx || 0}`,
+        name: `Subagent #${evt.idx || 0}`,
+        role: evt.kind,
+        status: "running",
+        startedAt: Date.now(),
+        summary: evt.text,
+      };
+      exports.jobs.update((prev) => {
+        const idx = prev.findIndex((j) => j.id === item.id);
+        if (idx >= 0) {
+          const next = [...prev];
+          next[idx] = { ...next[idx], ...item };
+          return next;
+        }
+        return [...prev, item];
+      });
+      break;
+    }
+
+    case "status": {
+      _signal.batch.call(void 0, () => {
+        if (typeof evt.pct === "number") exports.pct.set(evt.pct);
+        if (evt.model) exports.model.set(evt.model);
+      });
+      break;
+    }
+
+    case "title": {
+      if (evt.title) {
+        loadSessions();
       }
       break;
     }
 
-    case "stream_end":
+    case "turn_end": {
+      // 本轮彻底完成，解开流式锁定！
       _signal.batch.call(void 0, () => {
         exports.isStreaming.set(false);
-        const curId = exports.streamingTurnId.call(void 0, );
-        if (curId) {
-          exports.turns.update((prev) =>
-            prev.map((t) => (t.id === curId ? { ...t, isStreaming: false } : t))
-          );
-        }
+        exports.turns.update((prev) =>
+          prev.map((t) => (t.isStreaming ? { ...t, isStreaming: false } : t))
+        );
         exports.streamingTurnId.set(null);
       });
       loadState();
       break;
+    }
   }
 } exports.handleSseEvent = handleSseEvent;
 
@@ -1388,6 +1444,240 @@ const urlParams = new URLSearchParams(window.location.search);
     exports.showAuthModal.set(true);
   });
 } exports.boot = boot;
+
+};
+__modules["icons"] = function(module, exports, require) {
+"use strict";Object.defineProperty(exports, "__esModule", {value: true});// icons.ts —— 规范化现代高精矢量图标系统 (统一 16x16 / 20x20 规范，杜绝任何 Emoji)
+var _dom = require('./dom');
+
+function createSvg(
+  d,
+  size = 16,
+  cls = "",
+  attrs = {}
+) {
+  return _dom.tags.svg(
+    {
+      class: `ui-icon ${cls}`.trim(),
+      width: String(size),
+      height: String(size),
+      viewBox: "0 0 24 24",
+      fill: "none",
+      stroke: "currentColor",
+      "stroke-width": "2",
+      "stroke-linecap": "round",
+      "stroke-linejoin": "round",
+      ...attrs,
+    },
+    _dom.tags.path({ d })
+  ) ;
+}
+
+ function iconBot(size = 16, cls = "") {
+  return createSvg(
+    "M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8z",
+    size,
+    cls
+  );
+} exports.iconBot = iconBot;
+
+ function iconUser(size = 16, cls = "") {
+  return createSvg(
+    "M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z",
+    size,
+    cls
+  );
+} exports.iconUser = iconUser;
+
+ function iconSend(size = 16, cls = "") {
+  return createSvg("M12 19V5M5 12l7-7 7 7", size, cls);
+} exports.iconSend = iconSend;
+
+ function iconStop(size = 16, cls = "") {
+  return createSvg("M6 6h12v12H6z", size, cls, { fill: "currentColor" });
+} exports.iconStop = iconStop;
+
+ function iconSpinner(size = 16, cls = "") {
+  return _dom.tags.svg(
+    {
+      class: `ui-icon ui-spinner ${cls}`.trim(),
+      width: String(size),
+      height: String(size),
+      viewBox: "0 0 24 24",
+      fill: "none",
+      stroke: "currentColor",
+      "stroke-width": "2.5",
+      "stroke-linecap": "round",
+    },
+    _dom.tags.path({
+      d: "M12 2a10 10 0 0 1 10 10",
+    })
+  ) ;
+} exports.iconSpinner = iconSpinner;
+
+ function iconCheck(size = 16, cls = "") {
+  return createSvg("M20 6L9 17l-5-5", size, cls);
+} exports.iconCheck = iconCheck;
+
+ function iconClose(size = 16, cls = "") {
+  return createSvg("M18 6L6 18M6 6l12 12", size, cls);
+} exports.iconClose = iconClose;
+
+ function iconChevronRight(size = 16, cls = "") {
+  return createSvg("M9 18l6-6-6-6", size, cls);
+} exports.iconChevronRight = iconChevronRight;
+
+ function iconChevronDown(size = 16, cls = "") {
+  return createSvg("M6 9l6 6 6-6", size, cls);
+} exports.iconChevronDown = iconChevronDown;
+
+ function iconChevronUp(size = 16, cls = "") {
+  return createSvg("M18 15l-6-6-6 6", size, cls);
+} exports.iconChevronUp = iconChevronUp;
+
+ function iconSearch(size = 16, cls = "") {
+  return createSvg("M21 21l-4.35-4.35M19 11a8 8 0 1 1-16 0 8 8 0 0 1 16 0z", size, cls);
+} exports.iconSearch = iconSearch;
+
+ function iconSun(size = 16, cls = "") {
+  return createSvg(
+    "M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42M12 17a5 5 0 1 0 0-10 5 5 0 0 0 0 10z",
+    size,
+    cls
+  );
+} exports.iconSun = iconSun;
+
+ function iconMoon(size = 16, cls = "") {
+  return createSvg("M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z", size, cls);
+} exports.iconMoon = iconMoon;
+
+ function iconPlus(size = 16, cls = "") {
+  return createSvg("M12 5v14M5 12h14", size, cls);
+} exports.iconPlus = iconPlus;
+
+ function iconTrash(size = 16, cls = "") {
+  return createSvg(
+    "M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2",
+    size,
+    cls
+  );
+} exports.iconTrash = iconTrash;
+
+ function iconCopy(size = 16, cls = "") {
+  return createSvg(
+    "M8 4v12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7.242a2 2 0 0 0-.602-1.43L16.083 2.57A2 2 0 0 0 14.685 2H10a2 2 0 0 0-2 2z M4 8H3a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-1",
+    size,
+    cls
+  );
+} exports.iconCopy = iconCopy;
+
+ function iconDiff(size = 16, cls = "") {
+  return createSvg(
+    "M16 3h5v5M4 20L21 3M21 16v5h-5M15 15l6 6M4 4l5 5",
+    size,
+    cls
+  );
+} exports.iconDiff = iconDiff;
+
+ function iconTerminal(size = 16, cls = "") {
+  return createSvg("M4 17l6-6-6-6M12 19h8", size, cls);
+} exports.iconTerminal = iconTerminal;
+
+ function iconFolder(size = 16, cls = "") {
+  return createSvg(
+    "M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z",
+    size,
+    cls
+  );
+} exports.iconFolder = iconFolder;
+
+ function iconFile(size = 16, cls = "") {
+  return createSvg(
+    "M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z M13 2v7h7",
+    size,
+    cls
+  );
+} exports.iconFile = iconFile;
+
+ function iconCpu(size = 16, cls = "") {
+  return createSvg(
+    "M4 4h16v16H4z M9 9h6v6H9z M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 15h3M1 9h3M1 15h3",
+    size,
+    cls
+  );
+} exports.iconCpu = iconCpu;
+
+ function iconBolt(size = 16, cls = "") {
+  return createSvg("M13 2L3 14h9l-1 8 10-12h-9l1-8z", size, cls);
+} exports.iconBolt = iconBolt;
+
+ function iconQuestion(size = 16, cls = "") {
+  return createSvg(
+    "M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3M12 17h.01M22 12A10 10 0 1 1 2 12a10 10 0 0 1 20 0z",
+    size,
+    cls
+  );
+} exports.iconQuestion = iconQuestion;
+
+ function iconCompass(size = 16, cls = "") {
+  return createSvg(
+    "M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zm4.24-14.24l-2.83 8.48-8.48 2.83 2.83-8.48 8.48-2.83z",
+    size,
+    cls
+  );
+} exports.iconCompass = iconCompass;
+
+ function iconShield(size = 16, cls = "") {
+  return createSvg("M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z", size, cls);
+} exports.iconShield = iconShield;
+
+ function iconSettings(size = 16, cls = "") {
+  return createSvg(
+    "M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zm7.4 1.5a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V23a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 21.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z",
+    size,
+    cls
+  );
+} exports.iconSettings = iconSettings;
+
+ function iconMenu(size = 16, cls = "") {
+  return createSvg("M3 12h18M3 6h18M3 18h18", size, cls);
+} exports.iconMenu = iconMenu;
+
+ function iconSidebar(size = 16, cls = "") {
+  return createSvg("M3 3h18v18H3z M9 3v18", size, cls);
+} exports.iconSidebar = iconSidebar;
+
+ function iconDeck(size = 16, cls = "") {
+  return createSvg("M3 3h18v18H3z M15 3v18", size, cls);
+} exports.iconDeck = iconDeck;
+
+ function iconExternal(size = 16, cls = "") {
+  return createSvg("M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6M15 3h6v6M10 14L21 3", size, cls);
+} exports.iconExternal = iconExternal;
+
+ function iconKey(size = 16, cls = "") {
+  return createSvg(
+    "M21 2l-2 2m-1.5 1.5L14 9M3 21l6.5-6.5a4.5 4.5 0 1 1 2 2L5 23H3v-2z",
+    size,
+    cls
+  );
+} exports.iconKey = iconKey;
+
+ function iconSparkle(size = 16, cls = "") {
+  return createSvg(
+    "M12 2l2.4 7.2L21.6 12l-7.2 2.4L12 21.6l-2.4-7.2L2.4 12l7.2-2.4z",
+    size,
+    cls
+  );
+} exports.iconSparkle = iconSparkle;
+
+ function iconBranch(size = 16, cls = "") {
+  return createSvg(
+    "M6 3a3 3 0 1 0 0 6 3 3 0 0 0 0-6zm12 6a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM6 15a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM6 9v6m0 0a6 6 0 0 1 6-6h3",
+    size,
+    cls
+  );
+} exports.iconBranch = iconBranch;
 
 };
 __modules["topbar"] = function(module, exports, require) {
@@ -1417,6 +1707,19 @@ var _dom = require('./dom');
 var _store = require('./store');
 
 
+
+
+
+
+
+
+
+
+
+
+
+var _icons = require('./icons');
+
  function renderTopBar() {
   return _dom.tags.header(
     { class: "topbar" },
@@ -1429,11 +1732,7 @@ var _store = require('./store');
           title: "Toggle Sidebar (Ctrl+B)",
           onclick: _store.toggleSidebar,
         },
-        _dom.tags.svg(
-          { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2" },
-          _dom.tags.path({ d: "M3 3h18v18H3z" }),
-          _dom.tags.path({ d: "M9 3v18" })
-        )
+        _icons.iconSidebar.call(void 0, 15)
       ),
       _dom.tags.div(
         { class: "tb-brand" },
@@ -1453,7 +1752,11 @@ var _store = require('./store');
         const ch = _store.changesCount.call(void 0, );
         const branchPart = b ? ` (${b})` : "";
         const chPart = ch > 0 ? ` · ${ch}Δ` : "";
-        return _dom.tags.span({ class: "tb-ws-badge", title: `Workspace: ${w}${branchPart}` }, `${w}${branchPart}${chPart}`);
+        return _dom.tags.span(
+          { class: "tb-ws-badge", title: `Workspace: ${w}${branchPart}` },
+          _icons.iconBranch.call(void 0, 12, "tb-branch-icon"),
+          _dom.tags.span({}, `${w}${branchPart}${chPart}`)
+        );
       },
       _dom.tags.span({ class: "tb-sep" }, "/"),
       _dom.tags.button(
@@ -1479,9 +1782,9 @@ var _store = require('./store');
       { class: "tb-center" },
       _dom.tags.div(
         { class: "mode-pill" },
-        renderModeBtn("yolo", "⚡ YOLO", "Full auto-execution"),
-        renderModeBtn("ask", "🛡 Ask", "Ask before destructive operations"),
-        renderModeBtn("plan", "📋 Plan", "Analysis & plan only, no write")
+        renderModeBtn("yolo", _icons.iconBolt, "YOLO", "Full auto-execution"),
+        renderModeBtn("ask", _icons.iconQuestion, "ASK", "Ask before destructive operations"),
+        renderModeBtn("plan", _icons.iconCompass, "PLAN", "Analysis & plan only, no write")
       )
     ),
 
@@ -1495,7 +1798,7 @@ var _store = require('./store');
           title: "Search / Command Palette (Ctrl+K)",
           onclick: () => _store.showSearchModal.set(true),
         },
-        _dom.tags.span({ class: "search-icon" }, "⌕"),
+        _icons.iconSearch.call(void 0, 13),
         _dom.tags.span({ class: "search-key" }, "⌘K")
       ),
       // 模型下拉
@@ -1539,11 +1842,7 @@ var _store = require('./store');
           title: "Toggle Workspace Deck (Diffs/Terminal/Jobs)",
           onclick: _store.toggleDeck,
         },
-        _dom.tags.svg(
-          { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2" },
-          _dom.tags.path({ d: "M3 3h18v18H3z" }),
-          _dom.tags.path({ d: "M15 3v18" })
-        ),
+        _icons.iconDeck.call(void 0, 14),
         _dom.tags.span({ class: "tb-deck-label" }, "Deck")
       ),
       // 主题切换
@@ -1553,7 +1852,7 @@ var _store = require('./store');
           title: "Toggle Theme",
           onclick: _store.toggleTheme,
         },
-        () => (_store.theme.call(void 0, ) === "dark" ? "☀" : "🌙")
+        () => (_store.theme.call(void 0, ) === "dark" ? _icons.iconSun.call(void 0, 15) : _icons.iconMoon.call(void 0, 15))
       ),
       // 设置按钮
       _dom.tags.button(
@@ -1562,7 +1861,7 @@ var _store = require('./store');
           title: "Settings",
           onclick: () => _store.showSettingsModal.set(true),
         },
-        "⚙"
+        _icons.iconSettings.call(void 0, 15)
       ),
       // 网络状态指示灯
       _dom.tags.span({
@@ -1573,14 +1872,20 @@ var _store = require('./store');
   );
 } exports.renderTopBar = renderTopBar;
 
-function renderModeBtn(m, label, title) {
+function renderModeBtn(
+  m,
+  iconFn,
+  label,
+  title
+) {
   return _dom.tags.button(
     {
       class: () => `mode-btn ${_store.mode.call(void 0, ) === m ? "is-active" : ""}`,
       title,
       onclick: () => _store.switchMode.call(void 0, m),
     },
-    label
+    iconFn(12, "mode-btn-icon"),
+    _dom.tags.span({ class: "mode-btn-label" }, label)
   );
 }
 
@@ -1599,6 +1904,7 @@ var _dom = require('./dom');
 var _store = require('./store');
 var _signal = require('./signal');
 
+var _icons = require('./icons');
 
  function renderSidebar() {
   const searchQuery = _signal.signal("");
@@ -1622,7 +1928,7 @@ var _signal = require('./signal');
           class: "new-session-btn",
           onclick: _store.createSession,
         },
-        _dom.tags.span({ class: "btn-icon" }, "＋"),
+        _icons.iconPlus.call(void 0, 13, "btn-icon"),
         _dom.tags.span({ class: "btn-text" }, "New Session")
       )
     ),
@@ -1630,6 +1936,7 @@ var _signal = require('./signal');
     // 搜索框
     _dom.tags.div(
       { class: "sidebar-search-box" },
+      _icons.iconSearch.call(void 0, 12, "sidebar-search-icon"),
       _dom.tags.input({
         class: "sidebar-search-input",
         placeholder: "Filter sessions...",
@@ -1665,17 +1972,6 @@ var _signal = require('./signal');
             { class: "session-actions", onclick: (e) => e.stopPropagation() },
             _dom.tags.button(
               {
-                class: "session-act-btn",
-                title: "Rename",
-                onclick: () => {
-                  const val = prompt("Rename session:", item.title || item.name);
-                  if (val && val.trim()) _store.renameSession.call(void 0, item.id, val.trim());
-                },
-              },
-              "✎"
-            ),
-            _dom.tags.button(
-              {
                 class: "session-act-btn session-del-btn",
                 title: "Delete",
                 onclick: () => {
@@ -1684,31 +1980,28 @@ var _signal = require('./signal');
                   }
                 },
               },
-              "🗑"
+              _icons.iconTrash.call(void 0, 12)
             )
           )
         );
-      })
-    ),
-
-    // 侧栏底端状态
-    _dom.tags.div(
-      { class: "sidebar-footer" },
-      _dom.tags.span({ class: "sidebar-info" }, () => `${_store.sessions.call(void 0, ).length} sessions`)
+      }),
+      () => {
+        if (_store.sessions.call(void 0, ).length === 0) {
+          return _dom.tags.div({ class: "sidebar-empty" }, "No sessions yet.");
+        }
+        return null;
+      }
     )
   );
 } exports.renderSidebar = renderSidebar;
 
 function formatRelativeTime(ts) {
   if (!ts) return "";
-  const sec = Math.max(1, Math.floor((Date.now() - ts) / 1000));
-  if (sec < 60) return `${sec}s ago`;
-  const min = Math.floor(sec / 60);
-  if (min < 60) return `${min}m ago`;
-  const hr = Math.floor(min / 60);
-  if (hr < 24) return `${hr}h ago`;
-  const days = Math.floor(hr / 24);
-  return `${days}d ago`;
+  const diff = Date.now() - ts;
+  if (diff < 60000) return "just now";
+  if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
+  if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
+  return `${Math.floor(diff / 86400000)}d ago`;
 }
 
 };
@@ -1896,6 +2189,21 @@ var _md = require('./md');
 
 var _signal = require('./signal');
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+var _icons = require('./icons');
+
  function renderChatStream() {
   let userScrolledUp = false;
 
@@ -1927,7 +2235,6 @@ var _signal = require('./signal');
 
   // 自动滚动到底部
   _signal.effect.call(void 0, () => {
-    // 触发依赖
     _store.turns.call(void 0, );
     _store.isStreaming.call(void 0, );
     if (!userScrolledUp) {
@@ -1945,31 +2252,38 @@ function renderEmptyState() {
     { class: "chat-empty-state" },
     _dom.tags.div(
       { class: "empty-brand" },
-      _dom.tags.svg(
-        { class: "empty-logo", viewBox: "0 0 24 18", fill: "currentColor" },
-        _dom.tags.path({
-          d: "M2.4 1.8h17.2a1.7 1.7 0 0 1 0 3.4H10l10 8.2A1.8 1.8 0 0 1 18.65 16.45H3.2a1.7 1.7 0 0 1 0-3.4h9.4L2.7 4.9A1.8 1.8 0 0 1 4.1 1.8z",
-        })
-      ),
-      _dom.tags.h2({ class: "empty-title" }, "piz - Agentic Workspace"),
+      _dom.tags.div({ class: "empty-logo-wrap" }, _icons.iconBot.call(void 0, 28, "empty-logo-icon")),
+      _dom.tags.h2({ class: "empty-title" }, "piz workspace"),
       _dom.tags.p({ class: "empty-subtitle" }, "极速、安全的下一代自律型智能体工作台")
     ),
     _dom.tags.div(
       { class: "empty-prompts" },
       _dom.tags.div(
         { class: "prompt-card" },
-        _dom.tags.div({ class: "prompt-card-title" }, "⚡ 快速诊断与修复"),
-        _dom.tags.div({ class: "prompt-card-desc" }, "分析编译报错、内存泄漏或逻辑缺陷并立即提出补丁")
+        _dom.tags.div({ class: "prompt-card-icon" }, _icons.iconBolt.call(void 0, 18)),
+        _dom.tags.div(
+          { class: "prompt-card-text" },
+          _dom.tags.div({ class: "prompt-card-title" }, "任务驱动与自动编码"),
+          _dom.tags.div({ class: "prompt-card-desc" }, "自动分解目标，阅读依赖，编写代码并运行验证")
+        )
       ),
       _dom.tags.div(
         { class: "prompt-card" },
-        _dom.tags.div({ class: "prompt-card-title" }, "🛠 代码审查与 Diff"),
-        _dom.tags.div({ class: "prompt-card-desc" }, "在右侧检视台实时审查变更行数、Hunk 差异与终端输出")
+        _dom.tags.div({ class: "prompt-card-icon" }, _icons.iconDiff.call(void 0, 18)),
+        _dom.tags.div(
+          { class: "prompt-card-text" },
+          _dom.tags.div({ class: "prompt-card-title" }, "代码审查与检视台"),
+          _dom.tags.div({ class: "prompt-card-desc" }, "在右侧实时检视变更行数、Hunk 差异与终端输出")
+        )
       ),
       _dom.tags.div(
         { class: "prompt-card" },
-        _dom.tags.div({ class: "prompt-card-title" }, "🛡 安全审计与攻防"),
-        _dom.tags.div({ class: "prompt-card-desc" }, "污点分析、权限防范、最小权限原则审查与闭环验证")
+        _dom.tags.div({ class: "prompt-card-icon" }, _icons.iconShield.call(void 0, 18)),
+        _dom.tags.div(
+          { class: "prompt-card-text" },
+          _dom.tags.div({ class: "prompt-card-title" }, "安全审计与授权把关"),
+          _dom.tags.div({ class: "prompt-card-desc" }, "命令防护拦截、权限确认与严格的沙箱隔离")
+        )
       )
     )
   );
@@ -1980,7 +2294,7 @@ function renderUserTurn(turn) {
     { class: "turn turn-user", id: turn.id },
     _dom.tags.div(
       { class: "turn-inner" },
-      _dom.tags.div({ class: "turn-avatar user-avatar" }, "U"),
+      _dom.tags.div({ class: "turn-avatar user-avatar" }, _icons.iconUser.call(void 0, 15)),
       _dom.tags.div(
         { class: "turn-body" },
         _dom.tags.div({ class: "user-bubble" }, turn.content)
@@ -1991,12 +2305,13 @@ function renderUserTurn(turn) {
 
 function renderAssistantTurn(turn) {
   const thoughtCollapsed = _signal.signal(!turn.isStreaming && Boolean(turn.content));
+  const copied = _signal.signal(false);
 
   return _dom.tags.div(
     { class: "turn turn-assistant", id: turn.id },
     _dom.tags.div(
       { class: "turn-inner" },
-      _dom.tags.div({ class: "turn-avatar assistant-avatar" }, "π"),
+      _dom.tags.div({ class: "turn-avatar assistant-avatar" }, _icons.iconBot.call(void 0, 15)),
       _dom.tags.div(
         { class: "turn-body" },
         // 1. 思考流折叠
@@ -2005,7 +2320,7 @@ function renderAssistantTurn(turn) {
           if (!turn.thought && turn.isStreaming && turn.steps.length === 0) {
             return _dom.tags.div(
               { class: "thought-panel is-thinking" },
-              _dom.tags.span({ class: "thought-spinner" }),
+              _icons.iconSpinner.call(void 0, 13, "thought-spinner"),
               _dom.tags.span({ class: "thought-label" }, "Thinking...")
             );
           }
@@ -2023,7 +2338,7 @@ function renderAssistantTurn(turn) {
                 onclick: () => thoughtCollapsed.set(!thoughtCollapsed()),
               },
               _dom.tags.span({ class: "thought-chevron" }, () =>
-                thoughtCollapsed() ? "▸" : "▾"
+                thoughtCollapsed() ? _icons.iconChevronRight.call(void 0, 12) : _icons.iconChevronDown.call(void 0, 12)
               ),
               _dom.tags.span({ class: "thought-title" }, `Thinking Process${durationText}`),
               turn.isStreaming
@@ -2050,7 +2365,10 @@ function renderAssistantTurn(turn) {
         () => {
           const content = turn.content || "";
           if (!content && turn.isStreaming) {
-            return _dom.tags.div({ class: "markdown-body is-generating" }, _dom.tags.span({ class: "typing-cursor" }));
+            return _dom.tags.div(
+              { class: "markdown-body is-generating" },
+              _dom.tags.span({ class: "typing-cursor" })
+            );
           }
 
           const html = _md.renderMarkdown.call(void 0, content);
@@ -2062,6 +2380,27 @@ function renderAssistantTurn(turn) {
             el.appendChild(cursor);
           }
           return el;
+        },
+
+        // 4. 底部操作微栏 (复制等)
+        () => {
+          if (!turn.content || turn.isStreaming) return null;
+          return _dom.tags.div(
+            { class: "turn-footer-actions" },
+            _dom.tags.button(
+              {
+                class: "turn-action-btn",
+                title: "Copy reply",
+                onclick: () => {
+                  navigator.clipboard.writeText(turn.content || "");
+                  copied.set(true);
+                  setTimeout(() => copied.set(false), 2000);
+                },
+              },
+              () => (copied() ? _icons.iconCheck.call(void 0, 12) : _icons.iconCopy.call(void 0, 12)),
+              _dom.tags.span({}, () => (copied() ? "Copied" : "Copy"))
+            )
+          );
         }
       )
     )
@@ -2070,6 +2409,7 @@ function renderAssistantTurn(turn) {
 
 function renderStepCard(step) {
   const isExpanded = _signal.signal(false);
+  const stepCopied = _signal.signal(false);
 
   return _dom.tags.div(
     {
@@ -2081,9 +2421,9 @@ function renderStepCard(step) {
         onclick: () => isExpanded.set(!isExpanded()),
       },
       _dom.tags.span({ class: "step-status-icon" }, () => {
-        if (step.status === "running") return "⟳";
-        if (step.status === "error") return "✕";
-        return "✓";
+        if (step.status === "running") return _icons.iconSpinner.call(void 0, 13);
+        if (step.status === "error") return _icons.iconClose.call(void 0, 13);
+        return _icons.iconCheck.call(void 0, 13);
       }),
       _dom.tags.span({ class: "step-name" }, step.name),
       step.desc ? _dom.tags.span({ class: "step-desc" }, step.desc) : null,
@@ -2091,7 +2431,9 @@ function renderStepCard(step) {
         { class: "step-time" },
         step.durationMs ? `${(step.durationMs / 1000).toFixed(2)}s` : "..."
       ),
-      _dom.tags.span({ class: "step-chevron" }, () => (isExpanded() ? "▴" : "▾"))
+      _dom.tags.span({ class: "step-chevron" }, () =>
+        isExpanded() ? _icons.iconChevronUp.call(void 0, 12) : _icons.iconChevronDown.call(void 0, 12)
+      )
     ),
     // 展开查看详情
     () => {
@@ -2130,11 +2472,28 @@ function renderStepCard(step) {
             {
               class: "step-deck-btn",
               onclick: () => {
-                _store.appendTerminalLine.call(void 0, `=== Step ${step.name} ===\n${step.result || step.error || ""}`, "system");
+                const text = step.result || step.error || "";
+                navigator.clipboard.writeText(text);
+                stepCopied.set(true);
+                setTimeout(() => stepCopied.set(false), 2000);
+              },
+            },
+            () => (stepCopied() ? _icons.iconCheck.call(void 0, 12) : _icons.iconCopy.call(void 0, 12)),
+            _dom.tags.span({}, () => (stepCopied() ? "Copied" : "Copy"))
+          ),
+          _dom.tags.button(
+            {
+              class: "step-deck-btn",
+              onclick: () => {
+                _store.appendTerminalLine.call(void 0, 
+                  `=== Step ${step.name} ===\n${step.result || step.error || ""}`,
+                  "system"
+                );
                 _store.setDeckTab.call(void 0, "terminal");
               },
             },
-            "Send to Terminal"
+            _icons.iconTerminal.call(void 0, 12),
+            _dom.tags.span({}, "Send to Terminal")
           )
         )
       );
@@ -2158,6 +2517,19 @@ var _dom = require('./dom');
 var _store = require('./store');
 var _signal = require('./signal');
 
+
+
+
+
+
+
+
+
+
+
+
+var _icons = require('./icons');
+
  function renderComposer() {
   const text = _signal.signal("");
   const showSlashMenu = _signal.signal(false);
@@ -2167,14 +2539,14 @@ var _signal = require('./signal');
   let textareaEl = null;
 
   const SLASH_COMMANDS = [
-    { cmd: "/help", desc: "Show available commands and usage" },
-    { cmd: "/diff", desc: "Open right deck to view code changes" },
-    { cmd: "/term", desc: "Open terminal viewer in deck" },
-    { cmd: "/jobs", desc: "View subagent hierarchy and jobs" },
-    { cmd: "/files", desc: "Browse workspace files" },
-    { cmd: "/clear", desc: "Create a fresh new session" },
-    { cmd: "/yolo", desc: "Switch mode to YOLO (auto-execute)" },
-    { cmd: "/ask", desc: "Switch mode to Ask (require approval)" },
+    { cmd: "/diff", desc: "Open right deck to inspect code changes", icon: _icons.iconDiff },
+    { cmd: "/term", desc: "Open terminal viewer in deck", icon: _icons.iconTerminal },
+    { cmd: "/jobs", desc: "View subagent hierarchy and jobs", icon: _icons.iconCpu },
+    { cmd: "/files", desc: "Browse workspace files", icon: _icons.iconFile },
+    { cmd: "/clear", desc: "Create a fresh new session", icon: _icons.iconTrash },
+    { cmd: "/yolo", desc: "Switch mode to YOLO (auto-execute)", icon: _icons.iconBolt },
+    { cmd: "/ask", desc: "Switch mode to Ask (require approval)", icon: _icons.iconQuestion },
+    { cmd: "/plan", desc: "Switch mode to Plan (write plan first)", icon: _icons.iconCompass },
   ];
 
   function handleInput(e) {
@@ -2210,48 +2582,50 @@ var _signal = require('./signal');
     // 本地拦截部分斜杠命令
     if (msg === "/diff") {
       _store.setDeckTab.call(void 0, "diffs");
-      text.set("");
-      if (textareaEl) textareaEl.value = "";
+      clearInput();
       return;
     }
     if (msg === "/term") {
       _store.setDeckTab.call(void 0, "terminal");
-      text.set("");
-      if (textareaEl) textareaEl.value = "";
+      clearInput();
       return;
     }
     if (msg === "/jobs") {
       _store.setDeckTab.call(void 0, "jobs");
-      text.set("");
-      if (textareaEl) textareaEl.value = "";
+      clearInput();
       return;
     }
     if (msg === "/files") {
       _store.setDeckTab.call(void 0, "files");
-      text.set("");
-      if (textareaEl) textareaEl.value = "";
+      clearInput();
       return;
     }
     if (msg === "/clear") {
       _store.createSession.call(void 0, );
-      text.set("");
-      if (textareaEl) textareaEl.value = "";
+      clearInput();
       return;
     }
     if (msg === "/yolo") {
       _store.switchMode.call(void 0, "yolo");
-      text.set("");
-      if (textareaEl) textareaEl.value = "";
+      clearInput();
       return;
     }
     if (msg === "/ask") {
       _store.switchMode.call(void 0, "ask");
-      text.set("");
-      if (textareaEl) textareaEl.value = "";
+      clearInput();
+      return;
+    }
+    if (msg === "/plan") {
+      _store.switchMode.call(void 0, "plan");
+      clearInput();
       return;
     }
 
     _store.sendMessage.call(void 0, msg);
+    clearInput();
+  }
+
+  function clearInput() {
     text.set("");
     if (textareaEl) {
       textareaEl.value = "";
@@ -2264,10 +2638,53 @@ var _signal = require('./signal');
   function handleKeyDown(e) {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
+      // 如果斜杠菜单开着，回车选择当前项
+      if (showSlashMenu()) {
+        const q = text().toLowerCase();
+        const filtered = SLASH_COMMANDS.filter((c) => c.cmd.toLowerCase().startsWith(q));
+        if (filtered[menuIndex()]) {
+          text.set(filtered[menuIndex()].cmd + " ");
+          if (textareaEl) textareaEl.value = filtered[menuIndex()].cmd + " ";
+          showSlashMenu.set(false);
+          return;
+        }
+      }
+      // 如果文件菜单开着，回车选择当前文件
+      if (showFileMenu()) {
+        const atIdx = text().lastIndexOf("@");
+        const q = atIdx >= 0 ? text().slice(atIdx + 1).toLowerCase() : "";
+        const filtered = _store.files.call(void 0, )
+          .filter((f) => !f.dir && f.path.toLowerCase().includes(q))
+          .slice(0, 10);
+        if (filtered[menuIndex()]) {
+          const before = text().slice(0, atIdx);
+          const nextVal = `${before}@${filtered[menuIndex()].path} `;
+          text.set(nextVal);
+          if (textareaEl) textareaEl.value = nextVal;
+          showFileMenu.set(false);
+          return;
+        }
+      }
       doSend();
+    } else if (e.key === "ArrowDown") {
+      if (showSlashMenu() || showFileMenu()) {
+        e.preventDefault();
+        menuIndex.update((i) => i + 1);
+      }
+    } else if (e.key === "ArrowUp") {
+      if (showSlashMenu() || showFileMenu()) {
+        e.preventDefault();
+        menuIndex.update((i) => Math.max(0, i - 1));
+      }
     } else if (e.key === "Escape") {
-      showSlashMenu.set(false);
-      showFileMenu.set(false);
+      if (showSlashMenu() || showFileMenu()) {
+        e.preventDefault();
+        showSlashMenu.set(false);
+        showFileMenu.set(false);
+      } else if (_store.isStreaming.call(void 0, )) {
+        e.preventDefault();
+        _store.interrupt.call(void 0, );
+      }
     }
   }
 
@@ -2295,6 +2712,7 @@ var _signal = require('./signal');
                 showSlashMenu.set(false);
               },
             },
+            _dom.tags.span({ class: "menu-icon" }, item.icon ? item.icon(14) : _icons.iconSparkle.call(void 0, 14)),
             _dom.tags.span({ class: "menu-cmd" }, item.cmd),
             _dom.tags.span({ class: "menu-desc" }, item.desc)
           )
@@ -2329,7 +2747,7 @@ var _signal = require('./signal');
                 showFileMenu.set(false);
               },
             },
-            _dom.tags.span({ class: "file-icon" }, "📄"),
+            _dom.tags.span({ class: "file-icon" }, _icons.iconFile.call(void 0, 13)),
             _dom.tags.span({ class: "file-path" }, f.path)
           )
         )
@@ -2369,7 +2787,7 @@ var _signal = require('./signal');
                 showSlashMenu.set(true);
               },
             },
-            "/"
+            _dom.tags.span({ class: "bar-tag-text" }, "/")
           ),
           _dom.tags.button(
             {
@@ -2384,11 +2802,20 @@ var _signal = require('./signal');
                 showFileMenu.set(true);
               },
             },
-            "@"
+            _dom.tags.span({ class: "bar-tag-text" }, "@")
           ),
-          _dom.tags.span(
-            { class: "mode-indicator-label" },
-            () => `Mode: ${_store.mode.call(void 0, ).toUpperCase()}`
+          _dom.tags.div(
+            { class: "mode-badge-wrap" },
+            () => {
+              const curMode = _store.mode.call(void 0, );
+              if (curMode === "yolo") {
+                return _dom.tags.span({ class: "mode-badge mode-yolo" }, _icons.iconBolt.call(void 0, 12), "YOLO");
+              }
+              if (curMode === "ask") {
+                return _dom.tags.span({ class: "mode-badge mode-ask" }, _icons.iconQuestion.call(void 0, 12), "ASK");
+              }
+              return _dom.tags.span({ class: "mode-badge mode-plan" }, _icons.iconCompass.call(void 0, 12), "PLAN");
+            }
           )
         ),
         _dom.tags.div(
@@ -2401,7 +2828,7 @@ var _signal = require('./signal');
                   title: "Interrupt Generation (Esc)",
                   onclick: _store.interrupt,
                 },
-                _dom.tags.span({ class: "btn-stop-icon" }, "■"),
+                _icons.iconStop.call(void 0, 12),
                 _dom.tags.span({}, "Stop")
               );
             }
@@ -2411,7 +2838,7 @@ var _signal = require('./signal');
                 title: "Send message (Enter)",
                 onclick: doSend,
               },
-              _dom.tags.span({ class: "btn-send-icon" }, "↑"),
+              _icons.iconSend.call(void 0, 13),
               _dom.tags.span({}, "Send")
             );
           }
@@ -2547,6 +2974,16 @@ var _term = require('./term');
 var _signal = require('./signal');
 var _net = require('./net');
 
+
+
+
+
+
+
+
+
+var _icons = require('./icons');
+
  function renderDeck() {
   return _dom.tags.aside(
     {
@@ -2557,19 +2994,19 @@ var _net = require('./net');
       { class: "deck-header" },
       _dom.tags.div(
         { class: "deck-tabs" },
-        renderDeckTabBtn("diffs", "Diffs", () => {
+        renderDeckTabBtn("diffs", _icons.iconDiff, "Diffs", () => {
           const st = _store.totalDiffStats.call(void 0, );
           return st.files > 0 ? `${st.files}` : "";
         }),
-        renderDeckTabBtn("terminal", "Terminal", () => {
+        renderDeckTabBtn("terminal", _icons.iconTerminal, "Terminal", () => {
           const len = _store.terminalLines.call(void 0, ).length;
           return len > 0 ? `${len}` : "";
         }),
-        renderDeckTabBtn("jobs", "Jobs", () => {
+        renderDeckTabBtn("jobs", _icons.iconCpu, "Jobs", () => {
           const runCount = _store.jobs.call(void 0, ).filter((j) => j.status === "running").length;
           return runCount > 0 ? `${runCount}` : "";
         }),
-        renderDeckTabBtn("files", "Files")
+        renderDeckTabBtn("files", _icons.iconFolder, "Files")
       ),
       _dom.tags.div(
         { class: "deck-header-actions" },
@@ -2579,7 +3016,7 @@ var _net = require('./net');
             title: "Close Deck (Ctrl+J)",
             onclick: _store.toggleDeck,
           },
-          "✕"
+          _icons.iconClose.call(void 0, 14)
         )
       )
     ),
@@ -2604,12 +3041,18 @@ var _net = require('./net');
   );
 } exports.renderDeck = renderDeck;
 
-function renderDeckTabBtn(tab, title, badgeFn) {
+function renderDeckTabBtn(
+  tab,
+  iconFn,
+  title,
+  badgeFn
+) {
   return _dom.tags.button(
     {
       class: () => `deck-tab-btn ${_store.deckTab.call(void 0, ) === tab ? "is-active" : ""}`,
       onclick: () => _store.setDeckTab.call(void 0, tab),
     },
+    iconFn(13, "deck-tab-icon"),
     _dom.tags.span({}, title),
     () => {
       const badge = badgeFn ? badgeFn() : "";
@@ -2628,7 +3071,7 @@ function renderDiffsPanel() {
   if (list.length === 0) {
     return _dom.tags.div(
       { class: "deck-empty" },
-      _dom.tags.div({ class: "deck-empty-icon" }, "⌥"),
+      _dom.tags.div({ class: "deck-empty-icon" }, _icons.iconDiff.call(void 0, 28)),
       _dom.tags.div({ class: "deck-empty-title" }, "No Changeset Detected"),
       _dom.tags.div({ class: "deck-empty-desc" }, "File modifications generated by agent will stream here in real time.")
     );
@@ -2698,6 +3141,7 @@ function renderDiffsPanel() {
 // 2. Terminal 面板
 function renderTerminalPanel() {
   const autoScroll = _signal.signal(true);
+  const termCopied = _signal.signal(false);
   let termEl = null;
 
   _signal.effect.call(void 0, () => {
@@ -2740,9 +3184,12 @@ function renderTerminalPanel() {
             onclick: () => {
               const full = _store.terminalLines.call(void 0, ).map((l) => l.text).join("\n");
               navigator.clipboard.writeText(full);
+              termCopied.set(true);
+              setTimeout(() => termCopied.set(false), 2000);
             },
           },
-          "Copy"
+          () => (termCopied() ? _icons.iconCheck.call(void 0, 12) : _icons.iconCopy.call(void 0, 12)),
+          _dom.tags.span({}, () => (termCopied() ? "Copied" : "Copy"))
         )
       )
     ),
@@ -2777,7 +3224,7 @@ function renderJobsPanel() {
   if (list.length === 0) {
     return _dom.tags.div(
       { class: "deck-empty" },
-      _dom.tags.div({ class: "deck-empty-icon" }, "⚙"),
+      _dom.tags.div({ class: "deck-empty-icon" }, _icons.iconCpu.call(void 0, 28)),
       _dom.tags.div({ class: "deck-empty-title" }, "No Active Subagent Jobs"),
       _dom.tags.div({ class: "deck-empty-desc" }, "Concurrent tasks, background workers, and subagent trees appear here.")
     );
@@ -2832,7 +3279,7 @@ function renderFilesPanel() {
           title: "Refresh files",
           onclick: () => _store.loadFiles.call(void 0, ),
         },
-        "⟳"
+        _icons.iconFolder.call(void 0, 13)
       )
     ),
 
@@ -2858,7 +3305,7 @@ function renderFilesPanel() {
                 }
               },
             },
-            _dom.tags.span({ class: "item-icon" }, item.dir ? "📁" : "📄"),
+            _dom.tags.span({ class: "item-icon" }, item.dir ? _icons.iconFolder.call(void 0, 13) : _icons.iconFile.call(void 0, 13)),
             _dom.tags.span({ class: "item-name" }, item.name)
           )
         )
@@ -2969,10 +3416,19 @@ var _dom = require('./dom');
 
 
 
-
 var _store = require('./store');
 var _net = require('./net');
 var _signal = require('./signal');
+
+
+
+
+
+
+
+
+
+var _icons = require('./icons');
 
  function renderModals() {
   const container = _dom.tags.div({ class: "modals-layer" });
@@ -2992,7 +3448,7 @@ var _signal = require('./signal');
           { class: "modal-card permission-modal" },
           _dom.tags.div(
             { class: "modal-hdr" },
-            _dom.tags.span({ class: "perm-icon" }, "🛡"),
+            _dom.tags.span({ class: "perm-icon" }, _icons.iconShield.call(void 0, 18)),
             _dom.tags.h3({ class: "modal-title" }, "Permission Approval Required")
           ),
           _dom.tags.div(
@@ -3012,14 +3468,16 @@ var _signal = require('./signal');
                 class: "btn btn-deny",
                 onclick: () => _store.approve.call(void 0, req.id, false),
               },
-              "Deny"
+              _icons.iconClose.call(void 0, 13),
+              _dom.tags.span({}, "Deny")
             ),
             _dom.tags.button(
               {
                 class: "btn btn-allow",
                 onclick: () => _store.approve.call(void 0, req.id, true),
               },
-              "Allow Execution"
+              _icons.iconCheck.call(void 0, 13),
+              _dom.tags.span({}, "Allow Execution")
             )
           )
         );
@@ -3050,7 +3508,7 @@ var _signal = require('./signal');
           { class: "modal-card command-palette" },
           _dom.tags.div(
             { class: "palette-input-box" },
-            _dom.tags.span({ class: "palette-icon" }, "⌕"),
+            _icons.iconSearch.call(void 0, 15, "palette-icon"),
             _dom.tags.input({
               class: "palette-input",
               placeholder: "Type a command or search sessions...",
@@ -3074,7 +3532,7 @@ var _signal = require('./signal');
                   _store.showSearchModal.set(false);
                 },
               },
-              _dom.tags.span({ class: "palette-item-icon" }, "＋"),
+              _dom.tags.span({ class: "palette-item-icon" }, _icons.iconPlus.call(void 0, 14)),
               _dom.tags.span({}, "Create New Session")
             ),
             _dom.tags.div(
@@ -3085,7 +3543,7 @@ var _signal = require('./signal');
                   _store.showSearchModal.set(false);
                 },
               },
-              _dom.tags.span({ class: "palette-item-icon" }, "⌥"),
+              _dom.tags.span({ class: "palette-item-icon" }, _icons.iconDiff.call(void 0, 14)),
               _dom.tags.span({}, "View Code Diffs")
             ),
             _dom.tags.div(
@@ -3096,7 +3554,7 @@ var _signal = require('./signal');
                   _store.showSearchModal.set(false);
                 },
               },
-              _dom.tags.span({ class: "palette-item-icon" }, "⌨"),
+              _dom.tags.span({ class: "palette-item-icon" }, _icons.iconTerminal.call(void 0, 14)),
               _dom.tags.span({}, "Open Terminal Viewer")
             ),
             // 会话列表匹配
@@ -3112,7 +3570,6 @@ var _signal = require('./signal');
                     _store.showSearchModal.set(false);
                   },
                 },
-                _dom.tags.span({ class: "palette-item-icon" }, "💬"),
                 _dom.tags.span({ class: "palette-item-title" }, s.title || s.name),
                 _dom.tags.span({ class: "palette-item-badge" }, `${s.messageCount} msgs`)
               )
@@ -3136,7 +3593,11 @@ var _signal = require('./signal');
 
         return _dom.tags.div(
           { class: "modal-card auth-modal" },
-          _dom.tags.h3({ class: "modal-title" }, "Authentication Required"),
+          _dom.tags.div(
+            { class: "modal-hdr" },
+            _icons.iconKey.call(void 0, 18, "auth-icon"),
+            _dom.tags.h3({ class: "modal-title" }, "Authentication Required")
+          ),
           _dom.tags.p({ class: "auth-desc" }, "Please enter your server token to access piz."),
           _dom.tags.input({
             type: "password",
@@ -3190,7 +3651,7 @@ var _signal = require('./signal');
                 class: "modal-close-btn",
                 onclick: () => _store.showSettingsModal.set(false),
               },
-              "✕"
+              _icons.iconClose.call(void 0, 14)
             )
           ),
           _dom.tags.div(

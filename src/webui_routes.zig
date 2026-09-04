@@ -343,6 +343,10 @@ pub fn parseChatBody(alloc: std.mem.Allocator, body: []const u8) ChatBody {
     var text: []const u8 = "";
     if (root.object.get("text")) |v| {
         if (v == .string) text = alloc.dupe(u8, v.string) catch "";
+    } else if (root.object.get("message")) |v| {
+        if (v == .string) text = alloc.dupe(u8, v.string) catch "";
+    } else if (root.object.get("prompt")) |v| {
+        if (v == .string) text = alloc.dupe(u8, v.string) catch "";
     }
     var image: ?[]u8 = null;
     var mime: []const u8 = "image/png";
@@ -715,7 +719,11 @@ pub fn chatPost(self: *WebServer, req: *http.Server.Request, target: []const u8,
     const chat = parseChatBody(self.alloc, body);
     defer if (chat.text.len > 0) self.alloc.free(chat.text);
     defer if (chat.image) |img| self.alloc.free(img);
-    if ((chat.text.len > 0 or chat.image != null) and !self.stopping.load(.acquire)) {
+    if (chat.text.len == 0 and chat.image == null) {
+        try req.respond("{\"ok\":false,\"error\":\"empty text\"}", .{ .status = .bad_request, .extra_headers = &.{.{ .name = "content-type", .value = "application/json" }} });
+        return;
+    }
+    if (!self.stopping.load(.acquire)) {
         if (self.chat_hook) |f| {
             if (!f(self.chat_ctx, ws, session, chat.text, chat.image, chat.mime)) {
                 try req.respond("{\"ok\":false,\"error\":\"rejected\"}", .{ .status = .ok, .extra_headers = &.{.{ .name = "content-type", .value = "application/json" }} });

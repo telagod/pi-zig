@@ -11,6 +11,7 @@ import {
 } from "./store";
 import { signal } from "./signal";
 import { SessionItem } from "./types";
+import { iconPlus, iconTrash, iconSearch } from "./icons";
 
 export function renderSidebar(): HTMLElement {
   const searchQuery = signal<string>("");
@@ -34,7 +35,7 @@ export function renderSidebar(): HTMLElement {
           class: "new-session-btn",
           onclick: createSession,
         },
-        tags.span({ class: "btn-icon" }, "＋"),
+        iconPlus(13, "btn-icon"),
         tags.span({ class: "btn-text" }, "New Session")
       )
     ),
@@ -42,6 +43,7 @@ export function renderSidebar(): HTMLElement {
     // 搜索框
     tags.div(
       { class: "sidebar-search-box" },
+      iconSearch(12, "sidebar-search-icon"),
       tags.input({
         class: "sidebar-search-input",
         placeholder: "Filter sessions...",
@@ -77,17 +79,6 @@ export function renderSidebar(): HTMLElement {
             { class: "session-actions", onclick: (e: MouseEvent) => e.stopPropagation() },
             tags.button(
               {
-                class: "session-act-btn",
-                title: "Rename",
-                onclick: () => {
-                  const val = prompt("Rename session:", item.title || item.name);
-                  if (val && val.trim()) renameSession(item.id, val.trim());
-                },
-              },
-              "✎"
-            ),
-            tags.button(
-              {
                 class: "session-act-btn session-del-btn",
                 title: "Delete",
                 onclick: () => {
@@ -96,29 +87,26 @@ export function renderSidebar(): HTMLElement {
                   }
                 },
               },
-              "🗑"
+              iconTrash(12)
             )
           )
         );
-      })
-    ),
-
-    // 侧栏底端状态
-    tags.div(
-      { class: "sidebar-footer" },
-      tags.span({ class: "sidebar-info" }, () => `${sessions().length} sessions`)
+      }),
+      () => {
+        if (sessions().length === 0) {
+          return tags.div({ class: "sidebar-empty" }, "No sessions yet.");
+        }
+        return null;
+      }
     )
   );
 }
 
 function formatRelativeTime(ts: number): string {
   if (!ts) return "";
-  const sec = Math.max(1, Math.floor((Date.now() - ts) / 1000));
-  if (sec < 60) return `${sec}s ago`;
-  const min = Math.floor(sec / 60);
-  if (min < 60) return `${min}m ago`;
-  const hr = Math.floor(min / 60);
-  if (hr < 24) return `${hr}h ago`;
-  const days = Math.floor(hr / 24);
-  return `${days}d ago`;
+  const diff = Date.now() - ts;
+  if (diff < 60000) return "just now";
+  if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
+  if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
+  return `${Math.floor(diff / 86400000)}d ago`;
 }
