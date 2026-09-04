@@ -1,4 +1,4 @@
-// dom.ts —— 细粒度响应式声明式 DOM 构造器
+// dom.ts —— 细粒度响应式声明式 DOM 构造器 (Zero-vdom, Proxy Tags, Exact Reactivity)
 import { effect, Signal, ReadonlySignal } from "./signal";
 
 export type Child =
@@ -10,6 +10,7 @@ export type Child =
   | undefined
   | Signal<any>
   | ReadonlySignal<any>
+  | (() => any)
   | Child[];
 
 export type Props = Record<string, any>;
@@ -45,9 +46,9 @@ export function h(
         bindStyle(el, value);
       } else if (key === "ref" && typeof value === "function") {
         value(el);
-      } else if (isSignal(value)) {
+      } else if (typeof value === "function") {
         effect(() => {
-          setAttr(el, key, (value as any)());
+          setAttr(el, key, value());
         });
       } else {
         setAttr(el, key, value);
@@ -62,22 +63,16 @@ export function h(
 function setAttr(el: Element, key: string, val: any) {
   if (val == null || val === false) {
     el.removeAttribute(key);
-    if (key in el) {
-      try { (el as any)[key] = ""; } catch (_) {}
-    }
   } else {
-    if (key in el && typeof (el as any)[key] === "boolean") {
-      (el as any)[key] = Boolean(val);
-    }
     el.setAttribute(key, val === true ? "" : String(val));
-    if (key === "value" && (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement)) {
+    if (key === "value" && (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement)) {
       el.value = String(val);
     }
   }
 }
 
 function bindClass(el: Element, val: any) {
-  if (isSignal(val)) {
+  if (typeof val === "function") {
     effect(() => {
       applyClass(el, val());
     });
@@ -88,13 +83,13 @@ function bindClass(el: Element, val: any) {
 
 function applyClass(el: Element, val: any) {
   if (typeof val === "string") {
-    el.className = val;
+    el.setAttribute("class", val);
   } else if (Array.isArray(val)) {
-    el.className = val.filter(Boolean).join(" ");
+    el.setAttribute("class", val.filter(Boolean).join(" "));
   } else if (typeof val === "object" && val !== null) {
     const classes: string[] = [];
     for (const [cls, enabled] of Object.entries(val)) {
-      if (isSignal(enabled)) {
+      if (typeof enabled === "function") {
         effect(() => {
           el.classList.toggle(cls, Boolean(enabled()));
         });
@@ -103,13 +98,15 @@ function applyClass(el: Element, val: any) {
       }
     }
     if (classes.length) {
-      el.className = classes.join(" ");
+      el.setAttribute("class", classes.join(" "));
+    } else {
+      el.removeAttribute("class");
     }
   }
 }
 
 function bindStyle(el: HTMLElement | SVGElement, val: any) {
-  if (isSignal(val)) {
+  if (typeof val === "function") {
     effect(() => {
       applyStyle(el, val());
     });
@@ -120,10 +117,10 @@ function bindStyle(el: HTMLElement | SVGElement, val: any) {
 
 function applyStyle(el: HTMLElement | SVGElement, val: any) {
   if (typeof val === "string") {
-    el.style.cssText = val;
+    el.setAttribute("style", val);
   } else if (typeof val === "object" && val !== null) {
     for (const [prop, sVal] of Object.entries(val)) {
-      if (isSignal(sVal)) {
+      if (typeof sVal === "function") {
         effect(() => {
           (el.style as any)[prop] = sVal();
         });
@@ -140,26 +137,8 @@ function appendChildren(parent: Node, children: Child[]) {
 
     if (Array.isArray(child)) {
       appendChildren(parent, child);
-    } else if (isSignal(child)) {
-      let currentMarker: Node = document.createTextNode("");
-      parent.appendChild(currentMarker);
-
-      effect(() => {
-        const val = (child as any)();
-        if (val instanceof Node) {
-          parent.replaceChild(val, currentMarker);
-          currentMarker = val;
-        } else {
-          const text = val == null ? "" : String(val);
-          if (currentMarker.nodeType === Node.TEXT_NODE) {
-            currentMarker.nodeValue = text;
-          } else {
-            const textNode = document.createTextNode(text);
-            parent.replaceChild(textNode, currentMarker);
-            currentMarker = textNode;
-          }
-        }
-      });
+    } else if (typeof child === "function") {
+      appendDynamicChild(parent, child);
     } else if (child instanceof Node) {
       parent.appendChild(child);
     } else {
@@ -168,42 +147,54 @@ function appendChildren(parent: Node, children: Child[]) {
   }
 }
 
+function appendDynamicChild(parent: Node, getter: () => any) {
+  const startAnchor = document.createComment("dyn-start");
+  const endAnchor = document.createComment("dyn-end");
+  parent.appendChild(startAnchor);
+  parent.appendChild(endAnchor);
+
+  let renderedNodes: Node[] = [];
+
+  effect(() => {
+    const p = startAnchor.parentNode;
+    if (!p) return;
+
+    for (const node of renderedNodes) {
+      if (node.parentNode === p) {
+        p.removeChild(node);
+      }
+    }
+    renderedNodes = [];
+
+    const val = getter();
+    if (val == null || val === false) return;
+
+    if (Array.isArray(val)) {
+      for (const item of val) {
+        if (item == null || item === false) continue;
+        const node = item instanceof Node ? item : document.createTextNode(String(item));
+        p.insertBefore(node, endAnchor);
+        renderedNodes.push(node);
+      }
+    } else {
+      const node = val instanceof Node ? val : document.createTextNode(String(val));
+      p.insertBefore(node, endAnchor);
+      renderedNodes.push(node);
+    }
+  });
+}
+
 export function show(
   condition: Signal<boolean> | ReadonlySignal<boolean> | (() => boolean),
   thenFn: () => Child,
   elseFn?: () => Child
 ): Node {
-  const container = document.createDocumentFragment();
-  let currentAnchor: Node = document.createComment("show");
-  container.appendChild(currentAnchor);
-
-  let currentChild: Node | null = null;
-
-  effect(() => {
-    const parent = currentAnchor.parentNode;
-    const cond = typeof condition === "function" ? (condition as any)() : condition;
-    const nextChildResult = cond ? thenFn() : elseFn ? elseFn() : null;
-
-    let nextNode: Node | null = null;
-    if (nextChildResult instanceof Node) {
-      nextNode = nextChildResult;
-    } else if (nextChildResult != null && nextChildResult !== false) {
-      nextNode = document.createTextNode(String(nextChildResult));
-    }
-
-    if (parent) {
-      if (currentChild && currentChild.parentNode === parent) {
-        parent.removeChild(currentChild);
-        currentChild = null;
-      }
-      if (nextNode) {
-        parent.insertBefore(nextNode, currentAnchor);
-        currentChild = nextNode;
-      }
-    }
+  const fragment = document.createDocumentFragment();
+  appendDynamicChild(fragment, () => {
+    const cond = typeof condition === "function" ? condition() : condition;
+    return cond ? thenFn() : elseFn ? elseFn() : null;
   });
-
-  return container;
+  return fragment;
 }
 
 export function each<T>(
@@ -211,53 +202,15 @@ export function each<T>(
   renderItem: (item: T, index: number) => HTMLElement
 ): Node {
   const fragment = document.createDocumentFragment();
-  const anchor = document.createComment("each");
-  fragment.appendChild(anchor);
-
-  let renderedNodes: HTMLElement[] = [];
-
-  effect(() => {
-    const parent = anchor.parentNode;
-    if (!parent) return;
-
-    const list = typeof items === "function" ? (items as any)() : items;
-    for (const node of renderedNodes) {
-      if (node.parentNode === parent) {
-        parent.removeChild(node);
-      }
-    }
-    renderedNodes = [];
-
-    if (Array.isArray(list)) {
-      for (let i = 0; i < list.length; i++) {
-        const itemNode = renderItem(list[i], i);
-        parent.insertBefore(itemNode, anchor);
-        renderedNodes.push(itemNode);
-      }
-    }
+  appendDynamicChild(fragment, () => {
+    const list = typeof items === "function" ? items() : items;
+    if (!Array.isArray(list)) return null;
+    return list.map((item, i) => renderItem(item, i));
   });
-
   return fragment;
 }
 
-export const tags = {
-  div: (p?: Props | null, ...c: Child[]) => h("div", p, ...c),
-  span: (p?: Props | null, ...c: Child[]) => h("span", p, ...c),
-  button: (p?: Props | null, ...c: Child[]) => h("button", p, ...c),
-  input: (p?: Props | null, ...c: Child[]) => h("input", p, ...c),
-  textarea: (p?: Props | null, ...c: Child[]) => h("textarea", p, ...c),
-  header: (p?: Props | null, ...c: Child[]) => h("header", p, ...c),
-  main: (p?: Props | null, ...c: Child[]) => h("main", p, ...c),
-  aside: (p?: Props | null, ...c: Child[]) => h("aside", p, ...c),
-  section: (p?: Props | null, ...c: Child[]) => h("section", p, ...c),
-  nav: (p?: Props | null, ...c: Child[]) => h("nav", p, ...c),
-  article: (p?: Props | null, ...c: Child[]) => h("article", p, ...c),
-  pre: (p?: Props | null, ...c: Child[]) => h("pre", p, ...c),
-  code: (p?: Props | null, ...c: Child[]) => h("code", p, ...c),
-  ul: (p?: Props | null, ...c: Child[]) => h("ul", p, ...c),
-  li: (p?: Props | null, ...c: Child[]) => h("li", p, ...c),
-  a: (p?: Props | null, ...c: Child[]) => h("a", p, ...c),
-  p: (p?: Props | null, ...c: Child[]) => h("p", p, ...c),
-  svg: (p?: Props | null, ...c: Child[]) => h("svg", p, ...c),
-  path: (p?: Props | null, ...c: Child[]) => h("path", p, ...c),
-};
+// 优雅 Proxy tags：自动支持所有 HTML/SVG 标签，杜绝 undefined function
+export const tags: Record<string, (p?: Props | null, ...c: Child[]) => HTMLElement | SVGElement> = new Proxy({} as any, {
+  get: (_, tag: string) => (p?: Props | null, ...c: Child[]) => h(tag, p, ...c),
+});

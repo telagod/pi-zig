@@ -31,20 +31,23 @@ function setStored<T>(key: string, val: T) {
   } catch (_) {}
 }
 
+const urlParams = new URLSearchParams(window.location.search);
+export const urlWs = urlParams.get("ws") || "";
+export const wsName = signal<string>(urlWs || "workspace");
+export const branch = signal<string>("");
+export const changesCount = signal<number>(0);
+
+export const activeSession = signal<string>(urlParams.get("session") || "default");
+export const sessions = signal<SessionItem[]>([]);
+export const turns = signal<Turn[]>([]);
+export const isStreaming = signal<boolean>(false);
+export const streamingTurnId = signal<string | null>(null);
+
 export const theme = signal<"dark" | "light">(
   getStored("theme", window.matchMedia?.("(prefers-color-scheme: light)").matches ? "light" : "dark")
 );
 
 export const connectionStatus = signal<"connected" | "connecting" | "disconnected">("connecting");
-export const ws = signal<string>("");
-export const branch = signal<string>("");
-export const changesCount = signal<number>(0);
-
-export const activeSession = signal<string>("default");
-export const sessions = signal<SessionItem[]>([]);
-export const turns = signal<Turn[]>([]);
-export const isStreaming = signal<boolean>(false);
-export const streamingTurnId = signal<string | null>(null);
 
 export const mode = signal<AppMode>(getStored("mode", "yolo"));
 export const model = signal<string>("");
@@ -83,6 +86,20 @@ export const activeDiffFile = computed(() => {
   if (!list.length) return null;
   return list.find((d) => d.path === curPath) || list[0];
 });
+
+// 构建符合后端白名单规则的安全 query string
+export function getQuery(extra: Record<string, string> = {}): string {
+  const params = new URLSearchParams();
+  const s = activeSession();
+  if (s) params.set("session", s);
+  // 空 ws 代表当前默认项目，非空时才传递给后端
+  if (urlWs) params.set("ws", urlWs);
+  for (const [k, v] of Object.entries(extra)) {
+    if (v != null && v !== "") params.set(k, v);
+  }
+  const q = params.toString();
+  return q ? `?${q}` : "";
+}
 
 // 主题切换
 export function toggleTheme() {
@@ -129,10 +146,7 @@ export function appendTerminalLine(text: string, type: TerminalLine["type"] = "s
 // 核心网络同步
 export async function loadState() {
   try {
-    const sName = activeSession();
-    const wName = ws();
-    const q = `?session=${encodeURIComponent(sName)}&ws=${encodeURIComponent(wName)}`;
-    const data = await apiFetch(`/api/state${q}`);
+    const data = await apiFetch(`/api/state${getQuery()}`);
     if (data) {
       batch(() => {
         if (data.model) model.set(data.model);
@@ -140,7 +154,7 @@ export async function loadState() {
         if (data.mode && (data.mode === "yolo" || data.mode === "ask" || data.mode === "plan")) {
           mode.set(data.mode);
         }
-        if (data.ws) ws.set(data.ws);
+        if (data.ws) wsName.set(data.ws);
         if (data.branch) branch.set(data.branch);
         if (typeof data.changes === "number") changesCount.set(data.changes);
       });
@@ -162,9 +176,7 @@ export async function loadModels() {
 
 export async function loadSessions() {
   try {
-    const wName = ws();
-    const q = wName ? `?ws=${encodeURIComponent(wName)}` : "";
-    const res = await apiFetch(`/api/sessions${q}`);
+    const res = await apiFetch(`/api/sessions${getQuery()}`);
     const list = Array.isArray(res) ? res : Array.isArray(res?.sessions) ? res.sessions : [];
     sessions.set(
       list.map((s: any) => ({
@@ -183,9 +195,7 @@ export async function loadSessions() {
 
 export async function loadFiles(query = "") {
   try {
-    const wName = ws();
-    const q = `?ws=${encodeURIComponent(wName)}&q=${encodeURIComponent(query)}`;
-    const res = await apiFetch(`/api/files${q}`);
+    const res = await apiFetch(`/api/files${getQuery({ q: query })}`);
     const items = Array.isArray(res?.items) ? res.items : Array.isArray(res) ? res : [];
     files.set(items);
   } catch (err) {
@@ -195,10 +205,7 @@ export async function loadFiles(query = "") {
 
 export async function loadHistory() {
   try {
-    const sName = activeSession();
-    const wName = ws();
-    const q = `?session=${encodeURIComponent(sName)}&ws=${encodeURIComponent(wName)}`;
-    const res = await apiFetch(`/api/history${q}`);
+    const res = await apiFetch(`/api/history${getQuery()}`);
     const rawList = Array.isArray(res?.history)
       ? res.history
       : Array.isArray(res?.messages)
@@ -271,9 +278,7 @@ export async function switchSession(name: string) {
 
 export async function createSession() {
   try {
-    const wName = ws();
-    const q = wName ? `?ws=${encodeURIComponent(wName)}` : "";
-    const res = await apiFetch(`/api/action${q}`, {
+    const res = await apiFetch(`/api/action${getQuery()}`, {
       method: "POST",
       body: JSON.stringify({ act: "new" }),
     });
@@ -287,8 +292,7 @@ export async function createSession() {
 
 export async function renameSession(id: string, title: string) {
   try {
-    const wName = ws();
-    const q = `?session=${encodeURIComponent(id)}&ws=${encodeURIComponent(wName)}`;
+    const q = getQuery({ session: id });
     await apiFetch(`/api/title${q}`, {
       method: "POST",
       body: JSON.stringify({ title }),
@@ -301,8 +305,7 @@ export async function renameSession(id: string, title: string) {
 
 export async function deleteSession(id: string) {
   try {
-    const wName = ws();
-    const q = `?session=${encodeURIComponent(id)}&ws=${encodeURIComponent(wName)}`;
+    const q = getQuery({ session: id });
     await apiFetch(`/api/action${q}`, {
       method: "POST",
       body: JSON.stringify({ act: "delete" }),
@@ -322,10 +325,7 @@ export async function switchMode(nextMode: AppMode) {
   mode.set(nextMode);
   setStored("mode", nextMode);
   try {
-    const sName = activeSession();
-    const wName = ws();
-    const q = `?session=${encodeURIComponent(sName)}&ws=${encodeURIComponent(wName)}`;
-    await apiFetch(`/api/mode${q}`, {
+    await apiFetch(`/api/mode${getQuery()}`, {
       method: "POST",
       body: JSON.stringify({ mode: nextMode }),
     });
@@ -337,10 +337,7 @@ export async function switchMode(nextMode: AppMode) {
 export async function switchModel(nextModel: string) {
   model.set(nextModel);
   try {
-    const sName = activeSession();
-    const wName = ws();
-    const q = `?session=${encodeURIComponent(sName)}&ws=${encodeURIComponent(wName)}`;
-    await apiFetch(`/api/model${q}`, {
+    await apiFetch(`/api/model${getQuery()}`, {
       method: "POST",
       body: JSON.stringify({ model: nextModel }),
     });
@@ -351,10 +348,7 @@ export async function switchModel(nextModel: string) {
 
 export async function interrupt() {
   try {
-    const sName = activeSession();
-    const wName = ws();
-    const q = `?session=${encodeURIComponent(sName)}&ws=${encodeURIComponent(wName)}`;
-    await apiFetch(`/api/interrupt${q}`, { method: "POST" });
+    await apiFetch(`/api/interrupt${getQuery()}`, { method: "POST" });
   } catch (err) {
     console.warn("interrupt error:", err);
   } finally {
@@ -403,10 +397,7 @@ export async function sendMessage(text: string) {
   });
 
   try {
-    const sName = activeSession();
-    const wName = ws();
-    const q = `?session=${encodeURIComponent(sName)}&ws=${encodeURIComponent(wName)}`;
-    await apiFetch(`/api/chat${q}`, {
+    await apiFetch(`/api/chat${getQuery()}`, {
       method: "POST",
       body: JSON.stringify({ message: text.trim() }),
     });

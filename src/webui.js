@@ -168,8 +168,9 @@ const pendingEffects = new Set();
 
 };
 __modules["dom"] = function(module, exports, require) {
-"use strict";Object.defineProperty(exports, "__esModule", {value: true});// dom.ts —— 细粒度响应式声明式 DOM 构造器
+"use strict";Object.defineProperty(exports, "__esModule", {value: true});// dom.ts —— 细粒度响应式声明式 DOM 构造器 (Zero-vdom, Proxy Tags, Exact Reactivity)
 var _signal = require('./signal');
+
 
 
 
@@ -215,9 +216,9 @@ const SVG_TAGS = new Set([
         bindStyle(el, value);
       } else if (key === "ref" && typeof value === "function") {
         value(el);
-      } else if (isSignal(value)) {
+      } else if (typeof value === "function") {
         _signal.effect.call(void 0, () => {
-          setAttr(el, key, (value )());
+          setAttr(el, key, value());
         });
       } else {
         setAttr(el, key, value);
@@ -232,22 +233,16 @@ const SVG_TAGS = new Set([
 function setAttr(el, key, val) {
   if (val == null || val === false) {
     el.removeAttribute(key);
-    if (key in el) {
-      try { (el )[key] = ""; } catch (_) {}
-    }
   } else {
-    if (key in el && typeof (el )[key] === "boolean") {
-      (el )[key] = Boolean(val);
-    }
     el.setAttribute(key, val === true ? "" : String(val));
-    if (key === "value" && (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement)) {
+    if (key === "value" && (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement)) {
       el.value = String(val);
     }
   }
 }
 
 function bindClass(el, val) {
-  if (isSignal(val)) {
+  if (typeof val === "function") {
     _signal.effect.call(void 0, () => {
       applyClass(el, val());
     });
@@ -258,13 +253,13 @@ function bindClass(el, val) {
 
 function applyClass(el, val) {
   if (typeof val === "string") {
-    el.className = val;
+    el.setAttribute("class", val);
   } else if (Array.isArray(val)) {
-    el.className = val.filter(Boolean).join(" ");
+    el.setAttribute("class", val.filter(Boolean).join(" "));
   } else if (typeof val === "object" && val !== null) {
     const classes = [];
     for (const [cls, enabled] of Object.entries(val)) {
-      if (isSignal(enabled)) {
+      if (typeof enabled === "function") {
         _signal.effect.call(void 0, () => {
           el.classList.toggle(cls, Boolean(enabled()));
         });
@@ -273,13 +268,15 @@ function applyClass(el, val) {
       }
     }
     if (classes.length) {
-      el.className = classes.join(" ");
+      el.setAttribute("class", classes.join(" "));
+    } else {
+      el.removeAttribute("class");
     }
   }
 }
 
 function bindStyle(el, val) {
-  if (isSignal(val)) {
+  if (typeof val === "function") {
     _signal.effect.call(void 0, () => {
       applyStyle(el, val());
     });
@@ -290,10 +287,10 @@ function bindStyle(el, val) {
 
 function applyStyle(el, val) {
   if (typeof val === "string") {
-    el.style.cssText = val;
+    el.setAttribute("style", val);
   } else if (typeof val === "object" && val !== null) {
     for (const [prop, sVal] of Object.entries(val)) {
-      if (isSignal(sVal)) {
+      if (typeof sVal === "function") {
         _signal.effect.call(void 0, () => {
           (el.style )[prop] = sVal();
         });
@@ -310,26 +307,8 @@ function appendChildren(parent, children) {
 
     if (Array.isArray(child)) {
       appendChildren(parent, child);
-    } else if (isSignal(child)) {
-      let currentMarker = document.createTextNode("");
-      parent.appendChild(currentMarker);
-
-      _signal.effect.call(void 0, () => {
-        const val = (child )();
-        if (val instanceof Node) {
-          parent.replaceChild(val, currentMarker);
-          currentMarker = val;
-        } else {
-          const text = val == null ? "" : String(val);
-          if (currentMarker.nodeType === Node.TEXT_NODE) {
-            currentMarker.nodeValue = text;
-          } else {
-            const textNode = document.createTextNode(text);
-            parent.replaceChild(textNode, currentMarker);
-            currentMarker = textNode;
-          }
-        }
-      });
+    } else if (typeof child === "function") {
+      appendDynamicChild(parent, child);
     } else if (child instanceof Node) {
       parent.appendChild(child);
     } else {
@@ -338,42 +317,54 @@ function appendChildren(parent, children) {
   }
 }
 
+function appendDynamicChild(parent, getter) {
+  const startAnchor = document.createComment("dyn-start");
+  const endAnchor = document.createComment("dyn-end");
+  parent.appendChild(startAnchor);
+  parent.appendChild(endAnchor);
+
+  let renderedNodes = [];
+
+  _signal.effect.call(void 0, () => {
+    const p = startAnchor.parentNode;
+    if (!p) return;
+
+    for (const node of renderedNodes) {
+      if (node.parentNode === p) {
+        p.removeChild(node);
+      }
+    }
+    renderedNodes = [];
+
+    const val = getter();
+    if (val == null || val === false) return;
+
+    if (Array.isArray(val)) {
+      for (const item of val) {
+        if (item == null || item === false) continue;
+        const node = item instanceof Node ? item : document.createTextNode(String(item));
+        p.insertBefore(node, endAnchor);
+        renderedNodes.push(node);
+      }
+    } else {
+      const node = val instanceof Node ? val : document.createTextNode(String(val));
+      p.insertBefore(node, endAnchor);
+      renderedNodes.push(node);
+    }
+  });
+}
+
  function show(
   condition,
   thenFn,
   elseFn
 ) {
-  const container = document.createDocumentFragment();
-  let currentAnchor = document.createComment("show");
-  container.appendChild(currentAnchor);
-
-  let currentChild = null;
-
-  _signal.effect.call(void 0, () => {
-    const parent = currentAnchor.parentNode;
-    const cond = typeof condition === "function" ? (condition )() : condition;
-    const nextChildResult = cond ? thenFn() : elseFn ? elseFn() : null;
-
-    let nextNode = null;
-    if (nextChildResult instanceof Node) {
-      nextNode = nextChildResult;
-    } else if (nextChildResult != null && nextChildResult !== false) {
-      nextNode = document.createTextNode(String(nextChildResult));
-    }
-
-    if (parent) {
-      if (currentChild && currentChild.parentNode === parent) {
-        parent.removeChild(currentChild);
-        currentChild = null;
-      }
-      if (nextNode) {
-        parent.insertBefore(nextNode, currentAnchor);
-        currentChild = nextNode;
-      }
-    }
+  const fragment = document.createDocumentFragment();
+  appendDynamicChild(fragment, () => {
+    const cond = typeof condition === "function" ? condition() : condition;
+    return cond ? thenFn() : elseFn ? elseFn() : null;
   });
-
-  return container;
+  return fragment;
 } exports.show = show;
 
  function each(
@@ -381,56 +372,18 @@ function appendChildren(parent, children) {
   renderItem
 ) {
   const fragment = document.createDocumentFragment();
-  const anchor = document.createComment("each");
-  fragment.appendChild(anchor);
-
-  let renderedNodes = [];
-
-  _signal.effect.call(void 0, () => {
-    const parent = anchor.parentNode;
-    if (!parent) return;
-
-    const list = typeof items === "function" ? (items )() : items;
-    for (const node of renderedNodes) {
-      if (node.parentNode === parent) {
-        parent.removeChild(node);
-      }
-    }
-    renderedNodes = [];
-
-    if (Array.isArray(list)) {
-      for (let i = 0; i < list.length; i++) {
-        const itemNode = renderItem(list[i], i);
-        parent.insertBefore(itemNode, anchor);
-        renderedNodes.push(itemNode);
-      }
-    }
+  appendDynamicChild(fragment, () => {
+    const list = typeof items === "function" ? items() : items;
+    if (!Array.isArray(list)) return null;
+    return list.map((item, i) => renderItem(item, i));
   });
-
   return fragment;
 } exports.each = each;
 
- const tags = {
-  div: (p, ...c) => h("div", p, ...c),
-  span: (p, ...c) => h("span", p, ...c),
-  button: (p, ...c) => h("button", p, ...c),
-  input: (p, ...c) => h("input", p, ...c),
-  textarea: (p, ...c) => h("textarea", p, ...c),
-  header: (p, ...c) => h("header", p, ...c),
-  main: (p, ...c) => h("main", p, ...c),
-  aside: (p, ...c) => h("aside", p, ...c),
-  section: (p, ...c) => h("section", p, ...c),
-  nav: (p, ...c) => h("nav", p, ...c),
-  article: (p, ...c) => h("article", p, ...c),
-  pre: (p, ...c) => h("pre", p, ...c),
-  code: (p, ...c) => h("code", p, ...c),
-  ul: (p, ...c) => h("ul", p, ...c),
-  li: (p, ...c) => h("li", p, ...c),
-  a: (p, ...c) => h("a", p, ...c),
-  p: (p, ...c) => h("p", p, ...c),
-  svg: (p, ...c) => h("svg", p, ...c),
-  path: (p, ...c) => h("path", p, ...c),
-}; exports.tags = tags;
+// 优雅 Proxy tags：自动支持所有 HTML/SVG 标签，杜绝 undefined function
+ const tags = new Proxy({} , {
+  get: (_, tag) => (p, ...c) => h(tag, p, ...c),
+}); exports.tags = tags;
 
 };
 __modules["types"] = function(module, exports, require) {
@@ -877,20 +830,23 @@ function setStored(key, val) {
   } catch (_) {}
 }
 
+const urlParams = new URLSearchParams(window.location.search);
+ const urlWs = urlParams.get("ws") || ""; exports.urlWs = urlWs;
+ const wsName = _signal.signal(exports.urlWs || "workspace"); exports.wsName = wsName;
+ const branch = _signal.signal(""); exports.branch = branch;
+ const changesCount = _signal.signal(0); exports.changesCount = changesCount;
+
+ const activeSession = _signal.signal(urlParams.get("session") || "default"); exports.activeSession = activeSession;
+ const sessions = _signal.signal([]); exports.sessions = sessions;
+ const turns = _signal.signal([]); exports.turns = turns;
+ const isStreaming = _signal.signal(false); exports.isStreaming = isStreaming;
+ const streamingTurnId = _signal.signal(null); exports.streamingTurnId = streamingTurnId;
+
  const theme = _signal.signal(
   getStored("theme", _optionalChain([window, 'access', _2 => _2.matchMedia, 'optionalCall', _3 => _3("(prefers-color-scheme: light)"), 'access', _4 => _4.matches]) ? "light" : "dark")
 ); exports.theme = theme;
 
  const connectionStatus = _signal.signal("connecting"); exports.connectionStatus = connectionStatus;
- const ws = _signal.signal(""); exports.ws = ws;
- const branch = _signal.signal(""); exports.branch = branch;
- const changesCount = _signal.signal(0); exports.changesCount = changesCount;
-
- const activeSession = _signal.signal("default"); exports.activeSession = activeSession;
- const sessions = _signal.signal([]); exports.sessions = sessions;
- const turns = _signal.signal([]); exports.turns = turns;
- const isStreaming = _signal.signal(false); exports.isStreaming = isStreaming;
- const streamingTurnId = _signal.signal(null); exports.streamingTurnId = streamingTurnId;
 
  const mode = _signal.signal(getStored("mode", "yolo")); exports.mode = mode;
  const model = _signal.signal(""); exports.model = model;
@@ -929,6 +885,20 @@ function setStored(key, val) {
   if (!list.length) return null;
   return list.find((d) => d.path === curPath) || list[0];
 }); exports.activeDiffFile = activeDiffFile;
+
+// 构建符合后端白名单规则的安全 query string
+ function getQuery(extra = {}) {
+  const params = new URLSearchParams();
+  const s = exports.activeSession.call(void 0, );
+  if (s) params.set("session", s);
+  // 空 ws 代表当前默认项目，非空时才传递给后端
+  if (exports.urlWs) params.set("ws", exports.urlWs);
+  for (const [k, v] of Object.entries(extra)) {
+    if (v != null && v !== "") params.set(k, v);
+  }
+  const q = params.toString();
+  return q ? `?${q}` : "";
+} exports.getQuery = getQuery;
 
 // 主题切换
  function toggleTheme() {
@@ -975,10 +945,7 @@ function setStored(key, val) {
 // 核心网络同步
  async function loadState() {
   try {
-    const sName = exports.activeSession.call(void 0, );
-    const wName = exports.ws.call(void 0, );
-    const q = `?session=${encodeURIComponent(sName)}&ws=${encodeURIComponent(wName)}`;
-    const data = await _net.apiFetch.call(void 0, `/api/state${q}`);
+    const data = await _net.apiFetch.call(void 0, `/api/state${getQuery()}`);
     if (data) {
       _signal.batch.call(void 0, () => {
         if (data.model) exports.model.set(data.model);
@@ -986,7 +953,7 @@ function setStored(key, val) {
         if (data.mode && (data.mode === "yolo" || data.mode === "ask" || data.mode === "plan")) {
           exports.mode.set(data.mode);
         }
-        if (data.ws) exports.ws.set(data.ws);
+        if (data.ws) exports.wsName.set(data.ws);
         if (data.branch) exports.branch.set(data.branch);
         if (typeof data.changes === "number") exports.changesCount.set(data.changes);
       });
@@ -1008,9 +975,7 @@ function setStored(key, val) {
 
  async function loadSessions() {
   try {
-    const wName = exports.ws.call(void 0, );
-    const q = wName ? `?ws=${encodeURIComponent(wName)}` : "";
-    const res = await _net.apiFetch.call(void 0, `/api/sessions${q}`);
+    const res = await _net.apiFetch.call(void 0, `/api/sessions${getQuery()}`);
     const list = Array.isArray(res) ? res : Array.isArray(_optionalChain([res, 'optionalAccess', _6 => _6.sessions])) ? res.sessions : [];
     exports.sessions.set(
       list.map((s) => ({
@@ -1029,9 +994,7 @@ function setStored(key, val) {
 
  async function loadFiles(query = "") {
   try {
-    const wName = exports.ws.call(void 0, );
-    const q = `?ws=${encodeURIComponent(wName)}&q=${encodeURIComponent(query)}`;
-    const res = await _net.apiFetch.call(void 0, `/api/files${q}`);
+    const res = await _net.apiFetch.call(void 0, `/api/files${getQuery({ q: query })}`);
     const items = Array.isArray(_optionalChain([res, 'optionalAccess', _7 => _7.items])) ? res.items : Array.isArray(res) ? res : [];
     exports.files.set(items);
   } catch (err) {
@@ -1041,10 +1004,7 @@ function setStored(key, val) {
 
  async function loadHistory() {
   try {
-    const sName = exports.activeSession.call(void 0, );
-    const wName = exports.ws.call(void 0, );
-    const q = `?session=${encodeURIComponent(sName)}&ws=${encodeURIComponent(wName)}`;
-    const res = await _net.apiFetch.call(void 0, `/api/history${q}`);
+    const res = await _net.apiFetch.call(void 0, `/api/history${getQuery()}`);
     const rawList = Array.isArray(_optionalChain([res, 'optionalAccess', _8 => _8.history]))
       ? res.history
       : Array.isArray(_optionalChain([res, 'optionalAccess', _9 => _9.messages]))
@@ -1117,9 +1077,7 @@ function setStored(key, val) {
 
  async function createSession() {
   try {
-    const wName = exports.ws.call(void 0, );
-    const q = wName ? `?ws=${encodeURIComponent(wName)}` : "";
-    const res = await _net.apiFetch.call(void 0, `/api/action${q}`, {
+    const res = await _net.apiFetch.call(void 0, `/api/action${getQuery()}`, {
       method: "POST",
       body: JSON.stringify({ act: "new" }),
     });
@@ -1133,8 +1091,7 @@ function setStored(key, val) {
 
  async function renameSession(id, title) {
   try {
-    const wName = exports.ws.call(void 0, );
-    const q = `?session=${encodeURIComponent(id)}&ws=${encodeURIComponent(wName)}`;
+    const q = getQuery({ session: id });
     await _net.apiFetch.call(void 0, `/api/title${q}`, {
       method: "POST",
       body: JSON.stringify({ title }),
@@ -1147,8 +1104,7 @@ function setStored(key, val) {
 
  async function deleteSession(id) {
   try {
-    const wName = exports.ws.call(void 0, );
-    const q = `?session=${encodeURIComponent(id)}&ws=${encodeURIComponent(wName)}`;
+    const q = getQuery({ session: id });
     await _net.apiFetch.call(void 0, `/api/action${q}`, {
       method: "POST",
       body: JSON.stringify({ act: "delete" }),
@@ -1168,10 +1124,7 @@ function setStored(key, val) {
   exports.mode.set(nextMode);
   setStored("mode", nextMode);
   try {
-    const sName = exports.activeSession.call(void 0, );
-    const wName = exports.ws.call(void 0, );
-    const q = `?session=${encodeURIComponent(sName)}&ws=${encodeURIComponent(wName)}`;
-    await _net.apiFetch.call(void 0, `/api/mode${q}`, {
+    await _net.apiFetch.call(void 0, `/api/mode${getQuery()}`, {
       method: "POST",
       body: JSON.stringify({ mode: nextMode }),
     });
@@ -1183,10 +1136,7 @@ function setStored(key, val) {
  async function switchModel(nextModel) {
   exports.model.set(nextModel);
   try {
-    const sName = exports.activeSession.call(void 0, );
-    const wName = exports.ws.call(void 0, );
-    const q = `?session=${encodeURIComponent(sName)}&ws=${encodeURIComponent(wName)}`;
-    await _net.apiFetch.call(void 0, `/api/model${q}`, {
+    await _net.apiFetch.call(void 0, `/api/model${getQuery()}`, {
       method: "POST",
       body: JSON.stringify({ model: nextModel }),
     });
@@ -1197,10 +1147,7 @@ function setStored(key, val) {
 
  async function interrupt() {
   try {
-    const sName = exports.activeSession.call(void 0, );
-    const wName = exports.ws.call(void 0, );
-    const q = `?session=${encodeURIComponent(sName)}&ws=${encodeURIComponent(wName)}`;
-    await _net.apiFetch.call(void 0, `/api/interrupt${q}`, { method: "POST" });
+    await _net.apiFetch.call(void 0, `/api/interrupt${getQuery()}`, { method: "POST" });
   } catch (err) {
     console.warn("interrupt error:", err);
   } finally {
@@ -1249,10 +1196,7 @@ function setStored(key, val) {
   });
 
   try {
-    const sName = exports.activeSession.call(void 0, );
-    const wName = exports.ws.call(void 0, );
-    const q = `?session=${encodeURIComponent(sName)}&ws=${encodeURIComponent(wName)}`;
-    await _net.apiFetch.call(void 0, `/api/chat${q}`, {
+    await _net.apiFetch.call(void 0, `/api/chat${getQuery()}`, {
       method: "POST",
       body: JSON.stringify({ message: text.trim() }),
     });
@@ -1504,7 +1448,7 @@ var _store = require('./store');
       _dom.tags.span({ class: "tb-sep" }, "/"),
       // 工作区与分支
       () => {
-        const w = _store.ws.call(void 0, ) || "workspace";
+        const w = _store.wsName.call(void 0, ) || "workspace";
         const b = _store.branch.call(void 0, );
         const ch = _store.changesCount.call(void 0, );
         const branchPart = b ? ` (${b})` : "";

@@ -1,7 +1,7 @@
 // topbar.ts —— 顶栏工作台导航与全局状态指示
 import { tags, h } from "./dom";
 import {
-  ws,
+  wsName,
   branch,
   changesCount,
   activeSession,
@@ -55,7 +55,7 @@ export function renderTopBar(): HTMLElement {
       tags.span({ class: "tb-sep" }, "/"),
       // 工作区与分支
       () => {
-        const w = ws() || "workspace";
+        const w = wsName() || "workspace";
         const b = branch();
         const ch = changesCount();
         const branchPart = b ? ` (${b})` : "";
