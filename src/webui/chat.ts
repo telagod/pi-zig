@@ -13,9 +13,9 @@ import { act } from "./sessions";
 import { setApproval } from "./model";
 import { hideWelcome } from "./sheet";
 import { pluginEmit, getToolRenderer } from "./plugins";
-
-export const chatH: any = {};
-const sendPlain = (...a: any[]) => chatH.sendPlain(...a);
+import { t, getLang } from "./i18n";
+import { getLastUser, setLastUser } from "./store";
+import { emit } from "./bus";
 
 // ---- 渲染 ----
 export const th = $("thread")!;
@@ -26,7 +26,7 @@ document.addEventListener("click", (e: any) => {
   if (!b) return;
   const box = b.closest(".cb") || b.parentElement;
   const code = box && box.querySelector("code");
-  clipText(code ? code.textContent || "" : "", "已复制", "复制失败");
+  clipText(code ? code.textContent || "" : "", t("copied", "Copied"), t("copyFailed", "Failed to copy"));
 });
 // 回到底部:非贴底且有溢出时现身
 const toB = $("toBottom")!;
@@ -108,7 +108,7 @@ export function paintHistMore() {
   } else if (th.firstChild !== b) th.insertBefore(b, th.firstChild);
   const n = histStart;
   b.hidden = n <= 0;
-  b.textContent = n > 0 ? "↑ 更早 " + n + " 条" : "";
+  b.textContent = n > 0 ? (getLang() === "zh" ? "↑ 更早 " + n + " 条" : "↑ Load " + n + " earlier") : "";
 }
 export function replayHist(items: any[], prepend?: boolean) {
   if (!items || !items.length) return;
@@ -129,7 +129,7 @@ export function replayHist(items: any[], prepend?: boolean) {
       if (h.role === "user") {
         finishRsn();
         finishWork();
-        chatH.setLastUser(text);
+        setLastUser(text);
         addUser(h.has_image && !text ? "[image]" : h.has_image ? text + "  [image]" : text, h.image_file ? "/api/image?name=" + encodeURIComponent(h.image_file) : null);
       } else if (h.role === "assistant") {
         const rsn = histText(h.reasoning);
@@ -207,7 +207,7 @@ function workBitsHtml(live: boolean) {
   if (workCounts.todo) bits.push(ico("todo") + "<span>" + nunit(workCounts.todo, "plan") + "</span>");
   if (workCounts.agent) bits.push(ico("agent") + "<span>" + nunit(workCounts.agent, "agent") + "</span>");
   if (workCounts.other) bits.push(ico("tool") + "<span>" + nunit(workCounts.other, "tool") + "</span>");
-  if (!bits.length) return live ? "正在工作" : "已完成";
+  if (!bits.length) return live ? (getLang() === "zh" ? "正在工作" : "Working...") : (getLang() === "zh" ? "已完成" : "Completed");
   return bits.map((b) => '<span class="work-chip">' + b + "</span>").join('<span class="work-dot">·</span>');
 }
 function refreshWorkSum(live: boolean) {
@@ -222,7 +222,9 @@ function ensureWork() {
   const el = document.createElement("div");
   el.className = "work live";
   el.innerHTML =
-    '<button type="button" class="work-sum"><span class="work-caret">▸</span><span class="work-bits">正在工作</span></button><div class="work-list"></div>';
+    '<button type="button" class="work-sum"><span class="work-caret">▸</span><span class="work-bits">' +
+    (getLang() === "zh" ? "正在工作" : "Working...") +
+    '</span></button><div class="work-list"></div>';
   (el.querySelector(".work-sum") as HTMLElement).onclick = () => el.classList.toggle("open");
   th.appendChild(el);
   workEl = el;
@@ -399,10 +401,11 @@ export const Flow: any = {
       if (n.body) {
         bodyHtml = '<pre class="flow-body">' + esc(n.body) + "</pre>";
       } else {
+        const isZh = getLang() === "zh";
         const lines = [
-          "节点状态: " + (n.st || "pending"),
-          n.role ? "执行角色: " + n.role : "",
-          n.last ? "最近活动: " + n.last : "执行中，暂无标准输出",
+          (isZh ? "节点状态: " : "Status: ") + (n.st || "pending"),
+          n.role ? (isZh ? "执行角色: " : "Role: ") + n.role : "",
+          n.last ? (isZh ? "最近活动: " : "Activity: ") + n.last : (isZh ? "执行中，暂无标准输出" : "Running, no output yet"),
         ].filter(Boolean);
         bodyHtml = '<div class="flow-body flow-info">' + lines.map((l: string) => "<div>" + esc(l) + "</div>").join("") + "</div>";
       }
@@ -413,7 +416,9 @@ export const Flow: any = {
       (open ? " open" : "") +
       '" data-id="' +
       esc(n.id) +
-      '" title="点击查看节点详情"><i class="flow-dot"></i><div class="flow-main"><div class="flow-row"><b>' +
+      '" title="' +
+      (getLang() === "zh" ? "点击查看节点详情" : "Click to view details") +
+      '"><i class="flow-dot"></i><div class="flow-main"><div class="flow-row"><b>' +
       esc(n.id) +
       "</b>" +
       (n.role ? "<em>" + esc(n.role) + "</em>" : "") +
@@ -481,10 +486,11 @@ export function stampTurn() {
   if (!turnAt) return;
   const sec = Math.max(1, Math.round((Date.now() - turnAt) / 1000));
   turnAt = 0;
+  const isZh = getLang() === "zh";
   const label =
     sec < 60
-      ? "用了 " + sec + "s"
-      : "用了 " + Math.floor(sec / 60) + "m " + (sec % 60) + "s";
+      ? (isZh ? "用了 " + sec + "s" : "took " + sec + "s")
+      : (isZh ? "用了 " + Math.floor(sec / 60) + "m " + (sec % 60) + "s" : "took " + Math.floor(sec / 60) + "m " + (sec % 60) + "s");
   const host =
     th.querySelector(".a-turn:last-of-type") ||
     th.querySelector(".work:last-of-type");
@@ -511,7 +517,11 @@ export function addUser(txt: string, imgSrc?: string | null) {
   const t = document.createElement("div");
   t.className = "u-turn";
   t.innerHTML =
-    '<div class="u-bub"></div><div class="u-ops"><button type="button" class="copy-chip" title="复制">⧉</button><button type="button" class="undo-chip" title="撤销">↶</button></div>';
+    '<div class="u-bub"></div><div class="u-ops"><button type="button" class="copy-chip" title="' +
+    t("copy", "Copy") +
+    '">⧉</button><button type="button" class="undo-chip" title="' +
+    t("undo", "Undo") +
+    '">↶</button></div>';
   const bub = t.querySelector(".u-bub")!;
   if (imgSrc) {
     const im = document.createElement("img");
@@ -533,7 +543,7 @@ export function addUser(txt: string, imgSrc?: string | null) {
       const more = document.createElement("button");
       more.type = "button";
       more.className = "fold-more";
-      more.textContent = "展开 ▾";
+      more.textContent = getLang() === "zh" ? "展开 ▾" : "Expand ▾";
       more.onclick = () => bub.classList.remove("folded");
       bub.appendChild(document.createElement("br"));
       bub.appendChild(more);
@@ -542,10 +552,10 @@ export function addUser(txt: string, imgSrc?: string | null) {
     bub.textContent = txt || "";
   }
   const rawUser = shown || txt || "";
-  (t.querySelector(".copy-chip") as HTMLElement).onclick = () => clipText(rawUser, "已复制", "复制失败");
+  (t.querySelector(".copy-chip") as HTMLElement).onclick = () => clipText(rawUser, t("copied", "Copied"), t("copyFailed", "Failed to copy"));
   (t.querySelector(".undo-chip") as HTMLElement).onclick = () => {
     act({ act: "undo" }, (j) => {
-      showToast(j && j.ok ? "已撤销" : "无可撤销");
+      showToast(j && j.ok ? t("undone", "Undone") : t("noUndo", "Nothing to undo"));
       setTimeout(() => location.reload(), 400);
     });
   };
@@ -613,11 +623,13 @@ export function finishAsst() {
       const ops = document.createElement("div");
       ops.className = "a-ops";
       ops.innerHTML =
-        '<button type="button" class="copy-a" title="复制">⧉</button>' +
-        (chatH.getLastUser() ? '<button type="button" class="redo-a" title="重新生成">↻</button>' : "");
-      (ops.querySelector(".copy-a") as HTMLElement).onclick = () => clipText(raw, "已复制", "复制失败");
+        '<button type="button" class="copy-a" title="' +
+        t("copy", "Copy") +
+        '">⧉</button>' +
+        (getLastUser() ? '<button type="button" class="redo-a" title="' + (getLang() === "zh" ? "重新生成" : "Regenerate") + '">↻</button>' : "");
+      (ops.querySelector(".copy-a") as HTMLElement).onclick = () => clipText(raw, t("copied", "Copied"), t("copyFailed", "Failed to copy"));
       const redo = ops.querySelector(".redo-a") as HTMLElement | null;
-      if (redo) redo.onclick = () => sendPlain(chatH.getLastUser());
+      if (redo) redo.onclick = () => emit("chat:retry");
       curAsst.appendChild(ops);
     }
     pluginEmit("message-rendered", {
@@ -636,7 +648,9 @@ export function addRsn(txt: string) {
     el.innerHTML =
       '<button type="button" class="think-sum"><span class="work-caret">▸</span>' +
       ico("think") +
-      '<span class="think-txt">思考中</span></button><pre class="tk"></pre>';
+      '<span class="think-txt">' +
+      (getLang() === "zh" ? "思考中" : "Thinking...") +
+      '</span></button><pre class="tk"></pre>';
     (el.querySelector(".think-sum") as HTMLElement).onclick = () => el.classList.toggle("open");
     th.appendChild(el);
     rsnEl = el;
@@ -672,7 +686,7 @@ export function finishRsn() {
   paintRsn();
   rsnTm && (clearTimeout(rsnTm), (rsnTm = 0));
   const txt = rsnEl.querySelector(".think-txt");
-  if (txt) txt.textContent = "思考";
+  if (txt) txt.textContent = getLang() === "zh" ? "思考" : "Thinking";
   rsnEl = null;
 }
 // 工具卡
@@ -682,17 +696,18 @@ const pendingByName: Record<string, string[]> = {};
 export const inspect: any = {
   src: "",
   kind(d: any) {
-    if (!d) return "工具";
+    if (!d) return t("tool", "Tool");
     const ty = d.dataset.ty;
-    if (ty === "diff") return "变更";
-    if (ty === "code") return "文件";
-    if (ty === "term") return "终端输出";
-    if (ty === "todo") return "规划";
-    if (ty === "agent") return (cards[d.id] && cards[d.id].name) === "workflow" ? "工作流" : "智能体";
+    const isZh = getLang() === "zh";
+    if (ty === "diff") return isZh ? "Diff 变更" : "Diff";
+    if (ty === "code") return isZh ? "文件" : "File";
+    if (ty === "term") return isZh ? "终端输出" : "Terminal";
+    if (ty === "todo") return isZh ? "规划" : "Plan";
+    if (ty === "agent") return (cards[d.id] && cards[d.id].name) === "workflow" ? "Workflow" : "Subagent";
     const n = (cards[d.id] && cards[d.id].name) || "";
-    if (/^(ls|find)$/.test(n)) return "文件列表";
-    if (/^(grep|search)$/.test(n)) return "搜索结果";
-    return n || "输出";
+    if (/^(ls|find)$/.test(n)) return isZh ? "文件列表" : "Files";
+    if (/^(grep|search)$/.test(n)) return isZh ? "搜索结果" : "Search";
+    return n || (isZh ? "输出" : "Output");
   },
   pathOf(d: any) {
     const c = cards[d.id];
@@ -704,10 +719,11 @@ export const inspect: any = {
     const p = this.pathOf(d);
     if (p) return p.split(/[/\\]/).pop() || p;
     const c = cards[d.id];
-    if (!c) return "详情";
+    const isZh = getLang() === "zh";
+    if (!c) return isZh ? "详情" : "Details";
     const o = parseToolArgs(c.args);
-    if (c.name === "workflow") return String(o.goal || "工作流");
-    return String(o.command || c.name || "详情");
+    if (c.name === "workflow") return String(o.goal || "Workflow");
+    return String(o.command || c.name || (isZh ? "详情" : "Details"));
   },
   workEl: null,
   setHead(k: string, t: string) {
@@ -742,7 +758,7 @@ export const inspect: any = {
     this.thinkEl = el;
     this.src = "";
     this.show();
-    this.setHead("思考过程", "思考过程");
+    this.setHead(getLang() === "zh" ? "思考过程" : "Thinking", getLang() === "zh" ? "思考过程" : "Thinking");
     const txt = el.querySelector(".tk");
     const box = document.createElement("div");
     box.className = "insp-think";
@@ -771,7 +787,7 @@ export const inspect: any = {
         host.innerHTML = '<div class="flow">' + Flow.html() + "</div>";
         return;
       }
-      host.innerHTML = '<div class="insp-wait">正在运行…</div>';
+      host.innerHTML = '<div class="insp-wait">' + (getLang() === "zh" ? "正在运行…" : "Running...") + '</div>';
       return;
     }
     let out = (c && c.out) || "";
@@ -786,7 +802,7 @@ export const inspect: any = {
       } catch {}
     }
     if (!out) {
-      host.innerHTML = '<div class="insp-wait">暂无输出</div>';
+      host.innerHTML = '<div class="insp-wait">' + (getLang() === "zh" ? "暂无输出" : "No output") + '</div>';
       return;
     }
     d.dataset.out = out;
@@ -931,12 +947,22 @@ export function addPerm(id: string, name: string, args: string) {
       esc(String(o.path || args || "").slice(0, 300)) +
       "</pre></div>";
   d.innerHTML =
-    '<div class="ah"><span class="ah-ic">?</span><span class="akind">需要许可</span><span class="apath">' +
+    '<div class="ah"><span class="ah-ic">?</span><span class="akind">' +
+    t("permRequired", "Permission Required") +
+    '</span><span class="apath">' +
     esc(name) +
     (o.path && kind === "shell" ? "  " + esc(String(o.path).slice(0, 80)) : "") +
-    '</span><span class="aw">等待审批</span></div>' +
+    '</span><span class="aw">' +
+    t("awaitingApproval", "Awaiting approval") +
+    '</span></div>' +
     body +
-    '<div class="pb"><button class="ok">允许</button><button class="alw">本会话总是</button><button class="no">拒绝</button></div>';
+    '<div class="pb"><button class="ok">' +
+    t("allow", "Allow") +
+    '</button><button class="alw">' +
+    t("alwaysSession", "Always this session") +
+    '</button><button class="no">' +
+    t("deny", "Deny") +
+    '</button></div>';
   (d.querySelector(".ok") as HTMLElement).onclick = (e: any) => {
     e.stopPropagation();
     appr(d, id, true, false);
@@ -964,13 +990,13 @@ async function appr(card: any, id: string, allow: boolean, always: boolean) {
     });
     const j = await r.json().catch(() => ({}));
     if (!r.ok || j.ok === false) {
-      showToast(j.error || "审批失败");
+      showToast(j.error || t("apprFailed", "Approval failed"));
       card.querySelectorAll("button").forEach((b: any) => (b.disabled = false));
       return;
     }
     card.remove();
   } catch {
-    showToast("审批失败");
+    showToast(t("apprFailed", "Approval failed"));
     card.querySelectorAll("button").forEach((b: any) => (b.disabled = false));
   }
 }
@@ -996,9 +1022,12 @@ export function addCheckpoint(summary: string, folded: number, kept: number) {
   const n = Number(folded) || 0;
   const k = Number(kept) || 0;
   const same = th.lastElementChild && th.lastElementChild.classList && th.lastElementChild.classList.contains("cp");
+  const isZh = getLang() === "zh";
   d.innerHTML =
-    '<button type="button" class="cp-sum" aria-expanded="false"><span class="cp-ic">⧉</span><span class="cp-t">上下文已压缩</span>' +
-    (same ? "" : "<span class=\"cp-meta\">折叠 " + n + " 条 · 保留 " + fmtK(k) + " tok</span>") +
+    '<button type="button" class="cp-sum" aria-expanded="false"><span class="cp-ic">⧉</span><span class="cp-t">' +
+    (isZh ? "Context 已在此压缩整理" : "Context compacted") +
+    '</span>' +
+    (same ? "" : '<span class="cp-meta">' + (isZh ? "折叠 " + n + " 条 · 保留 " + fmtK(k) + " tok" : "Folded " + n + " msgs · Kept " + fmtK(k) + " tok") + '</span>') +
     '<span class="cp-caret">▸</span></button>' +
     '<div class="cp-body"></div>';
   const bd = d.querySelector(".cp-body")!;
@@ -1021,12 +1050,16 @@ export function planStrip(c: any) {
   const strip = $("planStrip") as HTMLElement | null;
   if (!strip || !total) return;
   strip.hidden = false;
+  const isZh = getLang() === "zh";
   strip.innerHTML =
-    '<button type="button" class="plan-sum"><span class="plan-ic">📋</span><span class="plan-t">计划</span><span class="plan-meta">' +
+    '<button type="button" class="plan-sum"><span class="plan-ic">📋</span><span class="plan-t">' +
+    (isZh ? "计划" : "Plan") +
+    '</span><span class="plan-meta">' +
     done +
     "/" +
     total +
-    " 完成</span><span class=\"plan-caret\">▸</span></button>";
+    (isZh ? " 完成" : " completed") +
+    '</span><span class="plan-caret">▸</span></button>';
   (strip.querySelector(".plan-sum") as HTMLElement).onclick = () => inspect.open(c.el);
 }
 function fmtK(n: number) {

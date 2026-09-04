@@ -1,13 +1,9 @@
 // sessions.ts —— 菜单助手 / 项目 / 会话列 / 会话操作。
-// 自 webui.js 切出。approvalMode/setModeBtn/closeSheet 属 main,经 sessHooks.applySessionMeta 注入(解循环)。
-// sessList/archList/sessMeta 以 sessData 活引用外供(main 的搜索与数字跳会读之)。
 import { $, esc, fmtTime, projectName } from "./util";
 import { sess, ws, wsp, sessUrl } from "./state";
 import { showToast, askText, askYes } from "./ui";
-
-export const sessHooks: { applySessionMeta: ((s: any) => void) | null } = {
-  applySessionMeta: null,
-};
+import { t, getLang } from "./i18n";
+import { emit, on } from "./bus";
 
 export const sessData = { list: [] as any[], arch: [] as any[], meta: {} as Record<string, any> };
 
@@ -17,6 +13,7 @@ export function closeMenus() {
     m.classList.remove("open");
   openMenu = null;
 }
+on("popups:dismiss", closeMenus);
 /// 统一锚定菜单(dsh Menu 原语之形):锚元素矩形 + 优先弹出方向/对齐。
 /// side: "bl"(默认 左下)| "br"(右下)| "tr"(右上)| "tl"(左上);
 /// 菜单卡片永远不越过视口(8px 边距),溢出时自动翻转。
@@ -105,7 +102,7 @@ export async function renderWsName() {
   const nm = projectName(cur) || "piz";
   $("wsName")!.textContent = "piz";
   $("tbWs")!.textContent = nm;
-  if ($("heroWsLbl")) $("heroWsLbl")!.textContent = nm || "选择项目";
+  if ($("heroWsLbl")) $("heroWsLbl")!.textContent = nm || t("workspace", "Workspace");
   if ($("hWs") && !$("hWs")!.textContent) {
     $("hWs")!.textContent = nm;
     if ($("hSep")) $("hSep")!.style.display = nm ? "" : "none";
@@ -113,7 +110,7 @@ export async function renderWsName() {
   return list;
 }
 export async function addProject() {
-  const root = await askText("添加项目", "", "绝对路径，如 /home/me/proj");
+  const root = await askText(t("addProject", "Add project"), "", getLang() === "zh" ? "绝对路径，如 /home/me/proj" : "Absolute path, e.g. /home/me/proj");
   if (!root) return;
   fetch("/api/workspaces", {
     method: "POST",
@@ -124,14 +121,14 @@ export async function addProject() {
     .then(() => {
       location.href = sessUrl("default", root);
     })
-    .catch(() => showToast("无效目录"));
+    .catch(() => showToast(getLang() === "zh" ? "无效目录" : "Invalid directory"));
 }
 export async function openWsMenu(btn: any) {
   const list = await renderWsName();
   const cur = ws || (list[0] ? list[0].root : "");
   const m = $("wsmenu")!;
   m.innerHTML = "";
-  m.appendChild(menuLabel("项目"));
+  m.appendChild(menuLabel(t("workspace", "Workspace")));
   for (const w of list) {
     m.appendChild(
       menuRow({
@@ -147,7 +144,7 @@ export async function openWsMenu(btn: any) {
   m.appendChild(menuSep());
   m.appendChild(
     menuRow({
-      label: "添加项目…",
+      label: t("addProject", "Add project") + "…",
       icon: "＋",
       onclick: () => addProject(),
     }),
@@ -162,9 +159,10 @@ export function initSideFilter() {
   const box = document.createElement("div");
   box.className = "side-filter";
   box.innerHTML =
-    '<span class="sf-ic">⌕</span><input type="text" placeholder="搜索会话…" spellcheck="false" /><button type="button" class="sf-x" title="清空">✕</button>';
+    '<span class="sf-ic">⌕</span><input type="text" placeholder="' + t("searchSessions", "Search sessions...") + '" spellcheck="false" /><button type="button" class="sf-x" title="' + t("clear", "Clear") + '">✕</button>';
   const inp = box.querySelector("input") as HTMLInputElement;
   const x = box.querySelector(".sf-x") as HTMLElement;
+
   x.hidden = true;
   let ft: any = 0;
   inp.addEventListener("input", () => {
@@ -236,7 +234,7 @@ export function sessionRow(s: any, arch: boolean, wsRoot?: string) {
     "se" +
     (s.name === sess && here ? " on" : "") +
     (arch ? " arch" : "");
-  const title = s.title || (s.name === "default" ? "默认会话" : s.name);
+  const title = s.title || (s.name === "default" ? t("defaultSession", "Default session") : s.name);
   d.innerHTML =
     '<div class="srow"><span class="lead">' +
     (s.busy
@@ -248,20 +246,20 @@ export function sessionRow(s: any, arch: boolean, wsRoot?: string) {
     esc(title) +
     "</span>" +
     (s.status === "awaitingQuestion"
-      ? '<span class="tag info">回答</span>'
+      ? '<span class="tag info">' + t("statusAnswer", "Answer") + "</span>"
       : "") +
     (s.status === "awaitingApproval"
-      ? '<span class="tag warn">审批</span>'
+      ? '<span class="tag warn">' + t("statusApproval", "Approval") + "</span>"
       : "") +
     (s.status === "aborted"
-      ? '<span class="tag danger">中止</span>'
+      ? '<span class="tag danger">' + t("statusAborted", "Aborted") + "</span>"
       : "") +
     '<span class="sts">' +
     fmtTime(s.ts) +
-    '</span><button class="kebab" title="操作">⋯</button></div>';
+    '</span><button class="kebab" title="' + t("sessionActions", "Session actions") + '">⋯</button></div>';
   d.onclick = () => {
     if (s.name === sess) {
-      sessHooks.applySessionMeta?.(s);
+      emit("session:select", s);
     } else {
       d.classList.add("switching");
       const wrap = $("wrap");
@@ -282,28 +280,28 @@ export function openSessionMenu(btn: any, s: any, arch: boolean) {
   if (!arch) {
     m.appendChild(
       menuRow({
-        label: "重命名",
+        label: t("rename", "Rename"),
         icon: "✎",
         onclick: async () => {
-          const t = await askText("重命名会话", s.title || s.name, "会话标题");
-          if (t === null) return;
-          act({ act: "rename", name: t, session: s.name }, (j) => {
+          const tName = await askText(t("renameSession", "Rename session"), s.title || s.name, t("sessionTitle", "Session title"));
+          if (tName === null) return;
+          act({ act: "rename", name: tName, session: s.name }, (j) => {
             loadSessions();
-            showToast(j && j.ok ? "已重命名" : "失败");
+            showToast(j && j.ok ? t("renamed", "Renamed") : t("failed", "Failed"));
           });
         },
       }),
     );
     m.appendChild(
       menuRow({
-        label: "派生会话",
+        label: t("forkSession", "Fork session"),
         icon: "✱",
         onclick: async () => {
-          const n = await askText("派生会话", "", "新会话名，留空自动");
+          const n = await askText(t("forkSession", "Fork session"), "", t("forkHint", "New session name, empty for auto"));
           if (n === null) return;
           act({ act: "fork", name: n || "", session: s.name }, (j) => {
             if (j && j.name) {
-              showToast("已派生 " + j.name);
+              showToast(t("forked", "Forked ") + j.name);
               setTimeout(
                 () =>
                   (location.href = sessUrl(j.name)),
@@ -316,12 +314,12 @@ export function openSessionMenu(btn: any, s: any, arch: boolean) {
     );
     m.appendChild(
       menuRow({
-        label: "归档",
+        label: t("archive", "Archive"),
         icon: "🗄",
         onclick: () => {
           act({ act: "archive", session: s.name }, (j) => {
             if (j && j.ok) {
-              showToast("已归档");
+              showToast(t("archived", "Archived"));
               if (s.name === sess)
                 setTimeout(() => (location.href = sessUrl("default")), 400);
             }
@@ -334,11 +332,11 @@ export function openSessionMenu(btn: any, s: any, arch: boolean) {
   }
   m.appendChild(
     menuRow({
-      label: arch ? "永久删除" : "删除",
+      label: arch ? t("deleteForever", "Delete forever") : t("delete", "Delete"),
       icon: "🗑",
       danger: true,
       onclick: async () => {
-        if (!(await askYes("删除会话", "永久删除 " + s.name + "？"))) return;
+        if (!(await askYes(t("deleteSession", "Delete session"), (arch ? t("deleteForever", "Delete forever ") : t("delete", "Delete ")) + s.name + "?"))) return;
         act({ act: "delete", session: s.name }, () => {
           loadSessions();
         });
@@ -348,12 +346,12 @@ export function openSessionMenu(btn: any, s: any, arch: boolean) {
   if (arch) {
     m.prepend(
       menuRow({
-        label: "恢复",
+        label: t("restore", "Restore"),
         icon: "↩",
         onclick: () => {
           act({ act: "restore", session: s.name }, () => {
             loadSessions();
-            showToast("已恢复 " + s.name);
+            showToast(t("restored", "Restored ") + s.name);
           });
         },
       }),
@@ -383,13 +381,13 @@ export function loadSessions() {
       const cur = ws || (projects[0] ? projects[0].root : "");
       const lab = document.createElement("div");
       lab.className = "side-lab";
-      lab.textContent = "项目";
+      lab.textContent = t("workspace", "Workspace");
       sl.appendChild(lab);
       if (!projects.length) {
         const empty = document.createElement("div");
         empty.className = "sg-name";
         empty.style.padding = "6px 8px";
-        empty.textContent = "当前目录";
+        empty.textContent = t("currentDir", "Current directory");
         sl.appendChild(empty);
       }
       for (const w of projects) {
@@ -414,12 +412,12 @@ export function loadSessions() {
           if (!vis.length && q) {
             const ne = document.createElement("div");
             ne.className = "sg-name";
-            ne.textContent = "无匹配会话";
+            ne.textContent = t("noMatchingSessions", "No matching sessions");
             wrap.appendChild(ne);
           } else if (!vis.length) {
             const ne = document.createElement("div");
             ne.className = "sg-name";
-            ne.textContent = "还没有会话,发一条消息开始";
+            ne.textContent = t("noSessionsHint", "No sessions yet. Send a message to start.");
             wrap.appendChild(ne);
           }
           for (const s of vis) wrap.appendChild(sessionRow(s, false, w.root));
@@ -427,7 +425,7 @@ export function loadSessions() {
             const se = document.createElement("div");
             se.className = "sg-arch";
             se.innerHTML =
-              '<span class="sg-chev">▶</span><span>归档</span><span class="sg-arch-n">' +
+              '<span class="sg-chev">▶</span><span>' + t("archive", "Archive") + '</span><span class="sg-arch-n">' +
               archList.length +
               "</span>";
             const awrap = document.createElement("div");
@@ -459,7 +457,7 @@ export function loadSessions() {
       const addp = document.createElement("button");
       addp.className = "btn-add-proj";
       addp.type = "button";
-      addp.innerHTML = '<span class="pl">＋</span><span>添加项目</span>';
+      addp.innerHTML = '<span class="pl">＋</span><span>' + t("addProject", "Add project") + '</span>';
       addp.onclick = () => addProject();
       sl.appendChild(addp);
       const sb = $("sbody");
@@ -470,7 +468,7 @@ export function loadSessions() {
           const ne2 = document.createElement("div");
           ne2.className = "sg-name";
           ne2.style.padding = "12px 14px";
-          ne2.textContent = "还没有会话,发一条消息开始";
+          ne2.textContent = t("noSessionsHint", "No sessions yet. Send a message to start.");
           sb.appendChild(ne2);
         }
         if (archList.length) {
@@ -479,14 +477,14 @@ export function loadSessions() {
           sb.appendChild(se2);
           const sh = document.createElement("div");
           sh.className = "sg-arch";
-          sh.textContent = "归档 " + archList.length;
+          sh.textContent = t("archive", "Archive") + " " + archList.length;
           sb.appendChild(sh);
           for (const s of archList)
             sb.appendChild(sessionRow(s, true, cur));
         }
       }
     })
-    .catch(() => showToast("会话加载失败"));
+    .catch(() => showToast(t("sessionsLoadFail", "Failed to load sessions")));
 }
 // 搜索框过滤态:内联侧栏过滤输入(loadSessions 的 show 读它)
 let sideQ = "";
@@ -521,5 +519,6 @@ export function act(body: any, then?: (j: any) => void) {
     .then((j) => {
       if (then) then(j);
     })
-    .catch(() => showToast("操作失败"));
+    .catch(() => showToast(t("actionFail", "Action failed")));
 }
+

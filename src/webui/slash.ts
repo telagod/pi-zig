@@ -1,39 +1,124 @@
 // slash.ts —— 斜杠命令目录/菜单/bang 提示/@文件补全 + runSlash 全分发。
-// 自 webui.js 切出。聊天渲染/发送/模型态皆 main 之物,经 slashH 钩袋注入;
-// 别名包装使本体调用点一字不改(唯活读之 bare var 改 H.getX())。
 import { $, esc, rankSlash, hlSpan, fmtTok, downloadText } from "./util";
 import { sess, ws, wsp, sessUrl, prefs } from "./state";
-import { showToast, askText } from "./ui";
+import { showToast, askText, clipText, setScheme } from "./ui";
 import { act, sessData } from "./sessions";
-import { autosizeInp, saveDraft } from "./store";
+import { autosizeInp, saveDraft, getLastUser } from "./store";
 import {
   setApproval, setSandbox, setThink, applySessionTitle,
   getCurModel, getCurTitle, getThink, getVision, getSandboxMode,
   approvalLabel, setApprovalMode, applySandboxLevel, applyThink,
 } from "./model";
-import { setScheme } from "./ui";
+import { addUser, addAsst, finishAsst, asstEl, findInThread, getWebFindQ } from "./chat";
+import { t, getLang } from "./i18n";
+import { emit, on } from "./bus";
 
-export const slashH: any = {};
-const addUser = (...a: any[]) => slashH.addUser(...a);
-const addAsst = (...a: any[]) => slashH.addAsst(...a);
-const finishAsst = (...a: any[]) => slashH.finishAsst(...a);
-const openSearch = (...a: any[]) => slashH.openSearch(...a);
-const attachClipboardImage = (...a: any[]) => slashH.attachClipboardImage(...a);
-const refreshSend = (...a: any[]) => slashH.refreshSend(...a);
-const ensureActPoll = (...a: any[]) => slashH.ensureActPoll(...a);
-const asstEl = (...a: any[]) => slashH.asstEl(...a);
-const findInThread = (...a: any[]) => slashH.findInThread(...a);
-const sendPlain = (...a: any[]) => slashH.sendPlain(...a);
-const send = (...a: any[]) => slashH.send(...a);
-const renderQueue = (...a: any[]) => slashH.renderQueue(...a);
-const clipText = (...a: any[]) => slashH.clipText(...a);
+const openSearch = () => emit("search:open");
+const attachClipboardImage = () => new Promise<boolean>((resolve) => {
+  emit("composer:paste-image", { callback: resolve });
+});
+const refreshSend = () => emit("composer:refresh-send");
+const ensureActPoll = () => emit("composer:ensure-act-poll");
+const sendPlain = async (text: string) => { emit("chat:send", { text }); };
+
+const SLASH_EN: any[] = [
+  { name: "/help", desc: "list commands" },
+  { name: "/login", desc: "save API key", accepts: true },
+  { name: "/new", desc: "new session" },
+  { name: "/clear", desc: "clear and restart" },
+  { name: "/sessions", desc: "search sessions" },
+  { name: "/resume", desc: "switch to n-th session", accepts: true },
+  { name: "/undo", desc: "undo last turn" },
+  { name: "/compact", desc: "compact context" },
+  { name: "/fast-compress", desc: "fast compress state" },
+  { name: "/fork", desc: "fork session" },
+  { name: "/title", desc: "change session title", accepts: true },
+  { name: "/model", desc: "switch model" },
+  { name: "/refresh", desc: "refresh provider models" },
+  { name: "/think", desc: "thinking level", accepts: true },
+  { name: "/permissions", desc: "approval: yolo/ask/read-only", accepts: true },
+  { name: "/sandbox", desc: "bash sandbox: off/workspace/strict", accepts: true },
+  { name: "/status", desc: "current status" },
+  { name: "/doctor", desc: "environment health check" },
+  { name: "/init", desc: "write AGENTS.md (no overwrite)" },
+  { name: "/diff", desc: "git status + diffstat" },
+  { name: "/commit", desc: "commit staged changes", accepts: true },
+  { name: "/log", desc: "git log --oneline", accepts: true },
+  { name: "/branch", desc: "current & recent branches" },
+  { name: "/mcp", desc: "list MCP servers" },
+  { name: "/reload", desc: "reload settings.json" },
+  { name: "/theme", desc: "appearance: light/dark/system", accepts: true },
+  { name: "/paste", desc: "paste image from clipboard" },
+  { name: "/usage", desc: "token usage ledger" },
+  { name: "/jobs", desc: "running & background jobs", accepts: true },
+  { name: "/find", desc: "find in thread", accepts: true },
+  { name: "/plan", desc: "write PLAN.md before executing", accepts: true },
+  { name: "/queue", desc: "clear input queue" },
+  { name: "/memory", desc: "cross-session memory", accepts: true },
+  { name: "/plugins", desc: "list or toggle plugins", accepts: true },
+  { name: "/pkg", desc: "installed packages" },
+  { name: "/tree", desc: "message tree" },
+  { name: "/copy", desc: "copy last reply" },
+  { name: "/export", desc: "export HTML" },
+  { name: "/dump", desc: "dump session to clipboard" },
+  { name: "/redo", desc: "redo last user input" },
+];
+
+const SLASH_ZH: any[] = [
+  { name: "/help", desc: "命令列表" },
+  { name: "/login", desc: "保存 API key", accepts: true },
+  { name: "/new", desc: "新建 Session" },
+  { name: "/clear", desc: "清空并重开" },
+  { name: "/sessions", desc: "搜索 Session" },
+  { name: "/resume", desc: "切到第 n 个 Session", accepts: true },
+  { name: "/undo", desc: "撤销上一轮" },
+  { name: "/compact", desc: "压缩 Context" },
+  { name: "/fast-compress", desc: "快压状态" },
+  { name: "/fork", desc: "派生 Session" },
+  { name: "/title", desc: "修改 Session 标题", accepts: true },
+  { name: "/model", desc: "切换 Model" },
+  { name: "/refresh", desc: "拉取 Provider Model 列表" },
+  { name: "/think", desc: "Thinking 等级", accepts: true },
+  { name: "/permissions", desc: "授权 yolo/ask/read-only", accepts: true },
+  { name: "/sandbox", desc: "Bash Sandbox: off/workspace/strict", accepts: true },
+  { name: "/status", desc: "当前状态" },
+  { name: "/doctor", desc: "环境体检" },
+  { name: "/init", desc: "初始化 AGENTS.md" },
+  { name: "/diff", desc: "Git status + diffstat" },
+  { name: "/commit", desc: "提交已暂存（需说明）", accepts: true },
+  { name: "/log", desc: "Git log --oneline", accepts: true },
+  { name: "/branch", desc: "当前与最近分支" },
+  { name: "/mcp", desc: "MCP Server 列表" },
+  { name: "/reload", desc: "重读 settings.json" },
+  { name: "/theme", desc: "外观 light/dark/system", accepts: true },
+  { name: "/paste", desc: "从剪贴板附图" },
+  { name: "/usage", desc: "Token 用量账本" },
+  { name: "/jobs", desc: "在跑 / 后台 Jobs", accepts: true },
+  { name: "/find", desc: "搜对话", accepts: true },
+  { name: "/plan", desc: "生成 PLAN.md 再执行", accepts: true },
+  { name: "/queue", desc: "清空输入队列" },
+  { name: "/memory", desc: "跨 Session 记忆", accepts: true },
+  { name: "/plugins", desc: "列出或开关插件", accepts: true },
+  { name: "/pkg", desc: "已安装 Packages" },
+  { name: "/tree", desc: "消息树" },
+  { name: "/copy", desc: "复制最后一条回复" },
+  { name: "/export", desc: "导出 HTML" },
+  { name: "/dump", desc: "整段 Session 到剪贴板" },
+  { name: "/redo", desc: "重发上一次输入" },
+];
+
+let customSlash: any[] | null = null;
+export function getSlashList(): any[] {
+  if (customSlash) return customSlash;
+  return getLang() === "zh" ? SLASH_ZH : SLASH_EN;
+}
 
 export function findSlash(cmd: string) {
-  return SLASH.find((s) => s.name === cmd);
+  return getSlashList().find((s) => s.name === cmd);
 }
 export function applyHelpCatalog(j: any) {
   if (j && Array.isArray(j.commands) && j.commands.length) {
-    SLASH = j.commands.map((c: any) => ({
+    customSlash = j.commands.map((c: any) => ({
       name: c.name,
       desc: c.desc,
       accepts: !!c.accepts,
@@ -45,50 +130,9 @@ export function loadHelpCatalog() {
   return fetch("/api/help?" + wsp + "session=" + encodeURIComponent(sess))
     .then((r) => r.json())
     .then(applyHelpCatalog)
-    .catch(() => showToast("帮助目录加载失败"));
+    .catch(() => showToast(t("helpLoadFail", "Failed to load help catalog")));
 }
-let SLASH: any[] = [
-  { name: "/help", desc: "list commands" },
-  { name: "/login", desc: "save API key", accepts: true },
-  { name: "/new", desc: "新会话" },
-  { name: "/clear", desc: "清空并重开" },
-  { name: "/sessions", desc: "搜索会话" },
-  { name: "/resume", desc: "切到第 n 个会话", accepts: true },
-  { name: "/undo", desc: "撤销上一轮" },
-  { name: "/compact", desc: "压缩上下文" },
-  { name: "/fast-compress", desc: "快压状态" },
-  { name: "/fork", desc: "派生会话" },
-  { name: "/title", desc: "改会话标题", accepts: true },
-  { name: "/model", desc: "切换模型" },
-  { name: "/refresh", desc: "拉取 provider 模型列表" },
-  { name: "/think", desc: "思考等级", accepts: true },
-  { name: "/permissions", desc: "授权 yolo/ask/read-only", accepts: true },
-  { name: "/sandbox", desc: "bash 沙箱 off/workspace/strict", accepts: true },
-  { name: "/status", desc: "当前状态" },
-  { name: "/doctor", desc: "环境体检" },
-  { name: "/init", desc: "写 AGENTS.md（已有不覆盖）" },
-  { name: "/diff", desc: "git status + diffstat" },
-  { name: "/commit", desc: "提交已暂存（需说明）", accepts: true },
-  { name: "/log", desc: "git log --oneline", accepts: true },
-  { name: "/branch", desc: "当前与最近分支" },
-  { name: "/mcp", desc: "MCP server 列表" },
-  { name: "/reload", desc: "重读 settings.json" },
-  { name: "/theme", desc: "外观 light/dark/system", accepts: true },
-  { name: "/paste", desc: "从剪贴板附图" },
-  { name: "/usage", desc: "token 账本" },
-  { name: "/jobs", desc: "在跑 / 后台任务", accepts: true },
-  { name: "/find", desc: "搜对话", accepts: true },
-  { name: "/plan", desc: "写 PLAN.md 再执行", accepts: true },
-  { name: "/queue", desc: "清空输入队列" },
-  { name: "/memory", desc: "跨会话记忆", accepts: true },
-  { name: "/plugins", desc: "列出或开关插件", accepts: true },
-  { name: "/pkg", desc: "已装资源包" },
-  { name: "/tree", desc: "消息列表" },
-  { name: "/copy", desc: "复制最后一条回复" },
-  { name: "/export", desc: "导出 HTML" },
-  { name: "/dump", desc: "整段会话到剪贴板" },
-  { name: "/redo", desc: "重发上一次输入" },
-];
+
 (window as any).HELP_KEYS = (window as any).HELP_KEYS || [
   { name: "@./path", desc: "embed a file" },
   { name: "!cmd", desc: "run shell, send to model" },
@@ -552,8 +596,8 @@ export async function runSlash(item: any, arg?: string) {
       const q = (arg || "").trim();
       addUser("/find" + (q ? " " + q : ""));
       const e = asstEl().querySelector(".md");
-      if (!q && !slashH.getWebFindQ()) e.textContent = "usage: /find <text>";
-      else if (findInThread(q || slashH.getWebFindQ(), false)) e.textContent = "found: " + (q || slashH.getWebFindQ());
+      if (!q && !getWebFindQ()) e.textContent = "usage: /find <text>";
+      else if (findInThread(q || getWebFindQ(), false)) e.textContent = "found: " + (q || getWebFindQ());
       else e.textContent = "no match";
       finishAsst();
       break;
@@ -798,8 +842,7 @@ export async function runSlash(item: any, arg?: string) {
       break;
     }
     case "/queue":
-      slashH.clearPending();
-      renderQueue();
+      emit("composer:clear-pending");
       act({ act: "queue" }, (j) => {
         showToast(
           j && j.cleared
@@ -954,11 +997,11 @@ export async function runSlash(item: any, arg?: string) {
       });
       break;
     case "/redo":
-      if (!slashH.getLastUser()) {
+      if (!getLastUser()) {
         showToast("没有可重发的输入");
         break;
       }
-      await sendPlain(slashH.getLastUser());
+      await sendPlain(getLastUser());
       break;
     default: {
       const stem = String(item.name || "").replace(/^\//, "");
@@ -980,3 +1023,11 @@ export async function runSlash(item: any, arg?: string) {
     }
   }
 }
+
+on("slash:run", ({ cmd, arg }) => {
+  runSlash(cmd, arg || "");
+});
+on("popups:dismiss", () => {
+  hideSlash();
+  hideBang();
+});

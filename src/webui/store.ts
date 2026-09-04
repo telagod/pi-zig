@@ -76,3 +76,11 @@ export function histNext() {
   } else ($("inp") as HTMLTextAreaElement).value = a[histIdx] || "";
   autosizeInp();
 }
+
+let lastUser = "";
+export const getLastUser = () => lastUser;
+export const setLastUser = (v: string) => { lastUser = v; };
+
+let running = false;
+export const getRunning = () => running;
+export const setRunning = (r: boolean) => { running = r; };

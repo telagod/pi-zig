@@ -2,6 +2,7 @@
 // 自 webui.js 切出;ev.onmessage 由 main 指派(消息路由属聊天层)。
 import { $ } from "./util";
 import { wsp } from "./state";
+import { t } from "./i18n";
 
 export const ev: { onmessage: ((m: { data: string }) => void) | null } = { onmessage: null };
 let sseRetry = 0;
@@ -52,7 +53,7 @@ function sseDown() {
   if (!b) {
     b = document.createElement("div");
     b.id = "ssebar";
-    b.textContent = "连接断开,重连中…";
+    b.textContent = t("disconnectedReconnecting", "Disconnected, reconnecting...");
     document.body.appendChild(b);
   }
   b.classList.add("on");

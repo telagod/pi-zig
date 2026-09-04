@@ -24,6 +24,7 @@ __modules["state"] = function(module, exports, require) {
 
 
 
+
  const qp = new URLSearchParams(location.search); exports.qp = qp;
  const sess = exports.qp.get("session") || "default"; exports.sess = sess;
  const ws = decodeURIComponent(exports.qp.get("ws") || ""); exports.ws = ws;
@@ -40,6 +41,7 @@ const PREF_KEY = "piz.prefs";
   wide: false,
   notify: false,
   sound: false,
+  lang: "en",
 }; exports.prefs = prefs;
 try {
   Object.assign(exports.prefs, JSON.parse(localStorage.getItem(PREF_KEY) || "{}"));
@@ -288,12 +290,70 @@ __modules["util"] = function(module, exports, require) {
 } exports.looksLikeMd = looksLikeMd;
 
 };
+__modules["bus"] = function(module, exports, require) {
+"use strict";Object.defineProperty(exports, "__esModule", {value: true}); function _optionalChain(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }// bus.ts —— 统一强类型事件总线 (Typed Event Bus)
+// 彻底解耦模块间动作分发，根除 *H 钩袋、手工接线板与循环依赖。
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+const listeners = new Map();
+
+ function on(event, handler) {
+  let set = listeners.get(event);
+  if (!set) {
+    set = new Set();
+    listeners.set(event, set);
+  }
+  set.add(handler);
+  return () => {
+    _optionalChain([set, 'optionalAccess', _ => _.delete, 'call', _2 => _2(handler)]);
+  };
+} exports.on = on;
+
+ function emit(
+  event,
+  ...args
+) {
+  const set = listeners.get(event);
+  if (set) {
+    for (const h of set) {
+      try {
+        h(args[0]);
+      } catch (err) {
+        console.error(`[piz bus] Error handling "${event}":`, err);
+      }
+    }
+  }
+} exports.emit = emit;
+
+};
 __modules["net"] = function(module, exports, require) {
 "use strict";Object.defineProperty(exports, "__esModule", {value: true}); function _optionalChain(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }// net.ts —— 服务器凭证 + fetch 全局包装(带 Bearer,401 → 登录页)。
 // 自 webui.js 切出;原 closure 变量 credential 改为模块私有,经 accessor 进出。
 // 登录成功后的 boot 续跑由 main 经 setOnAuthed 注入(解循环)。
 var _util = require('./util');
 var _state = require('./state');
+var _bus = require('./bus');
 
 const AUTH_KEY = "piz-web.credential";
 let credential = undefined;
@@ -356,9 +416,8 @@ window.fetch = (url, opts = {}) => {
   });
 };
 
-// 登录成功续跑(main 注入 boot)
-let onAuthed = () => {};
- function setOnAuthed(f) { onAuthed = f; } exports.setOnAuthed = setOnAuthed;
+// 登录成功续跑 (向事件总线广播 auth:success)
+ function setOnAuthed(f) { _bus.on.call(void 0, "auth:success", f); } exports.setOnAuthed = setOnAuthed;
 
 // 登录提交
 const authInp = _util.$.call(void 0, "authTok") ;
@@ -381,7 +440,7 @@ authInp.addEventListener("keydown", (e) => {
     });
     if (r.ok) {
       hideAuthPage();
-      onAuthed();
+      _bus.emit.call(void 0, "auth:success");
     } else {
       clearCredential();
       _util.$.call(void 0, "authErr").textContent = "连接失败,请检查 token";
@@ -399,11 +458,492 @@ authInp.addEventListener("keydown", (e) => {
 (_util.$.call(void 0, "authBtn") ).onclick = submitAuth;
 
 };
+__modules["i18n"] = function(module, exports, require) {
+"use strict";Object.defineProperty(exports, "__esModule", {value: true});// i18n.ts —— WebUI 国际化多语言支持。默认英文 (en)，支持中文 (zh)。
+// 术语严格保持英文 (Token, Tokens, Session, Model, Provider, Sandbox, Context, MCP, Git, Diff, Workflow)。
+var _state = require('./state');
+
+
+
+const en = {
+  // Brand & connection
+  connecting: "Connecting to local server...",
+  authTitle: "Credentials Required",
+  authDesc: "This server is protected. Enter the token printed at startup (or configured via --token).",
+  connect: "Connect",
+  cantConnect: "Cannot connect to local server. Please ensure piz web is running.",
+
+  // Sidebar
+  collapseSidebar: "Collapse sidebar",
+  expandSidebar: "Expand sidebar",
+  searchSessions: "Search sessions...",
+  newSession: "New session",
+  settings: "Settings",
+
+  // Topbar
+  switchWorkspace: "Switch workspace",
+  session: "Session",
+  sessionActions: "Session actions",
+  rename: "Rename",
+  backgroundTasks: "Background tasks (j)",
+  scrollToBottom: "Scroll to bottom",
+
+  // Queue
+  queued: "Queued",
+  sendWhenReady: "Send when ready",
+  clear: "Clear",
+
+  // Composer
+  inputPlaceholder: "Message · / command · @./file · !command · Enter to send",
+  permMode: "Approval mode",
+  sandboxMode: "Bash sandbox",
+  slashCommandsTitle: "/ commands",
+  switchModel: "Switch model",
+  thinkingLevel: "Thinking level",
+  contextFull: "Context full",
+  send: "Send",
+  stop: "Stop",
+  sendMore: "Send more",
+  sendMorePh: "Send more…",
+
+  // Hero / Welcome
+  workspace: "Workspace",
+  startSession: "＋ Start session",
+  sugWhatProject: "What does this project do?",
+  sugRunTests: "Run tests for me",
+  sugRecentChanges: "What changed recently?",
+  heroHint: "Read, edit, run. Full control.",
+  keyCommands: "Commands",
+  keyJobs: "Jobs",
+  keyUsage: "Usage",
+  keySandbox: "Sandbox",
+  keyShortcuts: "Shortcuts",
+
+  // Menus & Actions
+  copyReply: "⧉ Copy last reply",
+  undoTurn: "↶ Undo turn",
+  renameSession: "✎ Rename session",
+  forkSession: "✱ Fork session",
+  exportHtml: "⎘ Export HTML",
+  dumpAll: "📋 Dump all",
+  tree: "☰ Message list",
+  plan: "✎ Plan",
+  planGoal: "Plan goal",
+  whatToAccomplish: "What to accomplish",
+  compactContext: "⚡ Compact context",
+  archiveSession: "🗄 Archive session",
+  deleteSession: "🗑 Delete session",
+  confirmDeleteSession: "Confirm delete this session?",
+  sessionTitle: "Session title",
+  defaultSession: "Default session",
+  statusAnswer: "Answer",
+  statusApproval: "Approval",
+  statusAborted: "Aborted",
+  renamed: "Renamed",
+  failed: "Failed",
+  forked: "Forked ",
+  forkHint: "New session name, empty for auto",
+  archive: "Archive",
+  archived: "Archived",
+  delete: "Delete",
+  deleteForever: "Delete forever",
+  restore: "Restore",
+  restored: "Restored ",
+  noMatchingSessions: "No matching sessions",
+  noSessionsHint: "No sessions yet. Send a message to start.",
+  addProject: "Add project",
+  currentDir: "Current directory",
+
+  // Settings
+  tabAuth: "Providers & Keys",
+  tabLook: "Appearance",
+  tabAgent: "Agent & Sandbox",
+  tabNote: "Notifications",
+  tabAbout: "About",
+  language: "Language",
+  scheme: "Color scheme",
+  schemeLight: "Light",
+  schemeDark: "Dark",
+  schemeSystem: "System",
+  accent: "Accent color",
+  accentMono: "Mono",
+  accentBlue: "Blue",
+  accentGreen: "Green",
+  accentAmber: "Amber",
+  density: "Density",
+  densityCozy: "Cozy",
+  densityCompact: "Compact",
+  wideScreen: "Wide screen",
+  wideScreenHint: "Widen chat column",
+  wideNarrow: "Standard",
+  wideWide: "Wide",
+  fontSize: "UI font size",
+  sessModel: "Session model",
+  selectModel: "Select model",
+  sessAppr: "Session approval",
+  defAppr: "Default approval",
+  sandbox: "Bash sandbox",
+  sandboxHint: "workspace: writable workspace; strict: no network",
+  defModel: "Default model",
+  defModelHint: "Used for new sessions",
+  notifyDone: "Notify on completion",
+  notifyDoneHint: "Browser system notification",
+  soundDone: "Sound on completion",
+  aboutConfigHint: "Config files located in ~/.piz/",
+  shortcutsHint: "Shortcuts",
+  builtinProvidersHint: "Built-in providers. Paste API key and save. Green dot = configured.",
+  configured: "Configured",
+  notConfigured: "Not configured",
+  replaceApiKey: "Replace API key",
+  pasteApiKey: "Paste API key",
+  save: "Save",
+  saved: "Saved ",
+  saveFail: "Save failed",
+  packages: "Packages",
+  plugins: "Plugins",
+  pluginHint: "task-delegation enables workflow / subagents. Takes effect next turn.",
+  ok: "OK",
+  cancel: "Cancel",
+  close: "Close",
+  noContent: "No content",
+
+  // Status & Toasts
+  copied: "Copied",
+  copyFailed: "Failed to copy",
+  undone: "Undone",
+  noUndo: "Nothing to undo",
+  compressing: "Compressing context...",
+  compressedOk: "Context compressed",
+  compressedFail: "Compression failed",
+  modelSwitchFail: "Failed to switch model",
+  thinkSwitchFail: "Failed to switch thinking level",
+  permSwitchFail: "Failed to switch approval mode",
+  sandboxSwitchFail: "Failed to switch sandbox",
+  statusLoadFail: "Failed to load state",
+  configLoadFail: "Failed to load config",
+  modelsLoadFail: "Failed to load models",
+  sessionsLoadFail: "Failed to load sessions",
+  actionFail: "Action failed",
+  setTitleFail: "Failed to set title",
+  working: "Working...",
+  done: "Done",
+  noModels: "No models available",
+  activeTasks: "Active tasks",
+  taskHistory: "Task history",
+  noTasks: "No background tasks",
+  kill: "Kill",
+  killed: "Killed",
+  killFailed: "Failed to kill",
+  expandMore: "Expand ▾",
+  foldLess: "Collapse ▴",
+  permRequired: "Permission Required",
+  awaitingApproval: "Awaiting approval",
+  allow: "Allow",
+  alwaysSession: "Always in session",
+  deny: "Deny",
+  apprFailed: "Approval failed",
+  contextCompressed: "Context compressed",
+  type: "Type",
+  timeout: "Timeout",
+  dataTransfer: "Data transfer",
+  round: "Attempt",
+  details: "Details",
+  clickDetails: "Click to view details",
+  subagent: "subagent",
+  subagents: "subagents",
+  cache: "Cache ",
+  context: "Context ",
+  copy: "Copy",
+  undo: "Undo",
+  regenerate: "Regenerate",
+  running: "Running...",
+  noOutput: "No output",
+  thinking: "Thinking",
+  thinkingActive: "Thinking...",
+  thoughtFor: "Thought for ",
+  tool: "Tool",
+  completed: "Completed",
+  disconnectedReconnecting: "Disconnected, reconnecting...",
+  retryNoInput: "No input to retry",
+  copiedLastReply: "Copied last reply",
+  noReplyYet: "No reply yet",
+};
+
+const zh = {
+  // Brand & connection
+  connecting: "正在连接本地服务器…",
+  authTitle: "需要凭证",
+  authDesc: "此服务器受保护。输入启动时打印的 Token（或 --token 设置的值）。",
+  connect: "连接",
+  cantConnect: "无法连接本地服务器，请确认 piz web 已启动。",
+
+  // Sidebar
+  collapseSidebar: "折叠侧栏",
+  expandSidebar: "展开侧栏",
+  searchSessions: "搜索 Session…",
+  newSession: "新建 Session",
+  settings: "设置",
+
+  // Topbar
+  switchWorkspace: "切换项目",
+  session: "Session",
+  sessionActions: "Session 操作",
+  rename: "重命名",
+  backgroundTasks: "后台任务 (j)",
+  scrollToBottom: "回到底部",
+
+  // Queue
+  queued: "待发",
+  sendWhenReady: "轮到就发",
+  clear: "清空",
+
+  // Composer
+  inputPlaceholder: "消息 · / 命令 · @./文件 · !命令 · Enter 发送",
+  permMode: "授权模式",
+  sandboxMode: "Bash Sandbox",
+  slashCommandsTitle: "/ 命令",
+  switchModel: "切换 Model",
+  thinkingLevel: "Thinking 等级",
+  contextFull: "Context 已满",
+  send: "发送",
+  stop: "停止",
+  sendMore: "接着发",
+  sendMorePh: "接着发…",
+
+  // Hero / Welcome
+  workspace: "项目",
+  startSession: "＋ Start Session",
+  sugWhatProject: "这个项目是做什么的?",
+  sugRunTests: "帮我跑一下测试",
+  sugRecentChanges: "最近改了什么?",
+  heroHint: "读、改、跑。全权受控。",
+  keyCommands: "Commands",
+  keyJobs: "Jobs",
+  keyUsage: "Token 用量",
+  keySandbox: "Sandbox",
+  keyShortcuts: "快捷键",
+
+  // Menus & Actions
+  copyReply: "⧉ 复制最后回复",
+  undoTurn: "↶ 撤销此轮",
+  renameSession: "✎ 重命名 Session",
+  forkSession: "✱ 派生 Session",
+  exportHtml: "⎘ 导出 HTML",
+  dumpAll: "📋 导出全部消息",
+  tree: "☰ 消息列表",
+  plan: "✎ Plan 计划",
+  planGoal: "Plan 目标",
+  whatToAccomplish: "要完成什么",
+  compactContext: "⚡ 压缩 Context",
+  archiveSession: "🗄 归档 Session",
+  deleteSession: "🗑 删除 Session",
+  confirmDeleteSession: "确认删除该 Session？",
+  sessionTitle: "Session 标题",
+  defaultSession: "默认 Session",
+  statusAnswer: "回答",
+  statusApproval: "审批",
+  statusAborted: "中止",
+  renamed: "已重命名",
+  failed: "失败",
+  forked: "已派生 ",
+  forkHint: "新 Session 名，留空自动",
+  archive: "归档",
+  archived: "已归档",
+  delete: "删除",
+  deleteForever: "永久删除",
+  restore: "恢复",
+  restored: "已恢复 ",
+  noMatchingSessions: "无匹配 Session",
+  noSessionsHint: "还没有 Session，发一条消息开始",
+  addProject: "添加项目",
+  currentDir: "当前目录",
+
+  // Settings
+  tabAuth: "Provider & Key",
+  tabLook: "外观",
+  tabAgent: "Agent & Sandbox",
+  tabNote: "通知",
+  tabAbout: "关于",
+  language: "语言",
+  scheme: "配色方案",
+  schemeLight: "浅色",
+  schemeDark: "深色",
+  schemeSystem: "跟随系统",
+  accent: "强调色",
+  accentMono: "墨",
+  accentBlue: "蓝",
+  accentGreen: "苔",
+  accentAmber: "赭",
+  density: "排版密度",
+  densityCozy: "舒适",
+  densityCompact: "紧凑",
+  wideScreen: "宽屏显示",
+  wideScreenHint: "加宽主对话列",
+  wideNarrow: "标准",
+  wideWide: "宽屏",
+  fontSize: "界面字号",
+  sessModel: "当前 Session Model",
+  selectModel: "选择 Model",
+  sessAppr: "Session 授权",
+  defAppr: "默认授权",
+  sandbox: "Bash Sandbox",
+  sandboxHint: "workspace: 工作区可写；strict: 严禁网络",
+  defModel: "默认 Model",
+  defModelHint: "新建 Session 时生效",
+  notifyDone: "执行完成通知",
+  notifyDoneHint: "浏览器系统通知",
+  soundDone: "完成提示音",
+  aboutConfigHint: "配置持久化于 ~/.piz/",
+  shortcutsHint: "快捷键",
+  builtinProvidersHint: "内置 Provider，粘贴 API key 保存即用。绿点 = 已配置。",
+  configured: "已配置",
+  notConfigured: "未配置",
+  replaceApiKey: "替换 API key",
+  pasteApiKey: "粘贴 API key",
+  save: "保存",
+  saved: "已保存 ",
+  saveFail: "保存失败",
+  packages: "Packages 资源包",
+  plugins: "Plugins 插件",
+  pluginHint: "task-delegation 启用 Workflow / Subagent。开关后下一轮生效。",
+  ok: "确定",
+  cancel: "取消",
+  close: "关闭",
+  noContent: "没有内容",
+
+  // Status & Toasts
+  copied: "已复制",
+  copyFailed: "复制失败",
+  undone: "已撤销",
+  noUndo: "无可撤销",
+  compressing: "正在压缩 Context…",
+  compressedOk: "Context 压缩完成",
+  compressedFail: "压缩失败",
+  modelSwitchFail: "切换 Model 失败",
+  thinkSwitchFail: "切换 Thinking 等级失败",
+  permSwitchFail: "切换授权模式失败",
+  sandboxSwitchFail: "切换 Sandbox 失败",
+  statusLoadFail: "状态加载失败",
+  configLoadFail: "配置加载失败",
+  modelsLoadFail: "Model 列表加载失败",
+  sessionsLoadFail: "Session 加载失败",
+  actionFail: "操作失败",
+  setTitleFail: "设置标题失败",
+  working: "正在工作…",
+  done: "已完成",
+  noModels: "无可用 Model",
+  activeTasks: "活跃任务",
+  taskHistory: "历史任务",
+  noTasks: "无后台任务",
+  kill: "终止",
+  killed: "已终止",
+  killFailed: "终止失败",
+  expandMore: "展开 ▾",
+  foldLess: "收起 ▴",
+  permRequired: "需要许可",
+  awaitingApproval: "等待审批",
+  allow: "允许",
+  alwaysSession: "本 Session 总是",
+  deny: "拒绝",
+  apprFailed: "审批失败",
+  contextCompressed: "Context 已压缩",
+  type: "类型",
+  timeout: "超时限制",
+  dataTransfer: "传输数据",
+  round: "执行轮次",
+  details: "详细内容",
+  clickDetails: "点击查看详情",
+  subagent: "Subagent",
+  subagents: "Subagents",
+  cache: "Cache ",
+  context: "Context ",
+  copy: "复制",
+  undo: "撤销",
+  regenerate: "重新生成",
+  running: "正在运行…",
+  noOutput: "暂无输出",
+  thinking: "思考",
+  thinkingActive: "思考中",
+  thoughtFor: "思考 ",
+  tool: "工具",
+  completed: "已完成",
+  disconnectedReconnecting: "连接断开，重连中…",
+  retryNoInput: "没有可重发的输入",
+  copiedLastReply: "已复制最后回复",
+  noReplyYet: "还没有回复",
+};
+
+const dicts = { en, zh };
+const listeners = [];
+
+ function getLang() {
+  try {
+    const saved = localStorage.getItem("piz.lang") || _state.prefs.lang;
+    if (saved === "zh") return "zh";
+  } catch (e) {}
+  return "en";
+} exports.getLang = getLang;
+
+ function t(key, fallback) {
+  const lang = getLang();
+  const d = dicts[lang] || en;
+  if (d[key] !== undefined) return d[key];
+  if (en[key] !== undefined) return en[key];
+  return fallback !== undefined ? fallback : key;
+} exports.t = t;
+
+ function onLangChange(fn) {
+  listeners.push(fn);
+} exports.onLangChange = onLangChange;
+
+ function setLang(lang) {
+  try {
+    localStorage.setItem("piz.lang", lang);
+    _state.prefs.lang = lang;
+    _state.savePrefs.call(void 0, );
+  } catch (e2) {}
+  applyI18n();
+  for (const fn of listeners) {
+    try {
+      fn(lang);
+    } catch (e3) {}
+  }
+} exports.setLang = setLang;
+
+ function applyI18n() {
+  const lang = getLang();
+  try {
+    document.documentElement.lang = lang;
+  } catch (e4) {}
+
+  document.querySelectorAll("[data-i18n]").forEach((el) => {
+    const key = el.getAttribute("data-i18n");
+    if (key) el.textContent = t(key);
+  });
+
+  document.querySelectorAll("[data-i18n-title]").forEach((el) => {
+    const key = el.getAttribute("data-i18n-title");
+    if (key) el.setAttribute("title", t(key));
+  });
+
+  document.querySelectorAll("[data-i18n-ph]").forEach((el) => {
+    const key = el.getAttribute("data-i18n-ph");
+    if (key) {
+      const val = t(key);
+      (el ).placeholder = val;
+      (el ).dataset.ph = val;
+    }
+  });
+} exports.applyI18n = applyI18n;
+
+
+};
 __modules["ui"] = function(module, exports, require) {
-"use strict";Object.defineProperty(exports, "__esModule", {value: true}); function _optionalChain(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }// ui.ts —— toast / 对话框 / seg 与 auth 面板 DOM 绑定。
-// 自 webui.js 切出。openDlg 开场要收菜单与补全 —— 彼在 main,经 dlgHooks 迟绑注入(解循环)。
+"use strict";Object.defineProperty(exports, "__esModule", {value: true});// ui.ts —— toast / 对话框 / seg 与 auth 面板 DOM 绑定。
 var _util = require('./util');
 var _state = require('./state');
+var _i18n = require('./i18n');
+var _bus = require('./bus');
 
 // ---- toast ----
 const toastEl = _util.$.call(void 0, "toast");
@@ -414,13 +954,6 @@ let toastT = null;
   clearTimeout(toastT);
   toastT = setTimeout(() => toastEl.classList.remove("show"), 2200);
 } exports.showToast = showToast;
-
-// 迟绑钩:main 在启动时把 closeMenus/hideSlash/hideBang 挂上
- const dlgHooks = {
-  closeMenus: null,
-  hideSlash: null,
-  hideBang: null,
-}; exports.dlgHooks = dlgHooks;
 
 let dlgOnok = null,
   dlgOncancel = null;
@@ -441,9 +974,7 @@ let dlgPrevFocus = null;
   dlgPrevFocus = null;
 } exports.closeDlg = closeDlg;
  function openDlg(opts) {
-  _optionalChain([exports.dlgHooks, 'access', _ => _.closeMenus, 'optionalCall', _2 => _2()]);
-  _optionalChain([exports.dlgHooks, 'access', _3 => _3.hideSlash, 'optionalCall', _4 => _4()]);
-  _optionalChain([exports.dlgHooks, 'access', _5 => _5.hideBang, 'optionalCall', _6 => _6()]);
+  _bus.emit.call(void 0, "popups:dismiss");
   const ov = _util.$.call(void 0, "overlay");
   ov.classList.add("open");
   document.body.style.overflow = "hidden";
@@ -452,7 +983,7 @@ let dlgPrevFocus = null;
     (opts.cls || "") +
     '" role="dialog" aria-modal="true"><div class="dlg-hd"><span>' +
     _util.esc.call(void 0, opts.title || "") +
-    '</span><button class="dlg-x" id="dlgX" type="button" aria-label="关闭">✕</button></div><div class="dlg-bd">' +
+    '</span><button class="dlg-x" id="dlgX" type="button" aria-label="' + _i18n.t.call(void 0, "close", "Close") + '">✕</button></div><div class="dlg-bd">' +
     (opts.body || "") +
     "</div>" +
     (opts.ok
@@ -541,8 +1072,8 @@ let dlgPrevFocus = null;
         '" placeholder="' +
         _util.esc.call(void 0, placeholder || "") +
         '">',
-      ok: "确定",
-      cancel: "取消",
+      ok: _i18n.t.call(void 0, "ok", "OK"),
+      cancel: _i18n.t.call(void 0, "cancel", "Cancel"),
       focus: "dlgIn",
       onok: () => {
         resolve((_util.$.call(void 0, "dlgIn") ).value);
@@ -563,9 +1094,9 @@ let dlgPrevFocus = null;
     openDlg({
       title,
       body: '<p class="dlg-msg">' + _util.esc.call(void 0, msg) + "</p>",
-      ok: "确定",
+      ok: _i18n.t.call(void 0, "ok", "OK"),
       danger: true,
-      cancel: "取消",
+      cancel: _i18n.t.call(void 0, "cancel", "Cancel"),
       onok: () => resolve(true),
       oncancel: () => resolve(false),
     });
@@ -574,15 +1105,15 @@ let dlgPrevFocus = null;
 // 剪贴板 + toast
  function clipText(text, ok, fail) {
   if (!text) {
-    showToast(fail || "没有内容");
+    showToast(fail || _i18n.t.call(void 0, "noContent", "No content"));
     return;
   }
   if (navigator.clipboard && navigator.clipboard.writeText) {
     navigator.clipboard
       .writeText(text)
-      .then(() => showToast(ok || "已复制"))
-      .catch(() => showToast(fail || "复制失败"));
-  } else showToast(fail || "复制失败");
+      .then(() => showToast(ok || _i18n.t.call(void 0, "copied", "Copied")))
+      .catch(() => showToast(fail || _i18n.t.call(void 0, "copyFailed", "Failed to copy")));
+  } else showToast(fail || _i18n.t.call(void 0, "copyFailed", "Failed to copy"));
 } exports.clipText = clipText;
  function bindSeg(name, fn) {
   const box = document.querySelector('[data-seg="' + name + '"]') ;
@@ -605,7 +1136,7 @@ let dlgPrevFocus = null;
       save.onclick = () => {
         const key = (inp && inp.value) || "";
         if (!key) {
-          showToast("请粘贴 API key");
+          showToast(_i18n.t.call(void 0, "pasteApiKey", "Please paste API key"));
           return;
         }
         fetch("/api/config", {
@@ -615,10 +1146,10 @@ let dlgPrevFocus = null;
         })
           .then((r) => r.json())
           .then((j) => {
-            showToast(j && j.ok ? "已保存 " + name : "保存失败");
+            showToast(j && j.ok ? _i18n.t.call(void 0, "saved", "Saved ") + name : _i18n.t.call(void 0, "saveFail", "Save failed"));
             if (inp) inp.value = "";
           })
-          .catch(() => showToast("保存失败"));
+          .catch(() => showToast(_i18n.t.call(void 0, "saveFail", "Save failed")));
       };
     if (oauthBtn)
       oauthBtn.onclick = async () => {
@@ -631,7 +1162,7 @@ let dlgPrevFocus = null;
           });
           const j = await r.json();
           if (!j || !j.ok) {
-            showToast("OAuth 启动失败");
+            showToast(_i18n.getLang.call(void 0, ) === "zh" ? "OAuth 启动失败" : "Failed to start OAuth");
             return;
           }
           if (j.user_code) {
@@ -643,37 +1174,38 @@ let dlgPrevFocus = null;
             showToast("code " + j.user_code);
           } else if (j.url) {
             window.open(j.url, "_blank");
-            showToast("请在新标签页完成登录");
+            showToast(_i18n.getLang.call(void 0, ) === "zh" ? "请在新标签页完成登录" : "Please complete login in new tab");
           } else {
-            showToast("OAuth 启动失败");
+            showToast(_i18n.getLang.call(void 0, ) === "zh" ? "OAuth 启动失败" : "Failed to start OAuth");
             return;
           }
           const path = j.user_code ? "/api/oauth/poll?state=" : "/api/oauth/status?state=";
           const t0 = Date.now();
           const tick = async () => {
             if (Date.now() - t0 > 180000) {
-              showToast("OAuth 超时");
+              showToast(_i18n.getLang.call(void 0, ) === "zh" ? "OAuth 超时" : "OAuth timed out");
               return;
             }
             const s = await fetch(path + encodeURIComponent(j.state)).then((x) => x.json());
             if (s && s.done && s.ok) {
-              showToast("已登录");
+              showToast(_i18n.getLang.call(void 0, ) === "zh" ? "已登录" : "Logged in");
               if (hint) hint.hidden = true;
               return;
             }
             if (s && s.done && !s.ok) {
-              showToast("登录失败");
+              showToast(_i18n.getLang.call(void 0, ) === "zh" ? "登录失败" : "Login failed");
               return;
             }
             setTimeout(tick, 1500);
           };
           setTimeout(tick, 1500);
         } catch (e3) {
-          showToast("OAuth 启动失败");
+          showToast(_i18n.getLang.call(void 0, ) === "zh" ? "OAuth 启动失败" : "Failed to start OAuth");
         }
       };
   });
 } exports.bindAuthPanel = bindAuthPanel;
+
 
 // ---- 外观方案(配色/强调色/密度/宽屏/字号):自 main 迁入 ----
  function setScheme(v) {
@@ -793,18 +1325,22 @@ let histIdx = -1,
   autosizeInp();
 } exports.histNext = histNext;
 
+let lastUser = "";
+ const getLastUser = () => lastUser; exports.getLastUser = getLastUser;
+ const setLastUser = (v) => { lastUser = v; }; exports.setLastUser = setLastUser;
+
+let running = false;
+ const getRunning = () => running; exports.getRunning = getRunning;
+ const setRunning = (r) => { running = r; }; exports.setRunning = setRunning;
+
 };
 __modules["sessions"] = function(module, exports, require) {
-"use strict";Object.defineProperty(exports, "__esModule", {value: true}); function _optionalChain(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }// sessions.ts —— 菜单助手 / 项目 / 会话列 / 会话操作。
-// 自 webui.js 切出。approvalMode/setModeBtn/closeSheet 属 main,经 sessHooks.applySessionMeta 注入(解循环)。
-// sessList/archList/sessMeta 以 sessData 活引用外供(main 的搜索与数字跳会读之)。
+"use strict";Object.defineProperty(exports, "__esModule", {value: true});// sessions.ts —— 菜单助手 / 项目 / 会话列 / 会话操作。
 var _util = require('./util');
 var _state = require('./state');
 var _ui = require('./ui');
-
- const sessHooks = {
-  applySessionMeta: null,
-}; exports.sessHooks = sessHooks;
+var _i18n = require('./i18n');
+var _bus = require('./bus');
 
  const sessData = { list: [] , arch: [] , meta: {}  }; exports.sessData = sessData;
 
@@ -814,6 +1350,7 @@ let openMenu = null;
     m.classList.remove("open");
   openMenu = null;
 } exports.closeMenus = closeMenus;
+_bus.on.call(void 0, "popups:dismiss", closeMenus);
 /// 统一锚定菜单(dsh Menu 原语之形):锚元素矩形 + 优先弹出方向/对齐。
 /// side: "bl"(默认 左下)| "br"(右下)| "tr"(右上)| "tl"(左上);
 /// 菜单卡片永远不越过视口(8px 边距),溢出时自动翻转。
@@ -902,7 +1439,7 @@ document.addEventListener("click", (e) => {
   const nm = _util.projectName.call(void 0, cur) || "piz";
   _util.$.call(void 0, "wsName").textContent = "piz";
   _util.$.call(void 0, "tbWs").textContent = nm;
-  if (_util.$.call(void 0, "heroWsLbl")) _util.$.call(void 0, "heroWsLbl").textContent = nm || "选择项目";
+  if (_util.$.call(void 0, "heroWsLbl")) _util.$.call(void 0, "heroWsLbl").textContent = nm || _i18n.t.call(void 0, "workspace", "Workspace");
   if (_util.$.call(void 0, "hWs") && !_util.$.call(void 0, "hWs").textContent) {
     _util.$.call(void 0, "hWs").textContent = nm;
     if (_util.$.call(void 0, "hSep")) _util.$.call(void 0, "hSep").style.display = nm ? "" : "none";
@@ -910,7 +1447,7 @@ document.addEventListener("click", (e) => {
   return list;
 } exports.renderWsName = renderWsName;
  async function addProject() {
-  const root = await _ui.askText.call(void 0, "添加项目", "", "绝对路径，如 /home/me/proj");
+  const root = await _ui.askText.call(void 0, _i18n.t.call(void 0, "addProject", "Add project"), "", _i18n.getLang.call(void 0, ) === "zh" ? "绝对路径，如 /home/me/proj" : "Absolute path, e.g. /home/me/proj");
   if (!root) return;
   fetch("/api/workspaces", {
     method: "POST",
@@ -921,14 +1458,14 @@ document.addEventListener("click", (e) => {
     .then(() => {
       location.href = _state.sessUrl.call(void 0, "default", root);
     })
-    .catch(() => _ui.showToast.call(void 0, "无效目录"));
+    .catch(() => _ui.showToast.call(void 0, _i18n.getLang.call(void 0, ) === "zh" ? "无效目录" : "Invalid directory"));
 } exports.addProject = addProject;
  async function openWsMenu(btn) {
   const list = await renderWsName();
   const cur = _state.ws || (list[0] ? list[0].root : "");
   const m = _util.$.call(void 0, "wsmenu");
   m.innerHTML = "";
-  m.appendChild(menuLabel("项目"));
+  m.appendChild(menuLabel(_i18n.t.call(void 0, "workspace", "Workspace")));
   for (const w of list) {
     m.appendChild(
       menuRow({
@@ -944,7 +1481,7 @@ document.addEventListener("click", (e) => {
   m.appendChild(menuSep());
   m.appendChild(
     menuRow({
-      label: "添加项目…",
+      label: _i18n.t.call(void 0, "addProject", "Add project") + "…",
       icon: "＋",
       onclick: () => addProject(),
     }),
@@ -959,9 +1496,10 @@ document.addEventListener("click", (e) => {
   const box = document.createElement("div");
   box.className = "side-filter";
   box.innerHTML =
-    '<span class="sf-ic">⌕</span><input type="text" placeholder="搜索会话…" spellcheck="false" /><button type="button" class="sf-x" title="清空">✕</button>';
+    '<span class="sf-ic">⌕</span><input type="text" placeholder="' + _i18n.t.call(void 0, "searchSessions", "Search sessions...") + '" spellcheck="false" /><button type="button" class="sf-x" title="' + _i18n.t.call(void 0, "clear", "Clear") + '">✕</button>';
   const inp = box.querySelector("input") ;
   const x = box.querySelector(".sf-x") ;
+
   x.hidden = true;
   let ft = 0;
   inp.addEventListener("input", () => {
@@ -1033,7 +1571,7 @@ document.addEventListener("click", (e) => {
     "se" +
     (s.name === _state.sess && here ? " on" : "") +
     (arch ? " arch" : "");
-  const title = s.title || (s.name === "default" ? "默认会话" : s.name);
+  const title = s.title || (s.name === "default" ? _i18n.t.call(void 0, "defaultSession", "Default session") : s.name);
   d.innerHTML =
     '<div class="srow"><span class="lead">' +
     (s.busy
@@ -1045,20 +1583,20 @@ document.addEventListener("click", (e) => {
     _util.esc.call(void 0, title) +
     "</span>" +
     (s.status === "awaitingQuestion"
-      ? '<span class="tag info">回答</span>'
+      ? '<span class="tag info">' + _i18n.t.call(void 0, "statusAnswer", "Answer") + "</span>"
       : "") +
     (s.status === "awaitingApproval"
-      ? '<span class="tag warn">审批</span>'
+      ? '<span class="tag warn">' + _i18n.t.call(void 0, "statusApproval", "Approval") + "</span>"
       : "") +
     (s.status === "aborted"
-      ? '<span class="tag danger">中止</span>'
+      ? '<span class="tag danger">' + _i18n.t.call(void 0, "statusAborted", "Aborted") + "</span>"
       : "") +
     '<span class="sts">' +
     _util.fmtTime.call(void 0, s.ts) +
-    '</span><button class="kebab" title="操作">⋯</button></div>';
+    '</span><button class="kebab" title="' + _i18n.t.call(void 0, "sessionActions", "Session actions") + '">⋯</button></div>';
   d.onclick = () => {
     if (s.name === _state.sess) {
-      _optionalChain([exports.sessHooks, 'access', _ => _.applySessionMeta, 'optionalCall', _2 => _2(s)]);
+      _bus.emit.call(void 0, "session:select", s);
     } else {
       d.classList.add("switching");
       const wrap = _util.$.call(void 0, "wrap");
@@ -1079,28 +1617,28 @@ document.addEventListener("click", (e) => {
   if (!arch) {
     m.appendChild(
       menuRow({
-        label: "重命名",
+        label: _i18n.t.call(void 0, "rename", "Rename"),
         icon: "✎",
         onclick: async () => {
-          const t = await _ui.askText.call(void 0, "重命名会话", s.title || s.name, "会话标题");
-          if (t === null) return;
-          act({ act: "rename", name: t, session: s.name }, (j) => {
+          const tName = await _ui.askText.call(void 0, _i18n.t.call(void 0, "renameSession", "Rename session"), s.title || s.name, _i18n.t.call(void 0, "sessionTitle", "Session title"));
+          if (tName === null) return;
+          act({ act: "rename", name: tName, session: s.name }, (j) => {
             loadSessions();
-            _ui.showToast.call(void 0, j && j.ok ? "已重命名" : "失败");
+            _ui.showToast.call(void 0, j && j.ok ? _i18n.t.call(void 0, "renamed", "Renamed") : _i18n.t.call(void 0, "failed", "Failed"));
           });
         },
       }),
     );
     m.appendChild(
       menuRow({
-        label: "派生会话",
+        label: _i18n.t.call(void 0, "forkSession", "Fork session"),
         icon: "✱",
         onclick: async () => {
-          const n = await _ui.askText.call(void 0, "派生会话", "", "新会话名，留空自动");
+          const n = await _ui.askText.call(void 0, _i18n.t.call(void 0, "forkSession", "Fork session"), "", _i18n.t.call(void 0, "forkHint", "New session name, empty for auto"));
           if (n === null) return;
           act({ act: "fork", name: n || "", session: s.name }, (j) => {
             if (j && j.name) {
-              _ui.showToast.call(void 0, "已派生 " + j.name);
+              _ui.showToast.call(void 0, _i18n.t.call(void 0, "forked", "Forked ") + j.name);
               setTimeout(
                 () =>
                   (location.href = _state.sessUrl.call(void 0, j.name)),
@@ -1113,12 +1651,12 @@ document.addEventListener("click", (e) => {
     );
     m.appendChild(
       menuRow({
-        label: "归档",
+        label: _i18n.t.call(void 0, "archive", "Archive"),
         icon: "🗄",
         onclick: () => {
           act({ act: "archive", session: s.name }, (j) => {
             if (j && j.ok) {
-              _ui.showToast.call(void 0, "已归档");
+              _ui.showToast.call(void 0, _i18n.t.call(void 0, "archived", "Archived"));
               if (s.name === _state.sess)
                 setTimeout(() => (location.href = _state.sessUrl.call(void 0, "default")), 400);
             }
@@ -1131,11 +1669,11 @@ document.addEventListener("click", (e) => {
   }
   m.appendChild(
     menuRow({
-      label: arch ? "永久删除" : "删除",
+      label: arch ? _i18n.t.call(void 0, "deleteForever", "Delete forever") : _i18n.t.call(void 0, "delete", "Delete"),
       icon: "🗑",
       danger: true,
       onclick: async () => {
-        if (!(await _ui.askYes.call(void 0, "删除会话", "永久删除 " + s.name + "？"))) return;
+        if (!(await _ui.askYes.call(void 0, _i18n.t.call(void 0, "deleteSession", "Delete session"), (arch ? _i18n.t.call(void 0, "deleteForever", "Delete forever ") : _i18n.t.call(void 0, "delete", "Delete ")) + s.name + "?"))) return;
         act({ act: "delete", session: s.name }, () => {
           loadSessions();
         });
@@ -1145,12 +1683,12 @@ document.addEventListener("click", (e) => {
   if (arch) {
     m.prepend(
       menuRow({
-        label: "恢复",
+        label: _i18n.t.call(void 0, "restore", "Restore"),
         icon: "↩",
         onclick: () => {
           act({ act: "restore", session: s.name }, () => {
             loadSessions();
-            _ui.showToast.call(void 0, "已恢复 " + s.name);
+            _ui.showToast.call(void 0, _i18n.t.call(void 0, "restored", "Restored ") + s.name);
           });
         },
       }),
@@ -1180,13 +1718,13 @@ document.addEventListener("click", (e) => {
       const cur = _state.ws || (projects[0] ? projects[0].root : "");
       const lab = document.createElement("div");
       lab.className = "side-lab";
-      lab.textContent = "项目";
+      lab.textContent = _i18n.t.call(void 0, "workspace", "Workspace");
       sl.appendChild(lab);
       if (!projects.length) {
         const empty = document.createElement("div");
         empty.className = "sg-name";
         empty.style.padding = "6px 8px";
-        empty.textContent = "当前目录";
+        empty.textContent = _i18n.t.call(void 0, "currentDir", "Current directory");
         sl.appendChild(empty);
       }
       for (const w of projects) {
@@ -1211,12 +1749,12 @@ document.addEventListener("click", (e) => {
           if (!vis.length && q) {
             const ne = document.createElement("div");
             ne.className = "sg-name";
-            ne.textContent = "无匹配会话";
+            ne.textContent = _i18n.t.call(void 0, "noMatchingSessions", "No matching sessions");
             wrap.appendChild(ne);
           } else if (!vis.length) {
             const ne = document.createElement("div");
             ne.className = "sg-name";
-            ne.textContent = "还没有会话,发一条消息开始";
+            ne.textContent = _i18n.t.call(void 0, "noSessionsHint", "No sessions yet. Send a message to start.");
             wrap.appendChild(ne);
           }
           for (const s of vis) wrap.appendChild(sessionRow(s, false, w.root));
@@ -1224,7 +1762,7 @@ document.addEventListener("click", (e) => {
             const se = document.createElement("div");
             se.className = "sg-arch";
             se.innerHTML =
-              '<span class="sg-chev">▶</span><span>归档</span><span class="sg-arch-n">' +
+              '<span class="sg-chev">▶</span><span>' + _i18n.t.call(void 0, "archive", "Archive") + '</span><span class="sg-arch-n">' +
               archList.length +
               "</span>";
             const awrap = document.createElement("div");
@@ -1256,7 +1794,7 @@ document.addEventListener("click", (e) => {
       const addp = document.createElement("button");
       addp.className = "btn-add-proj";
       addp.type = "button";
-      addp.innerHTML = '<span class="pl">＋</span><span>添加项目</span>';
+      addp.innerHTML = '<span class="pl">＋</span><span>' + _i18n.t.call(void 0, "addProject", "Add project") + '</span>';
       addp.onclick = () => addProject();
       sl.appendChild(addp);
       const sb = _util.$.call(void 0, "sbody");
@@ -1267,7 +1805,7 @@ document.addEventListener("click", (e) => {
           const ne2 = document.createElement("div");
           ne2.className = "sg-name";
           ne2.style.padding = "12px 14px";
-          ne2.textContent = "还没有会话,发一条消息开始";
+          ne2.textContent = _i18n.t.call(void 0, "noSessionsHint", "No sessions yet. Send a message to start.");
           sb.appendChild(ne2);
         }
         if (archList.length) {
@@ -1276,14 +1814,14 @@ document.addEventListener("click", (e) => {
           sb.appendChild(se2);
           const sh = document.createElement("div");
           sh.className = "sg-arch";
-          sh.textContent = "归档 " + archList.length;
+          sh.textContent = _i18n.t.call(void 0, "archive", "Archive") + " " + archList.length;
           sb.appendChild(sh);
           for (const s of archList)
             sb.appendChild(sessionRow(s, true, cur));
         }
       }
     })
-    .catch(() => _ui.showToast.call(void 0, "会话加载失败"));
+    .catch(() => _ui.showToast.call(void 0, _i18n.t.call(void 0, "sessionsLoadFail", "Failed to load sessions")));
 } exports.loadSessions = loadSessions;
 // 搜索框过滤态:内联侧栏过滤输入(loadSessions 的 show 读它)
 let sideQ = "";
@@ -1318,8 +1856,9 @@ let sideFilterEl = null;
     .then((j) => {
       if (then) then(j);
     })
-    .catch(() => _ui.showToast.call(void 0, "操作失败"));
+    .catch(() => _ui.showToast.call(void 0, _i18n.t.call(void 0, "actionFail", "Action failed")));
 } exports.act = act;
+
 
 };
 __modules["stream"] = function(module, exports, require) {
@@ -1327,6 +1866,7 @@ __modules["stream"] = function(module, exports, require) {
 // 自 webui.js 切出;ev.onmessage 由 main 指派(消息路由属聊天层)。
 var _util = require('./util');
 var _state = require('./state');
+var _i18n = require('./i18n');
 
  const ev = { onmessage: null }; exports.ev = ev;
 let sseRetry = 0;
@@ -1377,7 +1917,7 @@ function sseDown() {
   if (!b) {
     b = document.createElement("div");
     b.id = "ssebar";
-    b.textContent = "连接断开,重连中…";
+    b.textContent = _i18n.t.call(void 0, "disconnectedReconnecting", "Disconnected, reconnecting...");
     document.body.appendChild(b);
   }
   b.classList.add("on");
@@ -1393,16 +1933,12 @@ function sseUp() {
 };
 __modules["model"] = function(module, exports, require) {
 "use strict";Object.defineProperty(exports, "__esModule", {value: true});// model.ts —— 模型/思考档/授权/沙箱/cost/ctx/turnMeta/头部渲染与 kebab 菜单。
-// 自 webui.js 切出。runSlash 借自 slash.ts(环引,仅运行期回调用之,安全);
-// 诸模块直引本簇,旧 slashH/chatH/compH 之模型钩尽废。
 var _util = require('./util');
 var _state = require('./state');
 var _ui = require('./ui');
 var _sessions = require('./sessions');
-
-// runSlash 环引(slash↔model 为 build-web DFS 所禁),以钩袋迟取之。
- const modelH = {}; exports.modelH = modelH;
-const runSlash = (...a) => exports.modelH.runSlash(...a);
+var _i18n = require('./i18n');
+var _bus = require('./bus');
 
 // ---- 模型 ----
  let curModel = ""; exports.curModel = curModel;
@@ -1432,14 +1968,14 @@ const runSlash = (...a) => exports.modelH.runSlash(...a);
     );
     const j = await r.json().catch(() => ({}));
     if (!r.ok || j.ok === false || !j.model) {
-      _ui.showToast.call(void 0, j.error || "切换模型失败");
+      _ui.showToast.call(void 0, j.error || _i18n.t.call(void 0, "modelSwitchFail", "Failed to switch model"));
       return false;
     }
     exports.curModel = j.model;
     renderModel();
     return true;
   } catch (e2) {
-    _ui.showToast.call(void 0, "切换模型失败");
+    _ui.showToast.call(void 0, _i18n.t.call(void 0, "modelSwitchFail", "Failed to switch model"));
     return false;
   }
 } exports.applySessionModel = applySessionModel;
@@ -1455,7 +1991,7 @@ const runSlash = (...a) => exports.modelH.runSlash(...a);
       // 分组:provider 前缀 → 模型列表
       const groups = new Map();
       for (const md of list) {
-        const prov = md.includes("/") ? md.slice(0, md.indexOf("/")) : "其他";
+        const prov = md.includes("/") ? md.slice(0, md.indexOf("/")) : (_i18n.getLang.call(void 0, ) === "zh" ? "其他" : "Other");
         if (!groups.has(prov)) groups.set(prov, []);
         groups.get(prov).push(md);
       }
@@ -1480,13 +2016,13 @@ const runSlash = (...a) => exports.modelH.runSlash(...a);
           );
         }
       }
-      if (!list.length) m.appendChild(_sessions.menuLabel.call(void 0, "无可用模型"));
+      if (!list.length) m.appendChild(_sessions.menuLabel.call(void 0, _i18n.t.call(void 0, "noModels", "No models available")));
       _sessions.openAt.call(void 0, "modelMenu", sel, "tr");
     })
-    .catch(() => _ui.showToast.call(void 0, "模型列表加载失败"));
+    .catch(() => _ui.showToast.call(void 0, _i18n.t.call(void 0, "modelsLoadFail", "Failed to load models")));
 } exports.loadModels = loadModels;
  function modelShort(m) {
-  if (!m) return "模型";
+  if (!m) return _i18n.t.call(void 0, "selectModel", "Model");
   const n = m.includes("/") ? m.slice(m.lastIndexOf("/") + 1) : m;
   return n.length > 22 ? n.slice(0, 20) + "…" : n;
 } exports.modelShort = modelShort;
@@ -1494,7 +2030,7 @@ const runSlash = (...a) => exports.modelH.runSlash(...a);
   const el = _util.$.call(void 0, "hModel");
   if (!el) return;
   el.textContent = modelShort(exports.curModel);
-  el.title = exports.curModel ? "模型 " + exports.curModel : "切换模型";
+  el.title = exports.curModel ? "Model: " + exports.curModel : _i18n.t.call(void 0, "switchModel", "Switch model");
 } exports.renderModel = renderModel;
 (_util.$.call(void 0, "hModel") ).onclick = (e) => {
   e.stopPropagation();
@@ -1513,7 +2049,7 @@ const runSlash = (...a) => exports.modelH.runSlash(...a);
   const el = _util.$.call(void 0, "hThink");
   if (!el) return;
   el.textContent = exports.curThink || "high";
-  el.title = "思考 " + (exports.curThink || "high");
+  el.title = _i18n.t.call(void 0, "thinkingLevel", "Thinking") + ": " + (exports.curThink || "high");
 } exports.renderThink = renderThink;
  async function setThink(level) {
   try {
@@ -1524,7 +2060,7 @@ const runSlash = (...a) => exports.modelH.runSlash(...a);
     });
     const j = await r.json().catch(() => ({}));
     if (!r.ok || j.ok === false) {
-      _ui.showToast.call(void 0, j.error || "切换思考等级失败");
+      _ui.showToast.call(void 0, j.error || _i18n.t.call(void 0, "thinkSwitchFail", "Failed to switch thinking level"));
       return false;
     }
     if (j && j.defaultThinkingLevel) {
@@ -1533,7 +2069,7 @@ const runSlash = (...a) => exports.modelH.runSlash(...a);
     }
     return true;
   } catch (e3) {
-    _ui.showToast.call(void 0, "切换思考等级失败");
+    _ui.showToast.call(void 0, _i18n.t.call(void 0, "thinkSwitchFail", "Failed to switch thinking level"));
     return false;
   }
 } exports.setThink = setThink;
@@ -1541,7 +2077,7 @@ const runSlash = (...a) => exports.modelH.runSlash(...a);
   e.stopPropagation();
   const m = _util.$.call(void 0, "thinkMenu");
   m.innerHTML = "";
-  m.appendChild(_sessions.menuLabel.call(void 0, "思考等级"));
+  m.appendChild(_sessions.menuLabel.call(void 0, _i18n.t.call(void 0, "thinkingLevel", "Thinking level")));
   exports.THINK_LEVELS.forEach((lv) => {
     m.appendChild(
       _sessions.menuRow.call(void 0, {
@@ -1556,9 +2092,9 @@ const runSlash = (...a) => exports.modelH.runSlash(...a);
 // ---- 授权模式(Codex /permissions: yolo / ask / read-only) ----
  let approvalMode = "yolo"; exports.approvalMode = approvalMode;
  const APPROVALS = [
-  { id: "yolo", label: "yolo", hint: "不询问，默认" },
-  { id: "ask", label: "ask", hint: "危险工具先问" },
-  { id: "read-only", label: "read-only", hint: "危险工具直接拒" },
+  { id: "yolo", label: "yolo", hint: () => (_i18n.getLang.call(void 0, ) === "zh" ? "不询问，默认" : "No confirmation, default") },
+  { id: "ask", label: "ask", hint: () => (_i18n.getLang.call(void 0, ) === "zh" ? "危险工具先问" : "Ask before dangerous tools") },
+  { id: "read-only", label: "read-only", hint: () => (_i18n.getLang.call(void 0, ) === "zh" ? "危险工具直接拒" : "Deny dangerous tools directly") },
 ]; exports.APPROVALS = APPROVALS;
  const approvalLabel = () =>
   (exports.APPROVALS.find((x) => x.id === exports.approvalMode) || ({} )).label; exports.approvalLabel = approvalLabel;
@@ -1577,7 +2113,7 @@ const runSlash = (...a) => exports.modelH.runSlash(...a);
       : exports.approvalMode === "ask"
         ? "perm-ask"
         : "perm-deny");
-  p.title = "授权 " + cur.hint;
+  p.title = _i18n.t.call(void 0, "permMode", "Approval mode") + ": " + (typeof cur.hint === "function" ? cur.hint() : cur.hint);
 } exports.setModeBtn = setModeBtn;
  async function setApproval(mode) {
   exports.approvalMode = mode;
@@ -1593,26 +2129,26 @@ const runSlash = (...a) => exports.modelH.runSlash(...a);
     );
     const j = await r.json().catch(() => ({}));
     if (!r.ok || j.ok === false) {
-      _ui.showToast.call(void 0, j.error || "授权切换失败");
+      _ui.showToast.call(void 0, j.error || _i18n.t.call(void 0, "permSwitchFail", "Failed to switch approval mode"));
       return;
     }
     if (j.mode) exports.approvalMode = j.mode;
     else if (j.auto !== undefined) exports.approvalMode = j.auto ? "yolo" : "ask";
     setModeBtn();
   } catch (e4) {
-    _ui.showToast.call(void 0, "授权切换失败");
+    _ui.showToast.call(void 0, _i18n.t.call(void 0, "permSwitchFail", "Failed to switch approval mode"));
   }
 } exports.setApproval = setApproval;
 (_util.$.call(void 0, "permPill") ).onclick = (e) => {
   e.stopPropagation();
   const m = _util.$.call(void 0, "permMenu");
   m.innerHTML = "";
-  m.appendChild(_sessions.menuLabel.call(void 0, "授权模式"));
+  m.appendChild(_sessions.menuLabel.call(void 0, _i18n.t.call(void 0, "permMode", "Approval mode")));
   exports.APPROVALS.forEach((it) => {
     m.appendChild(
       _sessions.menuRow.call(void 0, {
         label: it.label,
-        hint: it.hint,
+        hint: typeof it.hint === "function" ? it.hint() : it.hint,
         check: it.id === exports.approvalMode,
         onclick: () => setApproval(it.id),
       }),
@@ -1620,11 +2156,12 @@ const runSlash = (...a) => exports.modelH.runSlash(...a);
   });
   _sessions.openAt.call(void 0, "permMenu", e.currentTarget, "tr");
 };
+
  let sandboxMode = "off"; exports.sandboxMode = sandboxMode;
  const SANDBOXES = [
-  { id: "off", label: "off", hint: "不隔离" },
-  { id: "workspace", label: "workspace", hint: "工作区可写，其余只读" },
-  { id: "strict", label: "strict", hint: "工作区 + 断网" },
+  { id: "off", label: "off", hint: () => (_i18n.getLang.call(void 0, ) === "zh" ? "不隔离" : "No isolation") },
+  { id: "workspace", label: "workspace", hint: () => (_i18n.getLang.call(void 0, ) === "zh" ? "工作区可写，其余只读" : "Workspace writable, others read-only") },
+  { id: "strict", label: "strict", hint: () => (_i18n.getLang.call(void 0, ) === "zh" ? "工作区 + 断网" : "Workspace + no network") },
 ]; exports.SANDBOXES = SANDBOXES;
  const getSandboxMode = () => exports.sandboxMode; exports.getSandboxMode = getSandboxMode;
  const getApprovalMode = () => exports.approvalMode; exports.getApprovalMode = getApprovalMode;
@@ -1642,7 +2179,7 @@ const runSlash = (...a) => exports.modelH.runSlash(...a);
   p.className =
     "perm-pill " +
     (exports.sandboxMode === "strict" ? "perm-deny" : exports.sandboxMode === "workspace" ? "perm-ask" : "");
-  p.title = "沙箱 " + cur.hint + (be ? " · " + be : "");
+  p.title = "Sandbox: " + (typeof cur.hint === "function" ? cur.hint() : cur.hint) + (be ? " · " + be : "");
 } exports.setSandboxBtn = setSandboxBtn;
  async function setSandbox(mode) {
   exports.sandboxMode = mode;
@@ -1655,26 +2192,26 @@ const runSlash = (...a) => exports.modelH.runSlash(...a);
     });
     const j = await r.json().catch(() => ({}));
     if (!r.ok || j.ok === false) {
-      _ui.showToast.call(void 0, j.error || "沙箱切换失败");
+      _ui.showToast.call(void 0, j.error || _i18n.t.call(void 0, "sandboxSwitchFail", "Failed to switch sandbox"));
       return;
     }
     if (j && j.sandboxMode) exports.sandboxMode = j.sandboxMode;
     if (j && j.sandboxBackend) (window ).sandboxBackend = j.sandboxBackend;
     setSandboxBtn();
   } catch (e5) {
-    _ui.showToast.call(void 0, "沙箱切换失败");
+    _ui.showToast.call(void 0, _i18n.t.call(void 0, "sandboxSwitchFail", "Failed to switch sandbox"));
   }
 } exports.setSandbox = setSandbox;
 (_util.$.call(void 0, "sbPill") ).onclick = (e) => {
   e.stopPropagation();
   const m = _util.$.call(void 0, "sbMenu");
   m.innerHTML = "";
-  m.appendChild(_sessions.menuLabel.call(void 0, "bash 沙箱"));
+  m.appendChild(_sessions.menuLabel.call(void 0, _i18n.t.call(void 0, "sandboxMode", "Bash sandbox")));
   exports.SANDBOXES.forEach((it) => {
     m.appendChild(
       _sessions.menuRow.call(void 0, {
         label: it.label,
-        hint: it.hint,
+        hint: typeof it.hint === "function" ? it.hint() : it.hint,
         check: it.id === exports.sandboxMode,
         onclick: () => setSandbox(it.id),
       }),
@@ -1722,7 +2259,7 @@ const runSlash = (...a) => exports.modelH.runSlash(...a);
     wrap.dataset.baseTitle =
       used != null && win
         ? _util.fmtTok.call(void 0, used) + " / " + _util.fmtTok.call(void 0, win) + " · " + pretty
-        : "上下文 " + pretty;
+        : _i18n.t.call(void 0, "context", "Context ") + pretty;
     wrap.title = wrap.dataset.baseTitle;
     (fill ).style.stroke =
       n > 85 ? "var(--color-danger)" : "var(--color-accent)";
@@ -1731,9 +2268,9 @@ const runSlash = (...a) => exports.modelH.runSlash(...a);
     const c = _util.$.call(void 0, "compactChip");
     c.style.display = "";
     c.onclick = () => {
-      _ui.showToast.call(void 0, "正在压缩…");
+      _ui.showToast.call(void 0, _i18n.t.call(void 0, "compressing", "Compressing context..."));
       _sessions.act.call(void 0, { act: "compact" }, (j) => {
-        _ui.showToast.call(void 0, j && j.ok ? "压缩完成" : "压缩失败");
+        _ui.showToast.call(void 0, j && j.ok ? _i18n.t.call(void 0, "compressedOk", "Context compressed") : _i18n.t.call(void 0, "compressedFail", "Compression failed"));
       });
     };
   } else _util.$.call(void 0, "compactChip").style.display = "none";
@@ -1743,7 +2280,7 @@ const runSlash = (...a) => exports.modelH.runSlash(...a);
   if (!el) return;
   const bits = [];
   if (evt.cache !== undefined && evt.cache !== "")
-    bits.push("缓存 " + evt.cache + "%");
+    bits.push(_i18n.t.call(void 0, "cache", "Cache ") + evt.cache + "%");
   if (evt.tps) bits.push(evt.tps + " tok/s");
   if (!bits.length) {
     el.hidden = true;
@@ -1754,10 +2291,10 @@ const runSlash = (...a) => exports.modelH.runSlash(...a);
   const wrap = _util.$.call(void 0, "ctxWrap");
   if (wrap && !wrap.hidden) {
     const extra = [];
-    if (evt.cache !== undefined && evt.cache !== "") extra.push("缓存 " + evt.cache + "%");
+    if (evt.cache !== undefined && evt.cache !== "") extra.push(_i18n.t.call(void 0, "cache", "Cache ") + evt.cache + "%");
     if (evt.tps) extra.push(evt.tps + " tok/s");
     wrap.title =
-      (wrap.dataset.baseTitle || wrap.title || "上下文") +
+      (wrap.dataset.baseTitle || wrap.title || _i18n.t.call(void 0, "context", "Context ")) +
       (extra.length ? " · " + extra.join(" · ") : "");
   }
 } exports.setTurnMeta = setTurnMeta;
@@ -1778,10 +2315,10 @@ const runSlash = (...a) => exports.modelH.runSlash(...a);
     hWs.textContent = "";
     hSep.style.display = "none";
   }
-  hSes.textContent = _state.sess === "default" ? "默认会话" : s.title || _state.sess;
+  hSes.textContent = _state.sess === "default" ? _i18n.t.call(void 0, "defaultSession", "Default session") : s.title || _state.sess;
   _util.$.call(void 0, "tbWs").textContent = wsName || "";
   _util.$.call(void 0, "tbSe").textContent =
-    _state.sess === "default" ? "默认会话" : s.title || _state.sess;
+    _state.sess === "default" ? _i18n.t.call(void 0, "defaultSession", "Default session") : s.title || _state.sess;
   const git = _util.$.call(void 0, "hGit");
   git.innerHTML = "";
   if (s.branch) {
@@ -1802,23 +2339,23 @@ const runSlash = (...a) => exports.modelH.runSlash(...a);
     pill.className = "ch-pill";
     pill.style.borderColor =
       "color-mix(in srgb,var(--color-success) 20%,var(--color-line))";
-    pill.textContent = s.changes + " 个变更";
+    pill.textContent = s.changes + (_i18n.getLang.call(void 0, ) === "zh" ? " 个变更" : " changes");
     git.appendChild(pill);
   }
 } exports.renderHdr = renderHdr;
- async function applySessionTitle(t, hdr) {
+ async function applySessionTitle(tStr, hdr) {
   try {
     const r = await fetch(
       "/api/title?" + _state.wsp + "session=" + encodeURIComponent(_state.sess),
       {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ title: t }),
+        body: JSON.stringify({ title: tStr }),
       },
     );
     const j = await r.json().catch(() => ({}));
     if (!r.ok || j.ok === false || j.title === undefined) {
-      _ui.showToast.call(void 0, j.error || "设置标题失败");
+      _ui.showToast.call(void 0, j.error || _i18n.t.call(void 0, "setTitleFail", "Failed to set title"));
       return false;
     }
     exports.curTitle = j.title;
@@ -1826,14 +2363,14 @@ const runSlash = (...a) => exports.modelH.runSlash(...a);
     _sessions.loadSessions.call(void 0, );
     return true;
   } catch (e6) {
-    _ui.showToast.call(void 0, "设置标题失败");
+    _ui.showToast.call(void 0, _i18n.t.call(void 0, "setTitleFail", "Failed to set title"));
     return false;
   }
 } exports.applySessionTitle = applySessionTitle;
 (_util.$.call(void 0, "hSes") ).onclick = async () => {
-  const t = await _ui.askText.call(void 0, "会话标题", exports.curTitle || "", "");
-  if (t === null) return;
-  await applySessionTitle(t, true);
+  const tStr = await _ui.askText.call(void 0, _i18n.t.call(void 0, "sessionTitle", "Session title"), exports.curTitle || "", "");
+  if (tStr === null) return;
+  await applySessionTitle(tStr, true);
 };
 (_util.$.call(void 0, "hKebab") ).onclick = (e) => {
   e.stopPropagation();
@@ -1841,25 +2378,25 @@ const runSlash = (...a) => exports.modelH.runSlash(...a);
   m.innerHTML = "";
   const mi = (label, fn, danger) =>
     m.appendChild(_sessions.menuRow.call(void 0, { label: label.replace(/^[^ ]+ /, ""), icon: label.slice(0, label.indexOf(" ")), danger, onclick: fn }));
-  mi("⧉ 复制最后回复", () => runSlash({ name: "/copy" }, ""));
-  mi("⎘ 导出 HTML", () => runSlash({ name: "/export" }, ""));
-  mi("☰ 消息列表", () => runSlash({ name: "/tree" }, ""));
-  mi("📋 复制全部", () => runSlash({ name: "/dump" }, ""));
-  mi("✎ 计划", async () => {
-    const g = await _ui.askText.call(void 0, "计划目标", "", "要完成什么");
-    if (g) runSlash({ name: "/plan" }, g);
+  mi(_i18n.t.call(void 0, "copyReply", "⧉ Copy last reply"), () => _bus.emit.call(void 0, "slash:run", { cmd: { name: "/copy" }, arg: "" }));
+  mi(_i18n.t.call(void 0, "exportHtml", "⎘ Export HTML"), () => _bus.emit.call(void 0, "slash:run", { cmd: { name: "/export" }, arg: "" }));
+  mi(_i18n.t.call(void 0, "tree", "☰ Message list"), () => _bus.emit.call(void 0, "slash:run", { cmd: { name: "/tree" }, arg: "" }));
+  mi(_i18n.t.call(void 0, "dumpAll", "📋 Dump all"), () => _bus.emit.call(void 0, "slash:run", { cmd: { name: "/dump" }, arg: "" }));
+  mi(_i18n.t.call(void 0, "plan", "✎ Plan"), async () => {
+    const g = await _ui.askText.call(void 0, _i18n.t.call(void 0, "planGoal", "Plan goal"), "", _i18n.t.call(void 0, "whatToAccomplish", "What to accomplish"));
+    if (g) _bus.emit.call(void 0, "slash:run", { cmd: { name: "/plan" }, arg: g });
   });
-  mi("✎ 重命名", async () => {
-    const t = await _ui.askText.call(void 0, "会话标题", exports.curTitle || "", "");
-    if (t === null) return;
-    await applySessionTitle(t, false);
+  mi(_i18n.t.call(void 0, "renameSession", "✎ Rename session"), async () => {
+    const tStr = await _ui.askText.call(void 0, _i18n.t.call(void 0, "sessionTitle", "Session title"), exports.curTitle || "", "");
+    if (tStr === null) return;
+    await applySessionTitle(tStr, false);
   });
-  mi("✱ 派生会话", async () => {
-    const n = await _ui.askText.call(void 0, "派生会话", "", "新会话名，留空自动");
+  mi(_i18n.t.call(void 0, "forkSession", "✱ Fork session"), async () => {
+    const n = await _ui.askText.call(void 0, _i18n.t.call(void 0, "forkSession", "Fork session"), "", _i18n.t.call(void 0, "forkHint", "New session name, empty for auto"));
     if (n === null) return;
     _sessions.act.call(void 0, { act: "fork", name: n || "" }, (j) => {
       if (j && j.name) {
-        _ui.showToast.call(void 0, "已派生 " + j.name);
+        _ui.showToast.call(void 0, _i18n.t.call(void 0, "forked", "Forked ") + j.name);
         setTimeout(
           () =>
             (location.href = _state.sessUrl.call(void 0, j.name) ),
@@ -1869,25 +2406,25 @@ const runSlash = (...a) => exports.modelH.runSlash(...a);
     });
   });
   m.appendChild(_sessions.menuSep.call(void 0, ));
-  mi("↶ 撤销最后一条", () => {
+  mi(_i18n.t.call(void 0, "undoTurn", "↶ Undo turn"), () => {
     _sessions.act.call(void 0, { act: "undo" }, (j) => {
-      _ui.showToast.call(void 0, j && j.ok ? "已撤销" : "无可撤销");
+      _ui.showToast.call(void 0, j && j.ok ? _i18n.t.call(void 0, "undone", "Undone") : _i18n.t.call(void 0, "noUndo", "Nothing to undo"));
       setTimeout(() => location.reload(), 400);
     });
   });
-  mi("⚡ 压缩上下文", () => {
-    _ui.showToast.call(void 0, "正在压缩…");
+  mi(_i18n.t.call(void 0, "compactContext", "⚡ Compact context"), () => {
+    _ui.showToast.call(void 0, _i18n.t.call(void 0, "compressing", "Compressing context..."));
     _sessions.act.call(void 0, { act: "compact" }, (j) => {
-      _ui.showToast.call(void 0, j && j.ok ? "压缩完成" : "压缩失败");
+      _ui.showToast.call(void 0, j && j.ok ? _i18n.t.call(void 0, "compressedOk", "Context compressed") : _i18n.t.call(void 0, "compressedFail", "Compression failed"));
     });
   });
   m.appendChild(_sessions.menuSep.call(void 0, ));
   mi(
-    "🗄 归档会话",
+    _i18n.t.call(void 0, "archiveSession", "🗄 Archive session"),
     () => {
       _sessions.act.call(void 0, { act: "archive" }, (j) => {
         if (j && j.ok) {
-          _ui.showToast.call(void 0, "已归档");
+          _ui.showToast.call(void 0, _i18n.t.call(void 0, "archived", "Archived"));
           setTimeout(() => (location.href = _state.sessUrl.call(void 0, "default") ), 400);
         }
       });
@@ -1896,6 +2433,7 @@ const runSlash = (...a) => exports.modelH.runSlash(...a);
   );
   _sessions.openAt.call(void 0, "kmenu", e.currentTarget, "br");
 };
+
 (_util.$.call(void 0, "tbKebab") ).onclick = (e) => {
   e.stopPropagation();
   (_util.$.call(void 0, "hKebab") ).onclick(e);
@@ -1921,996 +2459,18 @@ const runSlash = (...a) => exports.modelH.runSlash(...a);
   renderHdr(s);
 } exports.applyBootState = applyBootState;
 
-};
-__modules["slash"] = function(module, exports, require) {
-"use strict";Object.defineProperty(exports, "__esModule", {value: true});// slash.ts —— 斜杠命令目录/菜单/bang 提示/@文件补全 + runSlash 全分发。
-// 自 webui.js 切出。聊天渲染/发送/模型态皆 main 之物,经 slashH 钩袋注入;
-// 别名包装使本体调用点一字不改(唯活读之 bare var 改 H.getX())。
-var _util = require('./util');
-var _state = require('./state');
-var _ui = require('./ui');
-var _sessions = require('./sessions');
-var _store = require('./store');
-
-
-
-
-var _model = require('./model');
-
-
- const slashH = {}; exports.slashH = slashH;
-const addUser = (...a) => exports.slashH.addUser(...a);
-const addAsst = (...a) => exports.slashH.addAsst(...a);
-const finishAsst = (...a) => exports.slashH.finishAsst(...a);
-const openSearch = (...a) => exports.slashH.openSearch(...a);
-const attachClipboardImage = (...a) => exports.slashH.attachClipboardImage(...a);
-const refreshSend = (...a) => exports.slashH.refreshSend(...a);
-const ensureActPoll = (...a) => exports.slashH.ensureActPoll(...a);
-const asstEl = (...a) => exports.slashH.asstEl(...a);
-const findInThread = (...a) => exports.slashH.findInThread(...a);
-const sendPlain = (...a) => exports.slashH.sendPlain(...a);
-const send = (...a) => exports.slashH.send(...a);
-const renderQueue = (...a) => exports.slashH.renderQueue(...a);
-const clipText = (...a) => exports.slashH.clipText(...a);
-
- function findSlash(cmd) {
-  return SLASH.find((s) => s.name === cmd);
-} exports.findSlash = findSlash;
- function applyHelpCatalog(j) {
-  if (j && Array.isArray(j.commands) && j.commands.length) {
-    SLASH = j.commands.map((c) => ({
-      name: c.name,
-      desc: c.desc,
-      accepts: !!c.accepts,
-    }));
-    (window ).HELP_KEYS = Array.isArray(j.keys) ? j.keys : (window ).HELP_KEYS || [];
-  }
-} exports.applyHelpCatalog = applyHelpCatalog;
- function loadHelpCatalog() {
-  return fetch("/api/help?" + _state.wsp + "session=" + encodeURIComponent(_state.sess))
-    .then((r) => r.json())
-    .then(applyHelpCatalog)
-    .catch(() => _ui.showToast.call(void 0, "帮助目录加载失败"));
-} exports.loadHelpCatalog = loadHelpCatalog;
-let SLASH = [
-  { name: "/help", desc: "list commands" },
-  { name: "/login", desc: "save API key", accepts: true },
-  { name: "/new", desc: "新会话" },
-  { name: "/clear", desc: "清空并重开" },
-  { name: "/sessions", desc: "搜索会话" },
-  { name: "/resume", desc: "切到第 n 个会话", accepts: true },
-  { name: "/undo", desc: "撤销上一轮" },
-  { name: "/compact", desc: "压缩上下文" },
-  { name: "/fast-compress", desc: "快压状态" },
-  { name: "/fork", desc: "派生会话" },
-  { name: "/title", desc: "改会话标题", accepts: true },
-  { name: "/model", desc: "切换模型" },
-  { name: "/refresh", desc: "拉取 provider 模型列表" },
-  { name: "/think", desc: "思考等级", accepts: true },
-  { name: "/permissions", desc: "授权 yolo/ask/read-only", accepts: true },
-  { name: "/sandbox", desc: "bash 沙箱 off/workspace/strict", accepts: true },
-  { name: "/status", desc: "当前状态" },
-  { name: "/doctor", desc: "环境体检" },
-  { name: "/init", desc: "写 AGENTS.md（已有不覆盖）" },
-  { name: "/diff", desc: "git status + diffstat" },
-  { name: "/commit", desc: "提交已暂存（需说明）", accepts: true },
-  { name: "/log", desc: "git log --oneline", accepts: true },
-  { name: "/branch", desc: "当前与最近分支" },
-  { name: "/mcp", desc: "MCP server 列表" },
-  { name: "/reload", desc: "重读 settings.json" },
-  { name: "/theme", desc: "外观 light/dark/system", accepts: true },
-  { name: "/paste", desc: "从剪贴板附图" },
-  { name: "/usage", desc: "token 账本" },
-  { name: "/jobs", desc: "在跑 / 后台任务", accepts: true },
-  { name: "/find", desc: "搜对话", accepts: true },
-  { name: "/plan", desc: "写 PLAN.md 再执行", accepts: true },
-  { name: "/queue", desc: "清空输入队列" },
-  { name: "/memory", desc: "跨会话记忆", accepts: true },
-  { name: "/plugins", desc: "列出或开关插件", accepts: true },
-  { name: "/pkg", desc: "已装资源包" },
-  { name: "/tree", desc: "消息列表" },
-  { name: "/copy", desc: "复制最后一条回复" },
-  { name: "/export", desc: "导出 HTML" },
-  { name: "/dump", desc: "整段会话到剪贴板" },
-  { name: "/redo", desc: "重发上一次输入" },
-];
-(window ).HELP_KEYS = (window ).HELP_KEYS || [
-  { name: "@./path", desc: "embed a file" },
-  { name: "!cmd", desc: "run shell, send to model" },
-  { name: "!!cmd", desc: "run shell, show only" },
-  { name: "?", desc: "shortcut overlay when empty" },
-  { name: "c", desc: "copy last reply when empty" },
-  { name: "d", desc: "doctor when empty" },
-  { name: "g", desc: "git diff when empty" },
-  { name: "l", desc: "git log when empty" },
-  { name: "r", desc: "redo last input when empty" },
-  { name: "s", desc: "sandbox picker when empty" },
-  { name: "j", desc: "list jobs when empty" },
-  { name: "u", desc: "token ledger when empty" },
-  { name: "Esc", desc: "abort; empty again edits last" },
-  { name: "Ctrl+C", desc: "clear; empty again quits" },
-  { name: "Ctrl+D", desc: "empty again quits" },
-  { name: "Tab", desc: "queue input while busy" },
-  { name: "Ctrl+B", desc: "background while busy" },
-  { name: "Ctrl+T", desc: "fold thinking" },
-  { name: "Ctrl+O", desc: "fold tool output" },
-  { name: "PgUp/PgDn", desc: "scroll transcript" },
-  { name: "Ctrl+↑/↓", desc: "scroll a few lines" },
-  { name: "wheel", desc: "scroll transcript" },
-  { name: "Alt+,/.", desc: "think less / more" },
-  { name: "Shift+↑/↓", desc: "think less / more" },
-];
-let slashItems = [],
-  slashIdx = 0,
-  pickKind = "",
-  atTok = null,
-  fileTimer = 0;
- function hideSlash() {
-  const m = _util.$.call(void 0, "slashMenu");
-  if (m) m.hidden = true;
-  slashItems = [];
-  pickKind = "";
-  atTok = null;
-  if (fileTimer) {
-    clearTimeout(fileTimer);
-    fileTimer = 0;
-  }
-} exports.hideSlash = hideSlash;
- function slashOpen() {
-  const m = _util.$.call(void 0, "slashMenu");
-  return m && !m.hidden && slashItems.length > 0;
-} exports.slashOpen = slashOpen;
- function renderSlash() {
-  const m = _util.$.call(void 0, "slashMenu");
-  if (!m) return;
-  if (!slashItems.length) {
-    m.hidden = true;
-    return;
-  }
-  m.hidden = false;
-  const file = pickKind === "file";
-  const foot = file
-    ? "<span>↑↓ 选择</span><span>Enter 填入</span><span>Tab 补全</span><span>Esc 关闭</span>"
-    : "<span>↑↓ 选择</span><span>Enter 执行</span><span>Tab 补全</span><span>Esc 关闭</span>";
-  m.innerHTML =
-    '<div class="slash-list">' +
-    slashItems
-      .map((it, i) => {
-        const name = file ? it.path || it.name : it.name;
-        const desc = file ? (it.dir ? "目录" : "文件") : it.desc;
-        const nameHl = (it.hlLen ? _util.hlSpan.call(void 0, name, it.hlFrom || 0, it.hlLen) : _util.esc.call(void 0, name)) + (file && it.dir ? '<span class="mark">/</span>' : "");
-        return (
-          '<div class="slash-item' +
-          (i === slashIdx ? " active" : "") +
-          '" data-i="' +
-          i +
-          '" role="option"><span class="slash-name">' +
-          nameHl +
-          '</span><span class="slash-desc">' +
-          _util.esc.call(void 0, desc || "") +
-          "</span></div>"
-        );
-      })
-      .join("") +
-    '</div><div class="slash-foot">' +
-    foot +
-    "</div>";
-  const on = m.querySelector(".slash-item.active");
-  if (on) on.scrollIntoView({ block: "nearest" });
-} exports.renderSlash = renderSlash;
- function updateSlashList(q) {
-  pickKind = "slash";
-  const ranked = _util.rankSlash.call(void 0, SLASH, q);
-  slashItems = ranked.map((r) =>
-    Object.assign({}, r.it, { hlFrom: r.hlFrom, hlLen: r.kind === 2 ? 0 : r.hlLen }),
-  );
-  if (slashIdx >= slashItems.length) slashIdx = 0;
-  renderSlash();
-} exports.updateSlashList = updateSlashList;
- function atToken(v, caret) {
-  const left = v.slice(0, caret == null ? v.length : caret);
-  const m = /(^|[\s])(@(?:\.\/[^\s]*|\.?))$/.exec(left);
-  if (!m) return null;
-  const raw = m[2];
-  return { start: left.length - raw.length, raw, q: raw.startsWith("@./") ? raw.slice(3) : "" };
-} exports.atToken = atToken;
- function scheduleFiles(tok) {
-  atTok = tok;
-  pickKind = "file";
-  if (fileTimer) clearTimeout(fileTimer);
-  fileTimer = setTimeout(async () => {
-    fileTimer = 0;
-    const cur = atToken((_util.$.call(void 0, "inp") ).value, (_util.$.call(void 0, "inp") ).selectionStart);
-    if (!cur) {
-      hideSlash();
-      return;
-    }
-    atTok = cur;
-    try {
-      const r = await fetch("/api/files?" + _state.wsp + "q=" + encodeURIComponent(cur.q));
-      const j = await r.json();
-      if (!j || !j.ok) {
-        slashItems = [];
-        renderSlash();
-        return;
-      }
-      slashItems = (j.items || []).map((it) =>
-        Object.assign({ desc: it.link ? "→ " + it.link : it.dir ? "目录" : "文件" }, it),
-      );
-      // 裸 @(无 ./):运行中的子代理候选排最前(插入字面 @label,不做继续语义)
-      if (!cur.q) {
-        const subs = (exports.subPool || [])
-          .filter((s) => s && s.kind === "subagent" && s.name)
-          .map((s) => ({
-            id: "@" + s.name,
-            name: s.name,
-            desc: "运行中 子代理",
-            sub: true,
-          }));
-        if (subs.length) slashItems = subs.concat(slashItems);
-      }
-      if (slashIdx >= slashItems.length) slashIdx = 0;
-      pickKind = "file";
-      renderSlash();
-    } catch (e2) {
-      hideSlash();
-    }
-  }, 60);
-} exports.scheduleFiles = scheduleFiles;
-// 运行子代理池(jobs 轮询灌入;裸 @ 候选)
- let subPool = []; exports.subPool = subPool;
- function setSubPool(list) {
-  exports.subPool = list || [];
-} exports.setSubPool = setSubPool;
- function insertFile() {
-  const it = slashItems[slashIdx];
-  const inp = _util.$.call(void 0, "inp") ;
-  const tok = atToken(inp.value, inp.selectionStart) || atTok;
-  if (!it || !tok) {
-    hideSlash();
-    return;
-  }
-  const prefix = inp.value.slice(0, tok.start);
-  const suffix = inp.value.slice(tok.start + tok.raw.length);
-  if (it.sub && it.name) {
-    // 子代理引用:插入字面 @label(不做继续语义,仅文本)
-    const filled = prefix + "@" + it.name + " ";
-    inp.value = filled + suffix;
-    inp.setSelectionRange(filled.length, filled.length);
-    hideSlash();
-  } else if (it.dir) {
-    const filled = prefix + "@./" + it.path + "/";
-    inp.value = filled + suffix;
-    inp.setSelectionRange(filled.length, filled.length);
-    hideSlash();
-    scheduleFiles(atToken(inp.value, filled.length));
-  } else {
-    const filled = prefix + "@./" + it.path + " ";
-    inp.value = filled + suffix;
-    inp.setSelectionRange(filled.length, filled.length);
-    hideSlash();
-  }
-  _store.autosizeInp.call(void 0, );
-  _store.saveDraft.call(void 0, );
-  refreshSend();
-} exports.insertFile = insertFile;
- function hideBang() {
-  const el = _util.$.call(void 0, "cmpHint");
-  if (!el) return;
-  el.hidden = true;
-  el.innerHTML = "";
-} exports.hideBang = hideBang;
- function showBang(v) {
-  const el = _util.$.call(void 0, "cmpHint");
-  if (!el) return;
-  const local = v.startsWith("!!");
-  const cmd = v.slice(local ? 2 : 1).trim();
-  el.hidden = false;
-  el.innerHTML = local
-    ? '<span class="bang-local">!! 只跑</span><b>' +
-      _util.esc.call(void 0, cmd || "…") +
-      "</b><span>结果留在本页，不送模型</span>"
-    : '<span class="bang-run">! 跑并送</span><b>' +
-      _util.esc.call(void 0, cmd || "…") +
-      "</b><span>输出会一并交给模型</span>";
-} exports.showBang = showBang;
- function updateComposerChrome() {
-  const inp = _util.$.call(void 0, "inp") ;
-  const v = inp.value;
-  if (v.startsWith("/") && v.indexOf("\n") < 0 && v.indexOf(" ") < 0) {
-    hideBang();
-    updateSlashList(v.slice(1));
-    return;
-  }
-  if (v.startsWith("!")) {
-    hideSlash();
-    showBang(v);
-    return;
-  }
-  const tok = atToken(v, inp.selectionStart);
-  if (tok) {
-    hideBang();
-    scheduleFiles(tok);
-    return;
-  }
-  hideSlash();
-  hideBang();
-} exports.updateComposerChrome = updateComposerChrome;
- function updateSlash() {
-  updateComposerChrome();
-} exports.updateSlash = updateSlash;
- function slashMove(d) {
-  if (!slashItems.length) return;
-  slashIdx = (slashIdx + d + slashItems.length) % slashItems.length;
-  renderSlash();
-} exports.slashMove = slashMove;
- function slashComplete() {
-  if (pickKind === "file") {
-    insertFile();
-    return;
-  }
-  const it = slashItems[slashIdx];
-  if (!it) return;
-  (_util.$.call(void 0, "inp") ).value = it.name + (it.accepts ? " " : "");
-  hideSlash();
-  _store.autosizeInp.call(void 0, );
-  _store.saveDraft.call(void 0, );
-} exports.slashComplete = slashComplete;
- function slashPick() {
-  if (pickKind === "file") {
-    insertFile();
-    return;
-  }
-  const it = slashItems[slashIdx];
-  if (!it) return;
-  if (it.accepts) {
-    (_util.$.call(void 0, "inp") ).value = it.name + " ";
-    hideSlash();
-    _store.autosizeInp.call(void 0, );
-    return;
-  }
-  (_util.$.call(void 0, "inp") ).value = it.name;
-  hideSlash();
-  send();
-} exports.slashPick = slashPick;
-(_util.$.call(void 0, "slashMenu") ).onmousedown = (e) => {
-  const it = e.target.closest(".slash-item");
-  if (!it) return;
-  e.preventDefault();
-  slashIdx = +it.getAttribute("data-i") || 0;
-  slashPick();
-};
-document.addEventListener("click", (e) => {
-  if (slashOpen() && !e.target.closest("#slashMenu, #inp, .mode-pill")) {
-    hideSlash();
+_bus.on.call(void 0, "session:select", (s) => {
+  if (s && (s.mode || s.auto !== undefined)) {
+    exports.setApprovalMode.call(void 0, s.mode || (s.auto ? "yolo" : "ask"));
   }
 });
- async function runSlash(item, arg) {
-  switch (item.name) {
-    case "/login": {
-      const parts = (arg || "").trim().split(/\s+/);
-      const name = parts[0] || "";
-      const key = parts.slice(1).join(" ").trim();
-      if (!name || !key) {
-        _ui.showToast.call(void 0, "usage: /login <provider> <api-key>");
-        break;
-      }
-      fetch("/api/config", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ setAuth: { name, key } }),
-      })
-        .then((r) => r.json())
-        .then((j) => _ui.showToast.call(void 0, j && j.ok ? "saved " + name : "login failed"))
-        .catch(() => _ui.showToast.call(void 0, "登录失败"));
-      break;
-    }
-    case "/quit":
-      _ui.showToast.call(void 0, "close the tab to quit");
-      break;
-    case "/help":
-      addUser("/help");
-      const cmds = SLASH.map((s) => s.name.padEnd(16) + s.desc).join("\n");
-      const keys = ((window ).HELP_KEYS || [])
-        .map((s) => String(s.name || "").padEnd(16) + (s.desc || ""))
-        .join("\n");
-      addAsst(
-        cmds +
-          (keys ? "\n\n" + keys : "") +
-          "\n\n@./path 嵌文件 · !cmd 跑命令并送给模型 · !!cmd 只跑不送\nCtrl+K 搜会话 · 发送中再按 Enter 会接着发",
-      );
-      finishAsst();
-      break;
-    case "/sessions":
-      openSearch();
-      break;
-    case "/new":
-    case "/clear":
-      location.href = _state.sessUrl.call(void 0, Math.random().toString(36).slice(2, 8));
-      break;
-    case "/undo":
-      _sessions.act.call(void 0, { act: "undo" }, (j) =>
-        _ui.showToast.call(void 0, j && j.ok ? "已撤销" : "撤销失败"),
-      );
-      break;
-    case "/compact":
-      _sessions.act.call(void 0, { act: "compact" }, (j) =>
-        _ui.showToast.call(void 0, j && j.ok ? "压缩完成" : "压缩失败"),
-      );
-      break;
-    case "/fork": {
-      const n =
-        arg || (await _ui.askText.call(void 0, "派生会话", "", "新会话名，留空自动"));
-      if (n === null) return;
-      _sessions.act.call(void 0, { act: "fork", name: n || "" }, (j) => {
-        if (j && j.ok && j.name) location.href = _state.sessUrl.call(void 0, j.name);
-        else _ui.showToast.call(void 0, "派生失败");
-      });
-      break;
-    }
-    case "/title": {
-      const t = arg || (await _ui.askText.call(void 0, "会话标题", _model.getCurTitle.call(void 0, ) || "", ""));
-      if (t === null || !t) return;
-      await _model.applySessionTitle.call(void 0, t, true);
-      break;
-    }
-    case "/refresh": {
-      addUser("/refresh");
-      try {
-        const r = await fetch("/api/config", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ refreshModels: true }),
-        });
-        const j = await r.json().catch(() => ({}));
-        if (!r.ok || j.ok === false) {
-          addAsst(j.error || "cannot refresh models");
-        } else {
-          addAsst("refreshed " + (j.refreshed || 0) + " provider(s), +" + (j.added || 0) + " models" +
-            (j.fail ? "\n" + j.fail + " provider(s) failed GET /models" : ""));
-        }
-      } catch (e3) {
-        addAsst("cannot refresh models");
-      }
-      finishAsst();
-      break;
-    }
-    case "/model":
-      (_util.$.call(void 0, "hModel") ).click();
-      break;
-    case "/permissions":
-    case "/approvals": {
-      const lv = (arg || "").trim();
-      if (!lv) {
-        (_util.$.call(void 0, "permPill") ).click();
-        break;
-      }
-      await _model.setApproval.call(void 0, lv);
-      addUser("/permissions " + lv);
-      addAsst("授权 " + _model.approvalLabel.call(void 0, ));
-      finishAsst();
-      break;
-    }
-    case "/jobs": {
-      const raw = (arg || "").trim();
-      addUser(raw ? "/jobs " + raw : "/jobs");
-      try {
-        if (/^kill\s+\d+/.test(raw) || /^\d+$/.test(raw)) {
-          const pid = parseInt(raw.replace(/^kill\s+/, ""), 10);
-          const r = await fetch("/api/activity", {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ kill: pid }),
-          });
-          const j = await r.json();
-          addAsst(j.ok ? "killed pid " + pid : "no tracked job with that pid");
-        } else {
-          const r = await fetch("/api/activity");
-          const list = await r.json();
-          if (!list || !list.length) addAsst("no running jobs");
-          else
-            addAsst(
-              list
-                .map((a) => {
-                  const sec = Math.round((a.ms || 0) / 1000);
-                  return (
-                    (a.detached ? "~ " : "* ") +
-                    (a.pid ? "pid " + a.pid + "  " : "") +
-                    (a.name || "job") +
-                    " " +
-                    sec +
-                    "s" +
-                    (a.detail ? "  " + a.detail : "")
-                  );
-                })
-                .join("\n"),
-            );
-        }
-        ensureActPoll();
-      } catch (e4) {
-        addAsst("cannot read activity");
-      }
-      finishAsst();
-      break;
-    }
-    case "/usage": {
-      addUser("/usage");
-      try {
-        const r = await fetch("/api/usage");
-        const j = await r.json();
-        const cost = j.usd > 0 ? "  $" + Number(j.usd).toFixed(4) : "";
-        const head = "usage  " + (j.lines || 0) + " turns  ↑" + _util.fmtTok.call(void 0, j.in || 0) + " ↓" + _util.fmtTok.call(void 0, j.out || 0) + cost;
-        addAsst(j.tail ? head + "\n" + j.tail : head);
-      } catch (e5) {
-        addAsst("cannot read usage.jsonl");
-      }
-      finishAsst();
-      break;
-    }
-    case "/sandbox": {
-      const lv = (arg || "").trim();
-      if (!lv) {
-        addUser("/sandbox");
-        addAsst("usage: /sandbox off|workspace|strict");
-        finishAsst();
-        break;
-      }
-      addUser("/sandbox " + lv);
-      await _model.setSandbox.call(void 0, lv);
-      addAsst("sandbox " + _model.getSandboxMode.call(void 0, ));
-      finishAsst();
-      break;
-    }
-    case "/think": {
-      const lv = (arg || "").trim();
-      if (!lv) {
-        (_util.$.call(void 0, "hThink") ).click();
-        break;
-      }
-      addUser("/think " + lv);
-      await _model.setThink.call(void 0, lv);
-      addAsst("思考 " + (_model.getThink.call(void 0, ) || lv));
-      finishAsst();
-      break;
-    }
-    case "/find": {
-      const q = (arg || "").trim();
-      addUser("/find" + (q ? " " + q : ""));
-      const e = asstEl().querySelector(".md");
-      if (!q && !exports.slashH.getWebFindQ()) e.textContent = "usage: /find <text>";
-      else if (findInThread(q || exports.slashH.getWebFindQ(), false)) e.textContent = "found: " + (q || exports.slashH.getWebFindQ());
-      else e.textContent = "no match";
-      finishAsst();
-      break;
-    }
-    case "/paste": {
-      addUser("/paste");
-      try {
-        if (await attachClipboardImage()) {
-          addAsst(_model.getVision.call(void 0, ) ? "image attached — enter to send" : "image attached — this model has no vision");
-        } else {
-          addAsst("no image on clipboard — use Ctrl+V");
-        }
-      } catch (e6) {
-        addAsst("no image on clipboard — use Ctrl+V");
-      }
-      finishAsst();
-      break;
-    }
-    case "/theme": {
-      const lv = (arg || "").trim().toLowerCase();
-      addUser(lv ? "/theme " + lv : "/theme");
-      if (!lv) {
-        addAsst("theme " + (_state.prefs.scheme || "dark") + "\nusage: /theme light|dark|system");
-      } else if (_ui.setScheme.call(void 0, lv)) {
-        addAsst("theme " + _state.prefs.scheme);
-      } else {
-        addAsst("usage: /theme light|dark|system");
-      }
-      finishAsst();
-      break;
-    }
-    case "/reload":
-      fetch("/api/slash?" + _state.wsp + "session=" + encodeURIComponent(_state.sess), {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ name: "reload", args: "" }),
-      })
-        .then((r) => r.json())
-        .then((j) => {
-          const text = (j && j.text) || "reload failed";
-          String(text)
-            .split("\n")
-            .forEach((line) => {
-              const m = line.match(/^(theme|approval|sandbox|think)\s+(\S+)/);
-              if (!m) return;
-              if (m[1] === "theme") _ui.setScheme.call(void 0, m[2]);
-              if (m[1] === "approval") _model.setApprovalMode.call(void 0, m[2]);
-              if (m[1] === "sandbox") _model.applySandboxLevel.call(void 0, m[2]);
-              if (m[1] === "think") _model.applyThink.call(void 0, m[2]);
-            });
-          addUser("/reload");
-          addAsst(text);
-          finishAsst();
-        })
-        .catch(() => {
-          addUser("/reload");
-          addAsst("reload failed");
-          finishAsst();
-        });
-      break;
-    case "/mcp":
-      fetch("/api/slash?" + _state.wsp + "session=" + encodeURIComponent(_state.sess), {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ name: "mcp", args: "" }),
-      })
-        .then((r) => r.json())
-        .then((j) => {
-          addUser("/mcp");
-          addAsst((j && j.text) || "mcp failed");
-          finishAsst();
-        })
-        .catch(() => {
-          addUser("/mcp");
-          addAsst("mcp failed");
-          finishAsst();
-        });
-      break;
-    case "/branch":
-      fetch("/api/slash?" + _state.wsp + "session=" + encodeURIComponent(_state.sess), {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ name: "branch", args: "" }),
-      })
-        .then((r) => r.json())
-        .then((j) => {
-          addUser("/branch");
-          addAsst((j && j.text) || "branch failed");
-          finishAsst();
-        })
-        .catch(() => {
-          addUser("/branch");
-          addAsst("branch failed");
-          finishAsst();
-        });
-      break;
-    case "/log":
-      fetch("/api/slash?" + _state.wsp + "session=" + encodeURIComponent(_state.sess), {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ name: "log", args: arg || "" }),
-      })
-        .then((r) => r.json())
-        .then((j) => {
-          addUser("/log" + (arg ? " " + arg : ""));
-          addAsst((j && j.text) || "log failed");
-          finishAsst();
-        })
-        .catch(() => {
-          addUser("/log");
-          addAsst("log failed");
-          finishAsst();
-        });
-      break;
-    case "/commit":
-      fetch("/api/slash?" + _state.wsp + "session=" + encodeURIComponent(_state.sess), {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ name: "commit", args: arg || "" }),
-      })
-        .then((r) => r.json())
-        .then((j) => {
-          addUser("/commit" + (arg ? " " + arg : ""));
-          addAsst((j && j.text) || "commit failed");
-          finishAsst();
-        })
-        .catch(() => {
-          addUser("/commit");
-          addAsst("commit failed");
-          finishAsst();
-        });
-      break;
-    case "/diff":
-      fetch("/api/slash?" + _state.wsp + "session=" + encodeURIComponent(_state.sess), {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ name: "diff", args: "" }),
-      })
-        .then((r) => r.json())
-        .then((j) => {
-          addUser("/diff");
-          addAsst((j && j.text) || "diff failed");
-          finishAsst();
-        })
-        .catch(() => {
-          addUser("/diff");
-          addAsst("diff failed");
-          finishAsst();
-        });
-      break;
-    case "/init":
-      fetch("/api/slash?" + _state.wsp + "session=" + encodeURIComponent(_state.sess), {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ name: "init", args: "" }),
-      })
-        .then((r) => r.json())
-        .then((j) => {
-          addUser("/init");
-          addAsst((j && j.text) || "init failed");
-          finishAsst();
-        })
-        .catch(() => {
-          addUser("/init");
-          addAsst("init failed");
-          finishAsst();
-        });
-      break;
-    case "/doctor":
-      fetch("/api/slash?" + _state.wsp + "session=" + encodeURIComponent(_state.sess), {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ name: "doctor", args: "" }),
-      })
-        .then((r) => r.json())
-        .then((j) => {
-          addUser("/doctor");
-          addAsst((j && j.text) || "doctor failed");
-          finishAsst();
-        })
-        .catch(() => {
-          addUser("/doctor");
-          addAsst("doctor failed");
-          finishAsst();
-        });
-      break;
-    case "/status":
-      fetch("/api/config")
-        .then((r) => r.json())
-        .then((cfg) => {
-          const on = (Array.isArray(cfg.plugins) ? cfg.plugins : [])
-            .filter((p) => p && p.enabled && p.optional)
-            .map((p) => p.name);
-          addUser("/status");
-          addAsst(
-            "模型 " +
-              (_model.getCurModel.call(void 0, ) || "?") +
-              " · 思考 " +
-              (_model.getThink.call(void 0, ) || "high") +
-              " · 会话 " +
-              _state.sess +
-              " · 项目 " +
-              (_state.ws || ".") +
-              (on.length ? " · 插件 " + on.join(" ") : ""),
-          );
-          finishAsst();
-        })
-        .catch(() => {
-          addUser("/status");
-          addAsst(
-            "模型 " +
-              (_model.getCurModel.call(void 0, ) || "?") +
-              " · 思考 " +
-              (_model.getThink.call(void 0, ) || "high") +
-              " · 会话 " +
-              _state.sess +
-              " · 项目 " +
-              (_state.ws || "."),
-          );
-          finishAsst();
-        });
-      break;
-    case "/resume": {
-      const n = parseInt(arg || "", 10);
-      if (!arg || !n) {
-        openSearch();
-        break;
-      }
-      if (n < 1 || n > _sessions.sessData.list.length) {
-        _ui.showToast.call(void 0, "没有第 " + n + " 个会话（/sessions）");
-        break;
-      }
-      location.href = _state.sessUrl.call(void 0, _sessions.sessData.list[n - 1].name);
-      break;
-    }
-    case "/plan": {
-      const goal =
-        (arg && arg.trim()) ||
-        (await _ui.askText.call(void 0, "计划目标", "", "要完成什么"));
-      if (!goal) return;
-      await sendPlain("/plan " + goal);
-      break;
-    }
-    case "/queue":
-      exports.slashH.clearPending();
-      renderQueue();
-      _sessions.act.call(void 0, { act: "queue" }, (j) => {
-        _ui.showToast.call(void 0, 
-          j && j.cleared
-            ? "已清空 " + j.cleared + " 条"
-            : "没有待发送的消息",
-        );
-      });
-      break;
-    case "/memory": {
-      const rest = (arg || "").trim();
-      if (rest === "clear") {
-        _sessions.act.call(void 0, { act: "memory-clear" }, (j) =>
-          _ui.showToast.call(void 0, j && j.ok ? "记忆已清空" : "清空失败"),
-        );
-        break;
-      }
-      if (rest.startsWith("set ")) {
-        const text = rest.slice(4).trim();
-        if (!text) {
-          _ui.showToast.call(void 0, "usage: /memory set <text>");
-          break;
-        }
-        _sessions.act.call(void 0, { act: "memory-set", name: text }, (j) =>
-          _ui.showToast.call(void 0, j && j.ok ? "记忆已写入" : "写入失败"),
-        );
-        break;
-      }
-      _sessions.act.call(void 0, { act: "memory" }, (j) => {
-        addUser("/memory");
-        addAsst(
-          (j && j.text) ||
-            "memory is empty — /memory set <text> to add",
-        );
-        finishAsst();
-      });
-      break;
-    }
-    case "/plugins": {
-      const rest = (arg || "").trim();
-      if (!rest) {
-        fetch("/api/config")
-          .then((r) => r.json())
-          .then((cfg) => {
-            const plugs = Array.isArray(cfg.plugins) ? cfg.plugins : [];
-            const lines = plugs.map(
-              (p) =>
-                "  [" +
-                (p.enabled ? "on " : "off") +
-                "] " +
-                p.name,
-            );
-            addUser("/plugins");
-            addAsst(
-              "plugins (next turn):\n" +
-                lines.join("\n") +
-                "\nusage: /plugins on <name> | /plugins off <name>",
-            );
-            finishAsst();
-          })
-          .catch(() => _ui.showToast.call(void 0, "plugins 读取失败"));
-        break;
-      }
-      const m = rest.match(/^(on|off)\s+(\S+)$/);
-      if (!m) {
-        _ui.showToast.call(void 0, "usage: /plugins on <name> | /plugins off <name>");
-        break;
-      }
-      const on = m[1] === "on";
-      fetch("/api/config", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ setPlugin: { name: m[2], enabled: on } }),
-      })
-        .then((r) => r.json())
-        .then((j) => {
-          if (j && j.ok === false) {
-            _ui.showToast.call(void 0, "插件开关失败");
-            return;
-          }
-          _ui.showToast.call(void 0, "plugin " + m[2] + (on ? " on" : " off") + " — next turn");
-          loadHelpCatalog();
-        })
-        .catch(() => _ui.showToast.call(void 0, "插件开关失败"));
-      break;
-    }
-    case "/pkg":
-      fetch("/api/packages?" + _state.wsp)
-        .then((r) => r.json())
-        .then((j) => {
-          function rows(arr, title) {
-            const xs = Array.isArray(arr) ? arr : [];
-            const body = xs.length
-              ? xs
-                  .map(
-                    (p) =>
-                      "  " +
-                      p.name +
-                      "  skills:" +
-                      (p.skills || 0) +
-                      " prompts:" +
-                      (p.prompts || 0),
-                  )
-                  .join("\n")
-              : "  (none)";
-            return title + " (" + xs.length + "):\n" + body;
-          }
-          addUser("/pkg");
-          addAsst(
-            rows(j.user, "user packages") +
-              "\n" +
-              rows(j.project, "project packages") +
-              "\ninstall: piz pkg install <path> [-l]",
-          );
-          finishAsst();
-        })
-        .catch(() => {
-          addUser("/pkg");
-          addAsst("packages 读取失败");
-          finishAsst();
-        });
-      break;
-    case "/tree":
-      _sessions.act.call(void 0, { act: "tree" }, (j) => {
-        addUser("/tree");
-        addAsst((j && j.text) || "no messages");
-        finishAsst();
-      });
-      break;
-    case "/copy":
-      _sessions.act.call(void 0, { act: "copy" }, (j) =>
-        clipText(j && j.text, "已复制最后回复", "还没有回复"),
-      );
-      break;
-    case "/export":
-      _sessions.act.call(void 0, { act: "export" }, (j) => {
-        if (j && j.text) {
-          _util.downloadText.call(void 0, "piz-export.html", j.text, "text/html");
-          _ui.showToast.call(void 0, "已导出");
-        } else _ui.showToast.call(void 0, "导出失败");
-      });
-      break;
-    case "/dump":
-      _sessions.act.call(void 0, { act: "dump" }, (j) =>
-        clipText(j && j.text, "会话已复制", "没有内容"),
-      );
-      break;
-    case "/fast-compress":
-      _sessions.act.call(void 0, { act: "fast-compress" }, (j) => {
-        addUser("/fast-compress");
-        addAsst((j && j.text) || "fast-compress: ?");
-        finishAsst();
-      });
-      break;
-    case "/redo":
-      if (!exports.slashH.getLastUser()) {
-        _ui.showToast.call(void 0, "没有可重发的输入");
-        break;
-      }
-      await sendPlain(exports.slashH.getLastUser());
-      break;
-    default: {
-      const stem = String(item.name || "").replace(/^\//, "");
-      fetch("/api/slash?" + _state.wsp + "session=" + encodeURIComponent(_state.sess), {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ name: stem, args: arg || "" }),
-      })
-        .then((r) => r.json())
-        .then((j) => {
-          if (j && j.ok) {
-            addUser("/" + stem + (arg ? " " + arg : ""));
-            addAsst(j.text || "");
-            finishAsst();
-          } else _ui.showToast.call(void 0, (j && j.error) || "未知命令");
-        })
-        .catch(() => _ui.showToast.call(void 0, "未知命令"));
-      break;
-    }
-  }
-} exports.runSlash = runSlash;
 
 };
 __modules["md"] = function(module, exports, require) {
 "use strict";Object.defineProperty(exports, "__esModule", {value: true}); function _nullishCoalesce(lhs, rhsFn) { if (lhs != null) { return lhs; } else { return rhsFn(); } }// md.ts —— 极简 markdown / ansi / diff / todo 渲染,纯字符串进 HTML 出。
 // 块级:标题/表格/任务列表/嵌套列表/引用/分割线/围栏代码(含语法着色与头部栏)。
 var _util = require('./util');
+var _i18n = require('./i18n');
 
 // ---- 语法着色(轻量 tokenizer;关键字取常见语言并集) ----
 const KW = new Set(
@@ -2966,7 +2526,9 @@ function codeBlock(lang, body) {
   return (
     '<div class="cb"><div class="cb-hd"><span class="cb-lang">' +
     _util.esc.call(void 0, L) +
-    '</span><button class="pre-cp" type="button" title="复制">⧉</button></div><pre><code>' +
+    '</span><button class="pre-cp" type="button" title="' +
+    _i18n.t.call(void 0, "copy", "Copy") +
+    '">⧉</button></div><pre><code>' +
     inner +
     "</code></pre></div>"
   );
@@ -3309,6 +2871,7 @@ __modules["sheet"] = function(module, exports, require) {
 var _util = require('./util');
 var _state = require('./state');
 var _sessions = require('./sessions');
+var _bus = require('./bus');
 
 const sheet = _util.$.call(void 0, "sheet");
  function openSheet() {
@@ -3320,6 +2883,8 @@ const sheet = _util.$.call(void 0, "sheet");
   sheet.classList.remove("open");
   document.body.style.overflow = "";
 } exports.closeSheet = closeSheet;
+
+_bus.on.call(void 0, "session:select", () => closeSheet());
 // 下滑关闭:按住 grab/头部往下拖超过 70px 或快甩即收。
 (function () {
   const pnl = _util.$.call(void 0, "spnl");
@@ -3388,8 +2953,8 @@ __modules["plugins"] = function(module, exports, require) {
 // build-web DFS 所禁,故以 pluginsH 钩袋迟取;chat/composer 直引本模块无环。
 var _state = require('./state');
 var _ui = require('./ui');
-
- const pluginsH = {}; exports.pluginsH = pluginsH;
+var _store = require('./store');
+var _bus = require('./bus');
 
 const pluginListeners = new Map(),
   msgRenderers = [],
@@ -3443,8 +3008,8 @@ const pluginListeners = new Map(),
       return fetch(u, opts);
     },
     send: (text) => {
-      if (exports.pluginsH.getRunning()) return false;
-      exports.pluginsH.sendPlain(String(text));
+      if (_store.getRunning.call(void 0, )) return false;
+      _bus.emit.call(void 0, "chat:send", { text: String(text) });
       return true;
     },
     ui: {
@@ -3596,9 +3161,9 @@ var _sessions = require('./sessions');
 var _model = require('./model');
 var _sheet = require('./sheet');
 var _plugins = require('./plugins');
-
- const chatH = {}; exports.chatH = chatH;
-const sendPlain = (...a) => exports.chatH.sendPlain(...a);
+var _i18n = require('./i18n');
+var _store = require('./store');
+var _bus = require('./bus');
 
 // ---- 渲染 ----
  const th = _util.$.call(void 0, "thread"); exports.th = th;
@@ -3609,7 +3174,7 @@ document.addEventListener("click", (e) => {
   if (!b) return;
   const box = b.closest(".cb") || b.parentElement;
   const code = box && box.querySelector("code");
-  _ui.clipText.call(void 0, code ? code.textContent || "" : "", "已复制", "复制失败");
+  _ui.clipText.call(void 0, code ? code.textContent || "" : "", _i18n.t.call(void 0, "copied", "Copied"), _i18n.t.call(void 0, "copyFailed", "Failed to copy"));
 });
 // 回到底部:非贴底且有溢出时现身
 const toB = _util.$.call(void 0, "toBottom");
@@ -3691,7 +3256,7 @@ let histStart = 0,
   } else if (exports.th.firstChild !== b) exports.th.insertBefore(b, exports.th.firstChild);
   const n = histStart;
   b.hidden = n <= 0;
-  b.textContent = n > 0 ? "↑ 更早 " + n + " 条" : "";
+  b.textContent = n > 0 ? (_i18n.getLang.call(void 0, ) === "zh" ? "↑ 更早 " + n + " 条" : "↑ Load " + n + " earlier") : "";
 } exports.paintHistMore = paintHistMore;
  function replayHist(items, prepend) {
   if (!items || !items.length) return;
@@ -3712,7 +3277,7 @@ let histStart = 0,
       if (h.role === "user") {
         finishRsn();
         finishWork();
-        exports.chatH.setLastUser(text);
+        _store.setLastUser.call(void 0, text);
         addUser(h.has_image && !text ? "[image]" : h.has_image ? text + "  [image]" : text, h.image_file ? "/api/image?name=" + encodeURIComponent(h.image_file) : null);
       } else if (h.role === "assistant") {
         const rsn = _util.histText.call(void 0, h.reasoning);
@@ -3790,7 +3355,7 @@ function workBitsHtml(live) {
   if (workCounts.todo) bits.push(_util.ico.call(void 0, "todo") + "<span>" + _util.nunit.call(void 0, workCounts.todo, "plan") + "</span>");
   if (workCounts.agent) bits.push(_util.ico.call(void 0, "agent") + "<span>" + _util.nunit.call(void 0, workCounts.agent, "agent") + "</span>");
   if (workCounts.other) bits.push(_util.ico.call(void 0, "tool") + "<span>" + _util.nunit.call(void 0, workCounts.other, "tool") + "</span>");
-  if (!bits.length) return live ? "正在工作" : "已完成";
+  if (!bits.length) return live ? (_i18n.getLang.call(void 0, ) === "zh" ? "正在工作" : "Working...") : (_i18n.getLang.call(void 0, ) === "zh" ? "已完成" : "Completed");
   return bits.map((b) => '<span class="work-chip">' + b + "</span>").join('<span class="work-dot">·</span>');
 }
 function refreshWorkSum(live) {
@@ -3805,7 +3370,9 @@ function ensureWork() {
   const el = document.createElement("div");
   el.className = "work live";
   el.innerHTML =
-    '<button type="button" class="work-sum"><span class="work-caret">▸</span><span class="work-bits">正在工作</span></button><div class="work-list"></div>';
+    '<button type="button" class="work-sum"><span class="work-caret">▸</span><span class="work-bits">' +
+    (_i18n.getLang.call(void 0, ) === "zh" ? "正在工作" : "Working...") +
+    '</span></button><div class="work-list"></div>';
   (el.querySelector(".work-sum") ).onclick = () => el.classList.toggle("open");
   exports.th.appendChild(el);
   workEl = el;
@@ -3982,10 +3549,11 @@ function ensureWork() {
       if (n.body) {
         bodyHtml = '<pre class="flow-body">' + _util.esc.call(void 0, n.body) + "</pre>";
       } else {
+        const isZh = _i18n.getLang.call(void 0, ) === "zh";
         const lines = [
-          "节点状态: " + (n.st || "pending"),
-          n.role ? "执行角色: " + n.role : "",
-          n.last ? "最近活动: " + n.last : "执行中，暂无标准输出",
+          (isZh ? "节点状态: " : "Status: ") + (n.st || "pending"),
+          n.role ? (isZh ? "执行角色: " : "Role: ") + n.role : "",
+          n.last ? (isZh ? "最近活动: " : "Activity: ") + n.last : (isZh ? "执行中，暂无标准输出" : "Running, no output yet"),
         ].filter(Boolean);
         bodyHtml = '<div class="flow-body flow-info">' + lines.map((l) => "<div>" + _util.esc.call(void 0, l) + "</div>").join("") + "</div>";
       }
@@ -3996,7 +3564,9 @@ function ensureWork() {
       (open ? " open" : "") +
       '" data-id="' +
       _util.esc.call(void 0, n.id) +
-      '" title="点击查看节点详情"><i class="flow-dot"></i><div class="flow-main"><div class="flow-row"><b>' +
+      '" title="' +
+      (_i18n.getLang.call(void 0, ) === "zh" ? "点击查看节点详情" : "Click to view details") +
+      '"><i class="flow-dot"></i><div class="flow-main"><div class="flow-row"><b>' +
       _util.esc.call(void 0, n.id) +
       "</b>" +
       (n.role ? "<em>" + _util.esc.call(void 0, n.role) + "</em>" : "") +
@@ -4064,10 +3634,11 @@ function ensureWork() {
   if (!turnAt) return;
   const sec = Math.max(1, Math.round((Date.now() - turnAt) / 1000));
   turnAt = 0;
+  const isZh = _i18n.getLang.call(void 0, ) === "zh";
   const label =
     sec < 60
-      ? "用了 " + sec + "s"
-      : "用了 " + Math.floor(sec / 60) + "m " + (sec % 60) + "s";
+      ? (isZh ? "用了 " + sec + "s" : "took " + sec + "s")
+      : (isZh ? "用了 " + Math.floor(sec / 60) + "m " + (sec % 60) + "s" : "took " + Math.floor(sec / 60) + "m " + (sec % 60) + "s");
   const host =
     exports.th.querySelector(".a-turn:last-of-type") ||
     exports.th.querySelector(".work:last-of-type");
@@ -4094,7 +3665,11 @@ function pruneTranscript() {
   const t = document.createElement("div");
   t.className = "u-turn";
   t.innerHTML =
-    '<div class="u-bub"></div><div class="u-ops"><button type="button" class="copy-chip" title="复制">⧉</button><button type="button" class="undo-chip" title="撤销">↶</button></div>';
+    '<div class="u-bub"></div><div class="u-ops"><button type="button" class="copy-chip" title="' +
+    t("copy", "Copy") +
+    '">⧉</button><button type="button" class="undo-chip" title="' +
+    t("undo", "Undo") +
+    '">↶</button></div>';
   const bub = t.querySelector(".u-bub");
   if (imgSrc) {
     const im = document.createElement("img");
@@ -4116,7 +3691,7 @@ function pruneTranscript() {
       const more = document.createElement("button");
       more.type = "button";
       more.className = "fold-more";
-      more.textContent = "展开 ▾";
+      more.textContent = _i18n.getLang.call(void 0, ) === "zh" ? "展开 ▾" : "Expand ▾";
       more.onclick = () => bub.classList.remove("folded");
       bub.appendChild(document.createElement("br"));
       bub.appendChild(more);
@@ -4125,10 +3700,10 @@ function pruneTranscript() {
     bub.textContent = txt || "";
   }
   const rawUser = shown || txt || "";
-  (t.querySelector(".copy-chip") ).onclick = () => _ui.clipText.call(void 0, rawUser, "已复制", "复制失败");
+  (t.querySelector(".copy-chip") ).onclick = () => _ui.clipText.call(void 0, rawUser, t("copied", "Copied"), t("copyFailed", "Failed to copy"));
   (t.querySelector(".undo-chip") ).onclick = () => {
     _sessions.act.call(void 0, { act: "undo" }, (j) => {
-      _ui.showToast.call(void 0, j && j.ok ? "已撤销" : "无可撤销");
+      _ui.showToast.call(void 0, j && j.ok ? t("undone", "Undone") : t("noUndo", "Nothing to undo"));
       setTimeout(() => location.reload(), 400);
     });
   };
@@ -4196,11 +3771,13 @@ let mdTimer = 0;
       const ops = document.createElement("div");
       ops.className = "a-ops";
       ops.innerHTML =
-        '<button type="button" class="copy-a" title="复制">⧉</button>' +
-        (exports.chatH.getLastUser() ? '<button type="button" class="redo-a" title="重新生成">↻</button>' : "");
-      (ops.querySelector(".copy-a") ).onclick = () => _ui.clipText.call(void 0, raw, "已复制", "复制失败");
+        '<button type="button" class="copy-a" title="' +
+        _i18n.t.call(void 0, "copy", "Copy") +
+        '">⧉</button>' +
+        (_store.getLastUser.call(void 0, ) ? '<button type="button" class="redo-a" title="' + (_i18n.getLang.call(void 0, ) === "zh" ? "重新生成" : "Regenerate") + '">↻</button>' : "");
+      (ops.querySelector(".copy-a") ).onclick = () => _ui.clipText.call(void 0, raw, _i18n.t.call(void 0, "copied", "Copied"), _i18n.t.call(void 0, "copyFailed", "Failed to copy"));
       const redo = ops.querySelector(".redo-a") ;
-      if (redo) redo.onclick = () => sendPlain(exports.chatH.getLastUser());
+      if (redo) redo.onclick = () => _bus.emit.call(void 0, "chat:retry");
       curAsst.appendChild(ops);
     }
     _plugins.pluginEmit.call(void 0, "message-rendered", {
@@ -4219,7 +3796,9 @@ let mdTimer = 0;
     el.innerHTML =
       '<button type="button" class="think-sum"><span class="work-caret">▸</span>' +
       _util.ico.call(void 0, "think") +
-      '<span class="think-txt">思考中</span></button><pre class="tk"></pre>';
+      '<span class="think-txt">' +
+      (_i18n.getLang.call(void 0, ) === "zh" ? "思考中" : "Thinking...") +
+      '</span></button><pre class="tk"></pre>';
     (el.querySelector(".think-sum") ).onclick = () => el.classList.toggle("open");
     exports.th.appendChild(el);
     rsnEl = el;
@@ -4255,7 +3834,7 @@ function paintRsn() {
   paintRsn();
   rsnTm && (clearTimeout(rsnTm), (rsnTm = 0));
   const txt = rsnEl.querySelector(".think-txt");
-  if (txt) txt.textContent = "思考";
+  if (txt) txt.textContent = _i18n.getLang.call(void 0, ) === "zh" ? "思考" : "Thinking";
   rsnEl = null;
 } exports.finishRsn = finishRsn;
 // 工具卡
@@ -4265,17 +3844,18 @@ const pendingByName = {};
  const inspect = {
   src: "",
   kind(d) {
-    if (!d) return "工具";
+    if (!d) return _i18n.t.call(void 0, "tool", "Tool");
     const ty = d.dataset.ty;
-    if (ty === "diff") return "变更";
-    if (ty === "code") return "文件";
-    if (ty === "term") return "终端输出";
-    if (ty === "todo") return "规划";
-    if (ty === "agent") return (cards[d.id] && cards[d.id].name) === "workflow" ? "工作流" : "智能体";
+    const isZh = _i18n.getLang.call(void 0, ) === "zh";
+    if (ty === "diff") return isZh ? "Diff 变更" : "Diff";
+    if (ty === "code") return isZh ? "文件" : "File";
+    if (ty === "term") return isZh ? "终端输出" : "Terminal";
+    if (ty === "todo") return isZh ? "规划" : "Plan";
+    if (ty === "agent") return (cards[d.id] && cards[d.id].name) === "workflow" ? "Workflow" : "Subagent";
     const n = (cards[d.id] && cards[d.id].name) || "";
-    if (/^(ls|find)$/.test(n)) return "文件列表";
-    if (/^(grep|search)$/.test(n)) return "搜索结果";
-    return n || "输出";
+    if (/^(ls|find)$/.test(n)) return isZh ? "文件列表" : "Files";
+    if (/^(grep|search)$/.test(n)) return isZh ? "搜索结果" : "Search";
+    return n || (isZh ? "输出" : "Output");
   },
   pathOf(d) {
     const c = cards[d.id];
@@ -4287,10 +3867,11 @@ const pendingByName = {};
     const p = this.pathOf(d);
     if (p) return p.split(/[/\\]/).pop() || p;
     const c = cards[d.id];
-    if (!c) return "详情";
+    const isZh = _i18n.getLang.call(void 0, ) === "zh";
+    if (!c) return isZh ? "详情" : "Details";
     const o = _util.parseToolArgs.call(void 0, c.args);
-    if (c.name === "workflow") return String(o.goal || "工作流");
-    return String(o.command || c.name || "详情");
+    if (c.name === "workflow") return String(o.goal || "Workflow");
+    return String(o.command || c.name || (isZh ? "详情" : "Details"));
   },
   workEl: null,
   setHead(k, t) {
@@ -4325,7 +3906,7 @@ const pendingByName = {};
     this.thinkEl = el;
     this.src = "";
     this.show();
-    this.setHead("思考过程", "思考过程");
+    this.setHead(_i18n.getLang.call(void 0, ) === "zh" ? "思考过程" : "Thinking", _i18n.getLang.call(void 0, ) === "zh" ? "思考过程" : "Thinking");
     const txt = el.querySelector(".tk");
     const box = document.createElement("div");
     box.className = "insp-think";
@@ -4354,7 +3935,7 @@ const pendingByName = {};
         host.innerHTML = '<div class="flow">' + exports.Flow.html() + "</div>";
         return;
       }
-      host.innerHTML = '<div class="insp-wait">正在运行…</div>';
+      host.innerHTML = '<div class="insp-wait">' + (_i18n.getLang.call(void 0, ) === "zh" ? "正在运行…" : "Running...") + '</div>';
       return;
     }
     let out = (c && c.out) || "";
@@ -4369,7 +3950,7 @@ const pendingByName = {};
       } catch (e2) {}
     }
     if (!out) {
-      host.innerHTML = '<div class="insp-wait">暂无输出</div>';
+      host.innerHTML = '<div class="insp-wait">' + (_i18n.getLang.call(void 0, ) === "zh" ? "暂无输出" : "No output") + '</div>';
       return;
     }
     d.dataset.out = out;
@@ -4514,12 +4095,22 @@ const pendingByName = {};
       _util.esc.call(void 0, String(o.path || args || "").slice(0, 300)) +
       "</pre></div>";
   d.innerHTML =
-    '<div class="ah"><span class="ah-ic">?</span><span class="akind">需要许可</span><span class="apath">' +
+    '<div class="ah"><span class="ah-ic">?</span><span class="akind">' +
+    _i18n.t.call(void 0, "permRequired", "Permission Required") +
+    '</span><span class="apath">' +
     _util.esc.call(void 0, name) +
     (o.path && kind === "shell" ? "  " + _util.esc.call(void 0, String(o.path).slice(0, 80)) : "") +
-    '</span><span class="aw">等待审批</span></div>' +
+    '</span><span class="aw">' +
+    _i18n.t.call(void 0, "awaitingApproval", "Awaiting approval") +
+    '</span></div>' +
     body +
-    '<div class="pb"><button class="ok">允许</button><button class="alw">本会话总是</button><button class="no">拒绝</button></div>';
+    '<div class="pb"><button class="ok">' +
+    _i18n.t.call(void 0, "allow", "Allow") +
+    '</button><button class="alw">' +
+    _i18n.t.call(void 0, "alwaysSession", "Always this session") +
+    '</button><button class="no">' +
+    _i18n.t.call(void 0, "deny", "Deny") +
+    '</button></div>';
   (d.querySelector(".ok") ).onclick = (e) => {
     e.stopPropagation();
     appr(d, id, true, false);
@@ -4547,13 +4138,13 @@ async function appr(card, id, allow, always) {
     });
     const j = await r.json().catch(() => ({}));
     if (!r.ok || j.ok === false) {
-      _ui.showToast.call(void 0, j.error || "审批失败");
+      _ui.showToast.call(void 0, j.error || _i18n.t.call(void 0, "apprFailed", "Approval failed"));
       card.querySelectorAll("button").forEach((b) => (b.disabled = false));
       return;
     }
     card.remove();
   } catch (e4) {
-    _ui.showToast.call(void 0, "审批失败");
+    _ui.showToast.call(void 0, _i18n.t.call(void 0, "apprFailed", "Approval failed"));
     card.querySelectorAll("button").forEach((b) => (b.disabled = false));
   }
 }
@@ -4579,9 +4170,12 @@ let cpOpen = null;
   const n = Number(folded) || 0;
   const k = Number(kept) || 0;
   const same = exports.th.lastElementChild && exports.th.lastElementChild.classList && exports.th.lastElementChild.classList.contains("cp");
+  const isZh = _i18n.getLang.call(void 0, ) === "zh";
   d.innerHTML =
-    '<button type="button" class="cp-sum" aria-expanded="false"><span class="cp-ic">⧉</span><span class="cp-t">上下文已压缩</span>' +
-    (same ? "" : "<span class=\"cp-meta\">折叠 " + n + " 条 · 保留 " + fmtK(k) + " tok</span>") +
+    '<button type="button" class="cp-sum" aria-expanded="false"><span class="cp-ic">⧉</span><span class="cp-t">' +
+    (isZh ? "Context 已在此压缩整理" : "Context compacted") +
+    '</span>' +
+    (same ? "" : '<span class="cp-meta">' + (isZh ? "折叠 " + n + " 条 · 保留 " + fmtK(k) + " tok" : "Folded " + n + " msgs · Kept " + fmtK(k) + " tok") + '</span>') +
     '<span class="cp-caret">▸</span></button>' +
     '<div class="cp-body"></div>';
   const bd = d.querySelector(".cp-body");
@@ -4604,12 +4198,16 @@ let cpOpen = null;
   const strip = _util.$.call(void 0, "planStrip") ;
   if (!strip || !total) return;
   strip.hidden = false;
+  const isZh = _i18n.getLang.call(void 0, ) === "zh";
   strip.innerHTML =
-    '<button type="button" class="plan-sum"><span class="plan-ic">📋</span><span class="plan-t">计划</span><span class="plan-meta">' +
+    '<button type="button" class="plan-sum"><span class="plan-ic">📋</span><span class="plan-t">' +
+    (isZh ? "计划" : "Plan") +
+    '</span><span class="plan-meta">' +
     done +
     "/" +
     total +
-    " 完成</span><span class=\"plan-caret\">▸</span></button>";
+    (isZh ? " 完成" : " completed") +
+    '</span><span class="plan-caret">▸</span></button>';
   (strip.querySelector(".plan-sum") ).onclick = () => exports.inspect.open(c.el);
 } exports.planStrip = planStrip;
 function fmtK(n) {
@@ -4676,6 +4274,1042 @@ if (typeof window !== "undefined") {
 }
 
 };
+__modules["slash"] = function(module, exports, require) {
+"use strict";Object.defineProperty(exports, "__esModule", {value: true});// slash.ts —— 斜杠命令目录/菜单/bang 提示/@文件补全 + runSlash 全分发。
+var _util = require('./util');
+var _state = require('./state');
+var _ui = require('./ui');
+var _sessions = require('./sessions');
+var _store = require('./store');
+
+
+
+
+var _model = require('./model');
+var _chat = require('./chat');
+var _i18n = require('./i18n');
+var _bus = require('./bus');
+
+const openSearch = () => _bus.emit.call(void 0, "search:open");
+const attachClipboardImage = () => new Promise((resolve) => {
+  _bus.emit.call(void 0, "composer:paste-image", { callback: resolve });
+});
+const refreshSend = () => _bus.emit.call(void 0, "composer:refresh-send");
+const ensureActPoll = () => _bus.emit.call(void 0, "composer:ensure-act-poll");
+const sendPlain = async (text) => { _bus.emit.call(void 0, "chat:send", { text }); };
+
+const SLASH_EN = [
+  { name: "/help", desc: "list commands" },
+  { name: "/login", desc: "save API key", accepts: true },
+  { name: "/new", desc: "new session" },
+  { name: "/clear", desc: "clear and restart" },
+  { name: "/sessions", desc: "search sessions" },
+  { name: "/resume", desc: "switch to n-th session", accepts: true },
+  { name: "/undo", desc: "undo last turn" },
+  { name: "/compact", desc: "compact context" },
+  { name: "/fast-compress", desc: "fast compress state" },
+  { name: "/fork", desc: "fork session" },
+  { name: "/title", desc: "change session title", accepts: true },
+  { name: "/model", desc: "switch model" },
+  { name: "/refresh", desc: "refresh provider models" },
+  { name: "/think", desc: "thinking level", accepts: true },
+  { name: "/permissions", desc: "approval: yolo/ask/read-only", accepts: true },
+  { name: "/sandbox", desc: "bash sandbox: off/workspace/strict", accepts: true },
+  { name: "/status", desc: "current status" },
+  { name: "/doctor", desc: "environment health check" },
+  { name: "/init", desc: "write AGENTS.md (no overwrite)" },
+  { name: "/diff", desc: "git status + diffstat" },
+  { name: "/commit", desc: "commit staged changes", accepts: true },
+  { name: "/log", desc: "git log --oneline", accepts: true },
+  { name: "/branch", desc: "current & recent branches" },
+  { name: "/mcp", desc: "list MCP servers" },
+  { name: "/reload", desc: "reload settings.json" },
+  { name: "/theme", desc: "appearance: light/dark/system", accepts: true },
+  { name: "/paste", desc: "paste image from clipboard" },
+  { name: "/usage", desc: "token usage ledger" },
+  { name: "/jobs", desc: "running & background jobs", accepts: true },
+  { name: "/find", desc: "find in thread", accepts: true },
+  { name: "/plan", desc: "write PLAN.md before executing", accepts: true },
+  { name: "/queue", desc: "clear input queue" },
+  { name: "/memory", desc: "cross-session memory", accepts: true },
+  { name: "/plugins", desc: "list or toggle plugins", accepts: true },
+  { name: "/pkg", desc: "installed packages" },
+  { name: "/tree", desc: "message tree" },
+  { name: "/copy", desc: "copy last reply" },
+  { name: "/export", desc: "export HTML" },
+  { name: "/dump", desc: "dump session to clipboard" },
+  { name: "/redo", desc: "redo last user input" },
+];
+
+const SLASH_ZH = [
+  { name: "/help", desc: "命令列表" },
+  { name: "/login", desc: "保存 API key", accepts: true },
+  { name: "/new", desc: "新建 Session" },
+  { name: "/clear", desc: "清空并重开" },
+  { name: "/sessions", desc: "搜索 Session" },
+  { name: "/resume", desc: "切到第 n 个 Session", accepts: true },
+  { name: "/undo", desc: "撤销上一轮" },
+  { name: "/compact", desc: "压缩 Context" },
+  { name: "/fast-compress", desc: "快压状态" },
+  { name: "/fork", desc: "派生 Session" },
+  { name: "/title", desc: "修改 Session 标题", accepts: true },
+  { name: "/model", desc: "切换 Model" },
+  { name: "/refresh", desc: "拉取 Provider Model 列表" },
+  { name: "/think", desc: "Thinking 等级", accepts: true },
+  { name: "/permissions", desc: "授权 yolo/ask/read-only", accepts: true },
+  { name: "/sandbox", desc: "Bash Sandbox: off/workspace/strict", accepts: true },
+  { name: "/status", desc: "当前状态" },
+  { name: "/doctor", desc: "环境体检" },
+  { name: "/init", desc: "初始化 AGENTS.md" },
+  { name: "/diff", desc: "Git status + diffstat" },
+  { name: "/commit", desc: "提交已暂存（需说明）", accepts: true },
+  { name: "/log", desc: "Git log --oneline", accepts: true },
+  { name: "/branch", desc: "当前与最近分支" },
+  { name: "/mcp", desc: "MCP Server 列表" },
+  { name: "/reload", desc: "重读 settings.json" },
+  { name: "/theme", desc: "外观 light/dark/system", accepts: true },
+  { name: "/paste", desc: "从剪贴板附图" },
+  { name: "/usage", desc: "Token 用量账本" },
+  { name: "/jobs", desc: "在跑 / 后台 Jobs", accepts: true },
+  { name: "/find", desc: "搜对话", accepts: true },
+  { name: "/plan", desc: "生成 PLAN.md 再执行", accepts: true },
+  { name: "/queue", desc: "清空输入队列" },
+  { name: "/memory", desc: "跨 Session 记忆", accepts: true },
+  { name: "/plugins", desc: "列出或开关插件", accepts: true },
+  { name: "/pkg", desc: "已安装 Packages" },
+  { name: "/tree", desc: "消息树" },
+  { name: "/copy", desc: "复制最后一条回复" },
+  { name: "/export", desc: "导出 HTML" },
+  { name: "/dump", desc: "整段 Session 到剪贴板" },
+  { name: "/redo", desc: "重发上一次输入" },
+];
+
+let customSlash = null;
+ function getSlashList() {
+  if (customSlash) return customSlash;
+  return _i18n.getLang.call(void 0, ) === "zh" ? SLASH_ZH : SLASH_EN;
+} exports.getSlashList = getSlashList;
+
+ function findSlash(cmd) {
+  return getSlashList().find((s) => s.name === cmd);
+} exports.findSlash = findSlash;
+ function applyHelpCatalog(j) {
+  if (j && Array.isArray(j.commands) && j.commands.length) {
+    customSlash = j.commands.map((c) => ({
+      name: c.name,
+      desc: c.desc,
+      accepts: !!c.accepts,
+    }));
+    (window ).HELP_KEYS = Array.isArray(j.keys) ? j.keys : (window ).HELP_KEYS || [];
+  }
+} exports.applyHelpCatalog = applyHelpCatalog;
+ function loadHelpCatalog() {
+  return fetch("/api/help?" + _state.wsp + "session=" + encodeURIComponent(_state.sess))
+    .then((r) => r.json())
+    .then(applyHelpCatalog)
+    .catch(() => _ui.showToast.call(void 0, _i18n.t.call(void 0, "helpLoadFail", "Failed to load help catalog")));
+} exports.loadHelpCatalog = loadHelpCatalog;
+
+(window ).HELP_KEYS = (window ).HELP_KEYS || [
+  { name: "@./path", desc: "embed a file" },
+  { name: "!cmd", desc: "run shell, send to model" },
+  { name: "!!cmd", desc: "run shell, show only" },
+  { name: "?", desc: "shortcut overlay when empty" },
+  { name: "c", desc: "copy last reply when empty" },
+  { name: "d", desc: "doctor when empty" },
+  { name: "g", desc: "git diff when empty" },
+  { name: "l", desc: "git log when empty" },
+  { name: "r", desc: "redo last input when empty" },
+  { name: "s", desc: "sandbox picker when empty" },
+  { name: "j", desc: "list jobs when empty" },
+  { name: "u", desc: "token ledger when empty" },
+  { name: "Esc", desc: "abort; empty again edits last" },
+  { name: "Ctrl+C", desc: "clear; empty again quits" },
+  { name: "Ctrl+D", desc: "empty again quits" },
+  { name: "Tab", desc: "queue input while busy" },
+  { name: "Ctrl+B", desc: "background while busy" },
+  { name: "Ctrl+T", desc: "fold thinking" },
+  { name: "Ctrl+O", desc: "fold tool output" },
+  { name: "PgUp/PgDn", desc: "scroll transcript" },
+  { name: "Ctrl+↑/↓", desc: "scroll a few lines" },
+  { name: "wheel", desc: "scroll transcript" },
+  { name: "Alt+,/.", desc: "think less / more" },
+  { name: "Shift+↑/↓", desc: "think less / more" },
+];
+let slashItems = [],
+  slashIdx = 0,
+  pickKind = "",
+  atTok = null,
+  fileTimer = 0;
+ function hideSlash() {
+  const m = _util.$.call(void 0, "slashMenu");
+  if (m) m.hidden = true;
+  slashItems = [];
+  pickKind = "";
+  atTok = null;
+  if (fileTimer) {
+    clearTimeout(fileTimer);
+    fileTimer = 0;
+  }
+} exports.hideSlash = hideSlash;
+ function slashOpen() {
+  const m = _util.$.call(void 0, "slashMenu");
+  return m && !m.hidden && slashItems.length > 0;
+} exports.slashOpen = slashOpen;
+ function renderSlash() {
+  const m = _util.$.call(void 0, "slashMenu");
+  if (!m) return;
+  if (!slashItems.length) {
+    m.hidden = true;
+    return;
+  }
+  m.hidden = false;
+  const file = pickKind === "file";
+  const foot = file
+    ? "<span>↑↓ 选择</span><span>Enter 填入</span><span>Tab 补全</span><span>Esc 关闭</span>"
+    : "<span>↑↓ 选择</span><span>Enter 执行</span><span>Tab 补全</span><span>Esc 关闭</span>";
+  m.innerHTML =
+    '<div class="slash-list">' +
+    slashItems
+      .map((it, i) => {
+        const name = file ? it.path || it.name : it.name;
+        const desc = file ? (it.dir ? "目录" : "文件") : it.desc;
+        const nameHl = (it.hlLen ? _util.hlSpan.call(void 0, name, it.hlFrom || 0, it.hlLen) : _util.esc.call(void 0, name)) + (file && it.dir ? '<span class="mark">/</span>' : "");
+        return (
+          '<div class="slash-item' +
+          (i === slashIdx ? " active" : "") +
+          '" data-i="' +
+          i +
+          '" role="option"><span class="slash-name">' +
+          nameHl +
+          '</span><span class="slash-desc">' +
+          _util.esc.call(void 0, desc || "") +
+          "</span></div>"
+        );
+      })
+      .join("") +
+    '</div><div class="slash-foot">' +
+    foot +
+    "</div>";
+  const on = m.querySelector(".slash-item.active");
+  if (on) on.scrollIntoView({ block: "nearest" });
+} exports.renderSlash = renderSlash;
+ function updateSlashList(q) {
+  pickKind = "slash";
+  const ranked = _util.rankSlash.call(void 0, SLASH, q);
+  slashItems = ranked.map((r) =>
+    Object.assign({}, r.it, { hlFrom: r.hlFrom, hlLen: r.kind === 2 ? 0 : r.hlLen }),
+  );
+  if (slashIdx >= slashItems.length) slashIdx = 0;
+  renderSlash();
+} exports.updateSlashList = updateSlashList;
+ function atToken(v, caret) {
+  const left = v.slice(0, caret == null ? v.length : caret);
+  const m = /(^|[\s])(@(?:\.\/[^\s]*|\.?))$/.exec(left);
+  if (!m) return null;
+  const raw = m[2];
+  return { start: left.length - raw.length, raw, q: raw.startsWith("@./") ? raw.slice(3) : "" };
+} exports.atToken = atToken;
+ function scheduleFiles(tok) {
+  atTok = tok;
+  pickKind = "file";
+  if (fileTimer) clearTimeout(fileTimer);
+  fileTimer = setTimeout(async () => {
+    fileTimer = 0;
+    const cur = atToken((_util.$.call(void 0, "inp") ).value, (_util.$.call(void 0, "inp") ).selectionStart);
+    if (!cur) {
+      hideSlash();
+      return;
+    }
+    atTok = cur;
+    try {
+      const r = await fetch("/api/files?" + _state.wsp + "q=" + encodeURIComponent(cur.q));
+      const j = await r.json();
+      if (!j || !j.ok) {
+        slashItems = [];
+        renderSlash();
+        return;
+      }
+      slashItems = (j.items || []).map((it) =>
+        Object.assign({ desc: it.link ? "→ " + it.link : it.dir ? "目录" : "文件" }, it),
+      );
+      // 裸 @(无 ./):运行中的子代理候选排最前(插入字面 @label,不做继续语义)
+      if (!cur.q) {
+        const subs = (exports.subPool || [])
+          .filter((s) => s && s.kind === "subagent" && s.name)
+          .map((s) => ({
+            id: "@" + s.name,
+            name: s.name,
+            desc: "运行中 子代理",
+            sub: true,
+          }));
+        if (subs.length) slashItems = subs.concat(slashItems);
+      }
+      if (slashIdx >= slashItems.length) slashIdx = 0;
+      pickKind = "file";
+      renderSlash();
+    } catch (e2) {
+      hideSlash();
+    }
+  }, 60);
+} exports.scheduleFiles = scheduleFiles;
+// 运行子代理池(jobs 轮询灌入;裸 @ 候选)
+ let subPool = []; exports.subPool = subPool;
+ function setSubPool(list) {
+  exports.subPool = list || [];
+} exports.setSubPool = setSubPool;
+ function insertFile() {
+  const it = slashItems[slashIdx];
+  const inp = _util.$.call(void 0, "inp") ;
+  const tok = atToken(inp.value, inp.selectionStart) || atTok;
+  if (!it || !tok) {
+    hideSlash();
+    return;
+  }
+  const prefix = inp.value.slice(0, tok.start);
+  const suffix = inp.value.slice(tok.start + tok.raw.length);
+  if (it.sub && it.name) {
+    // 子代理引用:插入字面 @label(不做继续语义,仅文本)
+    const filled = prefix + "@" + it.name + " ";
+    inp.value = filled + suffix;
+    inp.setSelectionRange(filled.length, filled.length);
+    hideSlash();
+  } else if (it.dir) {
+    const filled = prefix + "@./" + it.path + "/";
+    inp.value = filled + suffix;
+    inp.setSelectionRange(filled.length, filled.length);
+    hideSlash();
+    scheduleFiles(atToken(inp.value, filled.length));
+  } else {
+    const filled = prefix + "@./" + it.path + " ";
+    inp.value = filled + suffix;
+    inp.setSelectionRange(filled.length, filled.length);
+    hideSlash();
+  }
+  _store.autosizeInp.call(void 0, );
+  _store.saveDraft.call(void 0, );
+  refreshSend();
+} exports.insertFile = insertFile;
+ function hideBang() {
+  const el = _util.$.call(void 0, "cmpHint");
+  if (!el) return;
+  el.hidden = true;
+  el.innerHTML = "";
+} exports.hideBang = hideBang;
+ function showBang(v) {
+  const el = _util.$.call(void 0, "cmpHint");
+  if (!el) return;
+  const local = v.startsWith("!!");
+  const cmd = v.slice(local ? 2 : 1).trim();
+  el.hidden = false;
+  el.innerHTML = local
+    ? '<span class="bang-local">!! 只跑</span><b>' +
+      _util.esc.call(void 0, cmd || "…") +
+      "</b><span>结果留在本页，不送模型</span>"
+    : '<span class="bang-run">! 跑并送</span><b>' +
+      _util.esc.call(void 0, cmd || "…") +
+      "</b><span>输出会一并交给模型</span>";
+} exports.showBang = showBang;
+ function updateComposerChrome() {
+  const inp = _util.$.call(void 0, "inp") ;
+  const v = inp.value;
+  if (v.startsWith("/") && v.indexOf("\n") < 0 && v.indexOf(" ") < 0) {
+    hideBang();
+    updateSlashList(v.slice(1));
+    return;
+  }
+  if (v.startsWith("!")) {
+    hideSlash();
+    showBang(v);
+    return;
+  }
+  const tok = atToken(v, inp.selectionStart);
+  if (tok) {
+    hideBang();
+    scheduleFiles(tok);
+    return;
+  }
+  hideSlash();
+  hideBang();
+} exports.updateComposerChrome = updateComposerChrome;
+ function updateSlash() {
+  updateComposerChrome();
+} exports.updateSlash = updateSlash;
+ function slashMove(d) {
+  if (!slashItems.length) return;
+  slashIdx = (slashIdx + d + slashItems.length) % slashItems.length;
+  renderSlash();
+} exports.slashMove = slashMove;
+ function slashComplete() {
+  if (pickKind === "file") {
+    insertFile();
+    return;
+  }
+  const it = slashItems[slashIdx];
+  if (!it) return;
+  (_util.$.call(void 0, "inp") ).value = it.name + (it.accepts ? " " : "");
+  hideSlash();
+  _store.autosizeInp.call(void 0, );
+  _store.saveDraft.call(void 0, );
+} exports.slashComplete = slashComplete;
+ function slashPick() {
+  if (pickKind === "file") {
+    insertFile();
+    return;
+  }
+  const it = slashItems[slashIdx];
+  if (!it) return;
+  if (it.accepts) {
+    (_util.$.call(void 0, "inp") ).value = it.name + " ";
+    hideSlash();
+    _store.autosizeInp.call(void 0, );
+    return;
+  }
+  (_util.$.call(void 0, "inp") ).value = it.name;
+  hideSlash();
+  send();
+} exports.slashPick = slashPick;
+(_util.$.call(void 0, "slashMenu") ).onmousedown = (e) => {
+  const it = e.target.closest(".slash-item");
+  if (!it) return;
+  e.preventDefault();
+  slashIdx = +it.getAttribute("data-i") || 0;
+  slashPick();
+};
+document.addEventListener("click", (e) => {
+  if (slashOpen() && !e.target.closest("#slashMenu, #inp, .mode-pill")) {
+    hideSlash();
+  }
+});
+ async function runSlash(item, arg) {
+  switch (item.name) {
+    case "/login": {
+      const parts = (arg || "").trim().split(/\s+/);
+      const name = parts[0] || "";
+      const key = parts.slice(1).join(" ").trim();
+      if (!name || !key) {
+        _ui.showToast.call(void 0, "usage: /login <provider> <api-key>");
+        break;
+      }
+      fetch("/api/config", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ setAuth: { name, key } }),
+      })
+        .then((r) => r.json())
+        .then((j) => _ui.showToast.call(void 0, j && j.ok ? "saved " + name : "login failed"))
+        .catch(() => _ui.showToast.call(void 0, "登录失败"));
+      break;
+    }
+    case "/quit":
+      _ui.showToast.call(void 0, "close the tab to quit");
+      break;
+    case "/help":
+      _chat.addUser.call(void 0, "/help");
+      const cmds = SLASH.map((s) => s.name.padEnd(16) + s.desc).join("\n");
+      const keys = ((window ).HELP_KEYS || [])
+        .map((s) => String(s.name || "").padEnd(16) + (s.desc || ""))
+        .join("\n");
+      _chat.addAsst.call(void 0, 
+        cmds +
+          (keys ? "\n\n" + keys : "") +
+          "\n\n@./path 嵌文件 · !cmd 跑命令并送给模型 · !!cmd 只跑不送\nCtrl+K 搜会话 · 发送中再按 Enter 会接着发",
+      );
+      _chat.finishAsst.call(void 0, );
+      break;
+    case "/sessions":
+      openSearch();
+      break;
+    case "/new":
+    case "/clear":
+      location.href = _state.sessUrl.call(void 0, Math.random().toString(36).slice(2, 8));
+      break;
+    case "/undo":
+      _sessions.act.call(void 0, { act: "undo" }, (j) =>
+        _ui.showToast.call(void 0, j && j.ok ? "已撤销" : "撤销失败"),
+      );
+      break;
+    case "/compact":
+      _sessions.act.call(void 0, { act: "compact" }, (j) =>
+        _ui.showToast.call(void 0, j && j.ok ? "压缩完成" : "压缩失败"),
+      );
+      break;
+    case "/fork": {
+      const n =
+        arg || (await _ui.askText.call(void 0, "派生会话", "", "新会话名，留空自动"));
+      if (n === null) return;
+      _sessions.act.call(void 0, { act: "fork", name: n || "" }, (j) => {
+        if (j && j.ok && j.name) location.href = _state.sessUrl.call(void 0, j.name);
+        else _ui.showToast.call(void 0, "派生失败");
+      });
+      break;
+    }
+    case "/title": {
+      const t = arg || (await _ui.askText.call(void 0, "会话标题", _model.getCurTitle.call(void 0, ) || "", ""));
+      if (t === null || !t) return;
+      await _model.applySessionTitle.call(void 0, t, true);
+      break;
+    }
+    case "/refresh": {
+      _chat.addUser.call(void 0, "/refresh");
+      try {
+        const r = await fetch("/api/config", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ refreshModels: true }),
+        });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok || j.ok === false) {
+          _chat.addAsst.call(void 0, j.error || "cannot refresh models");
+        } else {
+          _chat.addAsst.call(void 0, "refreshed " + (j.refreshed || 0) + " provider(s), +" + (j.added || 0) + " models" +
+            (j.fail ? "\n" + j.fail + " provider(s) failed GET /models" : ""));
+        }
+      } catch (e3) {
+        _chat.addAsst.call(void 0, "cannot refresh models");
+      }
+      _chat.finishAsst.call(void 0, );
+      break;
+    }
+    case "/model":
+      (_util.$.call(void 0, "hModel") ).click();
+      break;
+    case "/permissions":
+    case "/approvals": {
+      const lv = (arg || "").trim();
+      if (!lv) {
+        (_util.$.call(void 0, "permPill") ).click();
+        break;
+      }
+      await _model.setApproval.call(void 0, lv);
+      _chat.addUser.call(void 0, "/permissions " + lv);
+      _chat.addAsst.call(void 0, "授权 " + _model.approvalLabel.call(void 0, ));
+      _chat.finishAsst.call(void 0, );
+      break;
+    }
+    case "/jobs": {
+      const raw = (arg || "").trim();
+      _chat.addUser.call(void 0, raw ? "/jobs " + raw : "/jobs");
+      try {
+        if (/^kill\s+\d+/.test(raw) || /^\d+$/.test(raw)) {
+          const pid = parseInt(raw.replace(/^kill\s+/, ""), 10);
+          const r = await fetch("/api/activity", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ kill: pid }),
+          });
+          const j = await r.json();
+          _chat.addAsst.call(void 0, j.ok ? "killed pid " + pid : "no tracked job with that pid");
+        } else {
+          const r = await fetch("/api/activity");
+          const list = await r.json();
+          if (!list || !list.length) _chat.addAsst.call(void 0, "no running jobs");
+          else
+            _chat.addAsst.call(void 0, 
+              list
+                .map((a) => {
+                  const sec = Math.round((a.ms || 0) / 1000);
+                  return (
+                    (a.detached ? "~ " : "* ") +
+                    (a.pid ? "pid " + a.pid + "  " : "") +
+                    (a.name || "job") +
+                    " " +
+                    sec +
+                    "s" +
+                    (a.detail ? "  " + a.detail : "")
+                  );
+                })
+                .join("\n"),
+            );
+        }
+        ensureActPoll();
+      } catch (e4) {
+        _chat.addAsst.call(void 0, "cannot read activity");
+      }
+      _chat.finishAsst.call(void 0, );
+      break;
+    }
+    case "/usage": {
+      _chat.addUser.call(void 0, "/usage");
+      try {
+        const r = await fetch("/api/usage");
+        const j = await r.json();
+        const cost = j.usd > 0 ? "  $" + Number(j.usd).toFixed(4) : "";
+        const head = "usage  " + (j.lines || 0) + " turns  ↑" + _util.fmtTok.call(void 0, j.in || 0) + " ↓" + _util.fmtTok.call(void 0, j.out || 0) + cost;
+        _chat.addAsst.call(void 0, j.tail ? head + "\n" + j.tail : head);
+      } catch (e5) {
+        _chat.addAsst.call(void 0, "cannot read usage.jsonl");
+      }
+      _chat.finishAsst.call(void 0, );
+      break;
+    }
+    case "/sandbox": {
+      const lv = (arg || "").trim();
+      if (!lv) {
+        _chat.addUser.call(void 0, "/sandbox");
+        _chat.addAsst.call(void 0, "usage: /sandbox off|workspace|strict");
+        _chat.finishAsst.call(void 0, );
+        break;
+      }
+      _chat.addUser.call(void 0, "/sandbox " + lv);
+      await _model.setSandbox.call(void 0, lv);
+      _chat.addAsst.call(void 0, "sandbox " + _model.getSandboxMode.call(void 0, ));
+      _chat.finishAsst.call(void 0, );
+      break;
+    }
+    case "/think": {
+      const lv = (arg || "").trim();
+      if (!lv) {
+        (_util.$.call(void 0, "hThink") ).click();
+        break;
+      }
+      _chat.addUser.call(void 0, "/think " + lv);
+      await _model.setThink.call(void 0, lv);
+      _chat.addAsst.call(void 0, "思考 " + (_model.getThink.call(void 0, ) || lv));
+      _chat.finishAsst.call(void 0, );
+      break;
+    }
+    case "/find": {
+      const q = (arg || "").trim();
+      _chat.addUser.call(void 0, "/find" + (q ? " " + q : ""));
+      const e = _chat.asstEl.call(void 0, ).querySelector(".md");
+      if (!q && !_chat.getWebFindQ.call(void 0, )) e.textContent = "usage: /find <text>";
+      else if (_chat.findInThread.call(void 0, q || _chat.getWebFindQ.call(void 0, ), false)) e.textContent = "found: " + (q || _chat.getWebFindQ.call(void 0, ));
+      else e.textContent = "no match";
+      _chat.finishAsst.call(void 0, );
+      break;
+    }
+    case "/paste": {
+      _chat.addUser.call(void 0, "/paste");
+      try {
+        if (await attachClipboardImage()) {
+          _chat.addAsst.call(void 0, _model.getVision.call(void 0, ) ? "image attached — enter to send" : "image attached — this model has no vision");
+        } else {
+          _chat.addAsst.call(void 0, "no image on clipboard — use Ctrl+V");
+        }
+      } catch (e6) {
+        _chat.addAsst.call(void 0, "no image on clipboard — use Ctrl+V");
+      }
+      _chat.finishAsst.call(void 0, );
+      break;
+    }
+    case "/theme": {
+      const lv = (arg || "").trim().toLowerCase();
+      _chat.addUser.call(void 0, lv ? "/theme " + lv : "/theme");
+      if (!lv) {
+        _chat.addAsst.call(void 0, "theme " + (_state.prefs.scheme || "dark") + "\nusage: /theme light|dark|system");
+      } else if (_ui.setScheme.call(void 0, lv)) {
+        _chat.addAsst.call(void 0, "theme " + _state.prefs.scheme);
+      } else {
+        _chat.addAsst.call(void 0, "usage: /theme light|dark|system");
+      }
+      _chat.finishAsst.call(void 0, );
+      break;
+    }
+    case "/reload":
+      fetch("/api/slash?" + _state.wsp + "session=" + encodeURIComponent(_state.sess), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: "reload", args: "" }),
+      })
+        .then((r) => r.json())
+        .then((j) => {
+          const text = (j && j.text) || "reload failed";
+          String(text)
+            .split("\n")
+            .forEach((line) => {
+              const m = line.match(/^(theme|approval|sandbox|think)\s+(\S+)/);
+              if (!m) return;
+              if (m[1] === "theme") _ui.setScheme.call(void 0, m[2]);
+              if (m[1] === "approval") _model.setApprovalMode.call(void 0, m[2]);
+              if (m[1] === "sandbox") _model.applySandboxLevel.call(void 0, m[2]);
+              if (m[1] === "think") _model.applyThink.call(void 0, m[2]);
+            });
+          _chat.addUser.call(void 0, "/reload");
+          _chat.addAsst.call(void 0, text);
+          _chat.finishAsst.call(void 0, );
+        })
+        .catch(() => {
+          _chat.addUser.call(void 0, "/reload");
+          _chat.addAsst.call(void 0, "reload failed");
+          _chat.finishAsst.call(void 0, );
+        });
+      break;
+    case "/mcp":
+      fetch("/api/slash?" + _state.wsp + "session=" + encodeURIComponent(_state.sess), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: "mcp", args: "" }),
+      })
+        .then((r) => r.json())
+        .then((j) => {
+          _chat.addUser.call(void 0, "/mcp");
+          _chat.addAsst.call(void 0, (j && j.text) || "mcp failed");
+          _chat.finishAsst.call(void 0, );
+        })
+        .catch(() => {
+          _chat.addUser.call(void 0, "/mcp");
+          _chat.addAsst.call(void 0, "mcp failed");
+          _chat.finishAsst.call(void 0, );
+        });
+      break;
+    case "/branch":
+      fetch("/api/slash?" + _state.wsp + "session=" + encodeURIComponent(_state.sess), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: "branch", args: "" }),
+      })
+        .then((r) => r.json())
+        .then((j) => {
+          _chat.addUser.call(void 0, "/branch");
+          _chat.addAsst.call(void 0, (j && j.text) || "branch failed");
+          _chat.finishAsst.call(void 0, );
+        })
+        .catch(() => {
+          _chat.addUser.call(void 0, "/branch");
+          _chat.addAsst.call(void 0, "branch failed");
+          _chat.finishAsst.call(void 0, );
+        });
+      break;
+    case "/log":
+      fetch("/api/slash?" + _state.wsp + "session=" + encodeURIComponent(_state.sess), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: "log", args: arg || "" }),
+      })
+        .then((r) => r.json())
+        .then((j) => {
+          _chat.addUser.call(void 0, "/log" + (arg ? " " + arg : ""));
+          _chat.addAsst.call(void 0, (j && j.text) || "log failed");
+          _chat.finishAsst.call(void 0, );
+        })
+        .catch(() => {
+          _chat.addUser.call(void 0, "/log");
+          _chat.addAsst.call(void 0, "log failed");
+          _chat.finishAsst.call(void 0, );
+        });
+      break;
+    case "/commit":
+      fetch("/api/slash?" + _state.wsp + "session=" + encodeURIComponent(_state.sess), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: "commit", args: arg || "" }),
+      })
+        .then((r) => r.json())
+        .then((j) => {
+          _chat.addUser.call(void 0, "/commit" + (arg ? " " + arg : ""));
+          _chat.addAsst.call(void 0, (j && j.text) || "commit failed");
+          _chat.finishAsst.call(void 0, );
+        })
+        .catch(() => {
+          _chat.addUser.call(void 0, "/commit");
+          _chat.addAsst.call(void 0, "commit failed");
+          _chat.finishAsst.call(void 0, );
+        });
+      break;
+    case "/diff":
+      fetch("/api/slash?" + _state.wsp + "session=" + encodeURIComponent(_state.sess), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: "diff", args: "" }),
+      })
+        .then((r) => r.json())
+        .then((j) => {
+          _chat.addUser.call(void 0, "/diff");
+          _chat.addAsst.call(void 0, (j && j.text) || "diff failed");
+          _chat.finishAsst.call(void 0, );
+        })
+        .catch(() => {
+          _chat.addUser.call(void 0, "/diff");
+          _chat.addAsst.call(void 0, "diff failed");
+          _chat.finishAsst.call(void 0, );
+        });
+      break;
+    case "/init":
+      fetch("/api/slash?" + _state.wsp + "session=" + encodeURIComponent(_state.sess), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: "init", args: "" }),
+      })
+        .then((r) => r.json())
+        .then((j) => {
+          _chat.addUser.call(void 0, "/init");
+          _chat.addAsst.call(void 0, (j && j.text) || "init failed");
+          _chat.finishAsst.call(void 0, );
+        })
+        .catch(() => {
+          _chat.addUser.call(void 0, "/init");
+          _chat.addAsst.call(void 0, "init failed");
+          _chat.finishAsst.call(void 0, );
+        });
+      break;
+    case "/doctor":
+      fetch("/api/slash?" + _state.wsp + "session=" + encodeURIComponent(_state.sess), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: "doctor", args: "" }),
+      })
+        .then((r) => r.json())
+        .then((j) => {
+          _chat.addUser.call(void 0, "/doctor");
+          _chat.addAsst.call(void 0, (j && j.text) || "doctor failed");
+          _chat.finishAsst.call(void 0, );
+        })
+        .catch(() => {
+          _chat.addUser.call(void 0, "/doctor");
+          _chat.addAsst.call(void 0, "doctor failed");
+          _chat.finishAsst.call(void 0, );
+        });
+      break;
+    case "/status":
+      fetch("/api/config")
+        .then((r) => r.json())
+        .then((cfg) => {
+          const on = (Array.isArray(cfg.plugins) ? cfg.plugins : [])
+            .filter((p) => p && p.enabled && p.optional)
+            .map((p) => p.name);
+          _chat.addUser.call(void 0, "/status");
+          _chat.addAsst.call(void 0, 
+            "模型 " +
+              (_model.getCurModel.call(void 0, ) || "?") +
+              " · 思考 " +
+              (_model.getThink.call(void 0, ) || "high") +
+              " · 会话 " +
+              _state.sess +
+              " · 项目 " +
+              (_state.ws || ".") +
+              (on.length ? " · 插件 " + on.join(" ") : ""),
+          );
+          _chat.finishAsst.call(void 0, );
+        })
+        .catch(() => {
+          _chat.addUser.call(void 0, "/status");
+          _chat.addAsst.call(void 0, 
+            "模型 " +
+              (_model.getCurModel.call(void 0, ) || "?") +
+              " · 思考 " +
+              (_model.getThink.call(void 0, ) || "high") +
+              " · 会话 " +
+              _state.sess +
+              " · 项目 " +
+              (_state.ws || "."),
+          );
+          _chat.finishAsst.call(void 0, );
+        });
+      break;
+    case "/resume": {
+      const n = parseInt(arg || "", 10);
+      if (!arg || !n) {
+        openSearch();
+        break;
+      }
+      if (n < 1 || n > _sessions.sessData.list.length) {
+        _ui.showToast.call(void 0, "没有第 " + n + " 个会话（/sessions）");
+        break;
+      }
+      location.href = _state.sessUrl.call(void 0, _sessions.sessData.list[n - 1].name);
+      break;
+    }
+    case "/plan": {
+      const goal =
+        (arg && arg.trim()) ||
+        (await _ui.askText.call(void 0, "计划目标", "", "要完成什么"));
+      if (!goal) return;
+      await sendPlain("/plan " + goal);
+      break;
+    }
+    case "/queue":
+      _bus.emit.call(void 0, "composer:clear-pending");
+      _sessions.act.call(void 0, { act: "queue" }, (j) => {
+        _ui.showToast.call(void 0, 
+          j && j.cleared
+            ? "已清空 " + j.cleared + " 条"
+            : "没有待发送的消息",
+        );
+      });
+      break;
+    case "/memory": {
+      const rest = (arg || "").trim();
+      if (rest === "clear") {
+        _sessions.act.call(void 0, { act: "memory-clear" }, (j) =>
+          _ui.showToast.call(void 0, j && j.ok ? "记忆已清空" : "清空失败"),
+        );
+        break;
+      }
+      if (rest.startsWith("set ")) {
+        const text = rest.slice(4).trim();
+        if (!text) {
+          _ui.showToast.call(void 0, "usage: /memory set <text>");
+          break;
+        }
+        _sessions.act.call(void 0, { act: "memory-set", name: text }, (j) =>
+          _ui.showToast.call(void 0, j && j.ok ? "记忆已写入" : "写入失败"),
+        );
+        break;
+      }
+      _sessions.act.call(void 0, { act: "memory" }, (j) => {
+        _chat.addUser.call(void 0, "/memory");
+        _chat.addAsst.call(void 0, 
+          (j && j.text) ||
+            "memory is empty — /memory set <text> to add",
+        );
+        _chat.finishAsst.call(void 0, );
+      });
+      break;
+    }
+    case "/plugins": {
+      const rest = (arg || "").trim();
+      if (!rest) {
+        fetch("/api/config")
+          .then((r) => r.json())
+          .then((cfg) => {
+            const plugs = Array.isArray(cfg.plugins) ? cfg.plugins : [];
+            const lines = plugs.map(
+              (p) =>
+                "  [" +
+                (p.enabled ? "on " : "off") +
+                "] " +
+                p.name,
+            );
+            _chat.addUser.call(void 0, "/plugins");
+            _chat.addAsst.call(void 0, 
+              "plugins (next turn):\n" +
+                lines.join("\n") +
+                "\nusage: /plugins on <name> | /plugins off <name>",
+            );
+            _chat.finishAsst.call(void 0, );
+          })
+          .catch(() => _ui.showToast.call(void 0, "plugins 读取失败"));
+        break;
+      }
+      const m = rest.match(/^(on|off)\s+(\S+)$/);
+      if (!m) {
+        _ui.showToast.call(void 0, "usage: /plugins on <name> | /plugins off <name>");
+        break;
+      }
+      const on = m[1] === "on";
+      fetch("/api/config", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ setPlugin: { name: m[2], enabled: on } }),
+      })
+        .then((r) => r.json())
+        .then((j) => {
+          if (j && j.ok === false) {
+            _ui.showToast.call(void 0, "插件开关失败");
+            return;
+          }
+          _ui.showToast.call(void 0, "plugin " + m[2] + (on ? " on" : " off") + " — next turn");
+          loadHelpCatalog();
+        })
+        .catch(() => _ui.showToast.call(void 0, "插件开关失败"));
+      break;
+    }
+    case "/pkg":
+      fetch("/api/packages?" + _state.wsp)
+        .then((r) => r.json())
+        .then((j) => {
+          function rows(arr, title) {
+            const xs = Array.isArray(arr) ? arr : [];
+            const body = xs.length
+              ? xs
+                  .map(
+                    (p) =>
+                      "  " +
+                      p.name +
+                      "  skills:" +
+                      (p.skills || 0) +
+                      " prompts:" +
+                      (p.prompts || 0),
+                  )
+                  .join("\n")
+              : "  (none)";
+            return title + " (" + xs.length + "):\n" + body;
+          }
+          _chat.addUser.call(void 0, "/pkg");
+          _chat.addAsst.call(void 0, 
+            rows(j.user, "user packages") +
+              "\n" +
+              rows(j.project, "project packages") +
+              "\ninstall: piz pkg install <path> [-l]",
+          );
+          _chat.finishAsst.call(void 0, );
+        })
+        .catch(() => {
+          _chat.addUser.call(void 0, "/pkg");
+          _chat.addAsst.call(void 0, "packages 读取失败");
+          _chat.finishAsst.call(void 0, );
+        });
+      break;
+    case "/tree":
+      _sessions.act.call(void 0, { act: "tree" }, (j) => {
+        _chat.addUser.call(void 0, "/tree");
+        _chat.addAsst.call(void 0, (j && j.text) || "no messages");
+        _chat.finishAsst.call(void 0, );
+      });
+      break;
+    case "/copy":
+      _sessions.act.call(void 0, { act: "copy" }, (j) =>
+        _ui.clipText.call(void 0, j && j.text, "已复制最后回复", "还没有回复"),
+      );
+      break;
+    case "/export":
+      _sessions.act.call(void 0, { act: "export" }, (j) => {
+        if (j && j.text) {
+          _util.downloadText.call(void 0, "piz-export.html", j.text, "text/html");
+          _ui.showToast.call(void 0, "已导出");
+        } else _ui.showToast.call(void 0, "导出失败");
+      });
+      break;
+    case "/dump":
+      _sessions.act.call(void 0, { act: "dump" }, (j) =>
+        _ui.clipText.call(void 0, j && j.text, "会话已复制", "没有内容"),
+      );
+      break;
+    case "/fast-compress":
+      _sessions.act.call(void 0, { act: "fast-compress" }, (j) => {
+        _chat.addUser.call(void 0, "/fast-compress");
+        _chat.addAsst.call(void 0, (j && j.text) || "fast-compress: ?");
+        _chat.finishAsst.call(void 0, );
+      });
+      break;
+    case "/redo":
+      if (!_store.getLastUser.call(void 0, )) {
+        _ui.showToast.call(void 0, "没有可重发的输入");
+        break;
+      }
+      await sendPlain(_store.getLastUser.call(void 0, ));
+      break;
+    default: {
+      const stem = String(item.name || "").replace(/^\//, "");
+      fetch("/api/slash?" + _state.wsp + "session=" + encodeURIComponent(_state.sess), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: stem, args: arg || "" }),
+      })
+        .then((r) => r.json())
+        .then((j) => {
+          if (j && j.ok) {
+            _chat.addUser.call(void 0, "/" + stem + (arg ? " " + arg : ""));
+            _chat.addAsst.call(void 0, j.text || "");
+            _chat.finishAsst.call(void 0, );
+          } else _ui.showToast.call(void 0, (j && j.error) || "未知命令");
+        })
+        .catch(() => _ui.showToast.call(void 0, "未知命令"));
+      break;
+    }
+  }
+} exports.runSlash = runSlash;
+
+_bus.on.call(void 0, "slash:run", ({ cmd, arg }) => {
+  runSlash(cmd, arg || "");
+});
+_bus.on.call(void 0, "popups:dismiss", () => {
+  hideSlash();
+  hideBang();
+});
+
+};
 __modules["jobs"] = function(module, exports, require) {
 "use strict";Object.defineProperty(exports, "__esModule", {value: true}); function _nullishCoalesce(lhs, rhsFn) { if (lhs != null) { return lhs; } else { return rhsFn(); } } function _optionalChain(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }// jobs.ts —— 后台活动触发钮 + 弹层(借 dsh ui-jobs 之形)。
 // header 一颗 ⠿ 钮,活动时带计数 badge;点开平铺列表,esc/点外关。
@@ -4685,6 +5319,7 @@ __modules["jobs"] = function(module, exports, require) {
 // 失败 detail 是唯一可读之处,不过滤;耗时钟打开且含活物才跑。
 var _util = require('./util');
 var _slash = require('./slash');
+var _i18n = require('./i18n');
 
 let live = [];
 let gone = [];
@@ -4707,8 +5342,8 @@ function isOpen() {
   };
   document.addEventListener("click", (e) => {
     if (!isOpen()) return;
-    const t = e.target ;
-    if (_optionalChain([t, 'access', _4 => _4.closest, 'optionalCall', _5 => _5("#jobsPop,#hJobs")])) return;
+    const tEl = e.target ;
+    if (_optionalChain([tEl, 'access', _4 => _4.closest, 'optionalCall', _5 => _5("#jobsPop,#hJobs")])) return;
     closeJobs();
   });
   document.addEventListener("keydown", (e) => {
@@ -4758,28 +5393,29 @@ function fmtRow(a, gone_, i) {
   let expandHtml = "";
   if (isOpen) {
     const details = [
-      a.kind ? "<div><b>类型:</b> " + _util.esc.call(void 0, a.kind) + "</div>" : "",
+      a.kind ? "<div><b>" + _i18n.t.call(void 0, "type", "Type") + ":</b> " + _util.esc.call(void 0, a.kind) + "</div>" : "",
       a.pid ? "<div><b>PID:</b> " + _util.esc.call(void 0, String(a.pid)) + "</div>" : "",
-      a.limit_ms ? "<div><b>超时限制:</b> " + Math.round(a.limit_ms / 1000) + "s</div>" : "",
-      a.bytes ? "<div><b>传输数据:</b> " + _util.fmtTok.call(void 0, a.bytes) + "</div>" : "",
-      a.attempt ? "<div><b>执行轮次:</b> " + a.attempt + "</div>" : "",
-      a.detail ? '<div><b>详细内容:</b><pre class="jr-code">' + _util.esc.call(void 0, a.detail) + "</pre></div>" : "",
+      a.limit_ms ? "<div><b>" + _i18n.t.call(void 0, "timeout", "Timeout") + ":</b> " + Math.round(a.limit_ms / 1000) + "s</div>" : "",
+      a.bytes ? "<div><b>" + _i18n.t.call(void 0, "dataTransfer", "Data transfer") + ":</b> " + _util.fmtTok.call(void 0, a.bytes) + "</div>" : "",
+      a.attempt ? "<div><b>" + _i18n.t.call(void 0, "round", "Attempt") + ":</b> " + a.attempt + "</div>" : "",
+      a.detail ? '<div><b>' + _i18n.t.call(void 0, "details", "Details") + ':</b><pre class="jr-code">' + _util.esc.call(void 0, a.detail) + "</pre></div>" : "",
     ].filter(Boolean).join("");
-    expandHtml = '<div class="jr-exp">' + (details || "<i>暂无附加参数</i>") + "</div>";
+    expandHtml = '<div class="jr-exp">' + (details || "<i>" + (_i18n.getLang.call(void 0, ) === "zh" ? "暂无附加参数" : "No extra parameters") + "</i>") + "</div>";
   }
   return (
-    '<div class="jr' + (a.detached ? " bg" : "") + (gone_ ? " gone" : "") + (isOpen ? " open" : "") + '" data-key="' + _util.esc.call(void 0, k) + '" title="点击查看详情">' +
+    '<div class="jr' + (a.detached ? " bg" : "") + (gone_ ? " gone" : "") + (isOpen ? " open" : "") + '" data-key="' + _util.esc.call(void 0, k) + '" title="' + _i18n.t.call(void 0, "clickDetails", "Click to view details") + '">' +
     '<div class="jr-main">' +
     '<span class="jr-g">' + glyph + "</span>" +
     '<span class="jr-n">' + _util.esc.call(void 0, a.name || "job") + "</span>" +
     det +
-    '<span class="jr-t" data-i="' + i + '">' + sec + lim + by + retry + (gone_ ? " · 完成" : "") + "</span>" +
+    '<span class="jr-t" data-i="' + i + '">' + sec + lim + by + retry + (gone_ ? " · " + _i18n.t.call(void 0, "done", "Done") : "") + "</span>" +
     '<span class="jr-arr">' + (isOpen ? "▾" : "▸") + "</span>" +
     "</div>" +
     expandHtml +
     "</div>"
   );
 }
+
 
 function startTickIfNeeded() {
   if (!isOpen()) return;
@@ -4873,7 +5509,7 @@ function updateLineage(list) {
     _util.esc.call(void 0, subs.map((s) => s.name + (s.detail ? " — " + s.detail : "")).join("\n")) +
     '">' +
     subs.length +
-    (subs.length > 1 ? " 个子代理" : " 子代理") +
+    (subs.length > 1 ? (_i18n.getLang.call(void 0, ) === "zh" ? " 个 Subagent" : " subagents") : (_i18n.getLang.call(void 0, ) === "zh" ? " Subagent" : " subagent")) +
     "</span>";
 }
 
@@ -4892,6 +5528,7 @@ var _state = require('./state');
 var _ui = require('./ui');
 var _sessions = require('./sessions');
 var _store = require('./store');
+var _bus = require('./bus');
 var _stream = require('./stream');
 
 
@@ -4906,31 +5543,29 @@ var _chat = require('./chat');
 var _model = require('./model');
 var _plugins = require('./plugins');
 var _jobs = require('./jobs');
-
+var _i18n = require('./i18n');
 
 let running = false;
-let lastUser = "";
 let lastImgUrl = null;
 let pending = [];
- const getRunning = () => running; exports.getRunning = getRunning;
- const getLastUser = () => lastUser; exports.getLastUser = getLastUser;
- const setLastUser = (v) => { lastUser = v; }; exports.setLastUser = setLastUser;
+exports.getRunning = _store.getRunning; exports.getLastUser = _store.getLastUser; exports.setLastUser = _store.setLastUser;
  const clearPending = () => { pending = []; }; exports.clearPending = clearPending;
  function refreshSend() {
-  const t = (_util.$.call(void 0, "inp") ).value.trim();
-  const stop = running && !t;
+  const tVal = (_util.$.call(void 0, "inp") ).value.trim();
+  const stop = running && !tVal;
   _util.$.call(void 0, "send").textContent = stop ? "■" : "➤";
   _util.$.call(void 0, "send").classList.toggle("stop", stop);
-  _util.$.call(void 0, "send").title = stop ? "停止" : running ? "接着发" : "发送";
+  _util.$.call(void 0, "send").title = stop ? _i18n.t.call(void 0, "stop", "Stop") : running ? _i18n.t.call(void 0, "sendMore", "Send more") : _i18n.t.call(void 0, "send", "Send");
   const inp = _util.$.call(void 0, "inp") ;
   if (inp) {
     inp.placeholder = running
-      ? "接着发…"
+      ? _i18n.t.call(void 0, "sendMorePh", "Send more…")
       : inp.dataset.ph || inp.placeholder;
   }
 } exports.refreshSend = refreshSend;
  function setRun(r) {
   running = r;
+  _store.setRunning.call(void 0, r);
   refreshSend();
   if (r) ensureActPoll();
 } exports.setRun = setRun;
@@ -4993,7 +5628,7 @@ async function tickActivity() {
     return;
   }
   box.hidden = false;
-  count.textContent = pending.length === 1 ? "待发" : pending.length + " 条待发";
+  count.textContent = pending.length === 1 ? _i18n.t.call(void 0, "queued", "Queued") : pending.length + (_i18n.getLang.call(void 0, ) === "zh" ? " 条待发" : " queued");
   items.innerHTML = pending
     .map((t) => '<div class="q-item">' + _util.esc.call(void 0, t) + "</div>")
     .join("");
@@ -5016,7 +5651,7 @@ _stream.ev.onmessage = (e) => {
   _plugins.pluginEmit.call(void 0, evt.type, evt);
   switch (evt.type) {
     case "user_message":
-      lastUser = evt.text || lastUser;
+      _store.setLastUser.call(void 0, evt.text || _store.getLastUser.call(void 0, ));
       dropPending(evt.text);
       _chat.addUser.call(void 0, evt.has_image && !evt.text ? "[image]" : evt.has_image ? (evt.text || "") + "  [image]" : (evt.text || ""), evt.image_file ? "/api/image?name=" + encodeURIComponent(evt.image_file) : evt.has_image ? lastImgUrl : null);
       lastImgUrl = null;
@@ -5339,7 +5974,7 @@ document.addEventListener("paste", async (ev) => {
 });
  async function sendPlain(t) {
   if (!t && !pendingImg) return;
-  lastUser = t || "(image)";
+  _store.setLastUser.call(void 0, t || "(image)");
   let img = pendingImg;
   lastImgUrl = img || null;
   pendingImg = null;
@@ -5422,11 +6057,34 @@ document.addEventListener("paste", async (ev) => {
   if (window.matchMedia("(hover: hover)").matches) _util.$.call(void 0, "inp").focus();
 } exports.send = send;
 
+_bus.on.call(void 0, "chat:send", ({ text }) => {
+  sendPlain(text);
+});
+_bus.on.call(void 0, "chat:retry", () => {
+  const u = _store.getLastUser.call(void 0, );
+  if (u) sendPlain(u);
+});
+_bus.on.call(void 0, "composer:refresh-send", () => {
+  refreshSend();
+});
+_bus.on.call(void 0, "composer:ensure-act-poll", () => {
+  ensureActPoll();
+});
+_bus.on.call(void 0, "composer:clear-pending", () => {
+  exports.clearPending.call(void 0, );
+  renderQueue();
+});
+_bus.on.call(void 0, "composer:paste-image", async ({ callback }) => {
+  const ok = await attachClipboardImage();
+  callback(ok);
+});
+
 };
 __modules["render"] = function(module, exports, require) {
 "use strict";Object.defineProperty(exports, "__esModule", {value: true});// render.ts —— 设置面板的纯 HTML 构造器(seg 开关 / auth 键列 / 资源包 / 插件行)。
 // 自 webui.js 切出;名与义一字未改。DOM 绑定(bindSeg/bindAuthPanel)留在 main。
 var _util = require('./util');
+var _i18n = require('./i18n');
 
  function segHtml(name, opts, cur) {
   return (
@@ -5481,7 +6139,9 @@ var _util = require('./util');
     openai: "Sign in with ChatGPT",
   };
   return (
-    '<div class="prov-hint">内置供应商,粘贴 API key 保存即用。绿点 = 已配置。</div>' +
+    '<div class="prov-hint">' +
+    _i18n.t.call(void 0, "builtinProvidersHint", "Built-in providers. Paste API key and save. Green dot = configured.") +
+    "</div>" +
     '<div class="prov-cards">' +
     list
       .map((p) => {
@@ -5492,16 +6152,18 @@ var _util = require('./util');
           '"><div class="prov-head"><span class="cred-dot ' +
           (p.hasKey ? "cred-ok" : "cred-miss") +
           '" title="' +
-          (p.hasKey ? "已配置" : "未配置") +
+          (p.hasKey ? _i18n.t.call(void 0, "configured", "Configured") : _i18n.t.call(void 0, "notConfigured", "Not configured")) +
           '"></span><span class="prov-name">' +
           _util.esc.call(void 0, p.name) +
           "</span>" +
           (p.api ? '<span class="prov-api">' + _util.esc.call(void 0, p.api) + "</span>" : "") +
           "</div>" +
           '<div class="auth-actions"><input class="set-sel auth-key" type="password" placeholder="' +
-          (p.hasKey ? "替换 API key" : "粘贴 API key") +
+          (p.hasKey ? _i18n.t.call(void 0, "replaceApiKey", "Replace API key") : _i18n.t.call(void 0, "pasteApiKey", "Paste API key")) +
           '" autocomplete="off">' +
-          '<button type="button" class="btn auth-save">保存</button>' +
+          '<button type="button" class="btn auth-save">' +
+          _i18n.t.call(void 0, "save", "Save") +
+          "</button>" +
           (oauthl ? '<button type="button" class="btn auth-oauth">' + oauthl + "</button>" : "") +
           "</div>" +
           '<div class="set-hint auth-dev" hidden></div></div>'
@@ -5514,8 +6176,9 @@ var _util = require('./util');
  function packageRows(data) {
   const user = data && Array.isArray(data.user) ? data.user : [];
   const proj = data && Array.isArray(data.project) ? data.project : [];
+  const title = _i18n.t.call(void 0, "packages", "Packages");
   if (!user.length && !proj.length) {
-    return '<div class="set-row"><div class="set-lab">资源包<span class="set-hint">piz pkg install &lt;path&gt; [-l]</span></div></div>';
+    return '<div class="set-row"><div class="set-lab">' + title + '<span class="set-hint">piz pkg install &lt;path&gt; [-l]</span></div></div>';
   }
   function one(p, scope) {
     return (
@@ -5532,7 +6195,7 @@ var _util = require('./util');
     );
   }
   let html =
-    '<div class="set-row"><div class="set-lab">资源包<span class="set-hint">用户 ~/.piz/packages 与项目 .piz/packages</span></div></div>';
+    '<div class="set-row"><div class="set-lab">' + title + '<span class="set-hint">~/.piz/packages &amp; .piz/packages</span></div></div>';
   for (const p of user) html += one(p, "user");
   for (const p of proj) html += one(p, "project");
   return html;
@@ -5541,7 +6204,11 @@ var _util = require('./util');
   const plugs = Array.isArray(list) ? list.filter((p) => p && p.optional) : [];
   if (!plugs.length) return "";
   let html =
-    '<div class="set-row"><div class="set-lab">插件<span class="set-hint">task-delegation 才有 workflow / 子代理。开关后下一轮生效。</span></div></div>';
+    '<div class="set-row"><div class="set-lab">' +
+    _i18n.t.call(void 0, "plugins", "Plugins") +
+    '<span class="set-hint">' +
+    _i18n.t.call(void 0, "pluginHint", "task-delegation enables workflow / subagents. Takes effect next turn.") +
+    "</span></div></div>";
   for (const p of plugs) {
     html +=
       '<div class="set-row"><div class="set-lab">' +
@@ -5554,6 +6221,7 @@ var _util = require('./util');
   }
   return html;
 } exports.pluginRows = pluginRows;
+
 
 };
 __modules["settings"] = function(module, exports, require) {
@@ -5574,12 +6242,14 @@ var _slash = require('./slash');
 
 var _model = require('./model');
 var _chat = require('./chat');
-var _composer = require('./composer');
+var _store = require('./store');
+var _bus = require('./bus');
+var _i18n = require('./i18n');
 
 // 自 wired:设置钮(侧栏底部 foot;绑定居此避环)。
 (_util.$.call(void 0, "setBtn") ).onclick = () => openSettings();
 
- async function openSettings() {
+ async function openSettings(activeTab = "auth") {
   let cfg = {};
   let models = [];
   let pkgs = { user: [], project: [] };
@@ -5608,8 +6278,8 @@ var _composer = require('./composer');
     // 会话模型列:点击弹分组卡片菜单(modelMenu);默认模型仍是原生 select(选项即值)
     if (id === "setSessModel") {
       return (
-        '<button type="button" class="set-sel set-model-btn" id="setSessModel" title="点击选择模型">' +
-        _util.esc.call(void 0, cur || "选择模型") +
+        '<button type="button" class="set-sel set-model-btn" id="setSessModel" title="' + _i18n.t.call(void 0, "selectModel", "Select model") + '">' +
+        _util.esc.call(void 0, cur || _i18n.t.call(void 0, "selectModel", "Select model")) +
         "</button>"
       );
     }
@@ -5640,7 +6310,7 @@ var _composer = require('./composer');
   ]);
   const customs = (cfg.providers || []).filter((p) => !builtin.has(p.name));
   const provHtml = customs.length
-    ? '<div class="prov-hint" style="margin-top:14px">自定义供应商(见 ~/.piz/models.json)</div>' +
+    ? '<div class="prov-hint" style="margin-top:14px">' + (_i18n.getLang.call(void 0, ) === "zh" ? "自定义 Provider (见 ~/.piz/models.json)" : "Custom providers (~/.piz/models.json)") + "</div>" +
       '<div class="prov-cards">' +
       customs
         .map(
@@ -5651,7 +6321,7 @@ var _composer = require('./composer');
             _util.esc.call(void 0, p.name || "") +
             "</span>" +
             (p.api ? '<span class="prov-api">' + _util.esc.call(void 0, p.api) + "</span>" : "") +
-            (p.models && p.models.length ? '<span class="prov-api">' + p.models.length + " 模型</span>" : "") +
+            (p.models && p.models.length ? '<span class="prov-api">' + p.models.length + (_i18n.getLang.call(void 0, ) === "zh" ? " 个 Model" : " models") + "</span>" : "") +
             "</div></div>",
         )
         .join("") +
@@ -5659,61 +6329,70 @@ var _composer = require('./composer');
     : "";
   _ui.openDlg.call(void 0, {
     cls: "set",
-    title: "设置",
+    title: _i18n.t.call(void 0, "settings", "Settings"),
     body:
-      '<div class="set-tabs" id="setTabs"><button type="button" data-tab="auth" class="on">账户</button><button type="button" data-tab="look">外观</button><button type="button" data-tab="agent">智能体</button><button type="button" data-tab="note">通知</button><button type="button" data-tab="about">关于</button></div>' +
-      '<div id="setAuth">' +
+      '<div class="set-tabs" id="setTabs">' +
+      '<button type="button" data-tab="auth"' + (activeTab === "auth" ? ' class="on"' : "") + ">" + _i18n.t.call(void 0, "tabAuth", "Providers & Keys") + "</button>" +
+      '<button type="button" data-tab="look"' + (activeTab === "look" ? ' class="on"' : "") + ">" + _i18n.t.call(void 0, "tabLook", "Appearance") + "</button>" +
+      '<button type="button" data-tab="agent"' + (activeTab === "agent" ? ' class="on"' : "") + ">" + _i18n.t.call(void 0, "tabAgent", "Agent & Sandbox") + "</button>" +
+      '<button type="button" data-tab="note"' + (activeTab === "note" ? ' class="on"' : "") + ">" + _i18n.t.call(void 0, "tabNote", "Notifications") + "</button>" +
+      '<button type="button" data-tab="about"' + (activeTab === "about" ? ' class="on"' : "") + ">" + _i18n.t.call(void 0, "tabAbout", "About") + "</button>" +
+      "</div>" +
+      '<div id="setAuth"' + (activeTab === "auth" ? "" : " hidden") + ">" +
       _render.authPanelHtml.call(void 0, cfg) +
       provHtml +
       "</div>" +
-      '<div id="setLook" hidden>' +
-      '<div class="set-row"><div class="set-lab">配色</div>' +
-      _render.segHtml.call(void 0, "scheme", [{ v: "light", l: "浅色" }, { v: "dark", l: "深色" }, { v: "system", l: "系统" }], _state.prefs.scheme) +
+      '<div id="setLook"' + (activeTab === "look" ? "" : " hidden") + ">" +
+      '<div class="set-row"><div class="set-lab">' + _i18n.t.call(void 0, "language", "Language") + "</div>" +
+      _render.segHtml.call(void 0, "lang", [{ v: "en", l: "English" }, { v: "zh", l: "中文" }], _i18n.getLang.call(void 0, )) +
       "</div>" +
-      '<div class="set-row"><div class="set-lab">强调色</div>' +
-      _render.segHtml.call(void 0, "accent", [{ v: "mono", l: "墨" }, { v: "blue", l: "蓝" }, { v: "green", l: "苔" }, { v: "amber", l: "赭" }], _state.prefs.accent) +
+      '<div class="set-row"><div class="set-lab">' + _i18n.t.call(void 0, "scheme", "Color scheme") + "</div>" +
+      _render.segHtml.call(void 0, "scheme", [{ v: "light", l: _i18n.t.call(void 0, "schemeLight", "Light") }, { v: "dark", l: _i18n.t.call(void 0, "schemeDark", "Dark") }, { v: "system", l: _i18n.t.call(void 0, "schemeSystem", "System") }], _state.prefs.scheme) +
       "</div>" +
-      '<div class="set-row"><div class="set-lab">密度</div>' +
-      _render.segHtml.call(void 0, "density", [{ v: "cozy", l: "舒适" }, { v: "compact", l: "紧凑" }], _state.prefs.density || "cozy") +
+      '<div class="set-row"><div class="set-lab">' + _i18n.t.call(void 0, "accent", "Accent color") + "</div>" +
+      _render.segHtml.call(void 0, "accent", [{ v: "mono", l: _i18n.t.call(void 0, "accentMono", "Mono") }, { v: "blue", l: _i18n.t.call(void 0, "accentBlue", "Blue") }, { v: "green", l: _i18n.t.call(void 0, "accentGreen", "Green") }, { v: "amber", l: _i18n.t.call(void 0, "accentAmber", "Amber") }], _state.prefs.accent) +
       "</div>" +
-      '<div class="set-row"><div class="set-lab">宽屏<span class="set-hint">内容列加宽</span></div>' +
-      _render.segHtml.call(void 0, "wide", [{ v: "0", l: "窄" }, { v: "1", l: "宽" }], _state.prefs.wide ? "1" : "0") +
+      '<div class="set-row"><div class="set-lab">' + _i18n.t.call(void 0, "density", "Density") + "</div>" +
+      _render.segHtml.call(void 0, "density", [{ v: "cozy", l: _i18n.t.call(void 0, "densityCozy", "Cozy") }, { v: "compact", l: _i18n.t.call(void 0, "densityCompact", "Compact") }], _state.prefs.density || "cozy") +
       "</div>" +
-      '<div class="set-row"><div class="set-lab">界面字号</div><input id="setFont" class="num-in" type="number" min="12" max="20" value="' +
+      '<div class="set-row"><div class="set-lab">' + _i18n.t.call(void 0, "wideScreen", "Wide screen") + '<span class="set-hint">' + _i18n.t.call(void 0, "wideScreenHint", "Widen chat column") + "</span></div>" +
+      _render.segHtml.call(void 0, "wide", [{ v: "0", l: _i18n.t.call(void 0, "wideNarrow", "Standard") }, { v: "1", l: _i18n.t.call(void 0, "wideWide", "Wide") }], _state.prefs.wide ? "1" : "0") +
+      "</div>" +
+      '<div class="set-row"><div class="set-lab">' + _i18n.t.call(void 0, "fontSize", "UI font size") + '</div><input id="setFont" class="num-in" type="number" min="12" max="20" value="' +
       (_state.prefs.uiFont || 14) +
       '"></div></div>' +
-      '<div id="setAgent" hidden>' +
-      '<div class="set-row"><div class="set-lab">本会话模型</div>' +
+      '<div id="setAgent"' + (activeTab === "agent" ? "" : " hidden") + ">" +
+      '<div class="set-row"><div class="set-lab">' + _i18n.t.call(void 0, "sessModel", "Session model") + "</div>" +
       optHtml("setSessModel", _model.getCurModel.call(void 0, ), models) +
       "</div>" +
-      '<div class="set-row"><div class="set-lab">思考等级<span class="set-hint">写入默认并作用于当前会话</span></div>' +
+      '<div class="set-row"><div class="set-lab">' + _i18n.t.call(void 0, "thinkingLevel", "Thinking level") + '<span class="set-hint">' + (_i18n.getLang.call(void 0, ) === "zh" ? "写入默认并作用于当前 Session" : "Default and current session") + "</span></div>" +
       _render.segHtml.call(void 0, "think", thinkOpts, defThink) +
       "</div>" +
-      '<div class="set-row"><div class="set-lab">本会话授权</div>' +
+      '<div class="set-row"><div class="set-lab">' + _i18n.t.call(void 0, "sessAppr", "Session approval") + "</div>" +
       _render.segHtml.call(void 0, "sessappr", apprOpts.length ? apprOpts : [{ v: "yolo", l: "yolo" }, { v: "ask", l: "ask" }, { v: "read-only", l: "read-only" }], _model.getApprovalMode.call(void 0, )) +
       "</div>" +
-      '<div class="set-row"><div class="set-lab">新会话默认授权</div>' +
+      '<div class="set-row"><div class="set-lab">' + _i18n.t.call(void 0, "defAppr", "Default approval") + "</div>" +
       _render.segHtml.call(void 0, "defappr", apprOpts.length ? apprOpts : [{ v: "yolo", l: "yolo" }, { v: "ask", l: "ask" }, { v: "read-only", l: "read-only" }], defAppr) +
       "</div>" +
-      '<div class="set-row"><div class="set-lab">bash 沙箱<span class="set-hint">workspace 工作区可写；strict 再断网</span></div>' +
+      '<div class="set-row"><div class="set-lab">' + _i18n.t.call(void 0, "sandbox", "Bash sandbox") + '<span class="set-hint">' + _i18n.t.call(void 0, "sandboxHint", "workspace: writable workspace; strict: no network") + "</span></div>" +
       _render.segHtml.call(void 0, "sandbox", [{ v: "off", l: "off" }, { v: "workspace", l: "workspace" }, { v: "strict", l: "strict" }], cfg.sandboxMode || "off") +
       "</div>" +
-      '<div class="set-row"><div class="set-lab">默认模型<span class="set-hint">新会话用</span></div>' +
+      '<div class="set-row"><div class="set-lab">' + _i18n.t.call(void 0, "defModel", "Default model") + '<span class="set-hint">' + _i18n.t.call(void 0, "defModelHint", "Used for new sessions") + "</span></div>" +
       optHtml("setDefModel", defModel || _model.getCurModel.call(void 0, ), models) +
       "</div>" +
       _render.pluginRows.call(void 0, cfg.plugins) +
       _render.packageRows.call(void 0, pkgs) +
       "</div>" +
-      '<div id="setNote" hidden>' +
-      '<div class="set-row"><div class="set-lab">完成时通知<span class="set-hint">浏览器系统通知</span></div><button type="button" class="sw' +
+      '<div id="setNote"' + (activeTab === "note" ? "" : " hidden") + ">" +
+      '<div class="set-row"><div class="set-lab">' + _i18n.t.call(void 0, "notifyDone", "Notify on completion") + '<span class="set-hint">' + _i18n.t.call(void 0, "notifyDoneHint", "Browser system notification") + '</span></div><button type="button" class="sw' +
       (_state.prefs.notify ? " on" : "") +
       '" id="swNotify"></button></div>' +
-      '<div class="set-row"><div class="set-lab">完成时提示音</div><button type="button" class="sw' +
+      '<div class="set-row"><div class="set-lab">' + _i18n.t.call(void 0, "soundDone", "Sound on completion") + '</div><button type="button" class="sw' +
       (_state.prefs.sound ? " on" : "") +
       '" id="swSound"></button></div></div>' +
-      '<div id="setAbout" hidden>' +
-      '<div class="set-row"><div class="set-lab">piz web<span class="set-hint">配置见 ~/.piz/</span></div></div>' +
-      '<div class="set-row"><div class="set-lab">快捷键<span class="set-hint"><kbd>Ctrl</kbd><kbd>K</kbd> 搜会话 · <kbd>Ctrl</kbd><kbd>,</kbd> 设置 · <kbd>/</kbd> 命令 · <kbd>@./</kbd> 文件 · <kbd>!</kbd> 命令</span></div></div>' +
+      '<div id="setAbout"' + (activeTab === "about" ? "" : " hidden") + ">" +
+      '<div class="set-row"><div class="set-lab">piz web<span class="set-hint">' + _i18n.t.call(void 0, "aboutConfigHint", "Config files located in ~/.piz/") + "</span></div></div>" +
+      '<div class="set-row"><div class="set-lab">' + _i18n.t.call(void 0, "shortcutsHint", "Shortcuts") + '<span class="set-hint"><kbd>Ctrl</kbd><kbd>K</kbd> ' + _i18n.t.call(void 0, "searchSessions", "Search sessions") + ' · <kbd>Ctrl</kbd><kbd>,</kbd> ' + _i18n.t.call(void 0, "settings", "Settings") + ' · <kbd>/</kbd> ' + _i18n.t.call(void 0, "keyCommands", "Commands") + ' · <kbd>@./</kbd> ' + (_i18n.getLang.call(void 0, ) === "zh" ? "文件" : "files") + ' · <kbd>!</kbd> shell</span></div></div>' +
       "</div>",
   });
   const tabs = _util.$.call(void 0, "setTabs");
@@ -5725,6 +6404,11 @@ var _composer = require('./composer');
     for (const x of Array.from(tabs.querySelectorAll("button"))) x.classList.toggle("on", x === b);
     for (const k of Object.keys(panels)) panels[k].hidden = k !== b.dataset.tab;
   };
+  _ui.bindSeg.call(void 0, "lang", (v) => {
+    _i18n.setLang.call(void 0, (v || "en") );
+    openSettings("look");
+  });
+
   _ui.bindSeg.call(void 0, "scheme", (v) => {
     _ui.setScheme.call(void 0, v || "dark");
   });
@@ -5764,9 +6448,9 @@ var _composer = require('./composer');
       })
         .then((r) => r.json().catch(() => ({})))
         .then((j) => {
-          if (j && j.ok === false) _ui.showToast.call(void 0, j.error || "保存默认模型失败");
+          if (j && j.ok === false) _ui.showToast.call(void 0, j.error || _i18n.t.call(void 0, "saveFail", "Save failed"));
         })
-        .catch(() => _ui.showToast.call(void 0, "保存默认模型失败"));
+        .catch(() => _ui.showToast.call(void 0, _i18n.t.call(void 0, "saveFail", "Save failed")));
     };
   _ui.bindSeg.call(void 0, "think", (v) => _model.setThink.call(void 0, v || "high"));
   _ui.bindSeg.call(void 0, "sessappr", (v) => _model.setApproval.call(void 0, v || "ask"));
@@ -5778,9 +6462,9 @@ var _composer = require('./composer');
     })
       .then((r) => r.json().catch(() => ({})))
       .then((j) => {
-        if (j && j.ok === false) _ui.showToast.call(void 0, j.error || "保存默认授权失败");
+        if (j && j.ok === false) _ui.showToast.call(void 0, j.error || _i18n.t.call(void 0, "saveFail", "Save failed"));
       })
-      .catch(() => _ui.showToast.call(void 0, "保存默认授权失败"));
+      .catch(() => _ui.showToast.call(void 0, _i18n.t.call(void 0, "saveFail", "Save failed")));
   });
   _ui.bindSeg.call(void 0, "sandbox", (v) => {
     _model.setSandbox.call(void 0, v || "off");
@@ -5822,9 +6506,9 @@ var _composer = require('./composer');
   let sel = 0;
   _ui.openDlg.call(void 0, {
     cls: "wide",
-    title: "搜索会话",
+    title: _i18n.t.call(void 0, "searchSessions", "Search sessions"),
     body:
-      '<input id="dlgIn" class="dlg-in" placeholder="按标题或名字过滤…">' +
+      '<input id="dlgIn" class="dlg-in" placeholder="' + (_i18n.getLang.call(void 0, ) === "zh" ? "按标题或名字过滤…" : "Filter by title or name…") + '">' +
       '<div id="hitList" style="margin-top:8px;max-height:50vh;overflow:auto"></div>',
     focus: "dlgIn",
   });
@@ -5854,11 +6538,12 @@ var _composer = require('./composer');
               _util.esc.call(void 0, s.title || s.name) +
               '</div><div class="hit-s">' +
               _util.esc.call(void 0, s.name) +
-              (s.msgs ? " · " + s.msgs + " 条" : "") +
+              (s.msgs ? " · " + s.msgs + (_i18n.getLang.call(void 0, ) === "zh" ? " 条" : " msgs") : "") +
               "</div></div>",
           )
           .join("")
-      : '<div class="dlg-msg">无匹配会话</div>';
+      : '<div class="dlg-msg">' + _i18n.t.call(void 0, "noMatchingSessions", "No matching sessions") + "</div>";
+
     const on = box.querySelector(".hit.on");
     if (on) on.scrollIntoView({ block: "nearest" });
     return shown;
@@ -5911,13 +6596,13 @@ document.addEventListener("keydown", (e) => {
   if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "c") {
     e.preventDefault();
     const md = _chat.th.querySelector(".a-turn:last-of-type .md") ;
-    _ui.clipText.call(void 0, md && (md.dataset.raw || md.textContent), "已复制最后回复", "还没有回复");
+    _ui.clipText.call(void 0, md && (md.dataset.raw || md.textContent), _i18n.t.call(void 0, "copiedLastReply", "Copied last reply"), _i18n.t.call(void 0, "noReplyYet", "No reply yet"));
     return;
   }
   if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "r") {
     e.preventDefault();
-    if (_composer.getLastUser.call(void 0, )) _composer.sendPlain.call(void 0, _composer.getLastUser.call(void 0, ));
-    else _ui.showToast.call(void 0, "没有可重发的输入");
+    if (_store.getLastUser.call(void 0, )) _bus.emit.call(void 0, "chat:retry");
+    else _ui.showToast.call(void 0, _i18n.t.call(void 0, "retryNoInput", "No input to retry"));
     return;
   }
   // 输入框外按 "/":聚焦输入框并直接进斜杠菜单。
@@ -5981,6 +6666,10 @@ document.addEventListener("keydown", (e) => {
       _chat.inspect.close();
     }
   }
+});
+
+_bus.on.call(void 0, "search:open", () => {
+  openSearch();
 });
 
 };
@@ -6066,10 +6755,10 @@ __modules["main"] = function(module, exports, require) {
       var _composer = require('./composer');
       var _model = require('./model');
       var _settings = require('./settings');
-      var _sheet = require('./sheet');
       var _plugins = require('./plugins');
       var _jobs = require('./jobs');
       var _evolve = require('./evolve');
+      var _i18n = require('./i18n');
       // 侧栏折叠态(piz.sidebar=1 则预合)
       try {
         if (localStorage.getItem("piz.sidebar") === "1")
@@ -6081,6 +6770,7 @@ __modules["main"] = function(module, exports, require) {
       function boot() {
         if (booted) return;
         booted = true;
+        _i18n.applyI18n.call(void 0, );
         _chat.inspect.init();
         const isWarm = !!sessionStorage.getItem("piz.booted");
         try { sessionStorage.setItem("piz.booted", "1"); } catch (e3) {}
@@ -6107,7 +6797,7 @@ __modules["main"] = function(module, exports, require) {
           if (s.running) _composer.setRun.call(void 0, true);
           _model.applyBootState.call(void 0, s);
         })
-        .catch(() => _ui.showToast.call(void 0, "状态加载失败"));
+        .catch(() => _ui.showToast.call(void 0, _i18n.t.call(void 0, "statusLoadFail", "Failed to load state")));
       _model.setModeBtn.call(void 0, );
       _model.setSandboxBtn.call(void 0, );
       fetch("/api/config")
@@ -6117,7 +6807,7 @@ __modules["main"] = function(module, exports, require) {
           if (cfg && cfg.sandboxBackend) window.sandboxBackend = cfg.sandboxBackend;
           _model.setSandboxBtn.call(void 0, );
         })
-        .catch(() => _ui.showToast.call(void 0, "配置加载失败"));
+        .catch(() => _ui.showToast.call(void 0, _i18n.t.call(void 0, "configLoadFail", "Failed to load config")));
       _slash.loadHelpCatalog.call(void 0, );
       // todo 计划条插槽(dsh input dock 计划条):actStrip 之后、队列行之前
       const ps = document.createElement("div");
@@ -6133,15 +6823,15 @@ __modules["main"] = function(module, exports, require) {
         '<div class="empty-headline">' +
         '<svg class="empty-logo" viewBox="0 0 24 18" fill="currentColor" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M2.4 1.8h17.2a1.7 1.7 0 0 1 0 3.4H10l10 8.2A1.8 1.8 0 0 1 18.65 16.45H3.2a1.7 1.7 0 0 1 0-3.4h9.4L2.7 4.9A1.8 1.8 0 0 1 4.1 1.8z"/></svg>' +
         '<span class="empty-hint-title">piz</span></div>' +
-        '<button type="button" class="ws-chip" id="heroWs"><span class="ws-chip-ic">⌂</span><span id="heroWsLbl">项目</span><span class="ws-chip-chev">▾</span></button>' +
-        '<button type="button" class="hero-start" id="heroStart">＋ 开始对话</button>' +
+        '<button type="button" class="ws-chip" id="heroWs"><span class="ws-chip-ic">⌂</span><span id="heroWsLbl" data-i18n="workspace">' + _i18n.t.call(void 0, "workspace", "Workspace") + '</span><span class="ws-chip-chev">▾</span></button>' +
+        '<button type="button" class="hero-start" id="heroStart" data-i18n="startSession">' + _i18n.t.call(void 0, "startSession", "＋ Start session") + '</button>' +
         '<div class="hero-sugs">' +
-        '<button type="button" class="hero-sug" data-q="这个项目是做什么的?">这个项目是做什么的?</button>' +
-        '<button type="button" class="hero-sug" data-q="帮我跑一下测试">帮我跑一下测试</button>' +
-        '<button type="button" class="hero-sug" data-q="最近改了什么?">最近改了什么?</button>' +
+        '<button type="button" class="hero-sug" data-i18n="sugWhatProject">' + _i18n.t.call(void 0, "sugWhatProject", "What does this project do?") + '</button>' +
+        '<button type="button" class="hero-sug" data-i18n="sugRunTests">' + _i18n.t.call(void 0, "sugRunTests", "Run tests for me") + '</button>' +
+        '<button type="button" class="hero-sug" data-i18n="sugRecentChanges">' + _i18n.t.call(void 0, "sugRecentChanges", "What changed recently?") + '</button>' +
         '</div>' +
-        '<div class="empty-hint-text">读、改、跑。工具默认先问你。</div>' +
-        '<div class="empty-keys"><span><kbd>/</kbd> 命令</span><span><kbd>j</kbd> 任务</span><span><kbd>u</kbd> 用量</span><span><kbd>s</kbd> 沙箱</span><span><kbd>?</kbd> 快捷键</span></div>' +
+        '<div class="empty-hint-text" data-i18n="heroHint">' + _i18n.t.call(void 0, "heroHint", "Read, edit, run. Full control.") + '</div>' +
+        '<div class="empty-keys"><span><kbd>/</kbd> <span data-i18n="keyCommands">' + _i18n.t.call(void 0, "keyCommands", "Commands") + '</span></span><span><kbd>j</kbd> <span data-i18n="keyJobs">' + _i18n.t.call(void 0, "keyJobs", "Jobs") + '</span></span><span><kbd>u</kbd> <span data-i18n="keyUsage">' + _i18n.t.call(void 0, "keyUsage", "Usage") + '</span></span><span><kbd>s</kbd> <span data-i18n="keySandbox">' + _i18n.t.call(void 0, "keySandbox", "Sandbox") + '</span></span><span><kbd>?</kbd> <span data-i18n="keyShortcuts">' + _i18n.t.call(void 0, "keyShortcuts", "Shortcuts") + '</span></span></div>' +
         '</div>';
       const wrap = _util.$.call(void 0, "wrap");
       if (!_chat.th.children.length) {
@@ -6156,7 +6846,7 @@ __modules["main"] = function(module, exports, require) {
           (b ).onclick = () => {
             const inp = _util.$.call(void 0, "inp") ;
             if (!inp) return;
-            inp.value = (b ).dataset.q || "";
+            inp.value = (b ).textContent || "";
             inp.dispatchEvent(new Event("input"));
             inp.focus();
           };
@@ -6172,37 +6862,8 @@ __modules["main"] = function(module, exports, require) {
       // 全生命周期错误采集:页面加载即挂 window error/unhandledrejection/console.error
       _evolve.initEvolve.call(void 0, );
       }
-      // ui/net 解缠钩:对话框开场收菜单/补全;登录成功续 boot
       _util.$.call(void 0, "searchBtn").onclick = () => _settings.openSearch.call(void 0, );
-      _ui.dlgHooks.closeMenus = _sessions.closeMenus;
-      _ui.dlgHooks.hideSlash = _slash.hideSlash;
-      _ui.dlgHooks.hideBang = _slash.hideBang;
       _net.setOnAuthed.call(void 0, boot);
-      // sessions 解缠钩:点当前会话行 → 应其 mode/auto 并收 sheet
-      _sessions.sessHooks.applySessionMeta = (s) => {
-        if (s.mode || s.auto !== undefined) {
-          _model.setApprovalMode.call(void 0, s.mode || (s.auto ? "yolo" : "ask"));
-        }
-        _sheet.closeSheet.call(void 0, );
-      };
-      // slash 解缠钩:聊天渲染/发送经箭函迟取;模型态已直引 model.ts
-      _model.modelH.runSlash = _slash.runSlash;
-      Object.assign(_slash.slashH, {
-        addUser: _chat.addUser, addAsst: _chat.addAsst, finishAsst: _chat.finishAsst, openSearch: _settings.openSearch,
-        attachClipboardImage: _composer.attachClipboardImage, refreshSend: _composer.refreshSend, ensureActPoll: _composer.ensureActPoll,
-        asstEl: _chat.asstEl, findInThread: _chat.findInThread, sendPlain: _composer.sendPlain, send: _composer.send,
-        renderQueue: _composer.renderQueue, clipText: _ui.clipText,
-        getWebFindQ: _chat.getWebFindQ,
-        getLastUser: _composer.getLastUser,
-        clearPending: _composer.clearPending,
-      });
-      // chat 解缠钩:发送与 lastUser 以箭函迟取(余者已直引 sheet/plugins/model)
-      Object.assign(_chat.chatH, {
-        sendPlain: _composer.sendPlain,
-        getLastUser: _composer.getLastUser, setLastUser: _composer.setLastUser,
-      });
-      // plugins 解缠钩:api.send 之运行态/发送迟取(避 plugins↔composer 环)
-      Object.assign(_plugins.pluginsH, { getRunning: _composer.getRunning, sendPlain: _composer.sendPlain });
       _net.initServerAuth.call(void 0, );
       const probe = _net.rawFetch.call(void 0, "/api/state?" + _state.wsp + "session=" + encodeURIComponent(_state.sess), {
         headers: _net.getCredential.call(void 0, ) ? { Authorization: "Bearer " + _net.getCredential.call(void 0, ) } : {},
@@ -6220,8 +6881,8 @@ __modules["main"] = function(module, exports, require) {
           }
         })
         .catch(() => {
-          _util.$.call(void 0, "authErr").textContent = "无法连接本地服务器";
-          _net.showAuthPage.call(void 0, "无法连接本地服务器,请确认 piz web 已启动");
+          _util.$.call(void 0, "authErr").textContent = _i18n.t.call(void 0, "cantConnect", "Cannot connect to local server. Please ensure piz web is running.");
+          _net.showAuthPage.call(void 0, _i18n.t.call(void 0, "cantConnect", "Cannot connect to local server. Please ensure piz web is running."));
         });
 
 };

@@ -1,7 +1,8 @@
 // ui.ts —— toast / 对话框 / seg 与 auth 面板 DOM 绑定。
-// 自 webui.js 切出。openDlg 开场要收菜单与补全 —— 彼在 main,经 dlgHooks 迟绑注入(解循环)。
 import { $, esc } from "./util";
 import { prefs, savePrefs } from "./state";
+import { t, getLang } from "./i18n";
+import { emit } from "./bus";
 
 // ---- toast ----
 const toastEl = $("toast")!;
@@ -12,13 +13,6 @@ export function showToast(t: string) {
   clearTimeout(toastT);
   toastT = setTimeout(() => toastEl.classList.remove("show"), 2200);
 }
-
-// 迟绑钩:main 在启动时把 closeMenus/hideSlash/hideBang 挂上
-export const dlgHooks: { closeMenus: (() => void) | null; hideSlash: (() => void) | null; hideBang: (() => void) | null } = {
-  closeMenus: null,
-  hideSlash: null,
-  hideBang: null,
-};
 
 let dlgOnok: any = null,
   dlgOncancel: any = null;
@@ -39,9 +33,7 @@ export function closeDlg() {
   dlgPrevFocus = null;
 }
 export function openDlg(opts: any) {
-  dlgHooks.closeMenus?.();
-  dlgHooks.hideSlash?.();
-  dlgHooks.hideBang?.();
+  emit("popups:dismiss");
   const ov = $("overlay")!;
   ov.classList.add("open");
   document.body.style.overflow = "hidden";
@@ -50,7 +42,7 @@ export function openDlg(opts: any) {
     (opts.cls || "") +
     '" role="dialog" aria-modal="true"><div class="dlg-hd"><span>' +
     esc(opts.title || "") +
-    '</span><button class="dlg-x" id="dlgX" type="button" aria-label="关闭">✕</button></div><div class="dlg-bd">' +
+    '</span><button class="dlg-x" id="dlgX" type="button" aria-label="' + t("close", "Close") + '">✕</button></div><div class="dlg-bd">' +
     (opts.body || "") +
     "</div>" +
     (opts.ok
@@ -139,8 +131,8 @@ export function askText(title: string, value?: string, placeholder?: string): Pr
         '" placeholder="' +
         esc(placeholder || "") +
         '">',
-      ok: "确定",
-      cancel: "取消",
+      ok: t("ok", "OK"),
+      cancel: t("cancel", "Cancel"),
       focus: "dlgIn",
       onok: () => {
         resolve(($("dlgIn") as HTMLInputElement).value);
@@ -161,9 +153,9 @@ export function askYes(title: string, msg: string): Promise<boolean> {
     openDlg({
       title,
       body: '<p class="dlg-msg">' + esc(msg) + "</p>",
-      ok: "确定",
+      ok: t("ok", "OK"),
       danger: true,
-      cancel: "取消",
+      cancel: t("cancel", "Cancel"),
       onok: () => resolve(true),
       oncancel: () => resolve(false),
     });
@@ -172,15 +164,15 @@ export function askYes(title: string, msg: string): Promise<boolean> {
 // 剪贴板 + toast
 export function clipText(text: string, ok?: string, fail?: string) {
   if (!text) {
-    showToast(fail || "没有内容");
+    showToast(fail || t("noContent", "No content"));
     return;
   }
   if (navigator.clipboard && navigator.clipboard.writeText) {
     navigator.clipboard
       .writeText(text)
-      .then(() => showToast(ok || "已复制"))
-      .catch(() => showToast(fail || "复制失败"));
-  } else showToast(fail || "复制失败");
+      .then(() => showToast(ok || t("copied", "Copied")))
+      .catch(() => showToast(fail || t("copyFailed", "Failed to copy")));
+  } else showToast(fail || t("copyFailed", "Failed to copy"));
 }
 export function bindSeg(name: string, fn: (v: string | null) => void) {
   const box = document.querySelector('[data-seg="' + name + '"]') as HTMLElement | null;
@@ -203,7 +195,7 @@ export function bindAuthPanel() {
       save.onclick = () => {
         const key = (inp && inp.value) || "";
         if (!key) {
-          showToast("请粘贴 API key");
+          showToast(t("pasteApiKey", "Please paste API key"));
           return;
         }
         fetch("/api/config", {
@@ -213,10 +205,10 @@ export function bindAuthPanel() {
         })
           .then((r) => r.json())
           .then((j) => {
-            showToast(j && j.ok ? "已保存 " + name : "保存失败");
+            showToast(j && j.ok ? t("saved", "Saved ") + name : t("saveFail", "Save failed"));
             if (inp) inp.value = "";
           })
-          .catch(() => showToast("保存失败"));
+          .catch(() => showToast(t("saveFail", "Save failed")));
       };
     if (oauthBtn)
       oauthBtn.onclick = async () => {
@@ -229,7 +221,7 @@ export function bindAuthPanel() {
           });
           const j = await r.json();
           if (!j || !j.ok) {
-            showToast("OAuth 启动失败");
+            showToast(getLang() === "zh" ? "OAuth 启动失败" : "Failed to start OAuth");
             return;
           }
           if (j.user_code) {
@@ -241,37 +233,38 @@ export function bindAuthPanel() {
             showToast("code " + j.user_code);
           } else if (j.url) {
             window.open(j.url, "_blank");
-            showToast("请在新标签页完成登录");
+            showToast(getLang() === "zh" ? "请在新标签页完成登录" : "Please complete login in new tab");
           } else {
-            showToast("OAuth 启动失败");
+            showToast(getLang() === "zh" ? "OAuth 启动失败" : "Failed to start OAuth");
             return;
           }
           const path = j.user_code ? "/api/oauth/poll?state=" : "/api/oauth/status?state=";
           const t0 = Date.now();
           const tick = async () => {
             if (Date.now() - t0 > 180000) {
-              showToast("OAuth 超时");
+              showToast(getLang() === "zh" ? "OAuth 超时" : "OAuth timed out");
               return;
             }
             const s = await fetch(path + encodeURIComponent(j.state)).then((x) => x.json());
             if (s && s.done && s.ok) {
-              showToast("已登录");
+              showToast(getLang() === "zh" ? "已登录" : "Logged in");
               if (hint) hint.hidden = true;
               return;
             }
             if (s && s.done && !s.ok) {
-              showToast("登录失败");
+              showToast(getLang() === "zh" ? "登录失败" : "Login failed");
               return;
             }
             setTimeout(tick, 1500);
           };
           setTimeout(tick, 1500);
         } catch {
-          showToast("OAuth 启动失败");
+          showToast(getLang() === "zh" ? "OAuth 启动失败" : "Failed to start OAuth");
         }
       };
   });
 }
+
 
 // ---- 外观方案(配色/强调色/密度/宽屏/字号):自 main 迁入 ----
 export function setScheme(v: string) {

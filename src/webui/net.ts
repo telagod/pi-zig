@@ -3,6 +3,7 @@
 // 登录成功后的 boot 续跑由 main 经 setOnAuthed 注入(解循环)。
 import { $ } from "./util";
 import { sess, wsp } from "./state";
+import { emit, on } from "./bus";
 
 const AUTH_KEY = "piz-web.credential";
 let credential: string | undefined = undefined;
@@ -65,9 +66,8 @@ window.fetch = (url, opts: any = {}) => {
   });
 };
 
-// 登录成功续跑(main 注入 boot)
-let onAuthed: () => void = () => {};
-export function setOnAuthed(f: () => void) { onAuthed = f; }
+// 登录成功续跑 (向事件总线广播 auth:success)
+export function setOnAuthed(f: () => void) { on("auth:success", f); }
 
 // 登录提交
 const authInp = $("authTok") as HTMLInputElement;
@@ -90,7 +90,7 @@ export async function submitAuth() {
     });
     if (r.ok) {
       hideAuthPage();
-      onAuthed();
+      emit("auth:success");
     } else {
       clearCredential();
       $("authErr")!.textContent = "连接失败,请检查 token";

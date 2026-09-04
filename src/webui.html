@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh" data-color-scheme="dark">
+<html lang="en" data-color-scheme="dark">
   <head>
     <meta charset="utf-8" />
     <meta
@@ -27,7 +27,7 @@
           <span class="gload-word">piz</span>
         </div>
         <span class="spin"></span>
-        <div class="gload-text">正在连接本地服务器…</div>
+        <div class="gload-text" data-i18n="connecting">Connecting to local server...</div>
       </div>
     </div>
     <!-- 登录页(kimi auth-page) -->
@@ -39,11 +39,11 @@
           </svg>
           <span class="auth-word">piz</span>
         </div>
-        <h1>需要凭证</h1>
-        <p>此服务器受保护。输入启动时打印的 token(或 <code>--token</code> 设置的值)。</p>
+        <h1 data-i18n="authTitle">Credentials Required</h1>
+        <p data-i18n="authDesc">This server is protected. Enter the token printed at startup (or configured via <code>--token</code>).</p>
         <input type="password" id="authTok" placeholder="Token" autocomplete="current-password" />
         <div class="auth-err" id="authErr"></div>
-        <button id="authBtn" disabled>连接</button>
+        <button id="authBtn" disabled data-i18n="connect">Connect</button>
       </div>
     </section>
     <div id="app" class="app">
@@ -65,63 +65,63 @@
             <span class="ch-name" id="wsName">piz</span>
           </div>
           <div style="display: flex; gap: 2px">
-            <button class="ch-ib" id="colBtn" title="折叠侧栏">◂</button>
+            <button class="ch-ib" id="colBtn" title="Collapse sidebar" data-i18n-title="collapseSidebar">◂</button>
           </div>
         </div>
         <button class="search" id="searchBtn">
           <span class="search-ic">⌕</span
-          ><span class="search-t">搜索会话…</span>
+          ><span class="search-t" data-i18n="searchSessions">Search sessions...</span>
         </button>
         <button class="btn-new-chat" id="newBtn">
-          <span class="pl">＋</span><span>新对话</span>
+          <span class="pl">＋</span><span data-i18n="newSession">New session</span>
         </button>
         <div class="sessions" id="slist"></div>
         <div class="side-foot">
-          <button class="side-set" id="setBtn" title="设置">
-            <span class="side-set-ic">⚙</span><span>设置</span>
+          <button class="side-set" id="setBtn" title="Settings" data-i18n-title="settings">
+            <span class="side-set-ic">⚙</span><span data-i18n="settings">Settings</span>
           </button>
         </div>
       </aside>
       <div class="side-rail">
-        <button class="ch-ib" id="expBtn" title="展开侧栏">▸</button>
+        <button class="ch-ib" id="expBtn" title="Expand sidebar" data-i18n-title="expandSidebar">▸</button>
       </div>
       <main id="main">
         <div class="topbar">
-          <button class="wsq" id="wsqBtn" title="切换项目">⌂</button>
+          <button class="wsq" id="wsqBtn" title="Switch workspace" data-i18n-title="switchWorkspace">⌂</button>
           <button class="tb-mid" id="tbMid">
             <span class="tb-ws" id="tbWs">…</span><span class="tb-sl">/</span
-            ><span class="tb-se" id="tbSe">会话</span>
+            ><span class="tb-se" id="tbSe" data-i18n="session">Session</span>
           </button>
-          <button class="ib" id="tbKebab" title="会话操作">⋯</button>
+          <button class="ib" id="tbKebab" title="Session actions" data-i18n-title="sessionActions">⋯</button>
         </div>
         <header class="chat-header" id="chatHdr">
           <div class="ch-id">
             <span class="ch-ws" id="hWs"></span
             ><span class="ch-sep" id="hSep" style="display: none">/</span
-            ><span class="ch-ses" id="hSes" title="重命名"></span>
+            ><span class="ch-ses" id="hSes" title="Rename" data-i18n-title="rename"></span>
           </div>
           <div class="ch-git" id="hGit"></div>
           <div class="ch-spacer"></div>
           <span id="plugin-header" data-piz-slot="header"></span
           ><span id="plugin-status" data-piz-slot="status"></span>
-          <button class="ib" id="hJobs" title="后台活动(j)" hidden
+          <button class="ib" id="hJobs" title="Background tasks (j)" data-i18n-title="backgroundTasks" hidden
             >⠿<span id="hJobsBadge" class="jobs-badge" hidden></span></button
           >
-          <button class="ib" id="hKebab" title="会话操作">⋯</button>
+          <button class="ib" id="hKebab" title="Session actions" data-i18n-title="sessionActions">⋯</button>
         </header>
         <div id="stage">
           <div id="col">
             <div id="panes">
               <div id="wrap" class=""><div id="thread"></div></div>
-              <button id="toBottom" type="button" title="回到底部" hidden>↓</button>
+              <button id="toBottom" type="button" title="Scroll to bottom" data-i18n-title="scrollToBottom" hidden>↓</button>
             </div>
             <div id="dock"></div>
             <div id="cmp">
           <div id="actStrip" class="act-strip" hidden></div>
           <div id="qbox" hidden>
             <div class="q-head">
-              <b id="qCount">待发</b><span class="q-to">轮到就发</span>
-              <button type="button" id="qClr">清空</button>
+              <b id="qCount" data-i18n="queued">Queued</b><span class="q-to" data-i18n="sendWhenReady">Send when ready</span>
+              <button type="button" id="qClr" data-i18n="clear">Clear</button>
             </div>
             <div id="qItems"></div>
           </div>
@@ -133,8 +133,9 @@
                 <textarea
                   id="inp"
                   rows="1"
-                  placeholder="消息 · / 命令 · @./文件 · !命令 · Enter 发送"
-                  data-ph="消息 · / 命令 · @./文件 · !命令 · Enter 发送"
+                  placeholder="Message · / command · @./file · !command · Enter to send"
+                  data-ph="Message · / command · @./file · !command · Enter to send"
+                  data-i18n-ph="inputPlaceholder"
                 ></textarea>
               </div>
               <div class="toolbar">
@@ -142,22 +143,24 @@
                   <span
                     class="perm-pill perm-allow"
                     id="permPill"
-                    title="授权模式"
+                    title="Approval mode"
+                    data-i18n-title="permMode"
                     >yolo</span
                   >
-                  <span class="perm-pill" id="sbPill" title="bash 沙箱">off</span>
-                  <span class="mode-pill" id="modePill" title="斜杠命令"
-                    >/ 命令</span
+                  <span class="perm-pill" id="sbPill" title="Bash sandbox" data-i18n-title="sandboxMode">off</span>
+                  <span class="mode-pill" id="modePill" title="/ commands" data-i18n-title="slashCommandsTitle"
+                    >/ commands</span
                   >
-                  <span class="mode-pill" id="hModel" title="切换模型">…</span>
-                  <span class="mode-pill" id="hThink" title="思考等级">high</span>
+                  <span class="mode-pill" id="hModel" title="Switch model" data-i18n-title="switchModel">…</span>
+                  <span class="mode-pill" id="hThink" title="Thinking level" data-i18n-title="thinkingLevel">high</span>
                   <span id="turnMeta" class="turn-meta" hidden></span>
                   <button
                     class="compact-chip"
                     id="compactChip"
                     style="display: none"
+                    data-i18n="contextFull"
                   >
-                    上下文已满
+                    Context full
                   </button>
                 </div>
                 <div class="toolbar-right">
@@ -168,7 +171,7 @@
                       <circle id="ctxFill" class="ctx-ring-fill" cx="10" cy="10" r="7" fill="none" stroke-width="2.5" stroke-linecap="round" stroke-dasharray="43.98" stroke-dashoffset="43.98"></circle></svg
                     ><span id="ctxLbl"></span></span
                   ><span id="plugin-composer" data-piz-slot="composer"></span
-                  ><button id="send" title="发送">➤</button>
+                  ><button id="send" title="Send" data-i18n-title="send">➤</button>
                 </div>
               </div>
             </div>
@@ -203,7 +206,7 @@
       <div id="spnl">
         <div class="grab"></div>
         <div class="shd">
-          <span class="shd-t">会话</span><button id="scls">✕</button>
+          <span class="shd-t" data-i18n="session">Session</span><button id="scls">✕</button>
         </div>
         <div id="sbody"></div>
       </div>

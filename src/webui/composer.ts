@@ -5,7 +5,8 @@ import { $, esc, fmtTok } from "./util";
 import { sess, wsp, prefs } from "./state";
 import { showToast } from "./ui";
 import { act, loadSessions } from "./sessions";
-import { autosizeInp, saveDraft, clearDraft, pushHist, histPrev, histNext } from "./store";
+import { autosizeInp, saveDraft, clearDraft, pushHist, histPrev, histNext, getLastUser, setLastUser, getRunning, setRunning } from "./store";
+import { on } from "./bus";
 import { ev } from "./stream";
 import {
   hideSlash, hideBang, slashOpen, slashMove, slashComplete, slashPick,
@@ -20,31 +21,29 @@ import {
 } from "./model";
 import { pluginEmit } from "./plugins";
 import { refreshJobs } from "./jobs";
-
+import { t, getLang } from "./i18n";
 
 let running = false;
-let lastUser = "";
 let lastImgUrl: any = null;
 let pending: string[] = [];
-export const getRunning = () => running;
-export const getLastUser = () => lastUser;
-export const setLastUser = (v: string) => { lastUser = v; };
+export { getRunning, getLastUser, setLastUser };
 export const clearPending = () => { pending = []; };
 export function refreshSend() {
-  const t = ($("inp") as HTMLTextAreaElement).value.trim();
-  const stop = running && !t;
+  const tVal = ($("inp") as HTMLTextAreaElement).value.trim();
+  const stop = running && !tVal;
   $("send")!.textContent = stop ? "■" : "➤";
   $("send")!.classList.toggle("stop", stop);
-  $("send")!.title = stop ? "停止" : running ? "接着发" : "发送";
+  $("send")!.title = stop ? t("stop", "Stop") : running ? t("sendMore", "Send more") : t("send", "Send");
   const inp = $("inp") as HTMLTextAreaElement | null;
   if (inp) {
     inp.placeholder = running
-      ? "接着发…"
+      ? t("sendMorePh", "Send more…")
       : inp.dataset.ph || inp.placeholder;
   }
 }
 export function setRun(r: boolean) {
   running = r;
+  setRunning(r);
   refreshSend();
   if (r) ensureActPoll();
 }
@@ -107,7 +106,7 @@ export function renderQueue() {
     return;
   }
   box.hidden = false;
-  count!.textContent = pending.length === 1 ? "待发" : pending.length + " 条待发";
+  count!.textContent = pending.length === 1 ? t("queued", "Queued") : pending.length + (getLang() === "zh" ? " 条待发" : " queued");
   items.innerHTML = pending
     .map((t) => '<div class="q-item">' + esc(t) + "</div>")
     .join("");
@@ -130,7 +129,7 @@ ev.onmessage = (e) => {
   pluginEmit(evt.type, evt);
   switch (evt.type) {
     case "user_message":
-      lastUser = evt.text || lastUser;
+      setLastUser(evt.text || getLastUser());
       dropPending(evt.text);
       addUser(evt.has_image && !evt.text ? "[image]" : evt.has_image ? (evt.text || "") + "  [image]" : (evt.text || ""), evt.image_file ? "/api/image?name=" + encodeURIComponent(evt.image_file) : evt.has_image ? lastImgUrl : null);
       lastImgUrl = null;
@@ -453,7 +452,7 @@ document.addEventListener("paste", async (ev: any) => {
 });
 export async function sendPlain(t: string) {
   if (!t && !pendingImg) return;
-  lastUser = t || "(image)";
+  setLastUser(t || "(image)");
   let img = pendingImg;
   lastImgUrl = img || null;
   pendingImg = null;
@@ -535,3 +534,25 @@ export async function send() {
   // 桌面端发完回焦,接着打下一行;触屏不弹键盘。
   if (window.matchMedia("(hover: hover)").matches) $("inp")!.focus();
 }
+
+on("chat:send", ({ text }) => {
+  sendPlain(text);
+});
+on("chat:retry", () => {
+  const u = getLastUser();
+  if (u) sendPlain(u);
+});
+on("composer:refresh-send", () => {
+  refreshSend();
+});
+on("composer:ensure-act-poll", () => {
+  ensureActPoll();
+});
+on("composer:clear-pending", () => {
+  clearPending();
+  renderQueue();
+});
+on("composer:paste-image", async ({ callback }) => {
+  const ok = await attachClipboardImage();
+  callback(ok);
+});

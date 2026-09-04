@@ -3,6 +3,7 @@
 import { $ } from "./util";
 import { sessUrl } from "./state";
 import { loadSessions, openWsMenu } from "./sessions";
+import { on } from "./bus";
 
 const sheet = $("sheet")!;
 export function openSheet() {
@@ -14,6 +15,8 @@ export function closeSheet() {
   sheet.classList.remove("open");
   document.body.style.overflow = "";
 }
+
+on("session:select", () => closeSheet());
 // 下滑关闭:按住 grab/头部往下拖超过 70px 或快甩即收。
 (function () {
   const pnl = $("spnl");

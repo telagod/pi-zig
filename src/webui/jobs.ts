@@ -6,6 +6,7 @@
 // 失败 detail 是唯一可读之处,不过滤;耗时钟打开且含活物才跑。
 import { $, esc, fmtTok } from "./util";
 import { setSubPool } from "./slash";
+import { t, getLang } from "./i18n";
 
 let live: any[] = [];
 let gone: any[] = [];
@@ -28,8 +29,8 @@ export function setupJobs() {
   };
   document.addEventListener("click", (e) => {
     if (!isOpen()) return;
-    const t = e.target as HTMLElement;
-    if (t.closest?.("#jobsPop,#hJobs")) return;
+    const tEl = e.target as HTMLElement;
+    if (tEl.closest?.("#jobsPop,#hJobs")) return;
     closeJobs();
   });
   document.addEventListener("keydown", (e) => {
@@ -79,28 +80,29 @@ function fmtRow(a: any, gone_: boolean, i: number): string {
   let expandHtml = "";
   if (isOpen) {
     const details = [
-      a.kind ? "<div><b>类型:</b> " + esc(a.kind) + "</div>" : "",
+      a.kind ? "<div><b>" + t("type", "Type") + ":</b> " + esc(a.kind) + "</div>" : "",
       a.pid ? "<div><b>PID:</b> " + esc(String(a.pid)) + "</div>" : "",
-      a.limit_ms ? "<div><b>超时限制:</b> " + Math.round(a.limit_ms / 1000) + "s</div>" : "",
-      a.bytes ? "<div><b>传输数据:</b> " + fmtTok(a.bytes) + "</div>" : "",
-      a.attempt ? "<div><b>执行轮次:</b> " + a.attempt + "</div>" : "",
-      a.detail ? '<div><b>详细内容:</b><pre class="jr-code">' + esc(a.detail) + "</pre></div>" : "",
+      a.limit_ms ? "<div><b>" + t("timeout", "Timeout") + ":</b> " + Math.round(a.limit_ms / 1000) + "s</div>" : "",
+      a.bytes ? "<div><b>" + t("dataTransfer", "Data transfer") + ":</b> " + fmtTok(a.bytes) + "</div>" : "",
+      a.attempt ? "<div><b>" + t("round", "Attempt") + ":</b> " + a.attempt + "</div>" : "",
+      a.detail ? '<div><b>' + t("details", "Details") + ':</b><pre class="jr-code">' + esc(a.detail) + "</pre></div>" : "",
     ].filter(Boolean).join("");
-    expandHtml = '<div class="jr-exp">' + (details || "<i>暂无附加参数</i>") + "</div>";
+    expandHtml = '<div class="jr-exp">' + (details || "<i>" + (getLang() === "zh" ? "暂无附加参数" : "No extra parameters") + "</i>") + "</div>";
   }
   return (
-    '<div class="jr' + (a.detached ? " bg" : "") + (gone_ ? " gone" : "") + (isOpen ? " open" : "") + '" data-key="' + esc(k) + '" title="点击查看详情">' +
+    '<div class="jr' + (a.detached ? " bg" : "") + (gone_ ? " gone" : "") + (isOpen ? " open" : "") + '" data-key="' + esc(k) + '" title="' + t("clickDetails", "Click to view details") + '">' +
     '<div class="jr-main">' +
     '<span class="jr-g">' + glyph + "</span>" +
     '<span class="jr-n">' + esc(a.name || "job") + "</span>" +
     det +
-    '<span class="jr-t" data-i="' + i + '">' + sec + lim + by + retry + (gone_ ? " · 完成" : "") + "</span>" +
+    '<span class="jr-t" data-i="' + i + '">' + sec + lim + by + retry + (gone_ ? " · " + t("done", "Done") : "") + "</span>" +
     '<span class="jr-arr">' + (isOpen ? "▾" : "▸") + "</span>" +
     "</div>" +
     expandHtml +
     "</div>"
   );
 }
+
 
 function startTickIfNeeded() {
   if (!isOpen()) return;
@@ -194,7 +196,7 @@ function updateLineage(list: any[]) {
     esc(subs.map((s: any) => s.name + (s.detail ? " — " + s.detail : "")).join("\n")) +
     '">' +
     subs.length +
-    (subs.length > 1 ? " 个子代理" : " 子代理") +
+    (subs.length > 1 ? (getLang() === "zh" ? " 个 Subagent" : " subagents") : (getLang() === "zh" ? " Subagent" : " subagent")) +
     "</span>";
 }
 

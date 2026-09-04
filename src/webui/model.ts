@@ -1,14 +1,10 @@
 // model.ts —— 模型/思考档/授权/沙箱/cost/ctx/turnMeta/头部渲染与 kebab 菜单。
-// 自 webui.js 切出。runSlash 借自 slash.ts(环引,仅运行期回调用之,安全);
-// 诸模块直引本簇,旧 slashH/chatH/compH 之模型钩尽废。
 import { $, esc, fmtTok, projectName } from "./util";
 import { sess, wsp, ws, sessUrl } from "./state";
 import { showToast, askText } from "./ui";
 import { closeMenus, openAt, menuRow, menuLabel, menuSep, loadSessions, act, openWsMenu } from "./sessions";
-
-// runSlash 环引(slash↔model 为 build-web DFS 所禁),以钩袋迟取之。
-export const modelH: any = {};
-const runSlash = (...a: any[]) => modelH.runSlash(...a);
+import { t, getLang } from "./i18n";
+import { emit, on } from "./bus";
 
 // ---- 模型 ----
 export let curModel = "";
@@ -38,14 +34,14 @@ export async function applySessionModel(md: string) {
     );
     const j = await r.json().catch(() => ({}));
     if (!r.ok || j.ok === false || !j.model) {
-      showToast(j.error || "切换模型失败");
+      showToast(j.error || t("modelSwitchFail", "Failed to switch model"));
       return false;
     }
     curModel = j.model;
     renderModel();
     return true;
   } catch {
-    showToast("切换模型失败");
+    showToast(t("modelSwitchFail", "Failed to switch model"));
     return false;
   }
 }
@@ -61,7 +57,7 @@ export function loadModels(sel: any) {
       // 分组:provider 前缀 → 模型列表
       const groups = new Map<string, string[]>();
       for (const md of list) {
-        const prov = md.includes("/") ? md.slice(0, md.indexOf("/")) : "其他";
+        const prov = md.includes("/") ? md.slice(0, md.indexOf("/")) : (getLang() === "zh" ? "其他" : "Other");
         if (!groups.has(prov)) groups.set(prov, []);
         groups.get(prov)!.push(md);
       }
@@ -86,13 +82,13 @@ export function loadModels(sel: any) {
           );
         }
       }
-      if (!list.length) m.appendChild(menuLabel("无可用模型"));
+      if (!list.length) m.appendChild(menuLabel(t("noModels", "No models available")));
       openAt("modelMenu", sel, "tr");
     })
-    .catch(() => showToast("模型列表加载失败"));
+    .catch(() => showToast(t("modelsLoadFail", "Failed to load models")));
 }
 export function modelShort(m: string) {
-  if (!m) return "模型";
+  if (!m) return t("selectModel", "Model");
   const n = m.includes("/") ? m.slice(m.lastIndexOf("/") + 1) : m;
   return n.length > 22 ? n.slice(0, 20) + "…" : n;
 }
@@ -100,7 +96,7 @@ export function renderModel() {
   const el = $("hModel");
   if (!el) return;
   el.textContent = modelShort(curModel);
-  el.title = curModel ? "模型 " + curModel : "切换模型";
+  el.title = curModel ? "Model: " + curModel : t("switchModel", "Switch model");
 }
 ($("hModel") as HTMLElement).onclick = (e: any) => {
   e.stopPropagation();
@@ -119,7 +115,7 @@ export function renderThink() {
   const el = $("hThink");
   if (!el) return;
   el.textContent = curThink || "high";
-  el.title = "思考 " + (curThink || "high");
+  el.title = t("thinkingLevel", "Thinking") + ": " + (curThink || "high");
 }
 export async function setThink(level: string) {
   try {
@@ -130,7 +126,7 @@ export async function setThink(level: string) {
     });
     const j = await r.json().catch(() => ({}));
     if (!r.ok || j.ok === false) {
-      showToast(j.error || "切换思考等级失败");
+      showToast(j.error || t("thinkSwitchFail", "Failed to switch thinking level"));
       return false;
     }
     if (j && j.defaultThinkingLevel) {
@@ -139,7 +135,7 @@ export async function setThink(level: string) {
     }
     return true;
   } catch {
-    showToast("切换思考等级失败");
+    showToast(t("thinkSwitchFail", "Failed to switch thinking level"));
     return false;
   }
 }
@@ -147,7 +143,7 @@ export async function setThink(level: string) {
   e.stopPropagation();
   const m = $("thinkMenu")!;
   m.innerHTML = "";
-  m.appendChild(menuLabel("思考等级"));
+  m.appendChild(menuLabel(t("thinkingLevel", "Thinking level")));
   THINK_LEVELS.forEach((lv) => {
     m.appendChild(
       menuRow({
@@ -162,9 +158,9 @@ export async function setThink(level: string) {
 // ---- 授权模式(Codex /permissions: yolo / ask / read-only) ----
 export let approvalMode = "yolo";
 export const APPROVALS = [
-  { id: "yolo", label: "yolo", hint: "不询问，默认" },
-  { id: "ask", label: "ask", hint: "危险工具先问" },
-  { id: "read-only", label: "read-only", hint: "危险工具直接拒" },
+  { id: "yolo", label: "yolo", hint: () => (getLang() === "zh" ? "不询问，默认" : "No confirmation, default") },
+  { id: "ask", label: "ask", hint: () => (getLang() === "zh" ? "危险工具先问" : "Ask before dangerous tools") },
+  { id: "read-only", label: "read-only", hint: () => (getLang() === "zh" ? "危险工具直接拒" : "Deny dangerous tools directly") },
 ];
 export const approvalLabel = () =>
   (APPROVALS.find((x) => x.id === approvalMode) || ({} as any)).label;
@@ -183,7 +179,7 @@ export function setModeBtn() {
       : approvalMode === "ask"
         ? "perm-ask"
         : "perm-deny");
-  p.title = "授权 " + cur.hint;
+  p.title = t("permMode", "Approval mode") + ": " + (typeof cur.hint === "function" ? cur.hint() : cur.hint);
 }
 export async function setApproval(mode: string) {
   approvalMode = mode;
@@ -199,26 +195,26 @@ export async function setApproval(mode: string) {
     );
     const j = await r.json().catch(() => ({}));
     if (!r.ok || j.ok === false) {
-      showToast(j.error || "授权切换失败");
+      showToast(j.error || t("permSwitchFail", "Failed to switch approval mode"));
       return;
     }
     if (j.mode) approvalMode = j.mode;
     else if (j.auto !== undefined) approvalMode = j.auto ? "yolo" : "ask";
     setModeBtn();
   } catch {
-    showToast("授权切换失败");
+    showToast(t("permSwitchFail", "Failed to switch approval mode"));
   }
 }
 ($("permPill") as HTMLElement).onclick = (e: any) => {
   e.stopPropagation();
   const m = $("permMenu")!;
   m.innerHTML = "";
-  m.appendChild(menuLabel("授权模式"));
+  m.appendChild(menuLabel(t("permMode", "Approval mode")));
   APPROVALS.forEach((it) => {
     m.appendChild(
       menuRow({
         label: it.label,
-        hint: it.hint,
+        hint: typeof it.hint === "function" ? it.hint() : it.hint,
         check: it.id === approvalMode,
         onclick: () => setApproval(it.id),
       }),
@@ -226,11 +222,12 @@ export async function setApproval(mode: string) {
   });
   openAt("permMenu", e.currentTarget, "tr");
 };
+
 export let sandboxMode = "off";
 export const SANDBOXES = [
-  { id: "off", label: "off", hint: "不隔离" },
-  { id: "workspace", label: "workspace", hint: "工作区可写，其余只读" },
-  { id: "strict", label: "strict", hint: "工作区 + 断网" },
+  { id: "off", label: "off", hint: () => (getLang() === "zh" ? "不隔离" : "No isolation") },
+  { id: "workspace", label: "workspace", hint: () => (getLang() === "zh" ? "工作区可写，其余只读" : "Workspace writable, others read-only") },
+  { id: "strict", label: "strict", hint: () => (getLang() === "zh" ? "工作区 + 断网" : "Workspace + no network") },
 ];
 export const getSandboxMode = () => sandboxMode;
 export const getApprovalMode = () => approvalMode;
@@ -248,7 +245,7 @@ export function setSandboxBtn() {
   p.className =
     "perm-pill " +
     (sandboxMode === "strict" ? "perm-deny" : sandboxMode === "workspace" ? "perm-ask" : "");
-  p.title = "沙箱 " + cur.hint + (be ? " · " + be : "");
+  p.title = "Sandbox: " + (typeof cur.hint === "function" ? cur.hint() : cur.hint) + (be ? " · " + be : "");
 }
 export async function setSandbox(mode: string) {
   sandboxMode = mode;
@@ -261,26 +258,26 @@ export async function setSandbox(mode: string) {
     });
     const j = await r.json().catch(() => ({}));
     if (!r.ok || j.ok === false) {
-      showToast(j.error || "沙箱切换失败");
+      showToast(j.error || t("sandboxSwitchFail", "Failed to switch sandbox"));
       return;
     }
     if (j && j.sandboxMode) sandboxMode = j.sandboxMode;
     if (j && j.sandboxBackend) (window as any).sandboxBackend = j.sandboxBackend;
     setSandboxBtn();
   } catch {
-    showToast("沙箱切换失败");
+    showToast(t("sandboxSwitchFail", "Failed to switch sandbox"));
   }
 }
 ($("sbPill") as HTMLElement).onclick = (e: any) => {
   e.stopPropagation();
   const m = $("sbMenu")!;
   m.innerHTML = "";
-  m.appendChild(menuLabel("bash 沙箱"));
+  m.appendChild(menuLabel(t("sandboxMode", "Bash sandbox")));
   SANDBOXES.forEach((it) => {
     m.appendChild(
       menuRow({
         label: it.label,
-        hint: it.hint,
+        hint: typeof it.hint === "function" ? it.hint() : it.hint,
         check: it.id === sandboxMode,
         onclick: () => setSandbox(it.id),
       }),
@@ -328,7 +325,7 @@ export function setCtx(pct: any, used: any, win: any) {
     wrap.dataset.baseTitle =
       used != null && win
         ? fmtTok(used) + " / " + fmtTok(win) + " · " + pretty
-        : "上下文 " + pretty;
+        : t("context", "Context ") + pretty;
     wrap.title = wrap.dataset.baseTitle;
     (fill as unknown as SVGCircleElement).style.stroke =
       n > 85 ? "var(--color-danger)" : "var(--color-accent)";
@@ -337,9 +334,9 @@ export function setCtx(pct: any, used: any, win: any) {
     const c = $("compactChip")!;
     c.style.display = "";
     c.onclick = () => {
-      showToast("正在压缩…");
+      showToast(t("compressing", "Compressing context..."));
       act({ act: "compact" }, (j: any) => {
-        showToast(j && j.ok ? "压缩完成" : "压缩失败");
+        showToast(j && j.ok ? t("compressedOk", "Context compressed") : t("compressedFail", "Compression failed"));
       });
     };
   } else $("compactChip")!.style.display = "none";
@@ -349,7 +346,7 @@ export function setTurnMeta(evt: any) {
   if (!el) return;
   const bits = [];
   if (evt.cache !== undefined && evt.cache !== "")
-    bits.push("缓存 " + evt.cache + "%");
+    bits.push(t("cache", "Cache ") + evt.cache + "%");
   if (evt.tps) bits.push(evt.tps + " tok/s");
   if (!bits.length) {
     el.hidden = true;
@@ -360,10 +357,10 @@ export function setTurnMeta(evt: any) {
   const wrap = $("ctxWrap");
   if (wrap && !wrap.hidden) {
     const extra = [];
-    if (evt.cache !== undefined && evt.cache !== "") extra.push("缓存 " + evt.cache + "%");
+    if (evt.cache !== undefined && evt.cache !== "") extra.push(t("cache", "Cache ") + evt.cache + "%");
     if (evt.tps) extra.push(evt.tps + " tok/s");
     wrap.title =
-      (wrap.dataset.baseTitle || wrap.title || "上下文") +
+      (wrap.dataset.baseTitle || wrap.title || t("context", "Context ")) +
       (extra.length ? " · " + extra.join(" · ") : "");
   }
 }
@@ -384,10 +381,10 @@ export function renderHdr(s: any) {
     hWs.textContent = "";
     hSep.style.display = "none";
   }
-  hSes.textContent = sess === "default" ? "默认会话" : s.title || sess;
+  hSes.textContent = sess === "default" ? t("defaultSession", "Default session") : s.title || sess;
   $("tbWs")!.textContent = wsName || "";
   $("tbSe")!.textContent =
-    sess === "default" ? "默认会话" : s.title || sess;
+    sess === "default" ? t("defaultSession", "Default session") : s.title || sess;
   const git = $("hGit")!;
   git.innerHTML = "";
   if (s.branch) {
@@ -408,23 +405,23 @@ export function renderHdr(s: any) {
     pill.className = "ch-pill";
     pill.style.borderColor =
       "color-mix(in srgb,var(--color-success) 20%,var(--color-line))";
-    pill.textContent = s.changes + " 个变更";
+    pill.textContent = s.changes + (getLang() === "zh" ? " 个变更" : " changes");
     git.appendChild(pill);
   }
 }
-export async function applySessionTitle(t: string, hdr?: boolean) {
+export async function applySessionTitle(tStr: string, hdr?: boolean) {
   try {
     const r = await fetch(
       "/api/title?" + wsp + "session=" + encodeURIComponent(sess),
       {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ title: t }),
+        body: JSON.stringify({ title: tStr }),
       },
     );
     const j = await r.json().catch(() => ({}));
     if (!r.ok || j.ok === false || j.title === undefined) {
-      showToast(j.error || "设置标题失败");
+      showToast(j.error || t("setTitleFail", "Failed to set title"));
       return false;
     }
     curTitle = j.title;
@@ -432,14 +429,14 @@ export async function applySessionTitle(t: string, hdr?: boolean) {
     loadSessions();
     return true;
   } catch {
-    showToast("设置标题失败");
+    showToast(t("setTitleFail", "Failed to set title"));
     return false;
   }
 }
 ($("hSes") as HTMLElement).onclick = async () => {
-  const t = await askText("会话标题", curTitle || "", "");
-  if (t === null) return;
-  await applySessionTitle(t, true);
+  const tStr = await askText(t("sessionTitle", "Session title"), curTitle || "", "");
+  if (tStr === null) return;
+  await applySessionTitle(tStr, true);
 };
 ($("hKebab") as HTMLElement).onclick = (e: any) => {
   e.stopPropagation();
@@ -447,25 +444,25 @@ export async function applySessionTitle(t: string, hdr?: boolean) {
   m.innerHTML = "";
   const mi = (label: string, fn: () => void, danger?: boolean) =>
     m.appendChild(menuRow({ label: label.replace(/^[^ ]+ /, ""), icon: label.slice(0, label.indexOf(" ")), danger, onclick: fn }));
-  mi("⧉ 复制最后回复", () => runSlash({ name: "/copy" }, ""));
-  mi("⎘ 导出 HTML", () => runSlash({ name: "/export" }, ""));
-  mi("☰ 消息列表", () => runSlash({ name: "/tree" }, ""));
-  mi("📋 复制全部", () => runSlash({ name: "/dump" }, ""));
-  mi("✎ 计划", async () => {
-    const g = await askText("计划目标", "", "要完成什么");
-    if (g) runSlash({ name: "/plan" }, g);
+  mi(t("copyReply", "⧉ Copy last reply"), () => emit("slash:run", { cmd: { name: "/copy" }, arg: "" }));
+  mi(t("exportHtml", "⎘ Export HTML"), () => emit("slash:run", { cmd: { name: "/export" }, arg: "" }));
+  mi(t("tree", "☰ Message list"), () => emit("slash:run", { cmd: { name: "/tree" }, arg: "" }));
+  mi(t("dumpAll", "📋 Dump all"), () => emit("slash:run", { cmd: { name: "/dump" }, arg: "" }));
+  mi(t("plan", "✎ Plan"), async () => {
+    const g = await askText(t("planGoal", "Plan goal"), "", t("whatToAccomplish", "What to accomplish"));
+    if (g) emit("slash:run", { cmd: { name: "/plan" }, arg: g });
   });
-  mi("✎ 重命名", async () => {
-    const t = await askText("会话标题", curTitle || "", "");
-    if (t === null) return;
-    await applySessionTitle(t, false);
+  mi(t("renameSession", "✎ Rename session"), async () => {
+    const tStr = await askText(t("sessionTitle", "Session title"), curTitle || "", "");
+    if (tStr === null) return;
+    await applySessionTitle(tStr, false);
   });
-  mi("✱ 派生会话", async () => {
-    const n = await askText("派生会话", "", "新会话名，留空自动");
+  mi(t("forkSession", "✱ Fork session"), async () => {
+    const n = await askText(t("forkSession", "Fork session"), "", t("forkHint", "New session name, empty for auto"));
     if (n === null) return;
     act({ act: "fork", name: n || "" }, (j: any) => {
       if (j && j.name) {
-        showToast("已派生 " + j.name);
+        showToast(t("forked", "Forked ") + j.name);
         setTimeout(
           () =>
             (location.href = sessUrl(j.name) as any),
@@ -475,25 +472,25 @@ export async function applySessionTitle(t: string, hdr?: boolean) {
     });
   });
   m.appendChild(menuSep());
-  mi("↶ 撤销最后一条", () => {
+  mi(t("undoTurn", "↶ Undo turn"), () => {
     act({ act: "undo" }, (j: any) => {
-      showToast(j && j.ok ? "已撤销" : "无可撤销");
+      showToast(j && j.ok ? t("undone", "Undone") : t("noUndo", "Nothing to undo"));
       setTimeout(() => location.reload(), 400);
     });
   });
-  mi("⚡ 压缩上下文", () => {
-    showToast("正在压缩…");
+  mi(t("compactContext", "⚡ Compact context"), () => {
+    showToast(t("compressing", "Compressing context..."));
     act({ act: "compact" }, (j: any) => {
-      showToast(j && j.ok ? "压缩完成" : "压缩失败");
+      showToast(j && j.ok ? t("compressedOk", "Context compressed") : t("compressedFail", "Compression failed"));
     });
   });
   m.appendChild(menuSep());
   mi(
-    "🗄 归档会话",
+    t("archiveSession", "🗄 Archive session"),
     () => {
       act({ act: "archive" }, (j: any) => {
         if (j && j.ok) {
-          showToast("已归档");
+          showToast(t("archived", "Archived"));
           setTimeout(() => (location.href = sessUrl("default") as any), 400);
         }
       });
@@ -502,6 +499,7 @@ export async function applySessionTitle(t: string, hdr?: boolean) {
   );
   openAt("kmenu", e.currentTarget, "br");
 };
+
 ($("tbKebab") as HTMLElement).onclick = (e: any) => {
   e.stopPropagation();
   ($("hKebab") as any).onclick(e);
@@ -526,3 +524,9 @@ export function applyBootState(s: any) {
   }
   renderHdr(s);
 }
+
+on("session:select", (s: any) => {
+  if (s && (s.mode || s.auto !== undefined)) {
+    setApprovalMode(s.mode || (s.auto ? "yolo" : "ask"));
+  }
+});

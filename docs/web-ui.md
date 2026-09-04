@@ -223,24 +223,25 @@ Origin 校验挡的是浏览器发起的跨源请求，挡不住直接构造的 
 
 | 件 | 职 |
 | --- | --- |
+| `bus.ts` | 统一强类型事件总线:动作解耦、弹窗收起、命令下发与消息发送广播 |
 | `state.ts` | URL 参数(session/ws)、prefs 本地偏好、sessUrl |
 | `util.ts` | 纯工具:DOM/转义/格式化、工具分类与图标、斜杠打分 |
 | `md.ts` | 块级 markdown(表格/任务列表/嵌套列表/引用,围栏代码带轻量语法着色)/ ansi / diff / todo 渲染(字符串→HTML) |
 | `render.ts` | 设置面板 HTML 构造器(seg/auth/资源包/插件行) |
-| `net.ts` | 服务器凭证、fetch 全局包装(Bearer/401)、登录页;`setOnAuthed` 迟绑 boot 解循环 |
-| `ui.ts` | toast、对话框(openDlg/askText/askYes/dlgCancel)、seg/auth 绑定、外观方案(setScheme/applyScheme);`dlgHooks` 迟绑收菜单钩 |
-| `store.ts` | composer 草稿与历史(localStorage,按会话分键) |
-| `sessions.ts` | 菜单助手/项目/会话列/act;`sessHooks` 注入 mode 应用,`sessData` 活引用外供 |
+| `net.ts` | 服务器凭证、fetch 全局包装(Bearer/401)、登录页、`auth:success` 广播 |
+| `ui.ts` | toast、对话框(openDlg/askText/askYes/dlgCancel)、seg/auth 绑定、外观方案(setScheme/applyScheme);开窗发 `popups:dismiss` |
+| `store.ts` | composer 草稿与历史(localStorage)、`lastUser` 与 `running` 全局状态源 |
+| `sessions.ts` | 菜单助手/项目/会话列/act;切会话发 `session:select`，收听 `popups:dismiss` |
 | `stream.ts` | SSE(fetch+ReadableStream、断线横幅、退避重连);`ev.onmessage` 由 composer 指派 |
-| `slash.ts` | 斜杠目录/菜单/bang/@文件/runSlash 全分发;`slashH` 钩袋(模型态已直引 model.ts) |
-| `chat.ts` | 线程渲染核心:滚动贴底、搜索、历史重放、消息流、work/Flow 卡、工具卡/inspect、审批;`chatH` 钩袋(仅余发送/lastUser) |
+| `slash.ts` | 斜杠目录/菜单/bang/@文件/runSlash 全分发;收听 `slash:run` 与 `popups:dismiss`，动作经 bus 广播 |
+| `chat.ts` | 线程渲染核心:滚动贴底、搜索、历史重放、消息流、work/Flow 卡、工具卡/inspect、审批;重发直发 `chat:retry` |
 | `jobs.ts` | 会话头后台活动钮+badge+弹层(借 dsh ui-jobs 之形);数据走 composer 轮询的 refreshJobs,无自轮询 |
-| `composer.ts` | 发送生命周期:运行态/队列/活动条、ev.onmessage 路由、键盘簇、图片、sendPlain/send |
-| `model.ts` | 模型/思考档/授权/沙箱/cost/ctx/turnMeta/头部渲染/kebab;`modelH.runSlash` 一钩(环禁) |
-| `settings.ts` | openSettings/openSearch/全局键;setBtn 自 wired(避 sheet↔settings 环) |
-| `sheet.ts` | 移动 sheet/侧栏折叠/顶栏钮/hideWelcome |
-| `plugins.ts` | 插件 SDK v1:总线/pluginApi/loadPlugins/window.piz;`pluginsH` 注 getRunning/sendPlain(避环) |
-| `main.ts` | 余:boot 门(splash/探活/auth)、welcome 英雄位、三家钩袋总成(~150 行) |
+| `composer.ts` | 发送生命周期:运行态/队列/活动条、ev.onmessage 路由、键盘簇、图片、收听 `chat:send` / `chat:retry` |
+| `model.ts` | 模型/思考档/授权/沙箱/cost/ctx/turnMeta/头部渲染/kebab;收听 `session:select`，kebab 直发 `slash:run` |
+| `settings.ts` | openSettings/openSearch/全局键;收听 `search:open`，快捷键发 `chat:retry` |
+| `sheet.ts` | 移动 sheet/侧栏折叠/顶栏钮/hideWelcome;收听 `session:select` 自动收起 |
+| `plugins.ts` | 插件 SDK v1:总线/pluginApi/loadPlugins/window.piz;api.send 经 bus 广播 |
+| `main.ts` | 应用启动门(splash/探活/auth)、welcome 英雄位、纯净装配 |
 
 ## 构建
 

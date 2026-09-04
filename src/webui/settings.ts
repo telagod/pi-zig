@@ -15,12 +15,14 @@ import {
   applySessionModel, setThink, setApproval, setSandbox, loadModels,
 } from "./model";
 import { th, inspect } from "./chat";
-import { getLastUser, sendPlain } from "./composer";
+import { getLastUser } from "./store";
+import { on, emit } from "./bus";
+import { getLang, setLang, t } from "./i18n";
 
 // 自 wired:设置钮(侧栏底部 foot;绑定居此避环)。
 ($("setBtn") as HTMLElement).onclick = () => openSettings();
 
-export async function openSettings() {
+export async function openSettings(activeTab: string = "auth") {
   let cfg: any = {};
   let models: string[] = [];
   let pkgs: any = { user: [], project: [] };
@@ -49,8 +51,8 @@ export async function openSettings() {
     // 会话模型列:点击弹分组卡片菜单(modelMenu);默认模型仍是原生 select(选项即值)
     if (id === "setSessModel") {
       return (
-        '<button type="button" class="set-sel set-model-btn" id="setSessModel" title="点击选择模型">' +
-        esc(cur || "选择模型") +
+        '<button type="button" class="set-sel set-model-btn" id="setSessModel" title="' + t("selectModel", "Select model") + '">' +
+        esc(cur || t("selectModel", "Select model")) +
         "</button>"
       );
     }
@@ -81,7 +83,7 @@ export async function openSettings() {
   ]);
   const customs = (cfg.providers || []).filter((p: any) => !builtin.has(p.name));
   const provHtml = customs.length
-    ? '<div class="prov-hint" style="margin-top:14px">自定义供应商(见 ~/.piz/models.json)</div>' +
+    ? '<div class="prov-hint" style="margin-top:14px">' + (getLang() === "zh" ? "自定义 Provider (见 ~/.piz/models.json)" : "Custom providers (~/.piz/models.json)") + "</div>" +
       '<div class="prov-cards">' +
       customs
         .map(
@@ -92,7 +94,7 @@ export async function openSettings() {
             esc(p.name || "") +
             "</span>" +
             (p.api ? '<span class="prov-api">' + esc(p.api) + "</span>" : "") +
-            (p.models && p.models.length ? '<span class="prov-api">' + p.models.length + " 模型</span>" : "") +
+            (p.models && p.models.length ? '<span class="prov-api">' + p.models.length + (getLang() === "zh" ? " 个 Model" : " models") + "</span>" : "") +
             "</div></div>",
         )
         .join("") +
@@ -100,61 +102,70 @@ export async function openSettings() {
     : "";
   openDlg({
     cls: "set",
-    title: "设置",
+    title: t("settings", "Settings"),
     body:
-      '<div class="set-tabs" id="setTabs"><button type="button" data-tab="auth" class="on">账户</button><button type="button" data-tab="look">外观</button><button type="button" data-tab="agent">智能体</button><button type="button" data-tab="note">通知</button><button type="button" data-tab="about">关于</button></div>' +
-      '<div id="setAuth">' +
+      '<div class="set-tabs" id="setTabs">' +
+      '<button type="button" data-tab="auth"' + (activeTab === "auth" ? ' class="on"' : "") + ">" + t("tabAuth", "Providers & Keys") + "</button>" +
+      '<button type="button" data-tab="look"' + (activeTab === "look" ? ' class="on"' : "") + ">" + t("tabLook", "Appearance") + "</button>" +
+      '<button type="button" data-tab="agent"' + (activeTab === "agent" ? ' class="on"' : "") + ">" + t("tabAgent", "Agent & Sandbox") + "</button>" +
+      '<button type="button" data-tab="note"' + (activeTab === "note" ? ' class="on"' : "") + ">" + t("tabNote", "Notifications") + "</button>" +
+      '<button type="button" data-tab="about"' + (activeTab === "about" ? ' class="on"' : "") + ">" + t("tabAbout", "About") + "</button>" +
+      "</div>" +
+      '<div id="setAuth"' + (activeTab === "auth" ? "" : " hidden") + ">" +
       authPanelHtml(cfg) +
       provHtml +
       "</div>" +
-      '<div id="setLook" hidden>' +
-      '<div class="set-row"><div class="set-lab">配色</div>' +
-      segHtml("scheme", [{ v: "light", l: "浅色" }, { v: "dark", l: "深色" }, { v: "system", l: "系统" }], prefs.scheme) +
+      '<div id="setLook"' + (activeTab === "look" ? "" : " hidden") + ">" +
+      '<div class="set-row"><div class="set-lab">' + t("language", "Language") + "</div>" +
+      segHtml("lang", [{ v: "en", l: "English" }, { v: "zh", l: "中文" }], getLang()) +
       "</div>" +
-      '<div class="set-row"><div class="set-lab">强调色</div>' +
-      segHtml("accent", [{ v: "mono", l: "墨" }, { v: "blue", l: "蓝" }, { v: "green", l: "苔" }, { v: "amber", l: "赭" }], prefs.accent) +
+      '<div class="set-row"><div class="set-lab">' + t("scheme", "Color scheme") + "</div>" +
+      segHtml("scheme", [{ v: "light", l: t("schemeLight", "Light") }, { v: "dark", l: t("schemeDark", "Dark") }, { v: "system", l: t("schemeSystem", "System") }], prefs.scheme) +
       "</div>" +
-      '<div class="set-row"><div class="set-lab">密度</div>' +
-      segHtml("density", [{ v: "cozy", l: "舒适" }, { v: "compact", l: "紧凑" }], prefs.density || "cozy") +
+      '<div class="set-row"><div class="set-lab">' + t("accent", "Accent color") + "</div>" +
+      segHtml("accent", [{ v: "mono", l: t("accentMono", "Mono") }, { v: "blue", l: t("accentBlue", "Blue") }, { v: "green", l: t("accentGreen", "Green") }, { v: "amber", l: t("accentAmber", "Amber") }], prefs.accent) +
       "</div>" +
-      '<div class="set-row"><div class="set-lab">宽屏<span class="set-hint">内容列加宽</span></div>' +
-      segHtml("wide", [{ v: "0", l: "窄" }, { v: "1", l: "宽" }], prefs.wide ? "1" : "0") +
+      '<div class="set-row"><div class="set-lab">' + t("density", "Density") + "</div>" +
+      segHtml("density", [{ v: "cozy", l: t("densityCozy", "Cozy") }, { v: "compact", l: t("densityCompact", "Compact") }], prefs.density || "cozy") +
       "</div>" +
-      '<div class="set-row"><div class="set-lab">界面字号</div><input id="setFont" class="num-in" type="number" min="12" max="20" value="' +
+      '<div class="set-row"><div class="set-lab">' + t("wideScreen", "Wide screen") + '<span class="set-hint">' + t("wideScreenHint", "Widen chat column") + "</span></div>" +
+      segHtml("wide", [{ v: "0", l: t("wideNarrow", "Standard") }, { v: "1", l: t("wideWide", "Wide") }], prefs.wide ? "1" : "0") +
+      "</div>" +
+      '<div class="set-row"><div class="set-lab">' + t("fontSize", "UI font size") + '</div><input id="setFont" class="num-in" type="number" min="12" max="20" value="' +
       (prefs.uiFont || 14) +
       '"></div></div>' +
-      '<div id="setAgent" hidden>' +
-      '<div class="set-row"><div class="set-lab">本会话模型</div>' +
+      '<div id="setAgent"' + (activeTab === "agent" ? "" : " hidden") + ">" +
+      '<div class="set-row"><div class="set-lab">' + t("sessModel", "Session model") + "</div>" +
       optHtml("setSessModel", getCurModel(), models) +
       "</div>" +
-      '<div class="set-row"><div class="set-lab">思考等级<span class="set-hint">写入默认并作用于当前会话</span></div>' +
+      '<div class="set-row"><div class="set-lab">' + t("thinkingLevel", "Thinking level") + '<span class="set-hint">' + (getLang() === "zh" ? "写入默认并作用于当前 Session" : "Default and current session") + "</span></div>" +
       segHtml("think", thinkOpts, defThink) +
       "</div>" +
-      '<div class="set-row"><div class="set-lab">本会话授权</div>' +
+      '<div class="set-row"><div class="set-lab">' + t("sessAppr", "Session approval") + "</div>" +
       segHtml("sessappr", apprOpts.length ? apprOpts : [{ v: "yolo", l: "yolo" }, { v: "ask", l: "ask" }, { v: "read-only", l: "read-only" }], getApprovalMode()) +
       "</div>" +
-      '<div class="set-row"><div class="set-lab">新会话默认授权</div>' +
+      '<div class="set-row"><div class="set-lab">' + t("defAppr", "Default approval") + "</div>" +
       segHtml("defappr", apprOpts.length ? apprOpts : [{ v: "yolo", l: "yolo" }, { v: "ask", l: "ask" }, { v: "read-only", l: "read-only" }], defAppr) +
       "</div>" +
-      '<div class="set-row"><div class="set-lab">bash 沙箱<span class="set-hint">workspace 工作区可写；strict 再断网</span></div>' +
+      '<div class="set-row"><div class="set-lab">' + t("sandbox", "Bash sandbox") + '<span class="set-hint">' + t("sandboxHint", "workspace: writable workspace; strict: no network") + "</span></div>" +
       segHtml("sandbox", [{ v: "off", l: "off" }, { v: "workspace", l: "workspace" }, { v: "strict", l: "strict" }], cfg.sandboxMode || "off") +
       "</div>" +
-      '<div class="set-row"><div class="set-lab">默认模型<span class="set-hint">新会话用</span></div>' +
+      '<div class="set-row"><div class="set-lab">' + t("defModel", "Default model") + '<span class="set-hint">' + t("defModelHint", "Used for new sessions") + "</span></div>" +
       optHtml("setDefModel", defModel || getCurModel(), models) +
       "</div>" +
       pluginRows(cfg.plugins) +
       packageRows(pkgs) +
       "</div>" +
-      '<div id="setNote" hidden>' +
-      '<div class="set-row"><div class="set-lab">完成时通知<span class="set-hint">浏览器系统通知</span></div><button type="button" class="sw' +
+      '<div id="setNote"' + (activeTab === "note" ? "" : " hidden") + ">" +
+      '<div class="set-row"><div class="set-lab">' + t("notifyDone", "Notify on completion") + '<span class="set-hint">' + t("notifyDoneHint", "Browser system notification") + '</span></div><button type="button" class="sw' +
       (prefs.notify ? " on" : "") +
       '" id="swNotify"></button></div>' +
-      '<div class="set-row"><div class="set-lab">完成时提示音</div><button type="button" class="sw' +
+      '<div class="set-row"><div class="set-lab">' + t("soundDone", "Sound on completion") + '</div><button type="button" class="sw' +
       (prefs.sound ? " on" : "") +
       '" id="swSound"></button></div></div>' +
-      '<div id="setAbout" hidden>' +
-      '<div class="set-row"><div class="set-lab">piz web<span class="set-hint">配置见 ~/.piz/</span></div></div>' +
-      '<div class="set-row"><div class="set-lab">快捷键<span class="set-hint"><kbd>Ctrl</kbd><kbd>K</kbd> 搜会话 · <kbd>Ctrl</kbd><kbd>,</kbd> 设置 · <kbd>/</kbd> 命令 · <kbd>@./</kbd> 文件 · <kbd>!</kbd> 命令</span></div></div>' +
+      '<div id="setAbout"' + (activeTab === "about" ? "" : " hidden") + ">" +
+      '<div class="set-row"><div class="set-lab">piz web<span class="set-hint">' + t("aboutConfigHint", "Config files located in ~/.piz/") + "</span></div></div>" +
+      '<div class="set-row"><div class="set-lab">' + t("shortcutsHint", "Shortcuts") + '<span class="set-hint"><kbd>Ctrl</kbd><kbd>K</kbd> ' + t("searchSessions", "Search sessions") + ' · <kbd>Ctrl</kbd><kbd>,</kbd> ' + t("settings", "Settings") + ' · <kbd>/</kbd> ' + t("keyCommands", "Commands") + ' · <kbd>@./</kbd> ' + (getLang() === "zh" ? "文件" : "files") + ' · <kbd>!</kbd> shell</span></div></div>' +
       "</div>",
   });
   const tabs = $("setTabs")!;
@@ -166,6 +177,11 @@ export async function openSettings() {
     for (const x of Array.from(tabs.querySelectorAll("button"))) x.classList.toggle("on", x === b);
     for (const k of Object.keys(panels)) panels[k].hidden = k !== b.dataset.tab;
   };
+  bindSeg("lang", (v) => {
+    setLang((v || "en") as any);
+    openSettings("look");
+  });
+
   bindSeg("scheme", (v) => {
     setScheme(v || "dark");
   });
@@ -205,9 +221,9 @@ export async function openSettings() {
       })
         .then((r) => r.json().catch(() => ({})))
         .then((j) => {
-          if (j && j.ok === false) showToast(j.error || "保存默认模型失败");
+          if (j && j.ok === false) showToast(j.error || t("saveFail", "Save failed"));
         })
-        .catch(() => showToast("保存默认模型失败"));
+        .catch(() => showToast(t("saveFail", "Save failed")));
     };
   bindSeg("think", (v) => setThink(v || "high"));
   bindSeg("sessappr", (v) => setApproval(v || "ask"));
@@ -219,9 +235,9 @@ export async function openSettings() {
     })
       .then((r) => r.json().catch(() => ({})))
       .then((j) => {
-        if (j && j.ok === false) showToast(j.error || "保存默认授权失败");
+        if (j && j.ok === false) showToast(j.error || t("saveFail", "Save failed"));
       })
-      .catch(() => showToast("保存默认授权失败"));
+      .catch(() => showToast(t("saveFail", "Save failed")));
   });
   bindSeg("sandbox", (v) => {
     setSandbox(v || "off");
@@ -263,9 +279,9 @@ export function openSearch() {
   let sel = 0;
   openDlg({
     cls: "wide",
-    title: "搜索会话",
+    title: t("searchSessions", "Search sessions"),
     body:
-      '<input id="dlgIn" class="dlg-in" placeholder="按标题或名字过滤…">' +
+      '<input id="dlgIn" class="dlg-in" placeholder="' + (getLang() === "zh" ? "按标题或名字过滤…" : "Filter by title or name…") + '">' +
       '<div id="hitList" style="margin-top:8px;max-height:50vh;overflow:auto"></div>',
     focus: "dlgIn",
   });
@@ -295,11 +311,12 @@ export function openSearch() {
               esc(s.title || s.name) +
               '</div><div class="hit-s">' +
               esc(s.name) +
-              (s.msgs ? " · " + s.msgs + " 条" : "") +
+              (s.msgs ? " · " + s.msgs + (getLang() === "zh" ? " 条" : " msgs") : "") +
               "</div></div>",
           )
           .join("")
-      : '<div class="dlg-msg">无匹配会话</div>';
+      : '<div class="dlg-msg">' + t("noMatchingSessions", "No matching sessions") + "</div>";
+
     const on = box.querySelector(".hit.on");
     if (on) on.scrollIntoView({ block: "nearest" });
     return shown;
@@ -352,13 +369,13 @@ document.addEventListener("keydown", (e) => {
   if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "c") {
     e.preventDefault();
     const md = th.querySelector(".a-turn:last-of-type .md") as HTMLElement | null;
-    clipText(md && (md.dataset.raw || md.textContent), "已复制最后回复", "还没有回复");
+    clipText(md && (md.dataset.raw || md.textContent), t("copiedLastReply", "Copied last reply"), t("noReplyYet", "No reply yet"));
     return;
   }
   if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "r") {
     e.preventDefault();
-    if (getLastUser()) sendPlain(getLastUser());
-    else showToast("没有可重发的输入");
+    if (getLastUser()) emit("chat:retry");
+    else showToast(t("retryNoInput", "No input to retry"));
     return;
   }
   // 输入框外按 "/":聚焦输入框并直接进斜杠菜单。
@@ -422,4 +439,8 @@ document.addEventListener("keydown", (e) => {
       inspect.close();
     }
   }
+});
+
+on("search:open", () => {
+  openSearch();
 });

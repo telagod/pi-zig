@@ -4,8 +4,8 @@
 // build-web DFS 所禁,故以 pluginsH 钩袋迟取;chat/composer 直引本模块无环。
 import { sess, ws, wsp } from "./state";
 import { showToast } from "./ui";
-
-export const pluginsH: any = {};
+import { getRunning } from "./store";
+import { emit } from "./bus";
 
 const pluginListeners = new Map<string, Set<any>>(),
   msgRenderers: any[] = [],
@@ -59,8 +59,8 @@ export function pluginApi(meta: any) {
       return fetch(u, opts);
     },
     send: (text: any) => {
-      if (pluginsH.getRunning()) return false;
-      pluginsH.sendPlain(String(text));
+      if (getRunning()) return false;
+      emit("chat:send", { text: String(text) });
       return true;
     },
     ui: {

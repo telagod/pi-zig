@@ -9,6 +9,7 @@ export interface Prefs {
   wide: boolean;
   notify: boolean;
   sound: boolean;
+  lang: string;
 }
 
 export const qp = new URLSearchParams(location.search);
@@ -27,6 +28,7 @@ export const prefs: Prefs = {
   wide: false,
   notify: false,
   sound: false,
+  lang: "en",
 };
 try {
   Object.assign(prefs, JSON.parse(localStorage.getItem(PREF_KEY) || "{}"));

@@ -1,6 +1,7 @@
 // md.ts —— 极简 markdown / ansi / diff / todo 渲染,纯字符串进 HTML 出。
 // 块级:标题/表格/任务列表/嵌套列表/引用/分割线/围栏代码(含语法着色与头部栏)。
 import { esc } from "./util";
+import { t } from "./i18n";
 
 // ---- 语法着色(轻量 tokenizer;关键字取常见语言并集) ----
 const KW = new Set(
@@ -56,7 +57,9 @@ function codeBlock(lang: string, body: string) {
   return (
     '<div class="cb"><div class="cb-hd"><span class="cb-lang">' +
     esc(L) +
-    '</span><button class="pre-cp" type="button" title="复制">⧉</button></div><pre><code>' +
+    '</span><button class="pre-cp" type="button" title="' +
+    t("copy", "Copy") +
+    '">⧉</button></div><pre><code>' +
     inner +
     "</code></pre></div>"
   );

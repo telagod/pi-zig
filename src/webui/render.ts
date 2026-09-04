@@ -1,6 +1,7 @@
 // render.ts —— 设置面板的纯 HTML 构造器(seg 开关 / auth 键列 / 资源包 / 插件行)。
 // 自 webui.js 切出;名与义一字未改。DOM 绑定(bindSeg/bindAuthPanel)留在 main。
 import { esc } from "./util";
+import { t } from "./i18n";
 
 export function segHtml(name: string, opts: { v: string; l: string }[], cur: string) {
   return (
@@ -55,7 +56,9 @@ export function authPanelHtml(cfg: any) {
     openai: "Sign in with ChatGPT",
   };
   return (
-    '<div class="prov-hint">内置供应商,粘贴 API key 保存即用。绿点 = 已配置。</div>' +
+    '<div class="prov-hint">' +
+    t("builtinProvidersHint", "Built-in providers. Paste API key and save. Green dot = configured.") +
+    "</div>" +
     '<div class="prov-cards">' +
     list
       .map((p) => {
@@ -66,16 +69,18 @@ export function authPanelHtml(cfg: any) {
           '"><div class="prov-head"><span class="cred-dot ' +
           (p.hasKey ? "cred-ok" : "cred-miss") +
           '" title="' +
-          (p.hasKey ? "已配置" : "未配置") +
+          (p.hasKey ? t("configured", "Configured") : t("notConfigured", "Not configured")) +
           '"></span><span class="prov-name">' +
           esc(p.name) +
           "</span>" +
           (p.api ? '<span class="prov-api">' + esc(p.api) + "</span>" : "") +
           "</div>" +
           '<div class="auth-actions"><input class="set-sel auth-key" type="password" placeholder="' +
-          (p.hasKey ? "替换 API key" : "粘贴 API key") +
+          (p.hasKey ? t("replaceApiKey", "Replace API key") : t("pasteApiKey", "Paste API key")) +
           '" autocomplete="off">' +
-          '<button type="button" class="btn auth-save">保存</button>' +
+          '<button type="button" class="btn auth-save">' +
+          t("save", "Save") +
+          "</button>" +
           (oauthl ? '<button type="button" class="btn auth-oauth">' + oauthl + "</button>" : "") +
           "</div>" +
           '<div class="set-hint auth-dev" hidden></div></div>'
@@ -88,8 +93,9 @@ export function authPanelHtml(cfg: any) {
 export function packageRows(data: any) {
   const user = data && Array.isArray(data.user) ? data.user : [];
   const proj = data && Array.isArray(data.project) ? data.project : [];
+  const title = t("packages", "Packages");
   if (!user.length && !proj.length) {
-    return '<div class="set-row"><div class="set-lab">资源包<span class="set-hint">piz pkg install &lt;path&gt; [-l]</span></div></div>';
+    return '<div class="set-row"><div class="set-lab">' + title + '<span class="set-hint">piz pkg install &lt;path&gt; [-l]</span></div></div>';
   }
   function one(p: any, scope: string) {
     return (
@@ -106,7 +112,7 @@ export function packageRows(data: any) {
     );
   }
   let html =
-    '<div class="set-row"><div class="set-lab">资源包<span class="set-hint">用户 ~/.piz/packages 与项目 .piz/packages</span></div></div>';
+    '<div class="set-row"><div class="set-lab">' + title + '<span class="set-hint">~/.piz/packages &amp; .piz/packages</span></div></div>';
   for (const p of user) html += one(p, "user");
   for (const p of proj) html += one(p, "project");
   return html;
@@ -115,7 +121,11 @@ export function pluginRows(list: any) {
   const plugs = Array.isArray(list) ? list.filter((p: any) => p && p.optional) : [];
   if (!plugs.length) return "";
   let html =
-    '<div class="set-row"><div class="set-lab">插件<span class="set-hint">task-delegation 才有 workflow / 子代理。开关后下一轮生效。</span></div></div>';
+    '<div class="set-row"><div class="set-lab">' +
+    t("plugins", "Plugins") +
+    '<span class="set-hint">' +
+    t("pluginHint", "task-delegation enables workflow / subagents. Takes effect next turn.") +
+    "</span></div></div>";
   for (const p of plugs) {
     html +=
       '<div class="set-row"><div class="set-lab">' +
@@ -128,3 +138,4 @@ export function pluginRows(list: any) {
   }
   return html;
 }
+
