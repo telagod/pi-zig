@@ -12,7 +12,7 @@ const wrapMoveVertical = emit.wrapMoveVertical;
 
 const Tui = tui.Tui;
 pub const SecretSubmit = struct { provider: []const u8, key: []const u8 };
-pub const Action = union(enum) { none, quit, abort, detach, submit: []const u8, secret: SecretSubmit, think, copy, sandbox, jobs, usage, redo, doctor, diff, log };
+pub const Action = union(enum) { none, quit, abort, detach, submit: []const u8, secret: SecretSubmit, think, copy, sandbox, jobs, usage, redo, doctor, diff, log, workflow };
 const WheelDir = keys.WheelDir;
 const SlashRank = slash.SlashRank;
 const slashName = slash.slashName;
@@ -255,16 +255,8 @@ pub fn handleInput(self: *Tui, bytes: []const u8) !Action {
                     .down => arrowOrWheel(self, .down, bytes, &i, params, final),
                     .page_up => self.scrollBy(@intCast(pageRows(self))),
                     .page_down => self.scrollBy(-@as(isize, @intCast(pageRows(self)))),
-                    .ctrl_up => self.scrollBy(3),
-                    .ctrl_down => self.scrollBy(-3),
-                    .shift_up => {
-                        self.cycleThink(true);
-                        return .think;
-                    },
-                    .shift_down => {
-                        self.cycleThink(false);
-                        return .think;
-                    },
+                    .ctrl_up, .shift_up => self.scrollBy(3),
+                    .ctrl_down, .shift_down => self.scrollBy(-3),
                     .right => {
                         if (self.cursor < self.input.items.len) {
                             self.cursor += utf8LenAt(self.input.items, self.cursor);
@@ -291,19 +283,119 @@ pub fn handleInput(self: *Tui, bytes: []const u8) !Action {
                 }
                 continue;
             }
-            if (i + 1 < bytes.len and bytes[i + 1] == ',') {
-                self.disarmQuit();
-                self.esc_armed = false;
-                self.cycleThink(false);
-                return .think;
-            }
-            if (i + 1 < bytes.len and bytes[i + 1] == '.') {
-                self.disarmQuit();
-                self.esc_armed = false;
-                self.cycleThink(true);
-                return .think;
+            // Alt+<key> 组合快捷键支持
+            if (i + 1 < bytes.len) {
+                const alt_b = bytes[i + 1];
+                switch (alt_b) {
+                    ',' => {
+                        self.disarmQuit();
+                        self.esc_armed = false;
+                        self.cycleThink(false);
+                        i += 2;
+                        return .think;
+                    },
+                    '.' => {
+                        self.disarmQuit();
+                        self.esc_armed = false;
+                        self.cycleThink(true);
+                        i += 2;
+                        return .think;
+                    },
+                    'g', 'G' => {
+                        self.disarmQuit();
+                        self.esc_armed = false;
+                        i += 2;
+                        return .diff;
+                    },
+                    'l', 'L' => {
+                        self.disarmQuit();
+                        self.esc_armed = false;
+                        i += 2;
+                        return .log;
+                    },
+                    'd', 'D' => {
+                        self.disarmQuit();
+                        self.esc_armed = false;
+                        i += 2;
+                        return .doctor;
+                    },
+                    'r', 'R' => {
+                        self.disarmQuit();
+                        self.esc_armed = false;
+                        i += 2;
+                        return .redo;
+                    },
+                    'u', 'U' => {
+                        self.disarmQuit();
+                        self.esc_armed = false;
+                        i += 2;
+                        return .usage;
+                    },
+                    'j', 'J' => {
+                        self.disarmQuit();
+                        self.esc_armed = false;
+                        i += 2;
+                        return .jobs;
+                    },
+                    'w', 'W' => {
+                        self.disarmQuit();
+                        self.esc_armed = false;
+                        i += 2;
+                        return .workflow;
+                    },
+                    's', 'S' => {
+                        self.disarmQuit();
+                        self.esc_armed = false;
+                        i += 2;
+                        return .sandbox;
+                    },
+                    'c', 'C' => {
+                        self.disarmQuit();
+                        self.esc_armed = false;
+                        i += 2;
+                        return .copy;
+                    },
+                    'h', 'H', '?' => {
+                        self.disarmQuit();
+                        self.esc_armed = false;
+                        self.shortcuts_open = !self.shortcuts_open;
+                        self.dirty.store(true, .release);
+                        i += 2;
+                        continue;
+                    },
+                    'n' => {
+                        self.disarmQuit();
+                        self.esc_armed = false;
+                        if (self.search_q.len > 0 and !streaming) {
+                            _ = self.findNext(self.search_q, false) catch false;
+                        }
+                        i += 2;
+                        continue;
+                    },
+                    'N' => {
+                        self.disarmQuit();
+                        self.esc_armed = false;
+                        if (self.search_q.len > 0 and !streaming) {
+                            _ = self.findNext(self.search_q, true) catch false;
+                        }
+                        i += 2;
+                        continue;
+                    },
+                    else => {},
+                }
             }
             if (streaming) return .abort;
+            if (self.shortcuts_open) {
+                self.shortcuts_open = false;
+                self.dirty.store(true, .release);
+                i += 1;
+                continue;
+            }
+            if (self.scroll_off > 0) {
+                self.clearScroll();
+                i += 1;
+                continue;
+            }
             if (self.input.items.len == 0) {
                 if (self.esc_armed) {
                     self.esc_armed = false;
@@ -361,6 +453,7 @@ pub fn handleInput(self: *Tui, bytes: []const u8) !Action {
 
         self.disarmQuit();
         self.esc_armed = false;
+        const in_shortcuts = self.shortcuts_open;
         if (b != '?') self.shortcuts_open = false;
 
         switch (b) {
@@ -421,70 +514,95 @@ pub fn handleInput(self: *Tui, bytes: []const u8) !Action {
                 self.clearScroll();
             },
             'n' => {
-                if (self.input.items.len == 0 and self.search_q.len > 0 and !streaming) {
+                if (self.input.items.len == 0 and self.search_q.len > 0 and self.search_hit != null and !streaming) {
                     _ = self.findNext(self.search_q, false) catch false;
                 } else {
                     try insertByte(self, 'n');
                 }
             },
             'N' => {
-                if (self.input.items.len == 0 and self.search_q.len > 0 and !streaming) {
+                if (self.input.items.len == 0 and self.search_q.len > 0 and self.search_hit != null and !streaming) {
                     _ = self.findNext(self.search_q, true) catch false;
                 } else {
                     try insertByte(self, 'N');
                 }
             },
             'g', 'G' => {
-                if (self.input.items.len == 0 and !streaming) {
+                if (in_shortcuts and !streaming) {
+                    self.shortcuts_open = false;
+                    self.dirty.store(true, .release);
                     return .diff;
                 } else {
                     try insertByte(self, b);
                 }
             },
             'l', 'L' => {
-                if (self.input.items.len == 0 and !streaming) {
+                if (in_shortcuts and !streaming) {
+                    self.shortcuts_open = false;
+                    self.dirty.store(true, .release);
                     return .log;
                 } else {
                     try insertByte(self, b);
                 }
             },
             'd', 'D' => {
-                if (self.input.items.len == 0 and !streaming) {
+                if (in_shortcuts and !streaming) {
+                    self.shortcuts_open = false;
+                    self.dirty.store(true, .release);
                     return .doctor;
                 } else {
                     try insertByte(self, b);
                 }
             },
             'r', 'R' => {
-                if (self.input.items.len == 0 and !streaming) {
+                if (in_shortcuts and !streaming) {
+                    self.shortcuts_open = false;
+                    self.dirty.store(true, .release);
                     return .redo;
                 } else {
                     try insertByte(self, b);
                 }
             },
             'u', 'U' => {
-                if (self.input.items.len == 0 and !streaming) {
+                if (in_shortcuts and !streaming) {
+                    self.shortcuts_open = false;
+                    self.dirty.store(true, .release);
                     return .usage;
                 } else {
                     try insertByte(self, b);
                 }
             },
             'j', 'J' => {
-                if (self.input.items.len == 0 and !streaming) {
+                if (in_shortcuts and !streaming) {
+                    self.shortcuts_open = false;
+                    self.dirty.store(true, .release);
                     return .jobs;
                 } else {
                     try insertByte(self, b);
                 }
             },
+            'w', 'W' => {
+                if (in_shortcuts and !streaming) {
+                    self.shortcuts_open = false;
+                    self.dirty.store(true, .release);
+                    return .workflow;
+                } else {
+                    try insertByte(self, b);
+                }
+            },
             's', 'S' => {
-                if (self.input.items.len == 0 and !streaming) {
+                if (in_shortcuts and !streaming) {
+                    self.shortcuts_open = false;
+                    self.dirty.store(true, .release);
                     return .sandbox;
                 } else {
                     try insertByte(self, b);
                 }
             },
             'c', 'C' => {
-                if (self.input.items.len == 0 and !streaming) {
+                if (in_shortcuts and !streaming) {
+                    self.shortcuts_open = false;
+                    self.dirty.store(true, .release);
                     return .copy;
                 } else {
                     try insertByte(self, b);
@@ -714,6 +832,15 @@ pub fn arrowOrWheel(self: *Tui, dir: WheelDir, bytes: []const u8, i: *usize, par
     }
     if (slashOpen(self)) {
         moveSlash(self, if (dir == .up) -1 else 1);
+        return;
+    }
+    // 用户处于上滚查看历史状态(scroll_off > 0),优先上下逐行浏览视图,不污染当前草稿与历史
+    if (self.scroll_off > 0) {
+        if (dir == .up) {
+            self.scrollBy(1);
+        } else {
+            self.scrollBy(-1);
+        }
         return;
     }
     // 多行草稿:先在同列行间移动,顶/底行再落历史。

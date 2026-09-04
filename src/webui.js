@@ -432,6 +432,7 @@ let dlgPrevFocus = null;
   const ov = _util.$.call(void 0, "overlay");
   ov.classList.remove("open");
   ov.innerHTML = "";
+  document.body.style.overflow = "";
   dlgOnok = dlgOncancel = null;
   // 焦点还给弹出前的元素(还在文档里才还)。
   if (dlgPrevFocus && document.contains(dlgPrevFocus)) {
@@ -445,12 +446,13 @@ let dlgPrevFocus = null;
   _optionalChain([exports.dlgHooks, 'access', _5 => _5.hideBang, 'optionalCall', _6 => _6()]);
   const ov = _util.$.call(void 0, "overlay");
   ov.classList.add("open");
+  document.body.style.overflow = "hidden";
   ov.innerHTML =
     '<div class="dlg ' +
     (opts.cls || "") +
-    '" role="dialog"><div class="dlg-hd"><span>' +
+    '" role="dialog" aria-modal="true"><div class="dlg-hd"><span>' +
     _util.esc.call(void 0, opts.title || "") +
-    '</span><button class="dlg-x" id="dlgX" type="button">✕</button></div><div class="dlg-bd">' +
+    '</span><button class="dlg-x" id="dlgX" type="button" aria-label="关闭">✕</button></div><div class="dlg-bd">' +
     (opts.body || "") +
     "</div>" +
     (opts.ok
@@ -492,6 +494,30 @@ let dlgPrevFocus = null;
       closeDlg();
     }
   };
+  // 焦点陷阱:Tab / Shift+Tab 在对话框内循环,防止焦点逃逸至背后界面
+  const dlgEl = ov.querySelector(".dlg") ;
+  if (dlgEl) {
+    dlgEl.addEventListener("keydown", (e) => {
+      if (e.key !== "Tab") return;
+      const focusables = dlgEl.querySelectorAll(
+        'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+      );
+      if (!focusables.length) return;
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      if (e.shiftKey) {
+        if (document.activeElement === first) {
+          e.preventDefault();
+          last.focus();
+        }
+      } else {
+        if (document.activeElement === last) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
+    });
+  }
   if (opts.focus && _util.$.call(void 0, opts.focus)) {
     const el = _util.$.call(void 0, opts.focus);
     el.focus();
@@ -792,8 +818,10 @@ let openMenu = null;
 /// side: "bl"(默认 左下)| "br"(右下)| "tr"(右上)| "tl"(左上);
 /// 菜单卡片永远不越过视口(8px 边距),溢出时自动翻转。
  function openAt(id, btn, side = "bl") {
-  closeMenus();
   const m = _util.$.call(void 0, id);
+  const wasOpen = m.classList.contains("open");
+  closeMenus();
+  if (wasOpen) return;
   m.classList.add("open");
   const r = btn.getBoundingClientRect();
   const mw = m.offsetWidth,
@@ -1005,7 +1033,7 @@ document.addEventListener("click", (e) => {
     "se" +
     (s.name === _state.sess && here ? " on" : "") +
     (arch ? " arch" : "");
-  const title = s.name === "default" ? "默认会话" : s.title || s.name;
+  const title = s.title || (s.name === "default" ? "默认会话" : s.name);
   d.innerHTML =
     '<div class="srow"><span class="lead">' +
     (s.busy
@@ -2252,6 +2280,11 @@ let slashItems = [],
   slashIdx = +it.getAttribute("data-i") || 0;
   slashPick();
 };
+document.addEventListener("click", (e) => {
+  if (slashOpen() && !e.target.closest("#slashMenu, #inp, .mode-pill")) {
+    hideSlash();
+  }
+});
  async function runSlash(item, arg) {
   switch (item.name) {
     case "/login": {
@@ -3942,21 +3975,35 @@ function ensureWork() {
     this.paint();
   },
   nodeHtml(n) {
-    const open = this.openId === n.id && n.body;
+    const open = this.openId === n.id;
     const act2 = n.st === "run" ? n.last || "running" : n.st === "fail" ? "fail" : n.st === "skip" ? "skip" : "";
+    let bodyHtml = "";
+    if (open) {
+      if (n.body) {
+        bodyHtml = '<pre class="flow-body">' + _util.esc.call(void 0, n.body) + "</pre>";
+      } else {
+        const lines = [
+          "节点状态: " + (n.st || "pending"),
+          n.role ? "执行角色: " + n.role : "",
+          n.last ? "最近活动: " + n.last : "执行中，暂无标准输出",
+        ].filter(Boolean);
+        bodyHtml = '<div class="flow-body flow-info">' + lines.map((l) => "<div>" + _util.esc.call(void 0, l) + "</div>").join("") + "</div>";
+      }
+    }
     return (
       '<li class="flow-n ' +
       n.st +
       (open ? " open" : "") +
       '" data-id="' +
       _util.esc.call(void 0, n.id) +
-      '"><i class="flow-dot"></i><div class="flow-main"><div class="flow-row"><b>' +
+      '" title="点击查看节点详情"><i class="flow-dot"></i><div class="flow-main"><div class="flow-row"><b>' +
       _util.esc.call(void 0, n.id) +
       "</b>" +
       (n.role ? "<em>" + _util.esc.call(void 0, n.role) + "</em>" : "") +
       (act2 ? '<span class="flow-act">' + _util.esc.call(void 0, act2) + "</span>" : "") +
+      '<span class="flow-arr">' + (open ? "▾" : "▸") + "</span>" +
       "</div>" +
-      (open ? '<pre class="flow-body">' + _util.esc.call(void 0, n.body) + "</pre>" : "") +
+      bodyHtml +
       "</div></li>"
     );
   },
@@ -4697,19 +4744,39 @@ function fmtSec(ms) {
   return Math.round(s / 60) + "m";
 }
 
+let openJobKey = null;
+
 function fmtRow(a, gone_, i) {
+  const k = keyOf(a);
+  const isOpen = openJobKey === k;
   const sec = fmtSec(a.ms || 0);
   const lim = a.limit_ms && !a.detached ? "/" + Math.round(a.limit_ms / 1000) + "s" : "";
   const by = a.bytes ? " · " + _util.fmtTok.call(void 0, a.bytes) : "";
   const retry = a.attempt > 1 && !gone_ ? " · retry " + (a.attempt - 1) : "";
   const glyph = a.detached ? "~" : a.kind === "subagent" ? "●" : a.kind === "http" ? "↻" : "▸";
   const det = a.detail ? '<span class="jr-d">' + _util.esc.call(void 0, a.detail) + "</span>" : "";
+  let expandHtml = "";
+  if (isOpen) {
+    const details = [
+      a.kind ? "<div><b>类型:</b> " + _util.esc.call(void 0, a.kind) + "</div>" : "",
+      a.pid ? "<div><b>PID:</b> " + _util.esc.call(void 0, String(a.pid)) + "</div>" : "",
+      a.limit_ms ? "<div><b>超时限制:</b> " + Math.round(a.limit_ms / 1000) + "s</div>" : "",
+      a.bytes ? "<div><b>传输数据:</b> " + _util.fmtTok.call(void 0, a.bytes) + "</div>" : "",
+      a.attempt ? "<div><b>执行轮次:</b> " + a.attempt + "</div>" : "",
+      a.detail ? '<div><b>详细内容:</b><pre class="jr-code">' + _util.esc.call(void 0, a.detail) + "</pre></div>" : "",
+    ].filter(Boolean).join("");
+    expandHtml = '<div class="jr-exp">' + (details || "<i>暂无附加参数</i>") + "</div>";
+  }
   return (
-    '<div class="jr' + (a.detached ? " bg" : "") + (gone_ ? " gone" : "") + '">' +
+    '<div class="jr' + (a.detached ? " bg" : "") + (gone_ ? " gone" : "") + (isOpen ? " open" : "") + '" data-key="' + _util.esc.call(void 0, k) + '" title="点击查看详情">' +
+    '<div class="jr-main">' +
     '<span class="jr-g">' + glyph + "</span>" +
     '<span class="jr-n">' + _util.esc.call(void 0, a.name || "job") + "</span>" +
     det +
     '<span class="jr-t" data-i="' + i + '">' + sec + lim + by + retry + (gone_ ? " · 完成" : "") + "</span>" +
+    '<span class="jr-arr">' + (isOpen ? "▾" : "▸") + "</span>" +
+    "</div>" +
+    expandHtml +
     "</div>"
   );
 }
@@ -4772,6 +4839,14 @@ function startTickIfNeeded() {
   p.innerHTML =
     sortedLive.map((a, i) => fmtRow(a, false, i)).join("") +
     gone.map((a, i) => fmtRow(a, true, i + sortedLive.length)).join("");
+  p.querySelectorAll(".jr").forEach((el) => {
+    el.onclick = (e) => {
+      e.stopPropagation();
+      const k = el.getAttribute("data-key");
+      openJobKey = openJobKey === k ? null : k;
+      refreshJobs(live);
+    };
+  });
   startTickIfNeeded();
 } exports.refreshJobs = refreshJobs;
 
@@ -5060,6 +5135,13 @@ _stream.ev.onmessage = (e) => {
     "<div><kbd>Ctrl</kbd><kbd>K</kbd> 搜会话 · <kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>C</kbd> 复制回复</div>" +
     "<div><kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>R</kbd> 重发 · <kbd>Ctrl</kbd><kbd>V</kbd> 贴图 · <kbd>Esc</kbd> 关</div>";
 } exports.toggleKeysHint = toggleKeysHint;
+document.addEventListener("click", (e) => {
+  const el = _util.$.call(void 0, "keysHint");
+  if (el && !el.hidden && !e.target.closest("#keysHint")) {
+    el.hidden = true;
+    el.innerHTML = "";
+  }
+});
 (_util.$.call(void 0, "inp") ).addEventListener("keydown", (e) => {
   if (
     !e.isComposing &&
@@ -5485,6 +5567,8 @@ var _state = require('./state');
 var _ui = require('./ui');
 var _render = require('./render');
 var _sessions = require('./sessions');
+var _sheet = require('./sheet');
+var _slash = require('./slash');
 
 
 
@@ -5862,21 +5946,34 @@ document.addEventListener("keydown", (e) => {
     }
   }
   if (e.key === "Escape") {
+    if (document.querySelector(".menu.open")) {
+      e.preventDefault();
+      _sessions.closeMenus.call(void 0, );
+      return;
+    }
     const kh = _util.$.call(void 0, "keysHint");
     if (kh && !kh.hidden) {
       kh.hidden = true;
       kh.innerHTML = "";
       return;
     }
+    const sm = _util.$.call(void 0, "slashMenu");
+    if (sm && !sm.hidden) {
+      e.preventDefault();
+      _slash.hideSlash.call(void 0, );
+      _slash.hideBang.call(void 0, );
+      return;
+    }
+    const sheet = _util.$.call(void 0, "sheet");
+    if (sheet && sheet.classList.contains("open")) {
+      e.preventDefault();
+      _sheet.closeSheet.call(void 0, );
+      return;
+    }
     if (_util.$.call(void 0, "overlay").classList.contains("open")) {
       e.preventDefault();
       _ui.dlgCancel.call(void 0, );
       _ui.closeDlg.call(void 0, );
-      return;
-    }
-    const sm = _util.$.call(void 0, "slashMenu");
-    if (sm && !sm.hidden) {
-      sm.hidden = true;
       return;
     }
     if (_util.$.call(void 0, "inspect") && !_util.$.call(void 0, "inspect").hidden) {

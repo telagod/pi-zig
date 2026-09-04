@@ -355,6 +355,11 @@ export function slashPick() {
   slashIdx = +it.getAttribute("data-i") || 0;
   slashPick();
 };
+document.addEventListener("click", (e: any) => {
+  if (slashOpen() && !e.target.closest("#slashMenu, #inp, .mode-pill")) {
+    hideSlash();
+  }
+});
 export async function runSlash(item: any, arg?: string) {
   switch (item.name) {
     case "/login": {

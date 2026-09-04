@@ -30,6 +30,7 @@ export function closeDlg() {
   const ov = $("overlay")!;
   ov.classList.remove("open");
   ov.innerHTML = "";
+  document.body.style.overflow = "";
   dlgOnok = dlgOncancel = null;
   // 焦点还给弹出前的元素(还在文档里才还)。
   if (dlgPrevFocus && document.contains(dlgPrevFocus)) {
@@ -43,12 +44,13 @@ export function openDlg(opts: any) {
   dlgHooks.hideBang?.();
   const ov = $("overlay")!;
   ov.classList.add("open");
+  document.body.style.overflow = "hidden";
   ov.innerHTML =
     '<div class="dlg ' +
     (opts.cls || "") +
-    '" role="dialog"><div class="dlg-hd"><span>' +
+    '" role="dialog" aria-modal="true"><div class="dlg-hd"><span>' +
     esc(opts.title || "") +
-    '</span><button class="dlg-x" id="dlgX" type="button">✕</button></div><div class="dlg-bd">' +
+    '</span><button class="dlg-x" id="dlgX" type="button" aria-label="关闭">✕</button></div><div class="dlg-bd">' +
     (opts.body || "") +
     "</div>" +
     (opts.ok
@@ -90,6 +92,30 @@ export function openDlg(opts: any) {
       closeDlg();
     }
   };
+  // 焦点陷阱:Tab / Shift+Tab 在对话框内循环,防止焦点逃逸至背后界面
+  const dlgEl = ov.querySelector(".dlg") as HTMLElement | null;
+  if (dlgEl) {
+    dlgEl.addEventListener("keydown", (e: KeyboardEvent) => {
+      if (e.key !== "Tab") return;
+      const focusables = dlgEl.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+      );
+      if (!focusables.length) return;
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      if (e.shiftKey) {
+        if (document.activeElement === first) {
+          e.preventDefault();
+          last.focus();
+        }
+      } else {
+        if (document.activeElement === last) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
+    });
+  }
   if (opts.focus && $(opts.focus)) {
     const el: any = $(opts.focus);
     el.focus();

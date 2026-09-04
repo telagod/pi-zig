@@ -240,6 +240,77 @@ pub fn showJobs(app: *App) void {
         if (views[i].pid > 0) tuiOk("jobs.pid", aw.writer.print("pid {d}  ", .{views[i].pid}));
         tuiOk("jobs.line", tui_mod.writeActivityLine(&aw.writer, views[i], 0, 80));
         tuiNote(app, "", aw.written());
+        if (views[i].detail.len > 0) {
+            var dw = std.Io.Writer.Allocating.init(app.alloc);
+            defer dw.deinit();
+            dw.writer.print("    \x1b[2m↳ {s}\x1b[0m", .{views[i].detail}) catch {};
+            tuiNote(app, "", dw.written());
+        }
+    }
+}
+
+pub fn showWorkflow(app: *App) void {
+    app.tui.mutex.lock(util.io) catch {};
+    defer app.tui.mutex.unlock(util.io);
+
+    const goal = app.tui.flow_goal;
+    const nodes = app.tui.flow_nodes.items;
+    const last_out = app.tui.flow_last_out.items;
+
+    if (nodes.len == 0 and last_out.len == 0) {
+        var found: ?*tui_mod.ToolMeta = null;
+        var i = app.tui.cells.items.len;
+        while (i > 0) {
+            i -= 1;
+            const c = &app.tui.cells.items[i];
+            if (c.kind == .tool and c.tool != null and std.mem.eql(u8, c.tool.?.name, "workflow")) {
+                found = &c.tool.?;
+                break;
+            }
+        }
+        if (found == null) {
+            tuiNote(app, "\x1b[2m", "no workflow has run in this session");
+            return;
+        }
+        const tm = found.?;
+        var hw = std.Io.Writer.Allocating.init(app.alloc);
+        defer hw.deinit();
+        hw.writer.print("workflow: {s}", .{tm.preview}) catch {};
+        tuiNote(app, "\x1b[1m", hw.written());
+        if (tm.body.items.len > 0) {
+            tuiNotes(app, "", tm.body.items);
+        }
+        return;
+    }
+
+    var hw = std.Io.Writer.Allocating.init(app.alloc);
+    defer hw.deinit();
+    if (goal.len > 0) {
+        hw.writer.print("workflow: {s} ({d} nodes)", .{ goal, nodes.len }) catch {};
+    } else {
+        hw.writer.print("workflow: ({d} nodes)", .{nodes.len}) catch {};
+    }
+    tuiNote(app, "\x1b[1m", hw.written());
+
+    for (nodes) |n| {
+        var nw = std.Io.Writer.Allocating.init(app.alloc);
+        defer nw.deinit();
+        const mark = switch (n.st) {
+            .wait => "○",
+            .run => "\x1b[33m●\x1b[0m",
+            .ok => "\x1b[32m●\x1b[0m",
+            .fail => "\x1b[31m●\x1b[0m",
+            .skip => "\x1b[2m·\x1b[0m",
+        };
+        nw.writer.print("  {s} {s}", .{ mark, n.id }) catch {};
+        if (n.role.len > 0) nw.writer.print("  \x1b[2m({s})\x1b[0m", .{n.role}) catch {};
+        if (n.last.len > 0) nw.writer.print("  \x1b[2m↳ {s}\x1b[0m", .{n.last}) catch {};
+        tuiNote(app, "", nw.written());
+    }
+
+    if (last_out.len > 0) {
+        tuiNote(app, "\x1b[2m", "--- details & output ---");
+        tuiNotes(app, "", last_out);
     }
 }
 

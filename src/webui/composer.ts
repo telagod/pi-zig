@@ -249,6 +249,13 @@ export function toggleKeysHint() {
     "<div><kbd>Ctrl</kbd><kbd>K</kbd> 搜会话 · <kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>C</kbd> 复制回复</div>" +
     "<div><kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>R</kbd> 重发 · <kbd>Ctrl</kbd><kbd>V</kbd> 贴图 · <kbd>Esc</kbd> 关</div>";
 }
+document.addEventListener("click", (e: any) => {
+  const el = $("keysHint");
+  if (el && !el.hidden && !e.target.closest("#keysHint")) {
+    el.hidden = true;
+    el.innerHTML = "";
+  }
+});
 ($("inp") as HTMLElement).addEventListener("keydown", (e: any) => {
   if (
     !e.isComposing &&

@@ -270,9 +270,11 @@ pub const Tui = struct {
     file_q_hash: u64 = 0,
     history_path: []u8,
     think_open: bool = true,
+    tools_open: bool = false,
     flow_nodes: std.ArrayListUnmanaged(FlowNode) = .empty,
     flow_goal: []u8 = &.{},
     flow_active: bool = false,
+    flow_last_out: std.ArrayListUnmanaged(u8) = .empty,
     think_live: bool = false,
     last_think_len: usize = 0,
     think_level: ai.ThinkLevel = .high,
@@ -376,6 +378,7 @@ pub const Tui = struct {
         if (self.modal_secret) |*s| s.deinit(self.alloc);
         tui_flow.resetFlow(self);
         self.flow_nodes.deinit(self.alloc);
+        self.flow_last_out.deinit(self.alloc);
     }
 
     fn freeCells(self: *Tui) void {
@@ -679,6 +682,8 @@ pub const Tui = struct {
             tui_flow.loadFlowFromOut(self, body);
             self.flow_active = false;
             tui_flow.paintFlowInto(self, tm);
+            self.flow_last_out.clearRetainingCapacity();
+            self.flow_last_out.appendSlice(self.alloc, body) catch {};
             return;
         }
         tm.body.clearRetainingCapacity();
@@ -722,17 +727,16 @@ pub const Tui = struct {
         self.mutex.lock(util.io) catch {};
         defer self.mutex.unlock(util.io);
         var any = false;
-        var any_folded = false;
         for (self.cells.items) |c| {
-            if (c.tool) |tm| {
+            if (c.tool != null) {
                 any = true;
-                if (tm.folded) any_folded = true;
+                break;
             }
         }
         if (!any) return;
-        const next_folded = !any_folded;
+        self.tools_open = !self.tools_open;
         for (self.cells.items) |*c| {
-            if (c.tool) |*tm| tm.folded = next_folded;
+            if (c.tool) |*tm| tm.folded = !self.tools_open;
         }
         self.dirty.store(true, .release);
     }
@@ -938,6 +942,65 @@ pub const Tui = struct {
         }
     }
 
+    pub const RenderMode = enum {
+        normal,
+        tool_group_head,
+        subsumed,
+    };
+
+    pub const CellRenderPlan = struct {
+        mode: RenderMode,
+        think_open: bool = false,
+        group_end: usize = 0,
+    };
+
+    pub fn buildRenderPlans(self: *const Tui, plans: []CellRenderPlan) void {
+        var last_think_idx: ?usize = null;
+        for (self.cells.items, 0..) |c, idx| {
+            if (c.kind == .think and c.text.items.len > 0) {
+                last_think_idx = idx;
+            }
+        }
+        for (plans, 0..) |*p, idx| {
+            p.* = .{
+                .mode = .normal,
+                .think_open = (self.think_open and last_think_idx != null and idx == last_think_idx.?),
+                .group_end = 0,
+            };
+        }
+        if (!self.tools_open) {
+            var i: usize = 0;
+            while (i < self.cells.items.len) {
+                if (self.cells.items[i].kind == .tool and
+                    self.cells.items[i].tool != null and
+                    !emit.isWorkflowTool(self.cells.items[i].tool.?))
+                {
+                    var j = i;
+                    while (j < self.cells.items.len and
+                        self.cells.items[j].kind == .tool and
+                        self.cells.items[j].tool != null and
+                        !emit.isWorkflowTool(self.cells.items[j].tool.?)) : (j += 1) {}
+                    var settled_end = j;
+                    if (settled_end > i and self.cells.items[settled_end - 1].tool.?.status == .running) {
+                        settled_end -= 1;
+                    }
+                    const count = settled_end - i;
+                    if (count >= 2) {
+                        plans[i].mode = .tool_group_head;
+                        plans[i].group_end = settled_end;
+                        var k = i + 1;
+                        while (k < settled_end) : (k += 1) {
+                            plans[k].mode = .subsumed;
+                        }
+                    }
+                    i = j;
+                } else {
+                    i += 1;
+                }
+            }
+        }
+    }
+
     fn renderFrame(self: *Tui) !void {
         var fw = std.Io.Writer.Allocating.init(self.alloc);
         defer fw.deinit();
@@ -956,12 +1019,29 @@ pub const Tui = struct {
         try self.ensurePainted(w);
 
         try fw.writer.writeAll("\x1b[?25l\x1b[H");
+        const plans = try self.alloc.alloc(CellRenderPlan, self.cells.items.len);
+        defer self.alloc.free(plans);
+        self.buildRenderPlans(plans);
+
         var total_vis: usize = 0;
+        var prev_kind: ?CellKind = null;
         var ci: usize = 0;
         while (ci < self.cells.items.len) : (ci += 1) {
-            if (ci > 0 and gapBetween(self.cells.items[ci - 1].kind, self.cells.items[ci].kind)) total_vis += 1;
-            const painted = paintedOf(self.cells.items[ci]);
-            total_vis += cellRowCountCached(self.alloc, &self.cells.items[ci], painted, self.think_open, w);
+            const plan = plans[ci];
+            if (plan.mode == .subsumed) continue;
+
+            if (prev_kind) |pk| {
+                if (gapBetween(pk, self.cells.items[ci].kind)) total_vis += 1;
+            }
+            prev_kind = self.cells.items[ci].kind;
+
+            if (plan.mode == .tool_group_head) {
+                const group_cells = self.cells.items[ci .. plan.group_end];
+                total_vis += emit.toolGroupRowCount(group_cells, w);
+            } else {
+                const painted = paintedOf(self.cells.items[ci]);
+                total_vis += cellRowCountCached(self.alloc, &self.cells.items[ci], painted, plan.think_open, w);
+            }
         }
         total_vis += composer_block;
         // composer+footer 跟消息同一份文档,整屏可滚。
@@ -975,24 +1055,44 @@ pub const Tui = struct {
         var emitted: usize = 0;
         var cell_aw = std.Io.Writer.Allocating.init(self.alloc);
         defer cell_aw.deinit();
+        prev_kind = null;
         ci = 0;
         while (ci < self.cells.items.len) : (ci += 1) {
-            if (ci > 0 and gapBetween(self.cells.items[ci - 1].kind, self.cells.items[ci].kind)) {
-                if (skip > 0) {
-                    skip -= 1;
-                } else if (emitted < scroll_h) {
-                    try cell_aw.writer.writeAll("\x1b[K\r\n");
-                    emitted += 1;
+            const plan = plans[ci];
+            if (plan.mode == .subsumed) continue;
+
+            if (prev_kind) |pk| {
+                if (gapBetween(pk, self.cells.items[ci].kind)) {
+                    if (skip > 0) {
+                        skip -= 1;
+                    } else if (emitted < scroll_h) {
+                        try cell_aw.writer.writeAll("\x1b[K\r\n");
+                        emitted += 1;
+                    }
                 }
             }
-            const painted = paintedOf(self.cells.items[ci]);
+            prev_kind = self.cells.items[ci].kind;
+
             if (emitted >= scroll_h) continue;
-            const n = cellRowCountCached(self.alloc, &self.cells.items[ci], painted, self.think_open, w);
-            if (skip >= n) {
-                skip -= n;
+
+            if (plan.mode == .tool_group_head) {
+                const group_cells = self.cells.items[ci .. plan.group_end];
+                const n = emit.toolGroupRowCount(group_cells, w);
+                if (skip >= n) {
+                    skip -= n;
+                } else {
+                    emitted += try emit.emitToolGroup(&cell_aw.writer, group_cells, w, skip, scroll_h - emitted);
+                    skip = 0;
+                }
             } else {
-                emitted += try emitCell(self.alloc, &cell_aw.writer, &self.cells.items[ci], painted, self.think_open, w, skip, scroll_h - emitted);
-                skip = 0;
+                const painted = paintedOf(self.cells.items[ci]);
+                const n = cellRowCountCached(self.alloc, &self.cells.items[ci], painted, plan.think_open, w);
+                if (skip >= n) {
+                    skip -= n;
+                } else {
+                    emitted += try emitCell(self.alloc, &cell_aw.writer, &self.cells.items[ci], painted, plan.think_open, w, skip, scroll_h - emitted);
+                    skip = 0;
+                }
             }
         }
         const nvis_doc = total_vis - composer_block;
@@ -1084,7 +1184,7 @@ pub const Tui = struct {
             try block_aw.writer.writeAll(ANSI_DIM);
             try writeTrunc(&block_aw.writer, "enter send   tab queue   esc abort   ctrl+c quit", w);
             try block_aw.writer.writeAll(ANSI_RESET ++ "\x1b[K\r\n" ++ ANSI_DIM);
-            try writeTrunc(&block_aw.writer, "c copy  d doctor  g diff  l log  r redo  s sandbox  j jobs  u usage  ctrl+v paste  /help", w);
+            try writeTrunc(&block_aw.writer, "c copy  d doctor  g diff  l log  r redo  s sandbox  j jobs  w flow  u usage  /help", w);
             try block_aw.writer.writeAll(ANSI_RESET ++ "\x1b[K\r\n");
         }
         var out_e: usize = 0;
@@ -1141,6 +1241,7 @@ pub const Tui = struct {
         on_copy: ?*const fn (ctx: ?*anyopaque) void = null,
         on_sandbox: ?*const fn (ctx: ?*anyopaque) void = null,
         on_jobs: ?*const fn (ctx: ?*anyopaque) void = null,
+        on_workflow: ?*const fn (ctx: ?*anyopaque) void = null,
         on_usage: ?*const fn (ctx: ?*anyopaque) void = null,
         on_redo: ?*const fn (ctx: ?*anyopaque) void = null,
         on_doctor: ?*const fn (ctx: ?*anyopaque) void = null,
@@ -1163,6 +1264,7 @@ pub const Tui = struct {
         const on_copy = h.on_copy;
         const on_sandbox = h.on_sandbox;
         const on_jobs = h.on_jobs;
+        const on_workflow = h.on_workflow;
         const on_usage = h.on_usage;
         const on_redo = h.on_redo;
         const on_doctor = h.on_doctor;
@@ -1225,6 +1327,9 @@ pub const Tui = struct {
                             },
                             .jobs => {
                                 if (on_jobs) |f| f(ctx);
+                            },
+                            .workflow => {
+                                if (on_workflow) |f| f(ctx);
                             },
                             .usage => {
                                 if (on_usage) |f| f(ctx);

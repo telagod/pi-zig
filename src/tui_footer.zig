@@ -204,11 +204,15 @@ pub fn writeComposerTopEdge(wr: *std.Io.Writer, ident: FooterIdent, box_w: usize
         std.fmt.bufPrint(&ctx_full_b, "{s}ctx {d}%{s}", .{ ctx_ink, ident.pct, ctx_rst }) catch "ctx —";
     var ctx_pct_b: [32]u8 = undefined;
     const ctx_pct = std.fmt.bufPrint(&ctx_pct_b, "{s}ctx {d}%{s}", .{ ctx_ink, ident.pct, ctx_rst }) catch "ctx —";
-    var cost_b: [40]u8 = undefined;
+    var cost_b: [64]u8 = undefined;
+    var in_b: [16]u8 = undefined;
+    var out_b: [16]u8 = undefined;
     const cost_s: []const u8 = if (ident.cost) |c|
         std.fmt.bufPrint(&cost_b, "${d:.2}", .{c}) catch ""
     else if (ident.subscription)
         "(sub)"
+    else if (ident.tok_in > 0 or ident.tok_out > 0)
+        std.fmt.bufPrint(&cost_b, "↑{s} ↓{s}", .{ formatTok(&in_b, ident.tok_in), formatTok(&out_b, ident.tok_out) }) catch ""
     else
         "";
     var right_full_b: [128]u8 = undefined;
@@ -216,15 +220,26 @@ pub fn writeComposerTopEdge(wr: *std.Io.Writer, ident: FooterIdent, box_w: usize
         std.fmt.bufPrint(&right_full_b, "{s} · {s}", .{ cost_s, ctx_full }) catch ctx_full
     else
         ctx_full;
+    var right_pct_b: [64]u8 = undefined;
+    const right_pct: []const u8 = if (wide and cost_s.len > 0)
+        std.fmt.bufPrint(&right_pct_b, "{s} · {s}", .{ cost_s, ctx_pct }) catch ctx_pct
+    else
+        ctx_pct;
     var right: []const u8 = if (wide) right_full else ctx_pct;
-    // 降级:cost → branch(先截后弃) → think/sandbox → ctx 绝对量 → 右段 → 截 model
-    if (edgeNeed(left, mid, right) > budget and wide and cost_s.len > 0) right = ctx_full;
+
+    // 降级原则(wide 时优先保留 cost 与 model,冗余路径 mid 先截后弃):
+    // 1. 优先缩减或丢弃 mid(cwd ↳ branch)
     if (edgeNeed(left, mid, right) > budget and mid.len > 0) {
         const spare = budget -| edgeNeed(left, "", right) -| 4;
         mid = if (spare >= 12) truncateToVisible(mid, spare) else "";
     }
     if (edgeNeed(left, mid, right) > budget and mid.len > 0) mid = "";
+    // 2. 空间仍紧,去掉 think/sandbox,只留 model
     if (edgeNeed(left, mid, right) > budget and !std.mem.eql(u8, left, ident.model)) left = ident.model;
+    // 3. 空间仍紧,wide 下右侧全量 ctx 降级为简短百分比 ctx,同时尽量保留 cost
+    if (edgeNeed(left, mid, right) > budget and wide and !std.mem.eql(u8, right, right_pct)) right = right_pct;
+    // 4. 空间若仍不够,wide 下放弃 cost 降为 ctx_full 或 ctx_pct
+    if (edgeNeed(left, mid, right) > budget and wide and cost_s.len > 0 and !std.mem.eql(u8, right, ctx_full)) right = ctx_full;
     if (edgeNeed(left, mid, right) > budget and !std.mem.eql(u8, right, ctx_pct)) right = ctx_pct;
     if (edgeNeed(left, mid, right) > budget) right = "";
     if (edgeNeed(left, mid, right) > budget) left = truncateToVisible(left, budget -| 5);

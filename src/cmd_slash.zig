@@ -571,6 +571,10 @@ pub fn dispatch(tui: *tui_mod.Tui, app: *App, cmd: []const u8) anyerror!bool {
         main_mod.showJobs(app);
         return true;
     }
+    if (std.mem.eql(u8, cmd, "workflow") or std.mem.eql(u8, cmd, "flow")) {
+        main_mod.showWorkflow(app);
+        return true;
+    }
     if (std.mem.eql(u8, cmd, "extensions")) {
         showExtensions(app);
         return true;

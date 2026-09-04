@@ -392,21 +392,35 @@ export const Flow: any = {
     this.paint();
   },
   nodeHtml(n: any) {
-    const open = this.openId === n.id && n.body;
+    const open = this.openId === n.id;
     const act2 = n.st === "run" ? n.last || "running" : n.st === "fail" ? "fail" : n.st === "skip" ? "skip" : "";
+    let bodyHtml = "";
+    if (open) {
+      if (n.body) {
+        bodyHtml = '<pre class="flow-body">' + esc(n.body) + "</pre>";
+      } else {
+        const lines = [
+          "节点状态: " + (n.st || "pending"),
+          n.role ? "执行角色: " + n.role : "",
+          n.last ? "最近活动: " + n.last : "执行中，暂无标准输出",
+        ].filter(Boolean);
+        bodyHtml = '<div class="flow-body flow-info">' + lines.map((l: string) => "<div>" + esc(l) + "</div>").join("") + "</div>";
+      }
+    }
     return (
       '<li class="flow-n ' +
       n.st +
       (open ? " open" : "") +
       '" data-id="' +
       esc(n.id) +
-      '"><i class="flow-dot"></i><div class="flow-main"><div class="flow-row"><b>' +
+      '" title="点击查看节点详情"><i class="flow-dot"></i><div class="flow-main"><div class="flow-row"><b>' +
       esc(n.id) +
       "</b>" +
       (n.role ? "<em>" + esc(n.role) + "</em>" : "") +
       (act2 ? '<span class="flow-act">' + esc(act2) + "</span>" : "") +
+      '<span class="flow-arr">' + (open ? "▾" : "▸") + "</span>" +
       "</div>" +
-      (open ? '<pre class="flow-body">' + esc(n.body) + "</pre>" : "") +
+      bodyHtml +
       "</div></li>"
     );
   },

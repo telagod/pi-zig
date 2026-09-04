@@ -21,8 +21,10 @@ export function closeMenus() {
 /// side: "bl"(默认 左下)| "br"(右下)| "tr"(右上)| "tl"(左上);
 /// 菜单卡片永远不越过视口(8px 边距),溢出时自动翻转。
 export function openAt(id: string, btn: any, side: "bl" | "br" | "tr" | "tl" = "bl") {
-  closeMenus();
   const m = $(id)!;
+  const wasOpen = m.classList.contains("open");
+  closeMenus();
+  if (wasOpen) return;
   m.classList.add("open");
   const r = btn.getBoundingClientRect();
   const mw = m.offsetWidth,
@@ -234,7 +236,7 @@ export function sessionRow(s: any, arch: boolean, wsRoot?: string) {
     "se" +
     (s.name === sess && here ? " on" : "") +
     (arch ? " arch" : "");
-  const title = s.name === "default" ? "默认会话" : s.title || s.name;
+  const title = s.title || (s.name === "default" ? "默认会话" : s.name);
   d.innerHTML =
     '<div class="srow"><span class="lead">' +
     (s.busy

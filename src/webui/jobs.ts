@@ -65,19 +65,39 @@ function fmtSec(ms: number): string {
   return Math.round(s / 60) + "m";
 }
 
+let openJobKey: string | null = null;
+
 function fmtRow(a: any, gone_: boolean, i: number): string {
+  const k = keyOf(a);
+  const isOpen = openJobKey === k;
   const sec = fmtSec(a.ms || 0);
   const lim = a.limit_ms && !a.detached ? "/" + Math.round(a.limit_ms / 1000) + "s" : "";
   const by = a.bytes ? " · " + fmtTok(a.bytes) : "";
   const retry = a.attempt > 1 && !gone_ ? " · retry " + (a.attempt - 1) : "";
   const glyph = a.detached ? "~" : a.kind === "subagent" ? "●" : a.kind === "http" ? "↻" : "▸";
   const det = a.detail ? '<span class="jr-d">' + esc(a.detail) + "</span>" : "";
+  let expandHtml = "";
+  if (isOpen) {
+    const details = [
+      a.kind ? "<div><b>类型:</b> " + esc(a.kind) + "</div>" : "",
+      a.pid ? "<div><b>PID:</b> " + esc(String(a.pid)) + "</div>" : "",
+      a.limit_ms ? "<div><b>超时限制:</b> " + Math.round(a.limit_ms / 1000) + "s</div>" : "",
+      a.bytes ? "<div><b>传输数据:</b> " + fmtTok(a.bytes) + "</div>" : "",
+      a.attempt ? "<div><b>执行轮次:</b> " + a.attempt + "</div>" : "",
+      a.detail ? '<div><b>详细内容:</b><pre class="jr-code">' + esc(a.detail) + "</pre></div>" : "",
+    ].filter(Boolean).join("");
+    expandHtml = '<div class="jr-exp">' + (details || "<i>暂无附加参数</i>") + "</div>";
+  }
   return (
-    '<div class="jr' + (a.detached ? " bg" : "") + (gone_ ? " gone" : "") + '">' +
+    '<div class="jr' + (a.detached ? " bg" : "") + (gone_ ? " gone" : "") + (isOpen ? " open" : "") + '" data-key="' + esc(k) + '" title="点击查看详情">' +
+    '<div class="jr-main">' +
     '<span class="jr-g">' + glyph + "</span>" +
     '<span class="jr-n">' + esc(a.name || "job") + "</span>" +
     det +
     '<span class="jr-t" data-i="' + i + '">' + sec + lim + by + retry + (gone_ ? " · 完成" : "") + "</span>" +
+    '<span class="jr-arr">' + (isOpen ? "▾" : "▸") + "</span>" +
+    "</div>" +
+    expandHtml +
     "</div>"
   );
 }
@@ -140,6 +160,14 @@ export function refreshJobs(list: any[]) {
   p.innerHTML =
     sortedLive.map((a, i) => fmtRow(a, false, i)).join("") +
     gone.map((a, i) => fmtRow(a, true, i + sortedLive.length)).join("");
+  p.querySelectorAll(".jr").forEach((el: any) => {
+    el.onclick = (e: any) => {
+      e.stopPropagation();
+      const k = el.getAttribute("data-key");
+      openJobKey = openJobKey === k ? null : k;
+      refreshJobs(live);
+    };
+  });
   startTickIfNeeded();
 }
 

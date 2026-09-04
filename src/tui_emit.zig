@@ -167,6 +167,109 @@ fn toolTitle(meta: ToolMeta, buf: []u8, now_ms: i64) []const u8 {
     }) catch meta.name;
 }
 
+pub fn toolGroupTitle(cells: []const Cell, buf: []u8) []const u8 {
+    if (cells.len == 0) return "";
+    var count: usize = 0;
+    var err_count: usize = 0;
+    var total_elapsed: i64 = 0;
+
+    const MaxDistinct = 6;
+    var names: [MaxDistinct][]const u8 = undefined;
+    var name_counts: [MaxDistinct]usize = [_]usize{0} ** MaxDistinct;
+    var n_distinct: usize = 0;
+
+    for (cells) |c| {
+        const tm = c.tool orelse continue;
+        count += 1;
+        if (tm.status == .err) err_count += 1;
+        total_elapsed += tm.elapsed_ms;
+
+        var found = false;
+        for (names[0..n_distinct], 0..) |n, i| {
+            if (std.mem.eql(u8, n, tm.name)) {
+                name_counts[i] += 1;
+                found = true;
+                break;
+            }
+        }
+        if (!found and n_distinct < MaxDistinct) {
+            names[n_distinct] = tm.name;
+            name_counts[n_distinct] = 1;
+            n_distinct += 1;
+        }
+    }
+
+    var breakdown_buf: [128]u8 = undefined;
+    var b_len: usize = 0;
+    for (names[0..n_distinct], 0..) |name, i| {
+        if (b_len > 0 and b_len + 2 < breakdown_buf.len) {
+            breakdown_buf[b_len] = ',';
+            breakdown_buf[b_len + 1] = ' ';
+            b_len += 2;
+        }
+        const cnt = name_counts[i];
+        const piece = if (cnt > 1)
+            std.fmt.bufPrint(breakdown_buf[b_len..], "{d} {s}", .{ cnt, name }) catch break
+        else
+            std.fmt.bufPrint(breakdown_buf[b_len..], "{s}", .{name}) catch break;
+        b_len += piece.len;
+    }
+    const breakdown = breakdown_buf[0..b_len];
+
+    var eb: [24]u8 = undefined;
+    const et = activity.formatElapsed(&eb, total_elapsed);
+
+    var status_buf: [64]u8 = undefined;
+    const status = if (err_count > 0) blk: {
+        const ink = theme().fgStatus(.err);
+        break :blk std.fmt.bufPrint(&status_buf, "{s}{d}/{d} ok, {d} err{s} {s}", .{
+            ink, count - err_count, count, err_count, if (ink.len > 0) ANSI_RESET else "", et,
+        }) catch "err";
+    } else blk: {
+        const ink = theme().fgStatus(.ok);
+        break :blk std.fmt.bufPrint(&status_buf, "{s}ok{s} {s}", .{
+            ink, if (ink.len > 0) ANSI_RESET else "", et,
+        }) catch "ok";
+    };
+
+    if (breakdown.len > 0) {
+        return std.fmt.bufPrint(buf, "{s}{d} commands{s} ({s})  {s}  {s}[Ctrl+O]{s}", .{
+            ANSI_BOLD, count, ANSI_RESET, breakdown, status, ANSI_DIM, ANSI_RESET,
+        }) catch "commands";
+    } else {
+        return std.fmt.bufPrint(buf, "{s}{d} commands{s}  {s}  {s}[Ctrl+O]{s}", .{
+            ANSI_BOLD, count, ANSI_RESET, status, ANSI_DIM, ANSI_RESET,
+        }) catch "commands";
+    }
+}
+
+pub fn toolGroupRowCount(cells: []const Cell, width: usize) usize {
+    if (cells.len == 0) return 0;
+    var tb: [384]u8 = undefined;
+    const title = toolGroupTitle(cells, &tb);
+    return wrapRowCount(title, gutterInner(.tool, width));
+}
+
+pub fn emitToolGroup(wr: *std.Io.Writer, cells: []const Cell, width: usize, skip: usize, limit: usize) !usize {
+    if (limit == 0 or cells.len == 0) return 0;
+    var tb: [384]u8 = undefined;
+    const title = toolGroupTitle(cells, &tb);
+    var has_err = false;
+    for (cells) |c| {
+        if (c.tool) |tm| {
+            if (tm.status == .err) {
+                has_err = true;
+                break;
+            }
+        }
+    }
+    const st: ToolStatus = if (has_err) .err else .ok;
+    var skipped = skip;
+    var emitted: usize = 0;
+    try emitPrefixed(wr, TOOL_HEAD_PREFIX, TOOL_HEAD_REST, title, gutterInner(.tool, width), &skipped, &emitted, limit, theme().bgTool(paintStatus(st)));
+    return emitted;
+}
+
 const TOOL_HEAD_PREFIX = ANSI_DIM ++ "    ▸ " ++ ANSI_RESET;
 const TOOL_HEAD_REST = "      ";
 const TOOL_BODY_FIRST = "      │ ";
@@ -208,7 +311,7 @@ fn toolBorderInk(status: ToolStatus) []const u8 {
     };
 }
 
-fn isWorkflowTool(meta: ToolMeta) bool {
+pub fn isWorkflowTool(meta: ToolMeta) bool {
     return std.mem.eql(u8, meta.name, "workflow");
 }
 

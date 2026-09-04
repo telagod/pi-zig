@@ -8,6 +8,8 @@ import {
 } from "./ui";
 import { segHtml, authPanelHtml, packageRows, pluginRows } from "./render";
 import { sessData, closeMenus } from "./sessions";
+import { closeSheet } from "./sheet";
+import { hideSlash, hideBang } from "./slash";
 import {
   THINK_LEVELS, APPROVALS, getThink, getCurModel, getApprovalMode,
   applySessionModel, setThink, setApproval, setSandbox, loadModels,
@@ -385,21 +387,34 @@ document.addEventListener("keydown", (e) => {
     }
   }
   if (e.key === "Escape") {
+    if (document.querySelector(".menu.open")) {
+      e.preventDefault();
+      closeMenus();
+      return;
+    }
     const kh = $("keysHint");
     if (kh && !kh.hidden) {
       kh.hidden = true;
       kh.innerHTML = "";
       return;
     }
+    const sm = $("slashMenu");
+    if (sm && !sm.hidden) {
+      e.preventDefault();
+      hideSlash();
+      hideBang();
+      return;
+    }
+    const sheet = $("sheet");
+    if (sheet && sheet.classList.contains("open")) {
+      e.preventDefault();
+      closeSheet();
+      return;
+    }
     if ($("overlay")!.classList.contains("open")) {
       e.preventDefault();
       dlgCancel();
       closeDlg();
-      return;
-    }
-    const sm = $("slashMenu");
-    if (sm && !sm.hidden) {
-      sm.hidden = true;
       return;
     }
     if ($("inspect") && !$("inspect")!.hidden) {

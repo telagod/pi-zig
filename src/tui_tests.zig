@@ -1834,3 +1834,119 @@ test "maskSecret: bullets only, one per char, utf8-safe" {
     }
     try t.expectEqual(@as(usize, 6), n);
 }
+
+test "tui only displays the most recent think cell open" {
+    const t = std.testing;
+    var ui = try Tui.init(t.allocator);
+    defer ui.deinit();
+
+    try ui.appendUser("first prompt");
+    try ui.appendThink("thought one");
+    try ui.appendText("answer one");
+    try ui.appendUser("second prompt");
+    try ui.appendThink("thought two");
+    try ui.appendText("answer two");
+
+    const plans = try t.allocator.alloc(Tui.CellRenderPlan, ui.cells.items.len);
+    defer t.allocator.free(plans);
+    ui.buildRenderPlans(plans);
+
+    // ui.cells.items:
+    // 0: user "first prompt"
+    // 1: think "thought one"
+    // 2: assistant "answer one"
+    // 3: user "second prompt"
+    // 4: think "thought two"
+    // 5: assistant "answer two"
+    try t.expect(!plans[1].think_open); // older think is folded!
+    try t.expect(plans[4].think_open); // only the most recent think is open!
+
+    // If think_open is toggled off (Ctrl+T):
+    ui.toggleThink();
+    ui.buildRenderPlans(plans);
+    try t.expect(!plans[1].think_open);
+    try t.expect(!plans[4].think_open);
+}
+
+test "tui automatically collapses consecutive completed tools" {
+    const t = std.testing;
+    var ui = try Tui.init(t.allocator);
+    defer ui.deinit();
+
+    try ui.appendUser("run commands");
+    try ui.appendTool("bash", "git status");
+    try ui.appendToolEnd("bash", false, "clean\n");
+    try ui.appendTool("read", "src/main.zig");
+    try ui.appendToolEnd("read", false, "fn main() {}\n");
+    try ui.appendTool("edit", "src/main.zig");
+    try ui.appendToolEnd("edit", false, "diff\n");
+
+    const plans = try t.allocator.alloc(Tui.CellRenderPlan, ui.cells.items.len);
+    defer t.allocator.free(plans);
+    ui.buildRenderPlans(plans);
+
+    // 0: user
+    // 1: tool bash (ok)
+    // 2: tool read (ok)
+    // 3: tool edit (ok)
+    try t.expectEqual(Tui.RenderMode.normal, plans[0].mode);
+    try t.expectEqual(Tui.RenderMode.tool_group_head, plans[1].mode);
+    try t.expectEqual(@as(usize, 4), plans[1].group_end);
+    try t.expectEqual(Tui.RenderMode.subsumed, plans[2].mode);
+    try t.expectEqual(Tui.RenderMode.subsumed, plans[3].mode);
+
+    // Group title format check:
+    var title_buf: [256]u8 = undefined;
+    const title = emit.toolGroupTitle(ui.cells.items[1..4], &title_buf);
+    try t.expect(std.mem.indexOf(u8, title, "3 commands") != null);
+    try t.expect(std.mem.indexOf(u8, title, "bash") != null);
+    try t.expect(std.mem.indexOf(u8, title, "read") != null);
+    try t.expect(std.mem.indexOf(u8, title, "edit") != null);
+    try t.expect(std.mem.indexOf(u8, title, "[Ctrl+O]") != null);
+
+    // When Ctrl+O expands tools:
+    ui.toggleTools();
+    ui.buildRenderPlans(plans);
+    try t.expectEqual(Tui.RenderMode.normal, plans[1].mode);
+    try t.expectEqual(Tui.RenderMode.normal, plans[2].mode);
+    try t.expectEqual(Tui.RenderMode.normal, plans[3].mode);
+}
+
+test "tui consecutive tools with a running tool at the end" {
+    const t = std.testing;
+    var ui = try Tui.init(t.allocator);
+    defer ui.deinit();
+
+    try ui.appendTool("bash", "git status");
+    try ui.appendToolEnd("bash", false, "clean\n");
+    try ui.appendTool("read", "src/main.zig");
+    try ui.appendToolEnd("read", false, "fn main() {}\n");
+    try ui.appendTool("bash", "zig build test"); // still running!
+
+    const plans = try t.allocator.alloc(Tui.CellRenderPlan, ui.cells.items.len);
+    defer t.allocator.free(plans);
+    ui.buildRenderPlans(plans);
+
+    // 0: tool bash (ok) -> group head
+    // 1: tool read (ok) -> subsumed
+    // 2: tool bash (running) -> normal (rendered actively running)
+    try t.expectEqual(Tui.RenderMode.tool_group_head, plans[0].mode);
+    try t.expectEqual(@as(usize, 2), plans[0].group_end);
+    try t.expectEqual(Tui.RenderMode.subsumed, plans[1].mode);
+    try t.expectEqual(Tui.RenderMode.normal, plans[2].mode);
+}
+
+test "tui single tool is not grouped" {
+    const t = std.testing;
+    var ui = try Tui.init(t.allocator);
+    defer ui.deinit();
+
+    try ui.appendTool("bash", "git status");
+    try ui.appendToolEnd("bash", false, "clean\n");
+
+    const plans = try t.allocator.alloc(Tui.CellRenderPlan, ui.cells.items.len);
+    defer t.allocator.free(plans);
+    ui.buildRenderPlans(plans);
+
+    try t.expectEqual(Tui.RenderMode.normal, plans[0].mode);
+}

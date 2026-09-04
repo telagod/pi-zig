@@ -355,6 +355,7 @@ pub const redoLast = app_views.redoLast;
 pub const showDiff = app_views.showDiff;
 pub const showLog = app_views.showLog;
 pub const showJobs = app_views.showJobs;
+pub const showWorkflow = app_views.showWorkflow;
 pub const showUsage = app_views.showUsage;
 pub const copyLastReply = app_views.copyLastReply;
 pub const copyToClipboard = app_views.copyToClipboard;
@@ -527,6 +528,11 @@ fn tuiOnSandbox(ctx: ?*anyopaque) void {
 fn tuiOnJobs(ctx: ?*anyopaque) void {
     const app: *App = @ptrCast(@alignCast(ctx orelse return));
     showJobs(app);
+}
+
+fn tuiOnWorkflow(ctx: ?*anyopaque) void {
+    const app: *App = @ptrCast(@alignCast(ctx orelse return));
+    showWorkflow(app);
 }
 
 fn tuiOnUsage(ctx: ?*anyopaque) void {
@@ -791,6 +797,7 @@ pub fn runInteractive(alloc: std.mem.Allocator, cfg: *cfgmod.Config, cwd: []cons
         .on_copy = tuiOnCopy,
         .on_sandbox = tuiOnSandbox,
         .on_jobs = tuiOnJobs,
+        .on_workflow = tuiOnWorkflow,
         .on_usage = tuiOnUsage,
         .on_redo = tuiOnRedo,
         .on_doctor = tuiOnDoctor,
@@ -1447,7 +1454,7 @@ test "every slash command appears in /help" {
     //
     // 命令名取自 onSubmit 里的 `eql(u8, cmd, "…")` / `startsWith(u8, cmd, "… ")`。
     const dispatched = [_][]const u8{
-        "help",  "status", "doctor", "init", "diff", "commit", "log",    "branch",  "mcp", "reload",  "usage",         "jobs",  "find", "paste", "think",  "theme", "permissions", "sandbox", "model", "refresh", "new", "sessions", "resume",
+        "help",  "status", "doctor", "init", "diff", "commit", "log",    "branch",  "mcp", "reload",  "usage",         "jobs", "workflow", "find", "paste", "think",  "theme", "permissions", "sandbox", "model", "refresh", "new", "sessions", "resume",
         "title", "tree",   "fork",   "copy", "undo", "redo",   "memory", "plugins", "pkg", "compact", "fast-compress", "clear", "plan", "queue", "export", "dump",  "quit",
     };
     for (dispatched) |cmd| {

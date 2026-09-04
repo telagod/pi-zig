@@ -9,12 +9,61 @@ const ai = @import("ai.zig");
 /// 磁盘上就永远是安全值。
 pub const MAX_TITLE_BYTES = 256;
 
-/// 从首条用户消息抽出侧栏标题。空、纯图、纯空白则无。
+/// 从首条用户消息智能提炼侧栏或会话标题。
+/// 剥离 slash 冗余、markdown 标记、多余空白，选出最有说明力的主题行并平滑截短。
 pub fn deriveTitle(alloc: std.mem.Allocator, text: []const u8) ?[]const u8 {
-    var t = std.mem.trim(u8, text, " \t\r\n");
-    if (t.len == 0) return null;
-    if (std.mem.eql(u8, t, "(image)") or std.mem.eql(u8, t, "[image]")) return null;
-    if (std.mem.indexOfScalar(u8, t, '\n')) |nl| t = std.mem.trim(u8, t[0..nl], " \t\r");
+    var raw = std.mem.trim(u8, text, " \t\r\n");
+    if (raw.len == 0) return null;
+    if (std.mem.eql(u8, raw, "(image)") or std.mem.eql(u8, raw, "[image]")) return null;
+
+    // 智能识别 slash 命令
+    if (std.mem.startsWith(u8, raw, "/")) {
+        const space_idx = std.mem.indexOfAny(u8, raw, " \t");
+        if (space_idx) |sp| {
+            const cmd = raw[1..sp];
+            const rest = std.mem.trim(u8, raw[sp..], " \t\r\n");
+            if (rest.len > 0) {
+                raw = rest;
+            } else {
+                if (std.mem.eql(u8, cmd, "doctor")) return alloc.dupe(u8, "诊断环境与依赖") catch null;
+                if (std.mem.eql(u8, cmd, "diff")) return alloc.dupe(u8, "工作区变更比对") catch null;
+                if (std.mem.eql(u8, cmd, "log")) return alloc.dupe(u8, "系统执行日志") catch null;
+                if (std.mem.eql(u8, cmd, "usage")) return alloc.dupe(u8, "Token开销统计") catch null;
+                if (std.mem.eql(u8, cmd, "jobs")) return alloc.dupe(u8, "后台任务列表") catch null;
+                if (std.mem.eql(u8, cmd, "sandbox")) return alloc.dupe(u8, "沙箱隔离状态") catch null;
+                return alloc.dupe(u8, cmd) catch null;
+            }
+        }
+    }
+
+    // 逐行寻找最具有总结意义的候选行
+    var best_line: ?[]const u8 = null;
+    var lines_it = std.mem.splitScalar(u8, raw, '\n');
+    var is_first = true;
+    while (lines_it.next()) |line| {
+        var clean = std.mem.trim(u8, line, " \t\r");
+        if (clean.len == 0) continue;
+        // 跳过代码块标记
+        if (std.mem.startsWith(u8, clean, "```")) continue;
+        // 去除 markdown 标题修饰
+        while (std.mem.startsWith(u8, clean, "#")) {
+            clean = std.mem.trimStart(u8, clean, "# \t");
+        }
+        if (std.mem.startsWith(u8, clean, "- ") or std.mem.startsWith(u8, clean, "* ")) {
+            clean = std.mem.trimStart(u8, clean, "-* \t");
+        }
+        if (clean.len == 0) continue;
+        if (is_first) {
+            best_line = clean;
+            is_first = false;
+            if (clean.len >= 6) break;
+        } else if (clean.len > 6) {
+            best_line = clean;
+            break;
+        }
+    }
+
+    const t = best_line orelse return null;
     if (t.len == 0) return null;
     const cap: usize = 64;
     return alloc.dupe(u8, util.clampUtf8(t, cap)) catch null;
