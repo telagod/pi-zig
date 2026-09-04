@@ -239,16 +239,23 @@ pub fn lockPathsFor(self: *Agent, args: []const u8, out: *[MAX_LOCKED_PATHS]?*st
         return 1;
     }
 
+    // 规范化:使用 self.cwd 补全相对路径并词法规范化(如 ./a.txt 与 a.txt 归一到同一路径),
+    // 防止因路径书写形式不同绕过互斥锁导致并发丢写。
+    var norm_paths: [MAX_LOCKED_PATHS][]const u8 = undefined;
+    for (paths[0..n], 0..) |p, i| {
+        norm_paths[i] = toolsmod.normalizePath(a, self.cwd, p);
+    }
+
     // 字典序排序 + 去重(同一文件在 multi_edit 里出现两次时不能重复加锁 —— 会自锁死)
-    std.mem.sort([]const u8, paths[0..n], {}, struct {
+    std.mem.sort([]const u8, norm_paths[0..n], {}, struct {
         fn lt(_: void, x: []const u8, y: []const u8) bool {
             return std.mem.order(u8, x, y) == .lt;
         }
     }.lt);
 
     var held: usize = 0;
-    for (paths[0..n], 0..) |p, i| {
-        if (i > 0 and std.mem.eql(u8, p, paths[i - 1])) continue; // 去重
+    for (norm_paths[0..n], 0..) |p, i| {
+        if (i > 0 and std.mem.eql(u8, p, norm_paths[i - 1])) continue; // 去重
         const m = FileLocks.get(p);
         m.lockUncancelable(util.io);
         out[held] = m;

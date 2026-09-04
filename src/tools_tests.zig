@@ -692,6 +692,34 @@ test "bash tool" {
     try t.expect(std.mem.indexOf(u8, r2.content, "exit code 3") != null);
 }
 
+test "bash tool strips sensitive credentials from environment" {
+    const t = std.testing;
+    try util.testInit();
+    var arena = util.Arena.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    try util.environ_map.?.put("ANTHROPIC_API_KEY", "sk-ant-secret-12345");
+    try util.environ_map.?.put("MY_SECRET_TOKEN", "super-secret");
+    try util.environ_map.?.put("NORMAL_VAR", "visible-value");
+    defer {
+        _ = util.environ_map.?.swapRemove("ANTHROPIC_API_KEY");
+        _ = util.environ_map.?.swapRemove("MY_SECRET_TOKEN");
+        _ = util.environ_map.?.swapRemove("NORMAL_VAR");
+    }
+
+    try t.expect(bash.isSensitiveEnv("ANTHROPIC_API_KEY"));
+    try t.expect(bash.isSensitiveEnv("OPENAI_API_KEY"));
+    try t.expect(bash.isSensitiveEnv("AWS_SECRET_ACCESS_KEY"));
+    try t.expect(bash.isSensitiveEnv("GITHUB_TOKEN"));
+    try t.expect(!bash.isSensitiveEnv("PATH"));
+    try t.expect(!bash.isSensitiveEnv("HOME"));
+
+    const r = try toolBash(a, "{\"command\":\"echo A=$ANTHROPIC_API_KEY S=$MY_SECRET_TOKEN N=$NORMAL_VAR\"}");
+    try t.expect(!r.is_error);
+    try t.expect(std.mem.indexOf(u8, r.content, "A= S= N=visible-value") != null);
+}
+
 test "bash background returns immediately and writes a log" {
     const t = std.testing;
     try util.testInit();

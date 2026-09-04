@@ -14,6 +14,7 @@ const EventHub = webui.EventHub;
 const WebServer = webui.WebServer;
 const ChatQueue = webui.ChatQueue;
 const originOk = webui.originOk;
+const hostOk = webui.hostOk;
 const wsAllowed = webui.wsAllowed;
 const queryUsize = routes.queryUsize;
 const querySession = routes.querySession;
@@ -49,6 +50,31 @@ test "cross-origin write requests are refused" {
     try t.expect(!originOk(PORT, "POST / HTTP/1.1\r\norigin: http://127.0.0.1.evil.com\r\n\r\n"));
     // 端口后面挂垃圾,不能被 parseInt 放过
     try t.expect(!originOk(PORT, "POST / HTTP/1.1\r\norigin: http://127.0.0.1:5494.evil.com\r\n\r\n"));
+}
+
+test "hostOk rejects external host and allows loopback" {
+    const t = std.testing;
+    const PORT: u16 = 5494;
+
+    // 缺失 Host 头(HTTP/1.0 客户端)放行
+    try t.expect(hostOk(PORT, "GET / HTTP/1.0\r\n\r\n"));
+
+    // 合法 loopback 与端口
+    try t.expect(hostOk(PORT, "GET / HTTP/1.1\r\nhost: 127.0.0.1\r\n\r\n"));
+    try t.expect(hostOk(PORT, "GET / HTTP/1.1\r\nHost: 127.0.0.1:5494\r\n\r\n"));
+    try t.expect(hostOk(PORT, "GET / HTTP/1.1\r\nhost: localhost\r\n\r\n"));
+    try t.expect(hostOk(PORT, "GET / HTTP/1.1\r\nhost: localhost:5494\r\n\r\n"));
+    try t.expect(hostOk(PORT, "GET / HTTP/1.1\r\nhost: [::1]\r\n\r\n"));
+    try t.expect(hostOk(PORT, "GET / HTTP/1.1\r\nhost: [::1]:5494\r\n\r\n"));
+
+    // 端口不匹配
+    try t.expect(!hostOk(PORT, "GET / HTTP/1.1\r\nhost: 127.0.0.1:9999\r\n\r\n"));
+    try t.expect(!hostOk(PORT, "GET / HTTP/1.1\r\nhost: localhost:80\r\n\r\n"));
+
+    // DNS Rebinding 外部域名
+    try t.expect(!hostOk(PORT, "GET / HTTP/1.1\r\nhost: attacker.com\r\n\r\n"));
+    try t.expect(!hostOk(PORT, "GET / HTTP/1.1\r\nhost: attacker.com:5494\r\n\r\n"));
+    try t.expect(!hostOk(PORT, "GET / HTTP/1.1\r\nhost: evil.localhost.com\r\n\r\n"));
 }
 
 test "parseChatText extracts text field" {
@@ -226,7 +252,7 @@ test "http: SSE stream limit answers 503 before writing any 200" {
     // 占满全部槽位
     var held: [EventHub.MAX_STREAMS]net.Stream = undefined;
     for (&held) |*s| {
-        s.* = try it.openStream("GET /api/events HTTP/1.1\r\nhost: x\r\naccept: text/event-stream\r\n\r\n");
+        s.* = try it.openStream("GET /api/events HTTP/1.1\r\nhost: 127.0.0.1\r\naccept: text/event-stream\r\n\r\n");
     }
     defer for (&held) |*s| s.close(util.io);
     // 等服务端把它们都注册上(每连接一个线程,注册不是同步的)
@@ -244,7 +270,7 @@ test "http: SSE stream limit answers 503 before writing any 200" {
 
     // 第 17 个:必须是 503 且带明确原因。旧实现先写 200 头再 register,
     // 满员时直接关流 —— 客户端拿到的 200 空流和「还没事件」无法区分。
-    const resp = try it.request("GET /api/events HTTP/1.1\r\nhost: x\r\naccept: text/event-stream\r\n\r\n");
+    const resp = try it.request("GET /api/events HTTP/1.1\r\nhost: 127.0.0.1\r\naccept: text/event-stream\r\n\r\n");
     try t.expect(std.mem.indexOf(u8, ITest.statusOf(resp), "503") != null);
     try t.expect(std.mem.indexOf(u8, resp, "too many event streams") != null);
     try t.expect(std.mem.indexOf(u8, resp, "retry-after") != null);
@@ -283,7 +309,7 @@ test "http: an over-long title still gets a complete response" {
     const body = try std.fmt.allocPrint(a, "{{\"title\":\"{s}\"}}", .{long});
     const req = try std.fmt.allocPrint(
         a,
-        "POST /api/title?session=default HTTP/1.1\r\nhost: x\r\ncontent-type: application/json\r\ncontent-length: {d}\r\nconnection: close\r\n\r\n{s}",
+        "POST /api/title?session=default HTTP/1.1\r\nhost: 127.0.0.1\r\ncontent-type: application/json\r\ncontent-length: {d}\r\nconnection: close\r\n\r\n{s}",
         .{ body.len, body },
     );
     const resp = try it.request(req);
@@ -310,14 +336,14 @@ test "http: cross-origin write is refused with 403" {
 
     // 恶意源:即使没开 token 也必须拒绝
     const evil = try it.request(
-        "POST /api/title?session=default HTTP/1.1\r\nhost: x\r\norigin: https://evil.example.com\r\ncontent-length: 2\r\nconnection: close\r\n\r\n{}",
+        "POST /api/title?session=default HTTP/1.1\r\nhost: 127.0.0.1\r\norigin: https://evil.example.com\r\ncontent-length: 2\r\nconnection: close\r\n\r\n{}",
     );
     try t.expect(std.mem.indexOf(u8, ITest.statusOf(evil), "403") != null);
 
     // 本服务自己的页面放行
     const own = try std.fmt.allocPrint(
         a,
-        "POST /api/title?session=default HTTP/1.1\r\nhost: x\r\norigin: http://127.0.0.1:{d}\r\ncontent-length: 2\r\nconnection: close\r\n\r\n{{}}",
+        "POST /api/title?session=default HTTP/1.1\r\nhost: 127.0.0.1\r\norigin: http://127.0.0.1:{d}\r\ncontent-length: 2\r\nconnection: close\r\n\r\n{{}}",
         .{it.port},
     );
     const ok = try it.request(own);
@@ -340,22 +366,22 @@ test "http: unregistered ws is refused before reaching any handler" {
     defer it.stop();
 
     // 未注册的 ws:一个不带凭证的 GET 曾能读出 ~/.piz/models.json 里的 apiKey
-    const bad = try it.request("GET /api/plugins/assets/p/web/x?ws=/tmp/attacker HTTP/1.1\r\nhost: x\r\nconnection: close\r\n\r\n");
+    const bad = try it.request("GET /api/plugins/assets/p/web/x?ws=/tmp/attacker HTTP/1.1\r\nhost: 127.0.0.1\r\nconnection: close\r\n\r\n");
     try t.expect(std.mem.indexOf(u8, ITest.statusOf(bad), "403") != null);
 
     // 已注册的 ws 过校验(资源不存在,所以是 404 而非 403 —— 关键是不再被门口拦下)
-    const good = try it.request("GET /api/plugins/assets/p/web/x?ws=/registered HTTP/1.1\r\nhost: x\r\nconnection: close\r\n\r\n");
+    const good = try it.request("GET /api/plugins/assets/p/web/x?ws=/registered HTTP/1.1\r\nhost: 127.0.0.1\r\nconnection: close\r\n\r\n");
     try t.expect(std.mem.indexOf(u8, ITest.statusOf(good), "403") == null);
 
     // 空 ws = 用进程默认项目,一律放行
-    const empty = try it.request("GET / HTTP/1.1\r\nhost: x\r\nconnection: close\r\n\r\n");
+    const empty = try it.request("GET / HTTP/1.1\r\nhost: 127.0.0.1\r\nconnection: close\r\n\r\n");
     try t.expect(std.mem.indexOf(u8, ITest.statusOf(empty), "200") != null);
 
     // 壳页带未注册 ws 仍吐 HTML;API 继续 403
-    const page = try it.request("GET /?session=s2&ws=/tmp/attacker HTTP/1.1\r\nhost: x\r\nconnection: close\r\n\r\n");
+    const page = try it.request("GET /?session=s2&ws=/tmp/attacker HTTP/1.1\r\nhost: 127.0.0.1\r\nconnection: close\r\n\r\n");
     try t.expect(std.mem.indexOf(u8, ITest.statusOf(page), "200") != null);
     try t.expect(std.mem.indexOf(u8, page, "<html") != null);
-    const api_bad = try it.request("GET /api/state?ws=/tmp/attacker HTTP/1.1\r\nhost: x\r\nconnection: close\r\n\r\n");
+    const api_bad = try it.request("GET /api/state?ws=/tmp/attacker HTTP/1.1\r\nhost: 127.0.0.1\r\nconnection: close\r\n\r\n");
     try t.expect(std.mem.indexOf(u8, ITest.statusOf(api_bad), "403") != null);
 }
 
@@ -474,10 +500,10 @@ test "http: /api/files lists a registered workspace and refuses others" {
     });
     defer it.stop();
 
-    const evil = try it.request("GET /api/files?q=&ws=/tmp/evil HTTP/1.1\r\nhost: x\r\nconnection: close\r\n\r\n");
+    const evil = try it.request("GET /api/files?q=&ws=/tmp/evil HTTP/1.1\r\nhost: 127.0.0.1\r\nconnection: close\r\n\r\n");
     try t.expect(std.mem.indexOf(u8, evil, "403") != null);
 
-    const req = try std.fmt.allocPrint(a, "GET /api/files?q=src&ws={s} HTTP/1.1\r\nhost: x\r\nconnection: close\r\n\r\n", .{tmp_path});
+    const req = try std.fmt.allocPrint(a, "GET /api/files?q=src&ws={s} HTTP/1.1\r\nhost: 127.0.0.1\r\nconnection: close\r\n\r\n", .{tmp_path});
     const ok = try it.request(req);
     try t.expect(std.mem.indexOf(u8, ok, "200") != null);
     try t.expect(std.mem.indexOf(u8, ok, "\"ok\":true") != null);

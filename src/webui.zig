@@ -368,6 +368,11 @@ pub const WebServer = struct {
         const method = req.head.method;
         const qmark = std.mem.indexOfScalar(u8, target, '?');
         const path = if (qmark) |i| target[0..i] else target;
+        // Host 头校验:防御 DNS Rebinding 攻击
+        if (!hostOk(self.port, req.head_buffer)) {
+            try req.respond("invalid host header", .{ .status = .bad_request });
+            return;
+        }
         // 静态资源(HTML/JS/CSS)免鉴权(kimi 同:仅 API/WS 需凭证)——否则 splash 无法加载
         const is_static = method == .GET and
             (std.mem.eql(u8, target, "/") or std.mem.startsWith(u8, target, "/?") or
@@ -680,6 +685,31 @@ pub fn originOk(port: u16, head: []const u8) bool {
     for ([_][]const u8{ "http://127.0.0.1:", "http://localhost:", "http://[::1]:" }) |prefix| {
         if (std.mem.startsWith(u8, rest, prefix)) {
             const port_str = rest[prefix.len..];
+            const p = std.fmt.parseInt(u16, port_str, 10) catch continue;
+            if (p == port) return true;
+        }
+    }
+    return false;
+}
+
+/// Host 是否属于本服务允许的本地目标。防御 DNS Rebinding 攻击。
+/// 无 Host 头(如极端 HTTP/1.0 客户端)放行。
+/// 仅允许 localhost / 127.0.0.1 / [::1] 及其匹配的端口。
+pub fn hostOk(port: u16, head: []const u8) bool {
+    const pos = blk: {
+        if (std.ascii.startsWithIgnoreCase(head, "host:")) break :blk 0;
+        if (std.ascii.indexOfIgnoreCase(head, "\nhost:")) |p| break :blk p + 1;
+        return true;
+    };
+    var rest = head[pos + "host:".len ..];
+    const eol = std.mem.indexOfAny(u8, rest, "\r\n") orelse rest.len;
+    rest = std.mem.trim(u8, rest[0..eol], " \t");
+    if (rest.len == 0) return true;
+
+    for ([_][]const u8{ "127.0.0.1", "localhost", "[::1]" }) |h| {
+        if (std.ascii.eqlIgnoreCase(rest, h)) return true;
+        if (rest.len > h.len and rest[h.len] == ':' and std.ascii.startsWithIgnoreCase(rest, h)) {
+            const port_str = rest[h.len + 1 ..];
             const p = std.fmt.parseInt(u16, port_str, 10) catch continue;
             if (p == port) return true;
         }

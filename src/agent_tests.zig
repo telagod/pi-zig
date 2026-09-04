@@ -512,6 +512,29 @@ test "duplicate paths in one batch are deduped before locking" {
     }
 }
 
+test "equivalent paths with different lexical forms map to the same lock" {
+    const t = std.testing;
+    try util.testInit();
+    var cfg = cfgmod.Config{ .arena = undefined };
+    var arena = util.Arena.init(std.testing.allocator);
+    defer arena.deinit();
+    cfg.arena = &arena;
+    var provs = [_]cfgmod.Provider{.{ .name = "mock", .api = .openai_completions, .base_url = "http://127.0.0.1:1", .api_key = "k" }};
+    cfg.providers = &provs;
+    var agent = try Agent.init(arena.allocator(), &cfg, "mock", "m", "/tmp");
+
+    // 同一物理文件的不同书写形态(直接、带./、带冗余斜杠、带..)必须归一到同一把锁并去重
+    const equiv = "{\"files\":[{\"path\":\"foo.zig\",\"edits\":[]},{\"path\":\"./foo.zig\",\"edits\":[]},{\"path\":\"sub/../foo.zig\",\"edits\":[]}]}";
+    var held: [MAX_LOCKED_PATHS]?*std.Io.Mutex = @splat(null);
+    const n = lockPathsFor(&agent, equiv, &held);
+    try t.expectEqual(@as(usize, 1), n);
+    var k = n;
+    while (k > 0) {
+        k -= 1;
+        if (held[k]) |m| m.unlock(util.io);
+    }
+}
+
 test "concurrent writes to distinct files run in parallel and none is lost" {
     const t = std.testing;
     try util.testInit();

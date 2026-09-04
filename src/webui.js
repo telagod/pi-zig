@@ -74,7 +74,9 @@ __modules["util"] = function(module, exports, require) {
   String(s)
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;"); exports.esc = esc;
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;"); exports.esc = esc;
  function histText(v) {
   if (typeof v === "string") return v;
   if (Array.isArray(v)) {

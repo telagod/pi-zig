@@ -26,6 +26,40 @@ fn outsideWorkspace(arena: std.mem.Allocator, path: []const u8) ?Result {
     return .{ .content = "error: path is outside the workspace", .is_error = true };
 }
 
+/// 识别可能包含 API Key、凭证、Token 的敏感环境变量名。
+pub fn isSensitiveEnv(key: []const u8) bool {
+    var upper_buf: [128]u8 = undefined;
+    if (key.len > upper_buf.len) return true; // 超长可疑变量名保守屏蔽
+    const upper = std.ascii.upperString(&upper_buf, key);
+    if (std.mem.indexOf(u8, upper, "API_KEY") != null or
+        std.mem.indexOf(u8, upper, "APIKEY") != null or
+        std.mem.indexOf(u8, upper, "SECRET") != null or
+        std.mem.indexOf(u8, upper, "AUTH_TOKEN") != null or
+        std.mem.indexOf(u8, upper, "ACCESS_TOKEN") != null or
+        std.mem.indexOf(u8, upper, "BEARER_TOKEN") != null or
+        std.mem.indexOf(u8, upper, "PRIVATE_KEY") != null or
+        std.mem.endsWith(u8, upper, "_TOKEN") or
+        std.mem.indexOf(u8, upper, "TOKEN") != null)
+    {
+        return true;
+    }
+    return false;
+}
+
+/// 构造用于 bash 子进程的干净环境变量集,剥离 API Key 与各类云凭证。
+pub fn buildCleanBashEnv(arena: std.mem.Allocator) ?std.process.Environ.Map {
+    if (util.environ_map) |pe| {
+        var clean = std.process.Environ.Map.init(arena);
+        var it = pe.iterator();
+        while (it.next()) |kv| {
+            if (isSensitiveEnv(kv.key_ptr.*)) continue;
+            clean.put(kv.key_ptr.*, kv.value_ptr.*) catch return null;
+        }
+        return clean;
+    }
+    return null;
+}
+
 fn setNonBlock(fd: std.posix.fd_t) void {
     util.setNonBlock(fd);
 }
@@ -444,12 +478,14 @@ pub fn toolBash(arena: std.mem.Allocator, args: []const u8) !Result {
         }
         return .{ .content = sandboxmod.missingSandboxMsg(arena, sandbox_mode), .is_error = true };
     };
+    var clean_env = buildCleanBashEnv(arena);
     var child = try std.process.spawn(util.io, .{
         .argv = argv,
         .cwd = if (start_dir.len > 0) .{ .path = start_dir } else .inherit,
         .stdout = .pipe,
         .stderr = .pipe,
         .pgid = 0,
+        .environ_map = if (clean_env) |*ce| ce else null,
     });
     const child_pid = child.id;
     const out_fd = child.stdout.?.handle;

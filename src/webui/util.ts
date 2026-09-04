@@ -5,7 +5,9 @@ export const esc = (s: any) =>
   String(s)
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 export function histText(v: any): string {
   if (typeof v === "string") return v;
   if (Array.isArray(v)) {

@@ -49,7 +49,7 @@ pub fn rootForSpawn() ?[]const u8 {
     return if (tool_root.len > 0) tool_root else null;
 }
 
-fn lexNorm(arena: std.mem.Allocator, path: []const u8) []const u8 {
+pub fn lexNorm(arena: std.mem.Allocator, path: []const u8) []const u8 {
     const abs = std.fs.path.isAbsolute(path);
     var parts = std.array_list.Managed([]const u8).init(arena);
     var it = std.mem.splitScalar(u8, path, '/');
@@ -73,6 +73,15 @@ fn lexNorm(arena: std.mem.Allocator, path: []const u8) []const u8 {
     }
     if (abs and parts.items.len == 0) return "/";
     return aw.toOwnedSlice() catch path;
+}
+
+/// 路径规范化:结合 root 补全相对路径并消除多余斜杠与 .. 相对段。
+pub fn normalizePath(arena: std.mem.Allocator, root: []const u8, path: []const u8) []const u8 {
+    const full = if (root.len > 0 and !std.fs.path.isAbsolute(path))
+        std.fs.path.join(arena, &.{ root, path }) catch path
+    else
+        path;
+    return lexNorm(arena, full);
 }
 
 /// 写类工具:路径必须落在当前 tool_root 下。未设 root 时不拦(单测直调)。
