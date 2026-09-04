@@ -495,6 +495,7 @@ __modules["types"] = function(module, exports, require) {
 
 
 
+
 };
 __modules["net"] = function(module, exports, require) {
 "use strict";Object.defineProperty(exports, "__esModule", {value: true}); function _optionalChain(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }// net.ts —— 高韧性网络层 (Bearer 鉴权、CSRF 防护、fetch+ReadableStream SSE 流)
@@ -852,6 +853,8 @@ const urlParams = new URLSearchParams(window.location.search);
  const model = _signal.signal(""); exports.model = model;
  const models = _signal.signal([]); exports.models = models;
  const pct = _signal.signal(0); exports.pct = pct;
+ const thinkingLevel = _signal.signal(getStored("think", "high")); exports.thinkingLevel = thinkingLevel;
+ const attachedImage = _signal.signal(null); exports.attachedImage = attachedImage;
 
  const deckTab = _signal.signal(getStored("deckTab", "diffs")); exports.deckTab = deckTab;
  const deckOpen = _signal.signal(getStored("deckOpen", true)); exports.deckOpen = deckOpen;
@@ -867,6 +870,7 @@ const urlParams = new URLSearchParams(window.location.search);
  const showSearchModal = _signal.signal(false); exports.showSearchModal = showSearchModal;
  const showAuthModal = _signal.signal(false); exports.showAuthModal = showAuthModal;
  const showSettingsModal = _signal.signal(false); exports.showSettingsModal = showSettingsModal;
+ const showShortcutsModal = _signal.signal(false); exports.showShortcutsModal = showShortcutsModal;
 
 // 统计衍生物
  const totalDiffStats = _signal.computed.call(void 0, () => {
@@ -1175,15 +1179,36 @@ const urlParams = new URLSearchParams(window.location.search);
   }
 } exports.approve = approve;
 
- async function sendMessage(text) {
-  if (!text || !text.trim() || exports.isStreaming.call(void 0, )) return;
+ async function switchThinkingLevel(lvl) {
+  exports.thinkingLevel.set(lvl);
+  setStored("think", lvl);
+  try {
+    await _net.apiFetch.call(void 0, "/api/config", {
+      method: "POST",
+      body: JSON.stringify({ setDefaultThinkingLevel: lvl }),
+    });
+  } catch (e) {
+    console.warn("switchThinkingLevel failed:", e);
+  }
+} exports.switchThinkingLevel = switchThinkingLevel;
+
+ async function sendMessage(
+  text,
+  imgObj
+) {
+  if ((!text || !text.trim()) && !imgObj && !exports.attachedImage.call(void 0, )) return;
+  if (exports.isStreaming.call(void 0, )) return;
+
+  const currentImg = imgObj !== undefined ? imgObj : exports.attachedImage.call(void 0, );
+  const trimmedText = text.trim();
 
   const userTurn = {
     id: `u_${Date.now()}`,
     role: "user",
-    content: text.trim(),
+    content: trimmedText,
     steps: [],
     timestamp: Date.now(),
+    image: currentImg ? `data:${currentImg.mime};base64,${currentImg.data}` : undefined,
   };
 
   const assistantTurnId = `a_${Date.now()}`;
@@ -1201,12 +1226,22 @@ const urlParams = new URLSearchParams(window.location.search);
     exports.turns.update((prev) => [...prev, userTurn, assistantTurn]);
     exports.isStreaming.set(true);
     exports.streamingTurnId.set(assistantTurnId);
+    exports.attachedImage.set(null);
   });
 
   try {
+    const payload = {
+      text: trimmedText,
+      message: trimmedText,
+    };
+    if (currentImg) {
+      payload.image = currentImg.data;
+      payload.mime = currentImg.mime;
+    }
+
     const res = await _net.apiFetch.call(void 0, `/api/chat${getQuery()}`, {
       method: "POST",
-      body: JSON.stringify({ text: text.trim(), message: text.trim() }),
+      body: JSON.stringify(payload),
     });
     if (res && res.ok === false) {
       throw new Error(res.error || "Request rejected by server");
@@ -1226,6 +1261,65 @@ const urlParams = new URLSearchParams(window.location.search);
     });
   }
 } exports.sendMessage = sendMessage;
+
+ function regenerateLastTurn() {
+  if (exports.isStreaming.call(void 0, )) return;
+  const list = exports.turns.call(void 0, );
+  for (let i = list.length - 1; i >= 0; i--) {
+    if (list[i].role === "user") {
+      sendMessage(list[i].content);
+      break;
+    }
+  }
+} exports.regenerateLastTurn = regenerateLastTurn;
+
+ async function runTerminalCommand(cmd) {
+  const trimmed = cmd.trim();
+  if (!trimmed) return;
+  appendTerminalLine(`$ ${trimmed}`, "cmd");
+  try {
+    await _net.apiFetch.call(void 0, `/api/chat${getQuery()}`, {
+      method: "POST",
+      body: JSON.stringify({ text: `!!${trimmed}`, message: `!!${trimmed}` }),
+    });
+  } catch (err) {
+    appendTerminalLine(`Error executing command: ${err}`, "stderr");
+  }
+} exports.runTerminalCommand = runTerminalCommand;
+
+ function exportSession(format = "md") {
+  const list = exports.turns.call(void 0, );
+  const curName = exports.activeSession.call(void 0, );
+  let content = "";
+  let filename = `piz_session_${curName}_${new Date().toISOString().slice(0, 10)}`;
+
+  if (format === "json") {
+    content = JSON.stringify(list, null, 2);
+    filename += ".json";
+  } else {
+    content = `# piz Session: ${curName}\n\n*Exported on ${new Date().toLocaleString()}*\n\n---\n\n`;
+    for (const t of list) {
+      if (t.role === "user") {
+        content += `### User\n\n${t.content}\n\n`;
+      } else {
+        content += `### Assistant\n\n`;
+        if (t.thought) {
+          content += `> **Thought Process**:\n> ${t.thought.replace(/\n/g, "\n> ")}\n\n`;
+        }
+        content += `${t.content}\n\n---\n\n`;
+      }
+    }
+    filename += ".md";
+  }
+
+  const blob = new Blob([content], { type: format === "json" ? "application/json" : "text/markdown;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+} exports.exportSession = exportSession;
 
 // 核心 SSE 事件调度（精准对齐后端真实事件契约）
  function handleSseEvent(evt) {
@@ -1679,6 +1773,42 @@ function createSvg(
   );
 } exports.iconBranch = iconBranch;
 
+ function iconImage(size = 16, cls = "") {
+  return createSvg(
+    "M21 19V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2zM8.5 10a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zm12.5 5l-5-5-8 8",
+    size,
+    cls
+  );
+} exports.iconImage = iconImage;
+
+ function iconRefresh(size = 16, cls = "") {
+  return createSvg(
+    "M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15",
+    size,
+    cls
+  );
+} exports.iconRefresh = iconRefresh;
+
+ function iconEdit(size = 16, cls = "") {
+  return createSvg(
+    "M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z",
+    size,
+    cls
+  );
+} exports.iconEdit = iconEdit;
+
+ function iconDownload(size = 16, cls = "") {
+  return createSvg("M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3", size, cls);
+} exports.iconDownload = iconDownload;
+
+ function iconHelp(size = 16, cls = "") {
+  return createSvg(
+    "M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3M12 17h.01M22 12A10 10 0 1 1 2 12a10 10 0 0 1 20 0z",
+    size,
+    cls
+  );
+} exports.iconHelp = iconHelp;
+
 };
 __modules["topbar"] = function(module, exports, require) {
 "use strict";Object.defineProperty(exports, "__esModule", {value: true});// topbar.ts —— 顶栏工作台导航与全局状态指示
@@ -1704,7 +1834,9 @@ var _dom = require('./dom');
 
 
 
+
 var _store = require('./store');
+
 
 
 
@@ -1863,6 +1995,15 @@ var _icons = require('./icons');
         },
         _icons.iconSettings.call(void 0, 15)
       ),
+      // 快捷键帮助按钮
+      _dom.tags.button(
+        {
+          class: "tb-btn tb-icon-btn",
+          title: "Keyboard Shortcuts (?)",
+          onclick: () => _store.showShortcutsModal.set(true),
+        },
+        _icons.iconHelp.call(void 0, 14)
+      ),
       // 网络状态指示灯
       _dom.tags.span({
         class: () => `status-indicator ${_store.connectionStatus.call(void 0, )}`,
@@ -2006,7 +2147,7 @@ function formatRelativeTime(ts) {
 
 };
 __modules["md"] = function(module, exports, require) {
-"use strict";Object.defineProperty(exports, "__esModule", {value: true});// md.ts —— 极速安全 Markdown 渲染器 (Fail-closed 防 XSS，流式容错)
+"use strict";Object.defineProperty(exports, "__esModule", {value: true});// md.ts —— 现代化极速安全 Markdown 与代码语法高亮引擎 (Zero-dep, Fail-closed, Lexical Syntax Highlighting)
 
 function escapeHtml(s) {
   return s
@@ -2016,6 +2157,102 @@ function escapeHtml(s) {
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
 }
+
+// 关键词词典
+const KEYWORDS = new Set([
+  "const", "let", "var", "function", "return", "if", "else", "for", "while", "do",
+  "switch", "case", "break", "continue", "default", "import", "export", "from", "as",
+  "class", "extends", "super", "this", "new", "typeof", "instanceof", "try", "catch",
+  "finally", "throw", "async", "await", "yield", "pub", "fn", "struct", "enum", "union",
+  "error", "orelse", "catch", "try", "defer", "errdefer", "comptime", "inline", "test",
+  "type", "interface", "namespace", "using", "package", "def", "elif", "pass", "lambda",
+  "with", "is", "in", "not", "and", "or", "true", "false", "null", "undefined", "nil", "None"
+]);
+
+const TYPES = new Set([
+  "string", "number", "boolean", "any", "void", "never", "unknown", "u8", "u16", "u32", "u64",
+  "i8", "i16", "i32", "i64", "usize", "isize", "f32", "f64", "bool", "int", "float", "str",
+  "list", "dict", "tuple", "set", "Self", "Allocator", "ArrayList", "Writer", "Reader"
+]);
+
+// 轻量词法高亮
+ function highlightCode(code, lang) {
+  const lines = code.split("\n");
+  const highlightedLines = lines.map((line) => {
+    let i = 0;
+    let out = "";
+    const len = line.length;
+
+    while (i < len) {
+      // 1. 注释 // 或 # 或 --
+      if ((line[i] === "/" && line[i + 1] === "/") || (line[i] === "#" && !lang.includes("hash")) || (line[i] === "-" && line[i + 1] === "-")) {
+        out += `<span class="hl-comment">${escapeHtml(line.slice(i))}</span>`;
+        break;
+      }
+
+      // 2. 字符串 "..." 或 '...' 或 `...`
+      const ch = line[i];
+      if (ch === '"' || ch === "'" || ch === "`") {
+        let str = ch;
+        i++;
+        while (i < len && line[i] !== ch) {
+          if (line[i] === "\\" && i + 1 < len) {
+            str += line[i] + line[i + 1];
+            i += 2;
+          } else {
+            str += line[i];
+            i++;
+          }
+        }
+        if (i < len) {
+          str += line[i];
+          i++;
+        }
+        out += `<span class="hl-string">${escapeHtml(str)}</span>`;
+        continue;
+      }
+
+      // 3. 数字 (包括十六进制 0x...)
+      if (/[0-9]/.test(ch) && (i === 0 || /[^a-zA-Z0-9_]/.test(line[i - 1]))) {
+        let num = "";
+        while (i < len && /[0-9a-fA-FxX_.]/.test(line[i])) {
+          num += line[i];
+          i++;
+        }
+        out += `<span class="hl-number">${escapeHtml(num)}</span>`;
+        continue;
+      }
+
+      // 4. 标识符（关键词、类型、函数调用）
+      if (/[a-zA-Z_]/.test(ch)) {
+        let word = "";
+        while (i < len && /[a-zA-Z0-9_]/.test(line[i])) {
+          word += line[i];
+          i++;
+        }
+
+        if (KEYWORDS.has(word)) {
+          out += `<span class="hl-keyword">${word}</span>`;
+        } else if (TYPES.has(word) || /^[A-Z][a-zA-Z0-9_]*$/.test(word)) {
+          out += `<span class="hl-type">${word}</span>`;
+        } else if (i < len && line[i] === "(") {
+          out += `<span class="hl-func">${word}</span>`;
+        } else {
+          out += escapeHtml(word);
+        }
+        continue;
+      }
+
+      // 5. 符号与其它字符
+      out += escapeHtml(ch);
+      i++;
+    }
+
+    return out || " ";
+  });
+
+  return highlightedLines.join("\n");
+} exports.highlightCode = highlightCode;
 
 function renderInline(text) {
   let s = escapeHtml(text);
@@ -2053,14 +2290,17 @@ function renderInline(text) {
     if (line.trim().startsWith("```")) {
       if (inCodeBlock) {
         // 闭合代码块
-        const codeText = escapeHtml(codeBlockContent.join("\n"));
+        const rawCode = codeBlockContent.join("\n");
+        const hlCode = highlightCode(rawCode, codeBlockLang);
         out.push(
           `<div class="code-block" data-lang="${codeBlockLang}">` +
             `<div class="code-block-hdr">` +
               `<span class="code-lang">${codeBlockLang || "text"}</span>` +
-              `<button class="copy-btn" onclick="navigator.clipboard.writeText(this.closest('.code-block').querySelector('code').innerText);this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500)">Copy</button>` +
+              `<button class="copy-btn" onclick="navigator.clipboard.writeText(this.closest('.code-block').querySelector('code').innerText);this.classList.add('is-copied');setTimeout(()=>this.classList.remove('is-copied'),2000)">` +
+                `<span class="copy-lbl">Copy</span><span class="copied-lbl">Copied!</span>` +
+              `</button>` +
             `</div>` +
-            `<pre><code class="lang-${codeBlockLang}">${codeText}</code></pre>` +
+            `<pre><code class="lang-${codeBlockLang}">${hlCode}</code></pre>` +
           `</div>`
         );
         inCodeBlock = false;
@@ -2069,7 +2309,7 @@ function renderInline(text) {
       } else {
         // 打开代码块
         inCodeBlock = true;
-        codeBlockLang = line.trim().slice(3).trim();
+        codeBlockLang = line.trim().slice(3).trim().toLowerCase();
         codeBlockContent = [];
       }
       continue;
@@ -2086,7 +2326,6 @@ function renderInline(text) {
         inTable = true;
         out.push('<div class="table-wrap"><table>');
       }
-      // 忽略分隔线 |---|---|
       if (/^\|[\s\-:|]+\|$/.test(line.trim())) {
         continue;
       }
@@ -2125,7 +2364,6 @@ function renderInline(text) {
         out.push("<ul>");
       }
       let content = listMatch[3];
-      // 任务列表 [ ] or [x]
       if (content.startsWith("[ ] ")) {
         content = `<input type="checkbox" disabled class="task-chk"> ` + content.slice(4);
       } else if (content.startsWith("[x] ")) {
@@ -2163,13 +2401,14 @@ function renderInline(text) {
 
   // 兜底闭合流式未完结结构
   if (inCodeBlock) {
-    const codeText = escapeHtml(codeBlockContent.join("\n"));
+    const rawCode = codeBlockContent.join("\n");
+    const hlCode = highlightCode(rawCode, codeBlockLang);
     out.push(
       `<div class="code-block is-streaming" data-lang="${codeBlockLang}">` +
         `<div class="code-block-hdr">` +
           `<span class="code-lang">${codeBlockLang || "text"}</span>` +
         `</div>` +
-        `<pre><code class="lang-${codeBlockLang}">${codeText}</code></pre>` +
+        `<pre><code class="lang-${codeBlockLang}">${hlCode}</code></pre>` +
       `</div>`
     );
   }
@@ -2182,12 +2421,20 @@ function renderInline(text) {
 
 };
 __modules["chat"] = function(module, exports, require) {
-"use strict";Object.defineProperty(exports, "__esModule", {value: true});// chat.ts —— 对话流视图 (Turn 境界、思考流折叠、步骤轨迹与 Markdown 渲染)
+"use strict";Object.defineProperty(exports, "__esModule", {value: true});// chat.ts —— 对话流视图 (Turn 境界、动态思考计时、多模态图片展示、操作动作条与 Markdown 渲染)
 var _dom = require('./dom');
+
+
+
+
+
+
 var _store = require('./store');
 var _md = require('./md');
 
 var _signal = require('./signal');
+
+
 
 
 
@@ -2248,6 +2495,12 @@ var _icons = require('./icons');
 } exports.renderChatStream = renderChatStream;
 
 function renderEmptyState() {
+  function fillPrompt(p) {
+    if (typeof (window ).__pizFillComposer === "function") {
+      (window ).__pizFillComposer(p);
+    }
+  }
+
   return _dom.tags.div(
     { class: "chat-empty-state" },
     _dom.tags.div(
@@ -2259,7 +2512,11 @@ function renderEmptyState() {
     _dom.tags.div(
       { class: "empty-prompts" },
       _dom.tags.div(
-        { class: "prompt-card" },
+        {
+          class: "prompt-card",
+          title: "Click to populate prompt",
+          onclick: () => fillPrompt("分析当前项目架构与未提交修改并提出建议"),
+        },
         _dom.tags.div({ class: "prompt-card-icon" }, _icons.iconBolt.call(void 0, 18)),
         _dom.tags.div(
           { class: "prompt-card-text" },
@@ -2268,7 +2525,13 @@ function renderEmptyState() {
         )
       ),
       _dom.tags.div(
-        { class: "prompt-card" },
+        {
+          class: "prompt-card",
+          title: "Click to open Diffs",
+          onclick: () => {
+            _store.setDeckTab.call(void 0, "diffs");
+          },
+        },
         _dom.tags.div({ class: "prompt-card-icon" }, _icons.iconDiff.call(void 0, 18)),
         _dom.tags.div(
           { class: "prompt-card-text" },
@@ -2277,7 +2540,11 @@ function renderEmptyState() {
         )
       ),
       _dom.tags.div(
-        { class: "prompt-card" },
+        {
+          class: "prompt-card",
+          title: "Click to populate prompt",
+          onclick: () => fillPrompt("对当前项目进行安全审计，检查未授权操作与潜在漏洞"),
+        },
         _dom.tags.div({ class: "prompt-card-icon" }, _icons.iconShield.call(void 0, 18)),
         _dom.tags.div(
           { class: "prompt-card-text" },
@@ -2290,6 +2557,8 @@ function renderEmptyState() {
 }
 
 function renderUserTurn(turn) {
+  const copied = _signal.signal(false);
+
   return _dom.tags.div(
     { class: "turn turn-user", id: turn.id },
     _dom.tags.div(
@@ -2297,7 +2566,44 @@ function renderUserTurn(turn) {
       _dom.tags.div({ class: "turn-avatar user-avatar" }, _icons.iconUser.call(void 0, 15)),
       _dom.tags.div(
         { class: "turn-body" },
-        _dom.tags.div({ class: "user-bubble" }, turn.content)
+        // 多模态图片预览
+        turn.image
+          ? _dom.tags.div(
+              { class: "user-image-wrap" },
+              _dom.tags.img({ class: "user-image-preview", src: turn.image })
+            )
+          : null,
+        _dom.tags.div({ class: "user-bubble" }, turn.content),
+        // 用户操作栏
+        _dom.tags.div(
+          { class: "turn-footer-actions user-actions" },
+          _dom.tags.button(
+            {
+              class: "turn-action-btn",
+              title: "Edit and repopulate to input",
+              onclick: () => {
+                if (typeof (window ).__pizFillComposer === "function") {
+                  (window ).__pizFillComposer(turn.content);
+                }
+              },
+            },
+            _icons.iconEdit.call(void 0, 12),
+            _dom.tags.span({}, "Edit")
+          ),
+          _dom.tags.button(
+            {
+              class: "turn-action-btn",
+              title: "Copy text",
+              onclick: () => {
+                navigator.clipboard.writeText(turn.content);
+                copied.set(true);
+                setTimeout(() => copied.set(false), 2000);
+              },
+            },
+            () => (copied() ? _icons.iconCheck.call(void 0, 12) : _icons.iconCopy.call(void 0, 12)),
+            _dom.tags.span({}, () => (copied() ? "Copied" : "Copy"))
+          )
+        )
       )
     )
   );
@@ -2306,6 +2612,20 @@ function renderUserTurn(turn) {
 function renderAssistantTurn(turn) {
   const thoughtCollapsed = _signal.signal(!turn.isStreaming && Boolean(turn.content));
   const copied = _signal.signal(false);
+  const startTime = Date.now();
+  const liveDuration = _signal.signal(0);
+
+  // 流式中思考秒数动态累加
+  let timer = null;
+  if (turn.isStreaming) {
+    timer = setInterval(() => {
+      if (!turn.isStreaming) {
+        clearInterval(timer);
+        return;
+      }
+      liveDuration.set(Math.floor((Date.now() - startTime) / 100) / 10);
+    }, 100);
+  }
 
   return _dom.tags.div(
     { class: "turn turn-assistant", id: turn.id },
@@ -2321,14 +2641,17 @@ function renderAssistantTurn(turn) {
             return _dom.tags.div(
               { class: "thought-panel is-thinking" },
               _icons.iconSpinner.call(void 0, 13, "thought-spinner"),
-              _dom.tags.span({ class: "thought-label" }, "Thinking...")
+              _dom.tags.span(
+                { class: "thought-label" },
+                () => `Thinking (${liveDuration().toFixed(1)}s)...`
+              )
             );
           }
           if (!turn.thought) return null;
 
-          const durationText = turn.thoughtDurationMs
-            ? ` (${(turn.thoughtDurationMs / 1000).toFixed(1)}s)`
-            : "";
+          const durationSec = turn.thoughtDurationMs
+            ? (turn.thoughtDurationMs / 1000).toFixed(1)
+            : liveDuration().toFixed(1);
 
           return _dom.tags.div(
             { class: "thought-panel" },
@@ -2340,7 +2663,7 @@ function renderAssistantTurn(turn) {
               _dom.tags.span({ class: "thought-chevron" }, () =>
                 thoughtCollapsed() ? _icons.iconChevronRight.call(void 0, 12) : _icons.iconChevronDown.call(void 0, 12)
               ),
-              _dom.tags.span({ class: "thought-title" }, `Thinking Process${durationText}`),
+              _dom.tags.span({ class: "thought-title" }, `Thinking Process (${durationSec}s)`),
               turn.isStreaming
                 ? _dom.tags.span({ class: "thought-live-badge" }, "LIVE")
                 : null
@@ -2382,7 +2705,7 @@ function renderAssistantTurn(turn) {
           return el;
         },
 
-        // 4. 底部操作微栏 (复制等)
+        // 4. 底部操作微栏 (复制、重新生成)
         () => {
           if (!turn.content || turn.isStreaming) return null;
           return _dom.tags.div(
@@ -2399,6 +2722,15 @@ function renderAssistantTurn(turn) {
               },
               () => (copied() ? _icons.iconCheck.call(void 0, 12) : _icons.iconCopy.call(void 0, 12)),
               _dom.tags.span({}, () => (copied() ? "Copied" : "Copy"))
+            ),
+            _dom.tags.button(
+              {
+                class: "turn-action-btn",
+                title: "Regenerate answer",
+                onclick: () => _store.regenerateLastTurn.call(void 0, ),
+              },
+              _icons.iconRefresh.call(void 0, 12),
+              _dom.tags.span({}, "Regenerate")
             )
           );
         }
@@ -2503,8 +2835,9 @@ function renderStepCard(step) {
 
 };
 __modules["composer"] = function(module, exports, require) {
-"use strict";Object.defineProperty(exports, "__esModule", {value: true});// composer.ts —— 底部智能输入台 (自适应高度、斜杠补全、文件引用与流控)
+"use strict";Object.defineProperty(exports, "__esModule", {value: true}); function _optionalChain(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }// composer.ts —— 底部智能输入台 (自适应高度、斜杠补全、多模态剪贴板图片粘贴、文件引用与流控)
 var _dom = require('./dom');
+
 
 
 
@@ -2528,6 +2861,8 @@ var _signal = require('./signal');
 
 
 
+
+
 var _icons = require('./icons');
 
  function renderComposer() {
@@ -2537,6 +2872,28 @@ var _icons = require('./icons');
   const menuIndex = _signal.signal(0);
 
   let textareaEl = null;
+  let fileInputEl = null;
+
+  // 全局暴露给空状态卡片点击直接填入 prompt
+  (window ).__pizFillComposer = (val) => {
+    text.set(val);
+    if (textareaEl) {
+      textareaEl.value = val;
+      autoResize(textareaEl);
+      textareaEl.focus();
+    }
+  };
+
+  (window ).__pizAppendComposer = (val) => {
+    const cur = text().trim();
+    const next = cur ? `${cur} ${val} ` : `${val} `;
+    text.set(next);
+    if (textareaEl) {
+      textareaEl.value = next;
+      autoResize(textareaEl);
+      textareaEl.focus();
+    }
+  };
 
   const SLASH_COMMANDS = [
     { cmd: "/diff", desc: "Open right deck to inspect code changes", icon: _icons.iconDiff },
@@ -2575,9 +2932,45 @@ var _icons = require('./icons');
     el.style.height = `${nextH}px`;
   }
 
+  // 剪贴板图片粘贴处理
+  function handlePaste(e) {
+    const items = _optionalChain([e, 'access', _ => _.clipboardData, 'optionalAccess', _2 => _2.items]);
+    if (!items) return;
+
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (item.type.startsWith("image/")) {
+        e.preventDefault();
+        const file = item.getAsFile();
+        if (!file) continue;
+        processImageFile(file);
+        break;
+      }
+    }
+  }
+
+  function processImageFile(file) {
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const result = _optionalChain([ev, 'access', _3 => _3.target, 'optionalAccess', _4 => _4.result]) ;
+      if (!result) return;
+      // 提取 base64 数据与 mime
+      const match = result.match(/^data:([^;]+);base64,(.+)$/);
+      if (match) {
+        _store.attachedImage.set({
+          mime: match[1],
+          data: match[2],
+          name: file.name || "pasted_image.png",
+        });
+      }
+    };
+    reader.readAsDataURL(file);
+  }
+
   function doSend() {
     const msg = text().trim();
-    if (!msg || _store.isStreaming.call(void 0, )) return;
+    const hasImg = Boolean(_store.attachedImage.call(void 0, ));
+    if ((!msg && !hasImg) || _store.isStreaming.call(void 0, )) return;
 
     // 本地拦截部分斜杠命令
     if (msg === "/diff") {
@@ -2638,7 +3031,6 @@ var _icons = require('./icons');
   function handleKeyDown(e) {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      // 如果斜杠菜单开着，回车选择当前项
       if (showSlashMenu()) {
         const q = text().toLowerCase();
         const filtered = SLASH_COMMANDS.filter((c) => c.cmd.toLowerCase().startsWith(q));
@@ -2649,7 +3041,6 @@ var _icons = require('./icons');
           return;
         }
       }
-      // 如果文件菜单开着，回车选择当前文件
       if (showFileMenu()) {
         const atIdx = text().lastIndexOf("@");
         const q = atIdx >= 0 ? text().slice(atIdx + 1).toLowerCase() : "";
@@ -2690,6 +3081,31 @@ var _icons = require('./icons');
 
   return _dom.tags.div(
     { class: "composer-wrap" },
+    // 图片附加预览条
+    () => {
+      const img = _store.attachedImage.call(void 0, );
+      if (!img) return null;
+      return _dom.tags.div(
+        { class: "attached-img-bar" },
+        _dom.tags.div(
+          { class: "attached-img-pill" },
+          _dom.tags.img({
+            class: "attached-img-thumb",
+            src: `data:${img.mime};base64,${img.data}`,
+          }),
+          _dom.tags.span({ class: "attached-img-name" }, img.name || "image.png"),
+          _dom.tags.button(
+            {
+              class: "attached-img-remove",
+              title: "Remove image",
+              onclick: () => _store.attachedImage.set(null),
+            },
+            _icons.iconClose.call(void 0, 12)
+          )
+        )
+      );
+    },
+
     // 斜杠菜单浮层
     () => {
       if (!showSlashMenu()) return null;
@@ -2754,16 +3170,34 @@ var _icons = require('./icons');
       );
     },
 
+    // 隐藏的文件上传 input
+    _dom.tags.input({
+      type: "file",
+      accept: "image/*",
+      style: "display:none;",
+      ref: (el) => {
+        fileInputEl = el;
+      },
+      onchange: (e) => {
+        const input = e.target ;
+        if (input.files && input.files[0]) {
+          processImageFile(input.files[0]);
+          input.value = "";
+        }
+      },
+    }),
+
     // 主输入框容器
     _dom.tags.div(
       { class: "composer-box" },
       _dom.tags.textarea({
         class: "composer-input",
-        placeholder: "Ask piz or type '/' for commands, '@' to reference files...",
+        placeholder: "Ask piz, paste screenshots (Ctrl+V), or type '/' for commands...",
         rows: "1",
         value: () => text(),
         oninput: handleInput,
         onkeydown: handleKeyDown,
+        onpaste: handlePaste,
         ref: (el) => {
           textareaEl = el;
         },
@@ -2774,6 +3208,14 @@ var _icons = require('./icons');
         { class: "composer-bar" },
         _dom.tags.div(
           { class: "composer-bar-left" },
+          _dom.tags.button(
+            {
+              class: "bar-tag-btn",
+              title: "Attach image (or Ctrl+V to paste)",
+              onclick: () => fileInputEl && fileInputEl.click(),
+            },
+            _icons.iconImage.call(void 0, 13)
+          ),
           _dom.tags.button(
             {
               class: "bar-tag-btn",
@@ -2968,6 +3410,7 @@ var _dom = require('./dom');
 
 
 
+
 var _store = require('./store');
 var _term = require('./term');
 
@@ -3067,6 +3510,7 @@ function renderDiffsPanel() {
   const list = _store.diffs.call(void 0, );
   const active = _store.activeDiffFile.call(void 0, );
   const stats = _store.totalDiffStats.call(void 0, );
+  const diffCopied = _signal.signal(false);
 
   if (list.length === 0) {
     return _dom.tags.div(
@@ -3086,7 +3530,35 @@ function renderDiffsPanel() {
         { class: "diff-stats" },
         _dom.tags.span({ class: "diff-stat-add" }, `+${stats.additions}`),
         _dom.tags.span({ class: "diff-stat-del" }, `-${stats.deletions}`),
-        _dom.tags.span({ class: "diff-stat-files" }, `${stats.files} files`)
+        _dom.tags.span({ class: "diff-stat-files" }, `${stats.files} files`),
+        _dom.tags.button(
+          {
+            class: "diff-act-btn",
+            title: "Copy current diff patch",
+            onclick: () => {
+              if (!active) return;
+              const patch = active.hunks
+                .map(
+                  (h) =>
+                    h.header +
+                    "\n" +
+                    h.lines
+                      .map(
+                        (l) =>
+                          (l.type === "add" ? "+" : l.type === "del" ? "-" : " ") +
+                          l.content
+                      )
+                      .join("\n")
+                )
+                .join("\n");
+              navigator.clipboard.writeText(patch);
+              diffCopied.set(true);
+              setTimeout(() => diffCopied.set(false), 2000);
+            },
+          },
+          () => (diffCopied() ? _icons.iconCheck.call(void 0, 12) : _icons.iconCopy.call(void 0, 12)),
+          _dom.tags.span({}, () => (diffCopied() ? "Copied" : "Copy Diff"))
+        )
       ),
       _dom.tags.div(
         { class: "diff-file-tabs" },
@@ -3213,6 +3685,25 @@ function renderTerminalPanel() {
         }
         return null;
       }
+    ),
+
+    // 终端交互执行行 (无模型沙箱直接执行)
+    _dom.tags.div(
+      { class: "terminal-input-bar" },
+      _dom.tags.span({ class: "terminal-prompt-prefix" }, "$"),
+      _dom.tags.input({
+        class: "terminal-cmd-input",
+        placeholder: "Run shell command in workspace (or !!cmd)...",
+        onkeydown: (e) => {
+          if (e.key === "Enter") {
+            const input = e.target ;
+            const cmd = input.value.trim();
+            if (!cmd) return;
+            _store.runTerminalCommand.call(void 0, cmd);
+            input.value = "";
+          }
+        },
+      })
     )
   );
 }
@@ -3320,7 +3811,23 @@ function renderFilesPanel() {
           }
           return _dom.tags.div(
             { class: "file-preview" },
-            _dom.tags.div({ class: "file-preview-hdr" }, cur.path),
+            _dom.tags.div(
+              { class: "file-preview-hdr" },
+              _dom.tags.span({ class: "file-preview-path" }, cur.path),
+              _dom.tags.button(
+                {
+                  class: "file-ref-btn",
+                  title: "Insert reference @file into composer",
+                  onclick: () => {
+                    if ((window ).__pizAppendComposer) {
+                      (window ).__pizAppendComposer(`@${cur.path}`);
+                    }
+                  },
+                },
+                _icons.iconFile.call(void 0, 12),
+                _dom.tags.span({}, "Reference @")
+              )
+            ),
             _dom.tags.pre({ class: "file-preview-code" }, cur.text)
           );
         }
@@ -3416,9 +3923,15 @@ var _dom = require('./dom');
 
 
 
+
+
+
+
 var _store = require('./store');
 var _net = require('./net');
 var _signal = require('./signal');
+
+
 
 
 
@@ -3670,8 +4183,47 @@ var _icons = require('./icons');
             ),
             _dom.tags.div(
               { class: "settings-row" },
+              _dom.tags.label({}, "Default Thinking Level"),
+              _dom.tags.select(
+                {
+                  class: "settings-select",
+                  value: () => _store.thinkingLevel.call(void 0, ),
+                  onchange: (e) => _store.switchThinkingLevel.call(void 0, (e.target ).value),
+                },
+                ["off", "low", "med", "high", "max"].map((lvl) =>
+                  _dom.tags.option({ value: lvl, selected: lvl === _store.thinkingLevel.call(void 0, ) }, lvl.toUpperCase())
+                )
+              )
+            ),
+            _dom.tags.div(
+              { class: "settings-row" },
               _dom.tags.label({}, "Context Window Usage"),
               _dom.tags.div({ class: "settings-stat" }, `${_store.pct.call(void 0, )}% utilized`)
+            ),
+            _dom.tags.div(
+              { class: "settings-row" },
+              _dom.tags.label({}, "Export Session"),
+              _dom.tags.div(
+                { class: "export-btn-group" },
+                _dom.tags.button(
+                  {
+                    class: "export-btn",
+                    title: "Export session as Markdown (.md)",
+                    onclick: () => _store.exportSession.call(void 0, "md"),
+                  },
+                  _icons.iconDownload.call(void 0, 12),
+                  _dom.tags.span({}, "Markdown")
+                ),
+                _dom.tags.button(
+                  {
+                    class: "export-btn",
+                    title: "Export session as JSON (.json)",
+                    onclick: () => _store.exportSession.call(void 0, "json"),
+                  },
+                  _icons.iconDownload.call(void 0, 12),
+                  _dom.tags.span({}, "JSON")
+                )
+              )
             ),
             _dom.tags.div(
               { class: "settings-row" },
@@ -3684,12 +4236,75 @@ var _icons = require('./icons');
     )
   );
 
+  // 5. Shortcuts Modal
+  container.appendChild(
+    _dom.tags.div(
+      {
+        class: () =>
+          `modal-backdrop ${_store.showShortcutsModal.call(void 0, ) ? "is-visible" : "is-hidden"}`,
+        onclick: (e) => {
+          if (e.target === e.currentTarget) _store.showShortcutsModal.set(false);
+        },
+      },
+      () => {
+        if (!_store.showShortcutsModal.call(void 0, )) return null;
+
+        const SHORTCUTS = [
+          { key: "Ctrl + K / ⌘K", desc: "Open command palette and quick switcher" },
+          { key: "Ctrl + B / ⌘B", desc: "Toggle session sidebar drawer" },
+          { key: "Ctrl + J / ⌘J", desc: "Toggle inspection deck (Diffs/Terminal/Files)" },
+          { key: "Ctrl + Shift + D", desc: "Jump to code diffs panel" },
+          { key: "Ctrl + Shift + T", desc: "Jump to terminal panel" },
+          { key: "Enter", desc: "Send message / Submit prompt" },
+          { key: "Shift + Enter", desc: "Insert new line in composer" },
+          { key: "Esc", desc: "Interrupt generation / Close open dialogs" },
+          { key: "Ctrl + V / ⌘V", desc: "Paste image from clipboard into composer" },
+          { key: "/", desc: "Trigger slash command menu in composer" },
+          { key: "@", desc: "Trigger file mention menu in composer" },
+          { key: "?", desc: "Open this keyboard shortcuts cheat sheet" },
+        ];
+
+        return _dom.tags.div(
+          { class: "modal-card shortcuts-modal" },
+          _dom.tags.div(
+            { class: "modal-hdr" },
+            _dom.tags.div(
+              { class: "modal-hdr-left" },
+              _icons.iconHelp.call(void 0, 16),
+              _dom.tags.h3({ class: "modal-title" }, "Keyboard Shortcuts")
+            ),
+            _dom.tags.button(
+              {
+                class: "modal-close-btn",
+                onclick: () => _store.showShortcutsModal.set(false),
+              },
+              _icons.iconClose.call(void 0, 14)
+            )
+          ),
+          _dom.tags.div(
+            { class: "modal-body" },
+            _dom.tags.div(
+              { class: "shortcuts-list" },
+              SHORTCUTS.map((item) =>
+                _dom.tags.div(
+                  { class: "shortcut-row" },
+                  _dom.tags.kbd({ class: "shortcut-key" }, item.key),
+                  _dom.tags.span({ class: "shortcut-desc" }, item.desc)
+                )
+              )
+            )
+          )
+        );
+      }
+    )
+  );
+
   return container;
 } exports.renderModals = renderModals;
 
 };
 __modules["main"] = function(module, exports, require) {
-"use strict";// main.ts —— WebUI Next 根入口总装
+"use strict"; function _optionalChain(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }// main.ts —— WebUI Next 根入口总装
 var _dom = require('./dom');
 var _topbar = require('./topbar');
 var _sidebar = require('./sidebar');
@@ -3698,6 +4313,7 @@ var _composer = require('./composer');
 var _deck = require('./deck');
 var _splitter = require('./splitter');
 var _modal = require('./modal');
+
 
 
 
@@ -3771,9 +4387,14 @@ function setupKeybindings() {
     } else if (isMeta && e.shiftKey && (e.key === "T" || e.key === "t")) {
       e.preventDefault();
       _store.setDeckTab.call(void 0, "terminal");
+    } else if (e.key === "?" && !["INPUT", "TEXTAREA"].includes(_optionalChain([(e.target ), 'optionalAccess', _ => _.tagName]))) {
+      e.preventDefault();
+      _store.showShortcutsModal.update((v) => !v);
     } else if (e.key === "Escape") {
       if (_store.showSearchModal.call(void 0, )) {
         _store.showSearchModal.set(false);
+      } else if (_store.showShortcutsModal.call(void 0, )) {
+        _store.showShortcutsModal.set(false);
       } else if (_store.isStreaming.call(void 0, )) {
         _store.interrupt.call(void 0, );
       }

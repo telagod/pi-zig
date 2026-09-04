@@ -15,6 +15,7 @@ import {
   toggleDeck,
   setDeckTab,
   showSearchModal,
+  showShortcutsModal,
   isStreaming,
   interrupt,
 } from "./store";
@@ -80,9 +81,14 @@ function setupKeybindings() {
     } else if (isMeta && e.shiftKey && (e.key === "T" || e.key === "t")) {
       e.preventDefault();
       setDeckTab("terminal");
+    } else if (e.key === "?" && !["INPUT", "TEXTAREA"].includes((e.target as HTMLElement)?.tagName)) {
+      e.preventDefault();
+      showShortcutsModal.update((v) => !v);
     } else if (e.key === "Escape") {
       if (showSearchModal()) {
         showSearchModal.set(false);
+      } else if (showShortcutsModal()) {
+        showShortcutsModal.set(false);
       } else if (isStreaming()) {
         interrupt();
       }

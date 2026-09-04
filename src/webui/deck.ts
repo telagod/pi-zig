@@ -14,6 +14,7 @@ import {
   files,
   loadFiles,
   appendTerminalLine,
+  runTerminalCommand,
 } from "./store";
 import { ansiToHtml } from "./term";
 import { DeckTab, JobItem, TerminalLine, FileTreeItem } from "./types";
@@ -113,6 +114,7 @@ function renderDiffsPanel(): HTMLElement {
   const list = diffs();
   const active = activeDiffFile();
   const stats = totalDiffStats();
+  const diffCopied = signal<boolean>(false);
 
   if (list.length === 0) {
     return tags.div(
@@ -132,7 +134,35 @@ function renderDiffsPanel(): HTMLElement {
         { class: "diff-stats" },
         tags.span({ class: "diff-stat-add" }, `+${stats.additions}`),
         tags.span({ class: "diff-stat-del" }, `-${stats.deletions}`),
-        tags.span({ class: "diff-stat-files" }, `${stats.files} files`)
+        tags.span({ class: "diff-stat-files" }, `${stats.files} files`),
+        tags.button(
+          {
+            class: "diff-act-btn",
+            title: "Copy current diff patch",
+            onclick: () => {
+              if (!active) return;
+              const patch = active.hunks
+                .map(
+                  (h) =>
+                    h.header +
+                    "\n" +
+                    h.lines
+                      .map(
+                        (l) =>
+                          (l.type === "add" ? "+" : l.type === "del" ? "-" : " ") +
+                          l.content
+                      )
+                      .join("\n")
+                )
+                .join("\n");
+              navigator.clipboard.writeText(patch);
+              diffCopied.set(true);
+              setTimeout(() => diffCopied.set(false), 2000);
+            },
+          },
+          () => (diffCopied() ? iconCheck(12) : iconCopy(12)),
+          tags.span({}, () => (diffCopied() ? "Copied" : "Copy Diff"))
+        )
       ),
       tags.div(
         { class: "diff-file-tabs" },
@@ -259,6 +289,25 @@ function renderTerminalPanel(): HTMLElement {
         }
         return null;
       }
+    ),
+
+    // 终端交互执行行 (无模型沙箱直接执行)
+    tags.div(
+      { class: "terminal-input-bar" },
+      tags.span({ class: "terminal-prompt-prefix" }, "$"),
+      tags.input({
+        class: "terminal-cmd-input",
+        placeholder: "Run shell command in workspace (or !!cmd)...",
+        onkeydown: (e: KeyboardEvent) => {
+          if (e.key === "Enter") {
+            const input = e.target as HTMLInputElement;
+            const cmd = input.value.trim();
+            if (!cmd) return;
+            runTerminalCommand(cmd);
+            input.value = "";
+          }
+        },
+      })
     )
   );
 }
@@ -366,7 +415,23 @@ function renderFilesPanel(): HTMLElement {
           }
           return tags.div(
             { class: "file-preview" },
-            tags.div({ class: "file-preview-hdr" }, cur.path),
+            tags.div(
+              { class: "file-preview-hdr" },
+              tags.span({ class: "file-preview-path" }, cur.path),
+              tags.button(
+                {
+                  class: "file-ref-btn",
+                  title: "Insert reference @file into composer",
+                  onclick: () => {
+                    if ((window as any).__pizAppendComposer) {
+                      (window as any).__pizAppendComposer(`@${cur.path}`);
+                    }
+                  },
+                },
+                iconFile(12),
+                tags.span({}, "Reference @")
+              )
+            ),
             tags.pre({ class: "file-preview-code" }, cur.text)
           );
         }

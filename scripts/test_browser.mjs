@@ -111,11 +111,22 @@ console.log('✓ Command Palette (Ctrl+K) popped up');
 await page.keyboard.press('Escape');
 await sleep(200);
 
+// 测试快捷键面板 (?)
+const helpBtn = page.locator('.tb-btn[title="Keyboard Shortcuts (?)"]');
+await helpBtn.click();
+await page.waitForSelector('.shortcuts-modal');
+console.log('✓ Keyboard Shortcuts Modal popped up');
+await page.keyboard.press('Escape');
+await sleep(200);
+
 // 测试设置面板
 const setBtn = page.locator('.tb-btn[title="Settings"]');
 await setBtn.click();
 await page.waitForSelector('.settings-modal');
-console.log('✓ Settings Modal popped up');
+// 检查 Thinking Level 和 Export 按钮是否存在
+await page.waitForSelector('.settings-modal select.settings-select');
+await page.waitForSelector('.export-btn');
+console.log('✓ Settings Modal (Thinking Level & Export buttons) verified');
 await page.locator('.modal-close-btn').click();
 await sleep(200);
 

@@ -20,6 +20,7 @@ import {
   toggleTheme,
   showSearchModal,
   showSettingsModal,
+  showShortcutsModal,
   renameSession,
 } from "./store";
 import { AppMode } from "./types";
@@ -30,6 +31,7 @@ import {
   iconSun,
   iconMoon,
   iconSettings,
+  iconHelp,
   iconBolt,
   iconQuestion,
   iconCompass,
@@ -179,6 +181,15 @@ export function renderTopBar(): HTMLElement {
           onclick: () => showSettingsModal.set(true),
         },
         iconSettings(15)
+      ),
+      // 快捷键帮助按钮
+      tags.button(
+        {
+          class: "tb-btn tb-icon-btn",
+          title: "Keyboard Shortcuts (?)",
+          onclick: () => showShortcutsModal.set(true),
+        },
+        iconHelp(14)
       ),
       // 网络状态指示灯
       tags.span({

@@ -229,3 +229,39 @@ export function iconBranch(size = 16, cls = ""): SVGElement {
     cls
   );
 }
+
+export function iconImage(size = 16, cls = ""): SVGElement {
+  return createSvg(
+    "M21 19V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2zM8.5 10a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zm12.5 5l-5-5-8 8",
+    size,
+    cls
+  );
+}
+
+export function iconRefresh(size = 16, cls = ""): SVGElement {
+  return createSvg(
+    "M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15",
+    size,
+    cls
+  );
+}
+
+export function iconEdit(size = 16, cls = ""): SVGElement {
+  return createSvg(
+    "M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z",
+    size,
+    cls
+  );
+}
+
+export function iconDownload(size = 16, cls = ""): SVGElement {
+  return createSvg("M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3", size, cls);
+}
+
+export function iconHelp(size = 16, cls = ""): SVGElement {
+  return createSvg(
+    "M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3M12 17h.01M22 12A10 10 0 1 1 2 12a10 10 0 0 1 20 0z",
+    size,
+    cls
+  );
+}

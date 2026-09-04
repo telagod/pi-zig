@@ -1,4 +1,4 @@
-// md.ts —— 极速安全 Markdown 渲染器 (Fail-closed 防 XSS，流式容错)
+// md.ts —— 现代化极速安全 Markdown 与代码语法高亮引擎 (Zero-dep, Fail-closed, Lexical Syntax Highlighting)
 
 function escapeHtml(s: string): string {
   return s
@@ -7,6 +7,102 @@ function escapeHtml(s: string): string {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
+}
+
+// 关键词词典
+const KEYWORDS = new Set([
+  "const", "let", "var", "function", "return", "if", "else", "for", "while", "do",
+  "switch", "case", "break", "continue", "default", "import", "export", "from", "as",
+  "class", "extends", "super", "this", "new", "typeof", "instanceof", "try", "catch",
+  "finally", "throw", "async", "await", "yield", "pub", "fn", "struct", "enum", "union",
+  "error", "orelse", "catch", "try", "defer", "errdefer", "comptime", "inline", "test",
+  "type", "interface", "namespace", "using", "package", "def", "elif", "pass", "lambda",
+  "with", "is", "in", "not", "and", "or", "true", "false", "null", "undefined", "nil", "None"
+]);
+
+const TYPES = new Set([
+  "string", "number", "boolean", "any", "void", "never", "unknown", "u8", "u16", "u32", "u64",
+  "i8", "i16", "i32", "i64", "usize", "isize", "f32", "f64", "bool", "int", "float", "str",
+  "list", "dict", "tuple", "set", "Self", "Allocator", "ArrayList", "Writer", "Reader"
+]);
+
+// 轻量词法高亮
+export function highlightCode(code: string, lang: string): string {
+  const lines = code.split("\n");
+  const highlightedLines = lines.map((line) => {
+    let i = 0;
+    let out = "";
+    const len = line.length;
+
+    while (i < len) {
+      // 1. 注释 // 或 # 或 --
+      if ((line[i] === "/" && line[i + 1] === "/") || (line[i] === "#" && !lang.includes("hash")) || (line[i] === "-" && line[i + 1] === "-")) {
+        out += `<span class="hl-comment">${escapeHtml(line.slice(i))}</span>`;
+        break;
+      }
+
+      // 2. 字符串 "..." 或 '...' 或 `...`
+      const ch = line[i];
+      if (ch === '"' || ch === "'" || ch === "`") {
+        let str = ch;
+        i++;
+        while (i < len && line[i] !== ch) {
+          if (line[i] === "\\" && i + 1 < len) {
+            str += line[i] + line[i + 1];
+            i += 2;
+          } else {
+            str += line[i];
+            i++;
+          }
+        }
+        if (i < len) {
+          str += line[i];
+          i++;
+        }
+        out += `<span class="hl-string">${escapeHtml(str)}</span>`;
+        continue;
+      }
+
+      // 3. 数字 (包括十六进制 0x...)
+      if (/[0-9]/.test(ch) && (i === 0 || /[^a-zA-Z0-9_]/.test(line[i - 1]))) {
+        let num = "";
+        while (i < len && /[0-9a-fA-FxX_.]/.test(line[i])) {
+          num += line[i];
+          i++;
+        }
+        out += `<span class="hl-number">${escapeHtml(num)}</span>`;
+        continue;
+      }
+
+      // 4. 标识符（关键词、类型、函数调用）
+      if (/[a-zA-Z_]/.test(ch)) {
+        let word = "";
+        while (i < len && /[a-zA-Z0-9_]/.test(line[i])) {
+          word += line[i];
+          i++;
+        }
+
+        if (KEYWORDS.has(word)) {
+          out += `<span class="hl-keyword">${word}</span>`;
+        } else if (TYPES.has(word) || /^[A-Z][a-zA-Z0-9_]*$/.test(word)) {
+          out += `<span class="hl-type">${word}</span>`;
+        } else if (i < len && line[i] === "(") {
+          out += `<span class="hl-func">${word}</span>`;
+        } else {
+          out += escapeHtml(word);
+        }
+        continue;
+      }
+
+      // 5. 符号与其它字符
+      out += escapeHtml(ch);
+      i++;
+    }
+
+    return out || " ";
+  });
+
+  return highlightedLines.join("\n");
 }
 
 function renderInline(text: string): string {
@@ -45,14 +141,17 @@ export function renderMarkdown(markdown: string): string {
     if (line.trim().startsWith("```")) {
       if (inCodeBlock) {
         // 闭合代码块
-        const codeText = escapeHtml(codeBlockContent.join("\n"));
+        const rawCode = codeBlockContent.join("\n");
+        const hlCode = highlightCode(rawCode, codeBlockLang);
         out.push(
           `<div class="code-block" data-lang="${codeBlockLang}">` +
             `<div class="code-block-hdr">` +
               `<span class="code-lang">${codeBlockLang || "text"}</span>` +
-              `<button class="copy-btn" onclick="navigator.clipboard.writeText(this.closest('.code-block').querySelector('code').innerText);this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500)">Copy</button>` +
+              `<button class="copy-btn" onclick="navigator.clipboard.writeText(this.closest('.code-block').querySelector('code').innerText);this.classList.add('is-copied');setTimeout(()=>this.classList.remove('is-copied'),2000)">` +
+                `<span class="copy-lbl">Copy</span><span class="copied-lbl">Copied!</span>` +
+              `</button>` +
             `</div>` +
-            `<pre><code class="lang-${codeBlockLang}">${codeText}</code></pre>` +
+            `<pre><code class="lang-${codeBlockLang}">${hlCode}</code></pre>` +
           `</div>`
         );
         inCodeBlock = false;
@@ -61,7 +160,7 @@ export function renderMarkdown(markdown: string): string {
       } else {
         // 打开代码块
         inCodeBlock = true;
-        codeBlockLang = line.trim().slice(3).trim();
+        codeBlockLang = line.trim().slice(3).trim().toLowerCase();
         codeBlockContent = [];
       }
       continue;
@@ -78,7 +177,6 @@ export function renderMarkdown(markdown: string): string {
         inTable = true;
         out.push('<div class="table-wrap"><table>');
       }
-      // 忽略分隔线 |---|---|
       if (/^\|[\s\-:|]+\|$/.test(line.trim())) {
         continue;
       }
@@ -117,7 +215,6 @@ export function renderMarkdown(markdown: string): string {
         out.push("<ul>");
       }
       let content = listMatch[3];
-      // 任务列表 [ ] or [x]
       if (content.startsWith("[ ] ")) {
         content = `<input type="checkbox" disabled class="task-chk"> ` + content.slice(4);
       } else if (content.startsWith("[x] ")) {
@@ -155,13 +252,14 @@ export function renderMarkdown(markdown: string): string {
 
   // 兜底闭合流式未完结结构
   if (inCodeBlock) {
-    const codeText = escapeHtml(codeBlockContent.join("\n"));
+    const rawCode = codeBlockContent.join("\n");
+    const hlCode = highlightCode(rawCode, codeBlockLang);
     out.push(
       `<div class="code-block is-streaming" data-lang="${codeBlockLang}">` +
         `<div class="code-block-hdr">` +
           `<span class="code-lang">${codeBlockLang || "text"}</span>` +
         `</div>` +
-        `<pre><code class="lang-${codeBlockLang}">${codeText}</code></pre>` +
+        `<pre><code class="lang-${codeBlockLang}">${hlCode}</code></pre>` +
       `</div>`
     );
   }

@@ -53,6 +53,8 @@ export const mode = signal<AppMode>(getStored("mode", "yolo"));
 export const model = signal<string>("");
 export const models = signal<string[]>([]);
 export const pct = signal<number>(0);
+export const thinkingLevel = signal<string>(getStored("think", "high"));
+export const attachedImage = signal<{ data: string; mime: string; name?: string } | null>(null);
 
 export const deckTab = signal<DeckTab>(getStored("deckTab", "diffs"));
 export const deckOpen = signal<boolean>(getStored("deckOpen", true));
@@ -68,6 +70,7 @@ export const pendingApproval = signal<ApprovalRequest | null>(null);
 export const showSearchModal = signal<boolean>(false);
 export const showAuthModal = signal<boolean>(false);
 export const showSettingsModal = signal<boolean>(false);
+export const showShortcutsModal = signal<boolean>(false);
 
 // 统计衍生物
 export const totalDiffStats = computed(() => {
@@ -376,15 +379,36 @@ export async function approve(id: string, allow: boolean) {
   }
 }
 
-export async function sendMessage(text: string) {
-  if (!text || !text.trim() || isStreaming()) return;
+export async function switchThinkingLevel(lvl: string) {
+  thinkingLevel.set(lvl);
+  setStored("think", lvl);
+  try {
+    await apiFetch("/api/config", {
+      method: "POST",
+      body: JSON.stringify({ setDefaultThinkingLevel: lvl }),
+    });
+  } catch (e) {
+    console.warn("switchThinkingLevel failed:", e);
+  }
+}
+
+export async function sendMessage(
+  text: string,
+  imgObj?: { data: string; mime: string } | null
+) {
+  if ((!text || !text.trim()) && !imgObj && !attachedImage()) return;
+  if (isStreaming()) return;
+
+  const currentImg = imgObj !== undefined ? imgObj : attachedImage();
+  const trimmedText = text.trim();
 
   const userTurn: Turn = {
     id: `u_${Date.now()}`,
     role: "user",
-    content: text.trim(),
+    content: trimmedText,
     steps: [],
     timestamp: Date.now(),
+    image: currentImg ? `data:${currentImg.mime};base64,${currentImg.data}` : undefined,
   };
 
   const assistantTurnId = `a_${Date.now()}`;
@@ -402,12 +426,22 @@ export async function sendMessage(text: string) {
     turns.update((prev) => [...prev, userTurn, assistantTurn]);
     isStreaming.set(true);
     streamingTurnId.set(assistantTurnId);
+    attachedImage.set(null);
   });
 
   try {
+    const payload: any = {
+      text: trimmedText,
+      message: trimmedText,
+    };
+    if (currentImg) {
+      payload.image = currentImg.data;
+      payload.mime = currentImg.mime;
+    }
+
     const res = await apiFetch(`/api/chat${getQuery()}`, {
       method: "POST",
-      body: JSON.stringify({ text: text.trim(), message: text.trim() }),
+      body: JSON.stringify(payload),
     });
     if (res && res.ok === false) {
       throw new Error(res.error || "Request rejected by server");
@@ -426,6 +460,65 @@ export async function sendMessage(text: string) {
       streamingTurnId.set(null);
     });
   }
+}
+
+export function regenerateLastTurn() {
+  if (isStreaming()) return;
+  const list = turns();
+  for (let i = list.length - 1; i >= 0; i--) {
+    if (list[i].role === "user") {
+      sendMessage(list[i].content);
+      break;
+    }
+  }
+}
+
+export async function runTerminalCommand(cmd: string) {
+  const trimmed = cmd.trim();
+  if (!trimmed) return;
+  appendTerminalLine(`$ ${trimmed}`, "cmd");
+  try {
+    await apiFetch(`/api/chat${getQuery()}`, {
+      method: "POST",
+      body: JSON.stringify({ text: `!!${trimmed}`, message: `!!${trimmed}` }),
+    });
+  } catch (err) {
+    appendTerminalLine(`Error executing command: ${err}`, "stderr");
+  }
+}
+
+export function exportSession(format: "md" | "json" = "md") {
+  const list = turns();
+  const curName = activeSession();
+  let content = "";
+  let filename = `piz_session_${curName}_${new Date().toISOString().slice(0, 10)}`;
+
+  if (format === "json") {
+    content = JSON.stringify(list, null, 2);
+    filename += ".json";
+  } else {
+    content = `# piz Session: ${curName}\n\n*Exported on ${new Date().toLocaleString()}*\n\n---\n\n`;
+    for (const t of list) {
+      if (t.role === "user") {
+        content += `### User\n\n${t.content}\n\n`;
+      } else {
+        content += `### Assistant\n\n`;
+        if (t.thought) {
+          content += `> **Thought Process**:\n> ${t.thought.replace(/\n/g, "\n> ")}\n\n`;
+        }
+        content += `${t.content}\n\n---\n\n`;
+      }
+    }
+    filename += ".md";
+  }
+
+  const blob = new Blob([content], { type: format === "json" ? "application/json" : "text/markdown;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 // 核心 SSE 事件调度（精准对齐后端真实事件契约）

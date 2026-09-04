@@ -6,6 +6,7 @@ import {
   showSearchModal,
   showAuthModal,
   showSettingsModal,
+  showShortcutsModal,
   sessions,
   switchSession,
   createSession,
@@ -14,6 +15,9 @@ import {
   model,
   switchModel,
   pct,
+  thinkingLevel,
+  switchThinkingLevel,
+  exportSession,
 } from "./store";
 import { setToken, getToken } from "./net";
 import { signal } from "./signal";
@@ -26,6 +30,8 @@ import {
   iconClose,
   iconKey,
   iconCheck,
+  iconDownload,
+  iconHelp,
 } from "./icons";
 
 export function renderModals(): HTMLElement {
@@ -268,13 +274,115 @@ export function renderModals(): HTMLElement {
             ),
             tags.div(
               { class: "settings-row" },
+              tags.label({}, "Default Thinking Level"),
+              tags.select(
+                {
+                  class: "settings-select",
+                  value: () => thinkingLevel(),
+                  onchange: (e: Event) => switchThinkingLevel((e.target as HTMLSelectElement).value),
+                },
+                ["off", "low", "med", "high", "max"].map((lvl) =>
+                  tags.option({ value: lvl, selected: lvl === thinkingLevel() }, lvl.toUpperCase())
+                )
+              )
+            ),
+            tags.div(
+              { class: "settings-row" },
               tags.label({}, "Context Window Usage"),
               tags.div({ class: "settings-stat" }, `${pct()}% utilized`)
             ),
             tags.div(
               { class: "settings-row" },
+              tags.label({}, "Export Session"),
+              tags.div(
+                { class: "export-btn-group" },
+                tags.button(
+                  {
+                    class: "export-btn",
+                    title: "Export session as Markdown (.md)",
+                    onclick: () => exportSession("md"),
+                  },
+                  iconDownload(12),
+                  tags.span({}, "Markdown")
+                ),
+                tags.button(
+                  {
+                    class: "export-btn",
+                    title: "Export session as JSON (.json)",
+                    onclick: () => exportSession("json"),
+                  },
+                  iconDownload(12),
+                  tags.span({}, "JSON")
+                )
+              )
+            ),
+            tags.div(
+              { class: "settings-row" },
               tags.label({}, "Interface Architecture"),
               tags.div({ class: "settings-stat" }, "WebUI Next v2.0 (Signals Reactive)")
+            )
+          )
+        );
+      }
+    )
+  );
+
+  // 5. Shortcuts Modal
+  container.appendChild(
+    tags.div(
+      {
+        class: () =>
+          `modal-backdrop ${showShortcutsModal() ? "is-visible" : "is-hidden"}`,
+        onclick: (e: MouseEvent) => {
+          if (e.target === e.currentTarget) showShortcutsModal.set(false);
+        },
+      },
+      () => {
+        if (!showShortcutsModal()) return null;
+
+        const SHORTCUTS = [
+          { key: "Ctrl + K / ⌘K", desc: "Open command palette and quick switcher" },
+          { key: "Ctrl + B / ⌘B", desc: "Toggle session sidebar drawer" },
+          { key: "Ctrl + J / ⌘J", desc: "Toggle inspection deck (Diffs/Terminal/Files)" },
+          { key: "Ctrl + Shift + D", desc: "Jump to code diffs panel" },
+          { key: "Ctrl + Shift + T", desc: "Jump to terminal panel" },
+          { key: "Enter", desc: "Send message / Submit prompt" },
+          { key: "Shift + Enter", desc: "Insert new line in composer" },
+          { key: "Esc", desc: "Interrupt generation / Close open dialogs" },
+          { key: "Ctrl + V / ⌘V", desc: "Paste image from clipboard into composer" },
+          { key: "/", desc: "Trigger slash command menu in composer" },
+          { key: "@", desc: "Trigger file mention menu in composer" },
+          { key: "?", desc: "Open this keyboard shortcuts cheat sheet" },
+        ];
+
+        return tags.div(
+          { class: "modal-card shortcuts-modal" },
+          tags.div(
+            { class: "modal-hdr" },
+            tags.div(
+              { class: "modal-hdr-left" },
+              iconHelp(16),
+              tags.h3({ class: "modal-title" }, "Keyboard Shortcuts")
+            ),
+            tags.button(
+              {
+                class: "modal-close-btn",
+                onclick: () => showShortcutsModal.set(false),
+              },
+              iconClose(14)
+            )
+          ),
+          tags.div(
+            { class: "modal-body" },
+            tags.div(
+              { class: "shortcuts-list" },
+              SHORTCUTS.map((item) =>
+                tags.div(
+                  { class: "shortcut-row" },
+                  tags.kbd({ class: "shortcut-key" }, item.key),
+                  tags.span({ class: "shortcut-desc" }, item.desc)
+                )
+              )
             )
           )
         );

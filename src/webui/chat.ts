@@ -1,6 +1,12 @@
-// chat.ts —— 对话流视图 (Turn 境界、思考流折叠、步骤轨迹与 Markdown 渲染)
+// chat.ts —— 对话流视图 (Turn 境界、动态思考计时、多模态图片展示、操作动作条与 Markdown 渲染)
 import { tags, each } from "./dom";
-import { turns, isStreaming, appendTerminalLine, setDeckTab } from "./store";
+import {
+  turns,
+  isStreaming,
+  appendTerminalLine,
+  setDeckTab,
+  regenerateLastTurn,
+} from "./store";
 import { renderMarkdown } from "./md";
 import { Turn, StepItem } from "./types";
 import { signal, effect } from "./signal";
@@ -18,6 +24,8 @@ import {
   iconBolt,
   iconDiff,
   iconShield,
+  iconRefresh,
+  iconEdit,
 } from "./icons";
 
 export function renderChatStream(): HTMLElement {
@@ -64,6 +72,12 @@ export function renderChatStream(): HTMLElement {
 }
 
 function renderEmptyState(): HTMLElement {
+  function fillPrompt(p: string) {
+    if (typeof (window as any).__pizFillComposer === "function") {
+      (window as any).__pizFillComposer(p);
+    }
+  }
+
   return tags.div(
     { class: "chat-empty-state" },
     tags.div(
@@ -75,7 +89,11 @@ function renderEmptyState(): HTMLElement {
     tags.div(
       { class: "empty-prompts" },
       tags.div(
-        { class: "prompt-card" },
+        {
+          class: "prompt-card",
+          title: "Click to populate prompt",
+          onclick: () => fillPrompt("分析当前项目架构与未提交修改并提出建议"),
+        },
         tags.div({ class: "prompt-card-icon" }, iconBolt(18)),
         tags.div(
           { class: "prompt-card-text" },
@@ -84,7 +102,13 @@ function renderEmptyState(): HTMLElement {
         )
       ),
       tags.div(
-        { class: "prompt-card" },
+        {
+          class: "prompt-card",
+          title: "Click to open Diffs",
+          onclick: () => {
+            setDeckTab("diffs");
+          },
+        },
         tags.div({ class: "prompt-card-icon" }, iconDiff(18)),
         tags.div(
           { class: "prompt-card-text" },
@@ -93,7 +117,11 @@ function renderEmptyState(): HTMLElement {
         )
       ),
       tags.div(
-        { class: "prompt-card" },
+        {
+          class: "prompt-card",
+          title: "Click to populate prompt",
+          onclick: () => fillPrompt("对当前项目进行安全审计，检查未授权操作与潜在漏洞"),
+        },
         tags.div({ class: "prompt-card-icon" }, iconShield(18)),
         tags.div(
           { class: "prompt-card-text" },
@@ -106,6 +134,8 @@ function renderEmptyState(): HTMLElement {
 }
 
 function renderUserTurn(turn: Turn): HTMLElement {
+  const copied = signal<boolean>(false);
+
   return tags.div(
     { class: "turn turn-user", id: turn.id },
     tags.div(
@@ -113,7 +143,44 @@ function renderUserTurn(turn: Turn): HTMLElement {
       tags.div({ class: "turn-avatar user-avatar" }, iconUser(15)),
       tags.div(
         { class: "turn-body" },
-        tags.div({ class: "user-bubble" }, turn.content)
+        // 多模态图片预览
+        turn.image
+          ? tags.div(
+              { class: "user-image-wrap" },
+              tags.img({ class: "user-image-preview", src: turn.image })
+            )
+          : null,
+        tags.div({ class: "user-bubble" }, turn.content),
+        // 用户操作栏
+        tags.div(
+          { class: "turn-footer-actions user-actions" },
+          tags.button(
+            {
+              class: "turn-action-btn",
+              title: "Edit and repopulate to input",
+              onclick: () => {
+                if (typeof (window as any).__pizFillComposer === "function") {
+                  (window as any).__pizFillComposer(turn.content);
+                }
+              },
+            },
+            iconEdit(12),
+            tags.span({}, "Edit")
+          ),
+          tags.button(
+            {
+              class: "turn-action-btn",
+              title: "Copy text",
+              onclick: () => {
+                navigator.clipboard.writeText(turn.content);
+                copied.set(true);
+                setTimeout(() => copied.set(false), 2000);
+              },
+            },
+            () => (copied() ? iconCheck(12) : iconCopy(12)),
+            tags.span({}, () => (copied() ? "Copied" : "Copy"))
+          )
+        )
       )
     )
   );
@@ -122,6 +189,20 @@ function renderUserTurn(turn: Turn): HTMLElement {
 function renderAssistantTurn(turn: Turn): HTMLElement {
   const thoughtCollapsed = signal<boolean>(!turn.isStreaming && Boolean(turn.content));
   const copied = signal<boolean>(false);
+  const startTime = Date.now();
+  const liveDuration = signal<number>(0);
+
+  // 流式中思考秒数动态累加
+  let timer: any = null;
+  if (turn.isStreaming) {
+    timer = setInterval(() => {
+      if (!turn.isStreaming) {
+        clearInterval(timer);
+        return;
+      }
+      liveDuration.set(Math.floor((Date.now() - startTime) / 100) / 10);
+    }, 100);
+  }
 
   return tags.div(
     { class: "turn turn-assistant", id: turn.id },
@@ -137,14 +218,17 @@ function renderAssistantTurn(turn: Turn): HTMLElement {
             return tags.div(
               { class: "thought-panel is-thinking" },
               iconSpinner(13, "thought-spinner"),
-              tags.span({ class: "thought-label" }, "Thinking...")
+              tags.span(
+                { class: "thought-label" },
+                () => `Thinking (${liveDuration().toFixed(1)}s)...`
+              )
             );
           }
           if (!turn.thought) return null;
 
-          const durationText = turn.thoughtDurationMs
-            ? ` (${(turn.thoughtDurationMs / 1000).toFixed(1)}s)`
-            : "";
+          const durationSec = turn.thoughtDurationMs
+            ? (turn.thoughtDurationMs / 1000).toFixed(1)
+            : liveDuration().toFixed(1);
 
           return tags.div(
             { class: "thought-panel" },
@@ -156,7 +240,7 @@ function renderAssistantTurn(turn: Turn): HTMLElement {
               tags.span({ class: "thought-chevron" }, () =>
                 thoughtCollapsed() ? iconChevronRight(12) : iconChevronDown(12)
               ),
-              tags.span({ class: "thought-title" }, `Thinking Process${durationText}`),
+              tags.span({ class: "thought-title" }, `Thinking Process (${durationSec}s)`),
               turn.isStreaming
                 ? tags.span({ class: "thought-live-badge" }, "LIVE")
                 : null
@@ -198,7 +282,7 @@ function renderAssistantTurn(turn: Turn): HTMLElement {
           return el;
         },
 
-        // 4. 底部操作微栏 (复制等)
+        // 4. 底部操作微栏 (复制、重新生成)
         () => {
           if (!turn.content || turn.isStreaming) return null;
           return tags.div(
@@ -215,6 +299,15 @@ function renderAssistantTurn(turn: Turn): HTMLElement {
               },
               () => (copied() ? iconCheck(12) : iconCopy(12)),
               tags.span({}, () => (copied() ? "Copied" : "Copy"))
+            ),
+            tags.button(
+              {
+                class: "turn-action-btn",
+                title: "Regenerate answer",
+                onclick: () => regenerateLastTurn(),
+              },
+              iconRefresh(12),
+              tags.span({}, "Regenerate")
             )
           );
         }

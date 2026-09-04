@@ -23,6 +23,7 @@ export interface Turn {
   steps: StepItem[];
   timestamp: number;
   isStreaming?: boolean;
+  image?: string;
 }
 
 export interface DiffLine {

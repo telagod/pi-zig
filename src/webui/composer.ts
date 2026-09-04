@@ -1,4 +1,4 @@
-// composer.ts —— 底部智能输入台 (自适应高度、斜杠补全、文件引用与流控)
+// composer.ts —— 底部智能输入台 (自适应高度、斜杠补全、多模态剪贴板图片粘贴、文件引用与流控)
 import { tags } from "./dom";
 import {
   sendMessage,
@@ -9,6 +9,7 @@ import {
   switchMode,
   createSession,
   setDeckTab,
+  attachedImage,
 } from "./store";
 import { signal } from "./signal";
 import {
@@ -23,6 +24,8 @@ import {
   iconCpu,
   iconTrash,
   iconSparkle,
+  iconImage,
+  iconClose,
 } from "./icons";
 
 export function renderComposer(): HTMLElement {
@@ -32,6 +35,28 @@ export function renderComposer(): HTMLElement {
   const menuIndex = signal<number>(0);
 
   let textareaEl: HTMLTextAreaElement | null = null;
+  let fileInputEl: HTMLInputElement | null = null;
+
+  // 全局暴露给空状态卡片点击直接填入 prompt
+  (window as any).__pizFillComposer = (val: string) => {
+    text.set(val);
+    if (textareaEl) {
+      textareaEl.value = val;
+      autoResize(textareaEl);
+      textareaEl.focus();
+    }
+  };
+
+  (window as any).__pizAppendComposer = (val: string) => {
+    const cur = text().trim();
+    const next = cur ? `${cur} ${val} ` : `${val} `;
+    text.set(next);
+    if (textareaEl) {
+      textareaEl.value = next;
+      autoResize(textareaEl);
+      textareaEl.focus();
+    }
+  };
 
   const SLASH_COMMANDS = [
     { cmd: "/diff", desc: "Open right deck to inspect code changes", icon: iconDiff },
@@ -70,9 +95,45 @@ export function renderComposer(): HTMLElement {
     el.style.height = `${nextH}px`;
   }
 
+  // 剪贴板图片粘贴处理
+  function handlePaste(e: ClipboardEvent) {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (item.type.startsWith("image/")) {
+        e.preventDefault();
+        const file = item.getAsFile();
+        if (!file) continue;
+        processImageFile(file);
+        break;
+      }
+    }
+  }
+
+  function processImageFile(file: File) {
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const result = ev.target?.result as string;
+      if (!result) return;
+      // 提取 base64 数据与 mime
+      const match = result.match(/^data:([^;]+);base64,(.+)$/);
+      if (match) {
+        attachedImage.set({
+          mime: match[1],
+          data: match[2],
+          name: file.name || "pasted_image.png",
+        });
+      }
+    };
+    reader.readAsDataURL(file);
+  }
+
   function doSend() {
     const msg = text().trim();
-    if (!msg || isStreaming()) return;
+    const hasImg = Boolean(attachedImage());
+    if ((!msg && !hasImg) || isStreaming()) return;
 
     // 本地拦截部分斜杠命令
     if (msg === "/diff") {
@@ -133,7 +194,6 @@ export function renderComposer(): HTMLElement {
   function handleKeyDown(e: KeyboardEvent) {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      // 如果斜杠菜单开着，回车选择当前项
       if (showSlashMenu()) {
         const q = text().toLowerCase();
         const filtered = SLASH_COMMANDS.filter((c) => c.cmd.toLowerCase().startsWith(q));
@@ -144,7 +204,6 @@ export function renderComposer(): HTMLElement {
           return;
         }
       }
-      // 如果文件菜单开着，回车选择当前文件
       if (showFileMenu()) {
         const atIdx = text().lastIndexOf("@");
         const q = atIdx >= 0 ? text().slice(atIdx + 1).toLowerCase() : "";
@@ -185,6 +244,31 @@ export function renderComposer(): HTMLElement {
 
   return tags.div(
     { class: "composer-wrap" },
+    // 图片附加预览条
+    () => {
+      const img = attachedImage();
+      if (!img) return null;
+      return tags.div(
+        { class: "attached-img-bar" },
+        tags.div(
+          { class: "attached-img-pill" },
+          tags.img({
+            class: "attached-img-thumb",
+            src: `data:${img.mime};base64,${img.data}`,
+          }),
+          tags.span({ class: "attached-img-name" }, img.name || "image.png"),
+          tags.button(
+            {
+              class: "attached-img-remove",
+              title: "Remove image",
+              onclick: () => attachedImage.set(null),
+            },
+            iconClose(12)
+          )
+        )
+      );
+    },
+
     // 斜杠菜单浮层
     () => {
       if (!showSlashMenu()) return null;
@@ -249,16 +333,34 @@ export function renderComposer(): HTMLElement {
       );
     },
 
+    // 隐藏的文件上传 input
+    tags.input({
+      type: "file",
+      accept: "image/*",
+      style: "display:none;",
+      ref: (el: HTMLInputElement) => {
+        fileInputEl = el;
+      },
+      onchange: (e: Event) => {
+        const input = e.target as HTMLInputElement;
+        if (input.files && input.files[0]) {
+          processImageFile(input.files[0]);
+          input.value = "";
+        }
+      },
+    }),
+
     // 主输入框容器
     tags.div(
       { class: "composer-box" },
       tags.textarea({
         class: "composer-input",
-        placeholder: "Ask piz or type '/' for commands, '@' to reference files...",
+        placeholder: "Ask piz, paste screenshots (Ctrl+V), or type '/' for commands...",
         rows: "1",
         value: () => text(),
         oninput: handleInput,
         onkeydown: handleKeyDown,
+        onpaste: handlePaste,
         ref: (el: HTMLTextAreaElement) => {
           textareaEl = el;
         },
@@ -269,6 +371,14 @@ export function renderComposer(): HTMLElement {
         { class: "composer-bar" },
         tags.div(
           { class: "composer-bar-left" },
+          tags.button(
+            {
+              class: "bar-tag-btn",
+              title: "Attach image (or Ctrl+V to paste)",
+              onclick: () => fileInputEl && fileInputEl.click(),
+            },
+            iconImage(13)
+          ),
           tags.button(
             {
               class: "bar-tag-btn",
