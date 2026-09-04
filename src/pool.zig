@@ -14,6 +14,7 @@ pub const Pool = struct {
     mutex: std.Io.Mutex = .init,
     jobs: std.array_list.Managed(Job),
     jobs_live: bool = true,
+    head: usize = 0,
     threads: [WORKER_COUNT]?std.Thread = @splat(null),
     started: bool = false,
     stopping: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
@@ -39,6 +40,10 @@ pub const Pool = struct {
         self.mutex.lockUncancelable(util.io);
         defer self.mutex.unlock(util.io);
         if (self.stopping.load(.acquire)) return error.PoolStopped;
+        if (self.head == self.jobs.items.len) {
+            self.jobs.clearRetainingCapacity();
+            self.head = 0;
+        }
         try self.jobs.append(job);
         self.sem.post(util.io);
     }
@@ -46,8 +51,19 @@ pub const Pool = struct {
     fn take(self: *Pool) ?Job {
         self.mutex.lockUncancelable(util.io);
         defer self.mutex.unlock(util.io);
-        if (self.jobs.items.len == 0) return null;
-        return self.jobs.orderedRemove(0);
+        if (self.head >= self.jobs.items.len) return null;
+        const job = self.jobs.items[self.head];
+        self.head += 1;
+        if (self.head == self.jobs.items.len) {
+            self.jobs.clearRetainingCapacity();
+            self.head = 0;
+        } else if (self.head > 64 and self.head * 2 >= self.jobs.items.len) {
+            const remaining = self.jobs.items.len - self.head;
+            std.mem.copyForwards(Job, self.jobs.items[0..remaining], self.jobs.items[self.head..self.jobs.items.len]);
+            self.jobs.items.len = remaining;
+            self.head = 0;
+        }
+        return job;
     }
 
     fn worker(self: *Pool) void {

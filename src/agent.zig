@@ -200,16 +200,20 @@ pub fn runToolSlot(slot: *ToolSlot) void {
         slot.result.content = self.alloc.dupe(u8, repl) catch slot.result.content;
     }
 }
-/// 限流包装:等到有名额才执行,完成后归还。
-///
-/// 为什么不用「一批 8 个、join 完再开下一批」:那样一批里最慢的会拖住整批,
-/// 快的线程结束后名额空着也不补人。实测 9 个各 100ms 的工具,分批要 202ms,
-/// 流水线只要 102ms。信号量让「一个完成立刻补下一个」,没有批边界。
-fn runToolSlotGated(slot: *ToolSlot, sem: *std.Io.Semaphore) void {
-    sem.waitUncancelable(util.io);
-    defer sem.post(util.io);
-    runToolSlot(slot);
-}
+/// 有界工作者上下文: 工作线程通过原子游标贪婪领取槽位执行。
+const ToolWorkerContext = struct {
+    slots: []ToolSlot,
+    cursor: *std.atomic.Value(usize),
+
+    fn run(ctx: @This()) void {
+        while (true) {
+            const idx = ctx.cursor.fetchAdd(1, .monotonic);
+            if (idx >= ctx.slots.len) break;
+            if (ctx.slots[idx].done) continue;
+            runToolSlot(&ctx.slots[idx]);
+        }
+    }
+};
 
 /// 单次工具调用最多按路径加锁的文件数。
 /// 超过就退化为全局锁 —— 一次改这么多文件的批次,串行化的代价可以接受,
@@ -1323,26 +1327,33 @@ pub const Agent = struct {
                 slots[i].tool = tool;
             }
 
-            // 阶段二:并行执行未定案的工具。
+            // 阶段二:有界并发执行未定案的工具。
             //
-            // 全部一次性 spawn,用信号量把同时在跑的数量压在 MAX_PARALLEL_TOOLS。
-            // 相比「8 个一批、join 完再开下一批」,这里没有批边界 —— 任一线程结束
-            // 立刻放行下一个,慢工具不再拖住后面所有人。
-            var sem: std.Io.Semaphore = .{ .permits = MAX_PARALLEL_TOOLS };
-            const threads = try self.alloc.alloc(?std.Thread, n);
-            defer self.alloc.free(threads);
-            @memset(threads, null);
-            for (0..n) |i| {
-                if (slots[i].done) continue;
-                threads[i] = std.Thread.spawn(.{}, runToolSlotGated, .{ &slots[i], &sem }) catch {
-                    // spawn 失败:就地同步跑,不因线程耗尽丢工具调用。
-                    // 不过信号量 —— 同步执行本身就是最强的限流。
-                    runToolSlot(&slots[i]);
-                    continue;
-                };
+            // 恒定最多起 MAX_PARALLEL_TOOLS (8) 条工作线程流水线,通过原子游标
+            // 贪婪领取待执行槽位。消除了「n 个调用无脑起 n 条线程再让大多数阻塞在信号量上」
+            // 的线程风暴与栈内存虚高。
+            var active_count: usize = 0;
+            for (slots) |s| {
+                if (!s.done) active_count += 1;
             }
-            for (threads) |maybe_th| {
-                if (maybe_th) |th| th.join();
+            if (active_count > 0) {
+                var next_slot: std.atomic.Value(usize) = .init(0);
+                const worker_count = @min(active_count, MAX_PARALLEL_TOOLS);
+                var threads_buf: [MAX_PARALLEL_TOOLS]?std.Thread = @splat(null);
+                const wctx = ToolWorkerContext{
+                    .slots = slots,
+                    .cursor = &next_slot,
+                };
+                for (0..worker_count) |w| {
+                    threads_buf[w] = std.Thread.spawn(.{}, ToolWorkerContext.run, .{wctx}) catch {
+                        // spawn 失败:就地由当前线程消费剩余所有未完成槽位
+                        ToolWorkerContext.run(wctx);
+                        break;
+                    };
+                }
+                for (threads_buf[0..worker_count]) |maybe_th| {
+                    if (maybe_th) |th| th.join();
+                }
             }
 
             // 阶段三:按原序回调 + 写回历史。此处单线程,插件后处理与 messages 追加都安全。
