@@ -196,44 +196,53 @@ fn modalEdge(wr: *std.Io.Writer, l: usize, t: usize, w: usize, r: usize, comptim
 pub fn writeModalPicker(wr: *std.Io.Writer, p: *Picker, cols: usize, rows: usize) !?ModalCursor {
     const n = p.visibleLen();
     const show_items = @min(n, @as(usize, 12));
-    const want_h = show_items + 4; // 顶边 + items + 搜索 + 底边
+    const items_h = if (show_items == 0) 1 else show_items;
+    const want_h = items_h + 4; // 顶边 + items(或空提示) + 分隔线 + 搜索 + 底边
     const g = modalGeom(cols, rows, 74, want_h);
     try modalEdge(wr, g.l, g.t, g.w, 0, "╭─", "╮", p.title);
     var r: usize = 1;
-    // 窗口:以 sel 为中心滚
-    var start: usize = 0;
-    if (n > show_items) {
-        start = if (p.sel >= show_items) p.sel + 1 - show_items else 0;
-        if (start + show_items > n) start = n - show_items;
-    }
-    var i: usize = 0;
-    while (i < show_items and start + i < n) : (i += 1) {
-        const it = p.visibleItem(start + i).*;
-        const selected = (start + i) == p.sel;
-        var line_buf: [256]u8 = undefined;
-        var fw = std.Io.Writer.fixed(&line_buf);
-        if (selected) {
-            fw.writeAll("\x1b[1;36m▸ \x1b[0m\x1b[1m") catch {};
-        } else {
-            fw.writeAll("  ") catch {};
-        }
-        fw.writeAll(it.label) catch {};
-        if (it.hint.len > 0) {
-            fw.writeAll("  " ++ ANSI_DIM) catch {};
-            fw.writeAll(it.hint) catch {};
-        }
-        try modalLine(wr, g.l, g.t, g.w, r, fw.buffered());
+    if (n == 0) {
+        try modalLine(wr, g.l, g.t, g.w, r, ANSI_DIM ++ "  无匹配项 (no matching items)");
         r += 1;
+    } else {
+        // 窗口:以 sel 为中心滚
+        var start: usize = 0;
+        if (n > show_items) {
+            start = if (p.sel >= show_items) p.sel + 1 - show_items else 0;
+            if (start + show_items > n) start = n - show_items;
+        }
+        var i: usize = 0;
+        while (i < show_items and start + i < n) : (i += 1) {
+            const it = p.visibleItem(start + i).*;
+            const selected = (start + i) == p.sel;
+            var line_buf: [256]u8 = undefined;
+            var fw = std.Io.Writer.fixed(&line_buf);
+            if (selected) {
+                fw.writeAll("\x1b[1;36m▸ \x1b[0m\x1b[1m") catch {};
+            } else {
+                fw.writeAll("  ") catch {};
+            }
+            fw.writeAll(it.label) catch {};
+            if (it.hint.len > 0) {
+                fw.writeAll("  " ++ ANSI_DIM) catch {};
+                fw.writeAll(it.hint) catch {};
+            }
+            try modalLine(wr, g.l, g.t, g.w, r, fw.buffered());
+            r += 1;
+        }
     }
+    // items 之后加分隔线
+    try modalEdge(wr, g.l, g.t, g.w, r, "├─", "┤", "");
+    r += 1;
     // 搜索行(omp:Type to search)
     const search_row = r;
     var sbuf: [300]u8 = undefined;
-    const sline = std.fmt.bufPrint(&sbuf, "{s}Type to search: {s}", .{ ANSI_DIM, p.search.items }) catch "Type to search:";
+    const sline = std.fmt.bufPrint(&sbuf, "{s}Type to search: {s}{s}", .{ ANSI_DIM, ANSI_RESET, p.search.items }) catch "Type to search:";
     try modalLine(wr, g.l, g.t, g.w, r, sline);
     r += 1;
     try modalEdge(wr, g.l, g.t, g.w, r, "╰─", "╯", "");
-    // ANSI 1 基:g.t/g.l 为 0 基屏坐标,modalLine/modalEdge 内部已 +1;光标同规则
-    return .{ .row = g.t + search_row + 1, .col = g.l + 1 + 1 + 16 + visibleCols(p.search.items) };
+    // ANSI 1 基:g.t/g.l 为 0 基屏坐标;modalLine 在 t + r 行输出,因此光标行同为 g.t + search_row
+    return .{ .row = g.t + search_row, .col = g.l + 1 + 1 + 16 + visibleCols(p.search.items) };
 }
 
 /// 密钥输入弹窗:label + 掩码输入行 + Esc 提示。返回输入光标位。

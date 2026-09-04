@@ -522,7 +522,7 @@ let dlgPrevFocus = null;
       oncancel: () => resolve(null),
     });
     _util.$.call(void 0, "dlgIn").addEventListener("keydown", (e) => {
-      if (e.key === "Enter") {
+      if (e.key === "Enter" && !e.isComposing && (e ).keyCode !== 229) {
         e.preventDefault();
         resolve((_util.$.call(void 0, "dlgIn") ).value);
         closeDlg();
@@ -3084,7 +3084,7 @@ function listHtml(lines, start) {
       continue;
     }
     // 围栏代码(吞到闭合;流式期由 closeFences 补闭合)
-    const fm = /^\s*```(\w*)\s*$/.exec(line);
+    const fm = /^\s*```([^\s`]*)\s*$/.exec(line);
     if (fm) {
       flushP();
       const body = [];
@@ -3128,7 +3128,17 @@ function listHtml(lines, start) {
         }
         break;
       }
-      html += "<blockquote>" + mdBlocks(qs.join("\n")) + "</blockquote>";
+      const first = qs[0] || "";
+      const am = /^\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\](?:\s+(.*))?$/i.exec(first);
+      if (am) {
+        const kind = am[1].toUpperCase();
+        const rest = qs.slice(1);
+        if (am[2]) rest.unshift(am[2]);
+        const inner = mdBlocks(rest.join("\n"));
+        html += '<div class="callout callout-' + kind.toLowerCase() + '"><div class="callout-hd">' + kind + "</div>" + inner + "</div>";
+      } else {
+        html += "<blockquote>" + mdBlocks(qs.join("\n")) + "</blockquote>";
+      }
       continue;
     }
     if (isTableAt(lines, i)) {
@@ -4196,7 +4206,7 @@ function paintRsn() {
   paintRsn();
   rsnTm && (clearTimeout(rsnTm), (rsnTm = 0));
   const txt = rsnEl.querySelector(".think-txt");
-  if (txt) txt.textContent = "Thought";
+  if (txt) txt.textContent = "思考";
   rsnEl = null;
 } exports.finishRsn = finishRsn;
 // 工具卡
@@ -4206,17 +4216,17 @@ const pendingByName = {};
  const inspect = {
   src: "",
   kind(d) {
-    if (!d) return "Tool";
+    if (!d) return "工具";
     const ty = d.dataset.ty;
-    if (ty === "diff") return "Diff";
-    if (ty === "code") return "File";
-    if (ty === "term") return "Output";
-    if (ty === "todo") return "Plan";
-    if (ty === "agent") return (cards[d.id] && cards[d.id].name) === "workflow" ? "Workflow" : "Agent";
+    if (ty === "diff") return "变更";
+    if (ty === "code") return "文件";
+    if (ty === "term") return "终端输出";
+    if (ty === "todo") return "规划";
+    if (ty === "agent") return (cards[d.id] && cards[d.id].name) === "workflow" ? "工作流" : "智能体";
     const n = (cards[d.id] && cards[d.id].name) || "";
-    if (/^(ls|find)$/.test(n)) return "List";
-    if (/^(grep|search)$/.test(n)) return "Search";
-    return n || "Output";
+    if (/^(ls|find)$/.test(n)) return "文件列表";
+    if (/^(grep|search)$/.test(n)) return "搜索结果";
+    return n || "输出";
   },
   pathOf(d) {
     const c = cards[d.id];
@@ -4228,10 +4238,10 @@ const pendingByName = {};
     const p = this.pathOf(d);
     if (p) return p.split(/[/\\]/).pop() || p;
     const c = cards[d.id];
-    if (!c) return "Inspect";
+    if (!c) return "详情";
     const o = _util.parseToolArgs.call(void 0, c.args);
-    if (c.name === "workflow") return String(o.goal || "workflow");
-    return String(o.command || c.name || "Inspect");
+    if (c.name === "workflow") return String(o.goal || "工作流");
+    return String(o.command || c.name || "详情");
   },
   workEl: null,
   setHead(k, t) {
@@ -4266,7 +4276,7 @@ const pendingByName = {};
     this.thinkEl = el;
     this.src = "";
     this.show();
-    this.setHead("Thought", "Thought");
+    this.setHead("思考过程", "思考过程");
     const txt = el.querySelector(".tk");
     const box = document.createElement("div");
     box.className = "insp-think";
@@ -4295,7 +4305,7 @@ const pendingByName = {};
         host.innerHTML = '<div class="flow">' + exports.Flow.html() + "</div>";
         return;
       }
-      host.innerHTML = '<div class="insp-wait">Running…</div>';
+      host.innerHTML = '<div class="insp-wait">正在运行…</div>';
       return;
     }
     let out = (c && c.out) || "";
@@ -4310,7 +4320,7 @@ const pendingByName = {};
       } catch (e2) {}
     }
     if (!out) {
-      host.innerHTML = '<div class="insp-wait">No output.</div>';
+      host.innerHTML = '<div class="insp-wait">暂无输出</div>';
       return;
     }
     d.dataset.out = out;
@@ -5051,6 +5061,7 @@ _stream.ev.onmessage = (e) => {
 (_util.$.call(void 0, "inp") ).addEventListener("keydown", (e) => {
   if (
     !e.isComposing &&
+    e.keyCode !== 229 &&
     !e.ctrlKey &&
     !e.metaKey &&
     !e.altKey &&
@@ -5121,7 +5132,7 @@ _stream.ev.onmessage = (e) => {
       _slash.slashComplete.call(void 0, );
       return;
     }
-    if (e.key === "Enter") {
+    if (e.key === "Enter" && !e.isComposing && e.keyCode !== 229) {
       e.preventDefault();
       _slash.slashPick.call(void 0, );
       return;
@@ -5153,7 +5164,7 @@ _stream.ev.onmessage = (e) => {
     _store.histNext.call(void 0, );
     return;
   }
-  if (e.key === "Enter" && !e.shiftKey) {
+  if (e.key === "Enter" && !e.shiftKey && !e.isComposing && e.keyCode !== 229) {
     e.preventDefault();
     send();
   }

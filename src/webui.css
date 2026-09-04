@@ -1685,6 +1685,77 @@
       .insp-md blockquote > :last-child {
         margin-bottom: 0;
       }
+      .callout {
+        margin: 16px 0;
+        padding: 12px 16px;
+        border-radius: var(--radius-md);
+        border-left: 4px solid var(--color-border);
+        background: var(--color-surface-subtle);
+        font-size: 13.5px;
+        line-height: 1.6;
+      }
+      .callout > :first-child { margin-top: 0; }
+      .callout > :last-child { margin-bottom: 0; }
+      .callout-hd {
+        display: flex;
+        align-items: center;
+        margin-bottom: 6px;
+        font-weight: 700;
+        font-size: 11px;
+        letter-spacing: 0.6px;
+        text-transform: uppercase;
+      }
+      .callout-note {
+        border-left-color: #0969da;
+        background: rgba(9, 105, 218, 0.07);
+      }
+      .callout-note .callout-hd { color: #0969da; }
+      .callout-tip {
+        border-left-color: #1a7f37;
+        background: rgba(26, 127, 55, 0.07);
+      }
+      .callout-tip .callout-hd { color: #1a7f37; }
+      .callout-warning {
+        border-left-color: #9a6700;
+        background: rgba(154, 103, 0, 0.07);
+      }
+      .callout-warning .callout-hd { color: #9a6700; }
+      .callout-important {
+        border-left-color: #8250df;
+        background: rgba(130, 80, 223, 0.07);
+      }
+      .callout-important .callout-hd { color: #8250df; }
+      .callout-caution {
+        border-left-color: #cf222e;
+        background: rgba(207, 34, 46, 0.07);
+      }
+      .callout-caution .callout-hd { color: #cf222e; }
+
+      [data-theme="dark"] .callout-note {
+        border-left-color: #4493f8;
+        background: rgba(56, 139, 253, 0.12);
+      }
+      [data-theme="dark"] .callout-note .callout-hd { color: #4493f8; }
+      [data-theme="dark"] .callout-tip {
+        border-left-color: #3fb950;
+        background: rgba(46, 160, 67, 0.12);
+      }
+      [data-theme="dark"] .callout-tip .callout-hd { color: #3fb950; }
+      [data-theme="dark"] .callout-warning {
+        border-left-color: #d29922;
+        background: rgba(187, 128, 9, 0.12);
+      }
+      [data-theme="dark"] .callout-warning .callout-hd { color: #d29922; }
+      [data-theme="dark"] .callout-important {
+        border-left-color: #a371f7;
+        background: rgba(163, 113, 247, 0.12);
+      }
+      [data-theme="dark"] .callout-important .callout-hd { color: #a371f7; }
+      [data-theme="dark"] .callout-caution {
+        border-left-color: #f85149;
+        background: rgba(248, 81, 73, 0.12);
+      }
+      [data-theme="dark"] .callout-caution .callout-hd { color: #f85149; }
       .md hr,
       .insp-md hr {
         border: none;

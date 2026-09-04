@@ -57,6 +57,52 @@ pub fn render(alloc: std.mem.Allocator, t: *const Theme, src: []const u8) ![]u8 
             continue;
         }
         if (quoteOf(line)) |q| {
+            if (std.mem.startsWith(u8, q, "[!NOTE]")) {
+                try out.appendSlice(t.fg_md_quote_border);
+                try out.appendSlice("│ \x1b[1;34mℹ NOTE\x1b[0m");
+                const after = std.mem.trimStart(u8, q[7..], " \t");
+                if (after.len > 0) {
+                    try out.appendSlice(" ");
+                    try writeInline(&out, t, after);
+                }
+                continue;
+            } else if (std.mem.startsWith(u8, q, "[!TIP]")) {
+                try out.appendSlice(t.fg_md_quote_border);
+                try out.appendSlice("│ \x1b[1;32m💡 TIP\x1b[0m");
+                const after = std.mem.trimStart(u8, q[6..], " \t");
+                if (after.len > 0) {
+                    try out.appendSlice(" ");
+                    try writeInline(&out, t, after);
+                }
+                continue;
+            } else if (std.mem.startsWith(u8, q, "[!WARNING]")) {
+                try out.appendSlice(t.fg_md_quote_border);
+                try out.appendSlice("│ \x1b[1;33m⚠ WARNING\x1b[0m");
+                const after = std.mem.trimStart(u8, q[10..], " \t");
+                if (after.len > 0) {
+                    try out.appendSlice(" ");
+                    try writeInline(&out, t, after);
+                }
+                continue;
+            } else if (std.mem.startsWith(u8, q, "[!IMPORTANT]")) {
+                try out.appendSlice(t.fg_md_quote_border);
+                try out.appendSlice("│ \x1b[1;35m📌 IMPORTANT\x1b[0m");
+                const after = std.mem.trimStart(u8, q[12..], " \t");
+                if (after.len > 0) {
+                    try out.appendSlice(" ");
+                    try writeInline(&out, t, after);
+                }
+                continue;
+            } else if (std.mem.startsWith(u8, q, "[!CAUTION]")) {
+                try out.appendSlice(t.fg_md_quote_border);
+                try out.appendSlice("│ \x1b[1;31m🚨 CAUTION\x1b[0m");
+                const after = std.mem.trimStart(u8, q[10..], " \t");
+                if (after.len > 0) {
+                    try out.appendSlice(" ");
+                    try writeInline(&out, t, after);
+                }
+                continue;
+            }
             try out.appendSlice(t.fg_md_quote_border);
             try out.appendSlice("│ ");
             try out.appendSlice(RESET ++ ITALIC);
@@ -382,4 +428,22 @@ test "markdown code fence card border" {
     try t.expect(std.mem.indexOf(u8, plain, "╭─ zig ────") != null);
     try t.expect(std.mem.indexOf(u8, plain, "╰───") != null);
     try t.expect(std.mem.indexOf(u8, plain, "const a = 1;") != null);
+}
+
+test "markdown GFM alert callouts" {
+    const t = std.testing;
+    const th = Theme{};
+    const src =
+        \\> [!NOTE]
+        \\> this is a note
+        \\> [!WARNING] danger ahead
+    ;
+    const painted = try render(t.allocator, &th, src);
+    defer t.allocator.free(painted);
+    const plain = try stripAnsi(t.allocator, painted);
+    defer t.allocator.free(plain);
+    try t.expect(std.mem.indexOf(u8, plain, "ℹ NOTE") != null);
+    try t.expect(std.mem.indexOf(u8, plain, "this is a note") != null);
+    try t.expect(std.mem.indexOf(u8, plain, "⚠ WARNING") != null);
+    try t.expect(std.mem.indexOf(u8, plain, "danger ahead") != null);
 }

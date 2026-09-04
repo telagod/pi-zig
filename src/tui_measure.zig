@@ -26,6 +26,7 @@ pub fn isWideCp(cp: u21) bool {
         0xFE30...0xFE6F => true,
         0xFF00...0xFF60 => true,
         0xFFE0...0xFFE6 => true,
+        0x1F1E6...0x1F1FF => true,
         0x1F300...0x1F6FF => true,
         0x1F900...0x1FAFF => true,
         0x20000...0x3FFFD => true,

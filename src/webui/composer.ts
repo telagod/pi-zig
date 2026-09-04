@@ -252,6 +252,7 @@ export function toggleKeysHint() {
 ($("inp") as HTMLElement).addEventListener("keydown", (e: any) => {
   if (
     !e.isComposing &&
+    e.keyCode !== 229 &&
     !e.ctrlKey &&
     !e.metaKey &&
     !e.altKey &&
@@ -322,7 +323,7 @@ export function toggleKeysHint() {
       slashComplete();
       return;
     }
-    if (e.key === "Enter") {
+    if (e.key === "Enter" && !e.isComposing && e.keyCode !== 229) {
       e.preventDefault();
       slashPick();
       return;
@@ -354,7 +355,7 @@ export function toggleKeysHint() {
     histNext();
     return;
   }
-  if (e.key === "Enter" && !e.shiftKey) {
+  if (e.key === "Enter" && !e.shiftKey && !e.isComposing && e.keyCode !== 229) {
     e.preventDefault();
     send();
   }

@@ -209,7 +209,7 @@ export function mdBlocks(src: string) {
       continue;
     }
     // 围栏代码(吞到闭合;流式期由 closeFences 补闭合)
-    const fm = /^\s*```(\w*)\s*$/.exec(line);
+    const fm = /^\s*```([^\s`]*)\s*$/.exec(line);
     if (fm) {
       flushP();
       const body: string[] = [];
@@ -253,7 +253,17 @@ export function mdBlocks(src: string) {
         }
         break;
       }
-      html += "<blockquote>" + mdBlocks(qs.join("\n")) + "</blockquote>";
+      const first = qs[0] || "";
+      const am = /^\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\](?:\s+(.*))?$/i.exec(first);
+      if (am) {
+        const kind = am[1].toUpperCase();
+        const rest = qs.slice(1);
+        if (am[2]) rest.unshift(am[2]);
+        const inner = mdBlocks(rest.join("\n"));
+        html += '<div class="callout callout-' + kind.toLowerCase() + '"><div class="callout-hd">' + kind + "</div>" + inner + "</div>";
+      } else {
+        html += "<blockquote>" + mdBlocks(qs.join("\n")) + "</blockquote>";
+      }
       continue;
     }
     if (isTableAt(lines, i)) {

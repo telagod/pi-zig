@@ -658,7 +658,7 @@ export function finishRsn() {
   paintRsn();
   rsnTm && (clearTimeout(rsnTm), (rsnTm = 0));
   const txt = rsnEl.querySelector(".think-txt");
-  if (txt) txt.textContent = "Thought";
+  if (txt) txt.textContent = "思考";
   rsnEl = null;
 }
 // 工具卡
@@ -668,17 +668,17 @@ const pendingByName: Record<string, string[]> = {};
 export const inspect: any = {
   src: "",
   kind(d: any) {
-    if (!d) return "Tool";
+    if (!d) return "工具";
     const ty = d.dataset.ty;
-    if (ty === "diff") return "Diff";
-    if (ty === "code") return "File";
-    if (ty === "term") return "Output";
-    if (ty === "todo") return "Plan";
-    if (ty === "agent") return (cards[d.id] && cards[d.id].name) === "workflow" ? "Workflow" : "Agent";
+    if (ty === "diff") return "变更";
+    if (ty === "code") return "文件";
+    if (ty === "term") return "终端输出";
+    if (ty === "todo") return "规划";
+    if (ty === "agent") return (cards[d.id] && cards[d.id].name) === "workflow" ? "工作流" : "智能体";
     const n = (cards[d.id] && cards[d.id].name) || "";
-    if (/^(ls|find)$/.test(n)) return "List";
-    if (/^(grep|search)$/.test(n)) return "Search";
-    return n || "Output";
+    if (/^(ls|find)$/.test(n)) return "文件列表";
+    if (/^(grep|search)$/.test(n)) return "搜索结果";
+    return n || "输出";
   },
   pathOf(d: any) {
     const c = cards[d.id];
@@ -690,10 +690,10 @@ export const inspect: any = {
     const p = this.pathOf(d);
     if (p) return p.split(/[/\\]/).pop() || p;
     const c = cards[d.id];
-    if (!c) return "Inspect";
+    if (!c) return "详情";
     const o = parseToolArgs(c.args);
-    if (c.name === "workflow") return String(o.goal || "workflow");
-    return String(o.command || c.name || "Inspect");
+    if (c.name === "workflow") return String(o.goal || "工作流");
+    return String(o.command || c.name || "详情");
   },
   workEl: null,
   setHead(k: string, t: string) {
@@ -728,7 +728,7 @@ export const inspect: any = {
     this.thinkEl = el;
     this.src = "";
     this.show();
-    this.setHead("Thought", "Thought");
+    this.setHead("思考过程", "思考过程");
     const txt = el.querySelector(".tk");
     const box = document.createElement("div");
     box.className = "insp-think";
@@ -757,7 +757,7 @@ export const inspect: any = {
         host.innerHTML = '<div class="flow">' + Flow.html() + "</div>";
         return;
       }
-      host.innerHTML = '<div class="insp-wait">Running…</div>';
+      host.innerHTML = '<div class="insp-wait">正在运行…</div>';
       return;
     }
     let out = (c && c.out) || "";
@@ -772,7 +772,7 @@ export const inspect: any = {
       } catch {}
     }
     if (!out) {
-      host.innerHTML = '<div class="insp-wait">No output.</div>';
+      host.innerHTML = '<div class="insp-wait">暂无输出</div>';
       return;
     }
     d.dataset.out = out;

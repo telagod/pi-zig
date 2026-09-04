@@ -122,7 +122,7 @@ export function askText(title: string, value?: string, placeholder?: string): Pr
       oncancel: () => resolve(null),
     });
     $("dlgIn")!.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") {
+      if (e.key === "Enter" && !e.isComposing && (e as any).keyCode !== 229) {
         e.preventDefault();
         resolve(($("dlgIn") as HTMLInputElement).value);
         closeDlg();
