@@ -784,6 +784,20 @@ export const inspect: any = {
   init() {
     const x = $("inspX");
     if (x) x.onclick = () => inspect.close();
+    window.addEventListener(
+      "click",
+      (e: MouseEvent) => {
+        const el = $("inspect");
+        if (!el || el.hidden) return;
+        if (window.innerWidth <= 840) {
+          const target = e.target as HTMLElement;
+          if (!el.contains(target) && !target.closest(".bh, .think-sum, .insp-x, .plan-sum")) {
+            inspect.close();
+          }
+        }
+      },
+      true,
+    );
   },
 };
 export function addTool(name: string, args?: string) {

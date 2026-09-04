@@ -1029,7 +1029,12 @@ document.addEventListener("click", (e) => {
   d.onclick = () => {
     if (s.name === _state.sess) {
       _optionalChain([exports.sessHooks, 'access', _ => _.applySessionMeta, 'optionalCall', _2 => _2(s)]);
-    } else location.href = _state.sessUrl.call(void 0, s.name, wsRoot);
+    } else {
+      d.classList.add("switching");
+      const wrap = _util.$.call(void 0, "wrap");
+      if (wrap) wrap.style.opacity = "0.5";
+      location.href = _state.sessUrl.call(void 0, s.name, wsRoot);
+    }
   };
   const kb = d.querySelector(".kebab") ;
   kb.onclick = (e) => {
@@ -4317,6 +4322,20 @@ const pendingByName = {};
   init() {
     const x = _util.$.call(void 0, "inspX");
     if (x) x.onclick = () => exports.inspect.close();
+    window.addEventListener(
+      "click",
+      (e) => {
+        const el = _util.$.call(void 0, "inspect");
+        if (!el || el.hidden) return;
+        if (window.innerWidth <= 840) {
+          const target = e.target ;
+          if (!el.contains(target) && !target.closest(".bh, .think-sum, .insp-x, .plan-sum")) {
+            exports.inspect.close();
+          }
+        }
+      },
+      true,
+    );
   },
 }; exports.inspect = inspect;
  function addTool(name, args) {
@@ -5953,11 +5972,17 @@ __modules["main"] = function(module, exports, require) {
         if (booted) return;
         booted = true;
         _chat.inspect.init();
-        const wait = Math.max(0, 450 - (Date.now() - splashAt));
-        setTimeout(() => {
-          _optionalChain([_util.$.call(void 0, "splash"), 'optionalAccess', _ => _.classList, 'access', _2 => _2.add, 'call', _3 => _3("hide")]);
-          setTimeout(() => _optionalChain([_util.$.call(void 0, "splash"), 'optionalAccess', _4 => _4.remove, 'call', _5 => _5()]), 350);
-        }, wait);
+        const isWarm = !!sessionStorage.getItem("piz.booted");
+        try { sessionStorage.setItem("piz.booted", "1"); } catch (e3) {}
+        const wait = isWarm ? 0 : Math.max(0, 450 - (Date.now() - splashAt));
+        if (wait === 0) {
+          _optionalChain([_util.$.call(void 0, "splash"), 'optionalAccess', _ => _.remove, 'call', _2 => _2()]);
+        } else {
+          setTimeout(() => {
+            _optionalChain([_util.$.call(void 0, "splash"), 'optionalAccess', _3 => _3.classList, 'access', _4 => _4.add, 'call', _5 => _5("hide")]);
+            setTimeout(() => _optionalChain([_util.$.call(void 0, "splash"), 'optionalAccess', _6 => _6.remove, 'call', _7 => _7()]), 350);
+          }, wait);
+        }
         _stream.connectSSE.call(void 0, );
         fetch("/api/state?" + _state.wsp + "session=" + encodeURIComponent(_state.sess))
         .then((r) => r.json())
@@ -5989,7 +6014,7 @@ __modules["main"] = function(module, exports, require) {
       ps.id = "planStrip";
       ps.className = "plan-strip";
       ps.hidden = true;
-      _optionalChain([_util.$.call(void 0, "actStrip"), 'optionalAccess', _6 => _6.insertAdjacentElement, 'call', _7 => _7("afterend", ps)]);
+      _optionalChain([_util.$.call(void 0, "actStrip"), 'optionalAccess', _8 => _8.insertAdjacentElement, 'call', _9 => _9("afterend", ps)]);
       const welcome = document.createElement("div");
       welcome.id = "welcome";
       welcome.className = "empty-hint";

@@ -260,7 +260,12 @@ export function sessionRow(s: any, arch: boolean, wsRoot?: string) {
   d.onclick = () => {
     if (s.name === sess) {
       sessHooks.applySessionMeta?.(s);
-    } else location.href = sessUrl(s.name, wsRoot);
+    } else {
+      d.classList.add("switching");
+      const wrap = $("wrap");
+      if (wrap) wrap.style.opacity = "0.5";
+      location.href = sessUrl(s.name, wsRoot);
+    }
   };
   const kb = d.querySelector(".kebab") as HTMLElement;
   kb.onclick = (e: any) => {

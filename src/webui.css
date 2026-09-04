@@ -336,7 +336,21 @@
           opacity: 1;
         }
       }
+      @keyframes slide-in-right {
+        from {
+          transform: translateX(100%);
+        }
+        to {
+          transform: translateX(0);
+        }
+      }
       /* ==== 连接 splash(kimi GlobalLoading) ==== */
+      html.warm-boot #splash {
+        display: none !important;
+      }
+      html.warm-boot #thread {
+        animation: fadein 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+      }
       .gload {
         position: fixed;
         inset: 0;
@@ -704,14 +718,22 @@
         padding: 4px 8px;
         border-radius: var(--radius-md);
         cursor: pointer;
+        transition: background 0.12s ease, color 0.12s ease, transform 0.1s ease;
       }
       .se:hover {
         background: var(--color-surface-sunken);
         color: var(--color-text);
       }
+      .se:active {
+        transform: scale(0.985);
+      }
       .se.on {
         background: var(--color-surface-active);
         color: var(--color-text);
+      }
+      .se.switching {
+        background: var(--color-surface-active);
+        opacity: 0.85;
       }
       .srow {
         display: flex;
@@ -1262,21 +1284,13 @@
       #app.hero #inspect {
         display: none !important;
       }
-      @media (max-width: 900px) {
-        #inspect:not([hidden]) {
-          position: fixed;
-          inset: 8px;
-          z-index: var(--z-modal);
-          width: auto;
-          flex: none;
-          margin: 0;
+      @media (min-width: 841px) {
+        #stage:has(#inspect:not([hidden])) #wrap {
+          padding-right: 28px;
         }
-      }
-      #stage:has(#inspect:not([hidden])) #wrap {
-        padding-right: 28px;
-      }
-      #stage:has(#inspect:not([hidden])) #cmp {
-        padding-right: 24px;
+        #stage:has(#inspect:not([hidden])) #cmp {
+          padding-right: 24px;
+        }
       }
       #wrap {
         width: 100%;
@@ -1286,6 +1300,7 @@
         flex-direction: column;
         margin: 0 auto;
         padding: 24px 20px 24px;
+        transition: opacity 0.15s ease;
       }
       #thread {
         display: flex;
@@ -3047,6 +3062,34 @@
         }
         .ch-ses {
           max-width: 40vw;
+        }
+        /* 移动端审查抽屉:全高右滑浮层 + 背景虚化遮罩 */
+        #stage:has(#inspect:not([hidden]))::before {
+          content: "";
+          position: fixed;
+          inset: 0;
+          z-index: calc(var(--z-modal) - 1);
+          background: rgba(0, 0, 0, 0.45);
+          backdrop-filter: blur(2px);
+          -webkit-backdrop-filter: blur(2px);
+          animation: fadein 0.18s ease forwards;
+        }
+        #inspect:not([hidden]) {
+          position: fixed;
+          top: 0;
+          right: 0;
+          bottom: 0;
+          z-index: var(--z-modal);
+          width: min(480px, 92vw);
+          max-width: 100vw;
+          height: 100dvh;
+          margin: 0;
+          flex: none;
+          border: none;
+          border-left: 1px solid var(--color-line-strong);
+          border-radius: 0;
+          box-shadow: -8px 0 24px rgba(0, 0, 0, 0.35);
+          animation: slide-in-right 0.22s cubic-bezier(0.16, 1, 0.3, 1) forwards;
         }
       }
       @media (max-width: 640px) {

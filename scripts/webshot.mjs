@@ -128,6 +128,18 @@ if (scenario === 'chat') {
 } else if (scenario === 'model') {
   await page.click('#hModel');
   await sleep(600);
+} else if (scenario === 'switch') {
+  await send('第一条会话');
+  await page.waitForSelector('.a-turn', { timeout: 30000 });
+  await waitIdle(1500);
+  await page.click('#newBtn');
+  await page.waitForSelector('#wrap', { timeout: 10000 });
+  await sleep(600);
+  await page.evaluate(() => {
+    const rows = document.querySelectorAll('#slist .se');
+    if (rows.length > 1) rows[1].click();
+  });
+  await sleep(800);
 } else if (scenario === 'welcome' || scenario === 'snap') {
   await sleep(Number(opts.wait || 800));
 }

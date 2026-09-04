@@ -27,11 +27,17 @@
         if (booted) return;
         booted = true;
         inspect.init();
-        const wait = Math.max(0, 450 - (Date.now() - splashAt));
-        setTimeout(() => {
-          $("splash")?.classList.add("hide");
-          setTimeout(() => $("splash")?.remove(), 350);
-        }, wait);
+        const isWarm = !!sessionStorage.getItem("piz.booted");
+        try { sessionStorage.setItem("piz.booted", "1"); } catch {}
+        const wait = isWarm ? 0 : Math.max(0, 450 - (Date.now() - splashAt));
+        if (wait === 0) {
+          $("splash")?.remove();
+        } else {
+          setTimeout(() => {
+            $("splash")?.classList.add("hide");
+            setTimeout(() => $("splash")?.remove(), 350);
+          }, wait);
+        }
         connectSSE();
         fetch("/api/state?" + wsp + "session=" + encodeURIComponent(sess))
         .then((r) => r.json())
