@@ -10,9 +10,15 @@ function __req(n) {
   __modules[n](m, m.exports, __req);
   return m.exports;
 }
-__modules["state"] = function(module, exports, require) {
-"use strict";Object.defineProperty(exports, "__esModule", {value: true});// state.ts —— 会话/工作区定位与本地偏好(prefs)。
-// 自 webui.js 切出;名与义一字未改,import 后调用点零改。
+__modules["signal"] = function(module, exports, require) {
+"use strict";Object.defineProperty(exports, "__esModule", {value: true});// signal.ts —— 微型细粒度响应式内核 (Zero-dependency Signals)
+// 支持依赖自动追踪、惰性计算、批量合并与自动解除订阅。
+
+
+
+let activeEffect = null;
+let batchDepth = 0;
+const pendingEffects = new Set();
 
 
 
@@ -25,6865 +31,3366 @@ __modules["state"] = function(module, exports, require) {
 
 
 
- const qp = new URLSearchParams(location.search); exports.qp = qp;
- const sess = exports.qp.get("session") || "default"; exports.sess = sess;
- const ws = decodeURIComponent(exports.qp.get("ws") || ""); exports.ws = ws;
- const wsp = exports.ws ? "ws=" + encodeURIComponent(exports.ws) + "&" : ""; exports.wsp = wsp;
- const isMobile = () => window.innerWidth < 840; exports.isMobile = isMobile;
 
-const PREF_KEY = "piz.prefs";
- const prefs = {
-  scheme: "dark",
-  accent: "mono",
-  accentPicked: false,
-  uiFont: 14,
-  density: "cozy",
-  wide: false,
-  notify: false,
-  sound: false,
-  lang: "en",
-}; exports.prefs = prefs;
-try {
-  Object.assign(exports.prefs, JSON.parse(localStorage.getItem(PREF_KEY) || "{}"));
-} catch (e) {}
-if (!exports.prefs.accentPicked) exports.prefs.accent = "mono";
-try {
-  const old = localStorage.getItem("piz.scheme");
-  if (old && !localStorage.getItem(PREF_KEY)) exports.prefs.scheme = old;
-} catch (e2) {}
- function savePrefs() {
+
+
+ function signal(initialValue) {
+  let value = initialValue;
+  const subscribers = new Set();
+
+  function read() {
+    if (activeEffect) {
+      subscribers.add(activeEffect);
+    }
+    return value;
+  }
+
+  read.get = () => read();
+
+  read.set = (next) => {
+    if (Object.is(value, next)) return;
+    value = next;
+    notify();
+  };
+
+  read.update = (fn) => {
+    read.set(fn(value));
+  };
+
+  read.subscribe = (fn) => {
+    return effect(() => {
+      fn(read());
+    });
+  };
+
+  function notify() {
+    for (const sub of subscribers) {
+      if (batchDepth > 0) {
+        pendingEffects.add(sub);
+      } else {
+        sub();
+      }
+    }
+  }
+
+  return read;
+} exports.signal = signal;
+
+ function computed(computeFn) {
+  let cachedValue;
+  let isDirty = true;
+  const subscribers = new Set();
+
+  const runner = () => {
+    if (!isDirty) {
+      isDirty = true;
+      for (const sub of subscribers) {
+        if (batchDepth > 0) {
+          pendingEffects.add(sub);
+        } else {
+          sub();
+        }
+      }
+    }
+  };
+
+  function read() {
+    if (activeEffect) {
+      subscribers.add(activeEffect);
+    }
+    if (isDirty) {
+      const prevEffect = activeEffect;
+      activeEffect = runner;
+      try {
+        cachedValue = computeFn();
+        isDirty = false;
+      } finally {
+        activeEffect = prevEffect;
+      }
+    }
+    return cachedValue;
+  }
+
+  read.get = () => read();
+
+  read.subscribe = (fn) => {
+    return effect(() => {
+      fn(read());
+    });
+  };
+
+  return read;
+} exports.computed = computed;
+
+ function effect(fn) {
+  let cleanup;
+  let isDisposed = false;
+
+  const execute = () => {
+    if (isDisposed) return;
+    if (cleanup && typeof cleanup === 'function') {
+      cleanup();
+    }
+    const prevEffect = activeEffect;
+    activeEffect = execute;
+    try {
+      cleanup = fn();
+    } finally {
+      activeEffect = prevEffect;
+    }
+  };
+
+  execute();
+
+  return () => {
+    isDisposed = true;
+    if (cleanup && typeof cleanup === 'function') {
+      cleanup();
+    }
+  };
+} exports.effect = effect;
+
+ function batch(fn) {
+  batchDepth++;
   try {
-    localStorage.setItem(PREF_KEY, JSON.stringify(exports.prefs));
-  } catch (e3) {}
-} exports.savePrefs = savePrefs;
-
-// 会话链接:root 未给则随当前工作区
- function sessUrl(name, root) {
-  const r = root !== undefined ? root : exports.ws;
-  return (
-    "/?session=" +
-    encodeURIComponent(name) +
-    (r ? "&ws=" + encodeURIComponent(r) : "")
-  );
-} exports.sessUrl = sessUrl;
+    return fn();
+  } finally {
+    batchDepth--;
+    if (batchDepth === 0) {
+      const toRun = Array.from(pendingEffects);
+      pendingEffects.clear();
+      for (const sub of toRun) {
+        sub();
+      }
+    }
+  }
+} exports.batch = batch;
 
 };
-__modules["util"] = function(module, exports, require) {
-"use strict";Object.defineProperty(exports, "__esModule", {value: true});// util.ts —— 纯工具:DOM 取值、转义、格式化、工具分类、斜杠打分。
-// 自 webui.js 切出,一律无闭包态;名与义一字未改。
- const $ = (id) => document.getElementById(id); exports.$ = $;
- const esc = (s) =>
-  String(s)
+__modules["dom"] = function(module, exports, require) {
+"use strict";Object.defineProperty(exports, "__esModule", {value: true});// dom.ts —— 细粒度响应式声明式 DOM 构造器
+var _signal = require('./signal');
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ function isSignal(val) {
+  return typeof val === "function" && typeof (val ).subscribe === "function";
+} exports.isSignal = isSignal;
+
+const SVG_TAGS = new Set([
+  "svg", "path", "circle", "rect", "line", "polyline", "polygon", "g", "text"
+]);
+
+ function h(
+  tag,
+  props,
+  ...children
+) {
+  const isSvg = SVG_TAGS.has(tag);
+  const el = isSvg
+    ? document.createElementNS("http://www.w3.org/2000/svg", tag)
+    : document.createElement(tag);
+
+  if (props) {
+    for (const [key, value] of Object.entries(props)) {
+      if (value == null) continue;
+
+      if (key.startsWith("on") && typeof value === "function") {
+        const eventName = key.slice(2).toLowerCase();
+        el.addEventListener(eventName, value);
+      } else if (key === "class" || key === "className") {
+        bindClass(el, value);
+      } else if (key === "style") {
+        bindStyle(el, value);
+      } else if (key === "ref" && typeof value === "function") {
+        value(el);
+      } else if (isSignal(value)) {
+        _signal.effect.call(void 0, () => {
+          setAttr(el, key, (value )());
+        });
+      } else {
+        setAttr(el, key, value);
+      }
+    }
+  }
+
+  appendChildren(el, children);
+  return el;
+} exports.h = h;
+
+function setAttr(el, key, val) {
+  if (val == null || val === false) {
+    el.removeAttribute(key);
+    if (key in el) {
+      try { (el )[key] = ""; } catch (_) {}
+    }
+  } else {
+    if (key in el && typeof (el )[key] === "boolean") {
+      (el )[key] = Boolean(val);
+    }
+    el.setAttribute(key, val === true ? "" : String(val));
+    if (key === "value" && (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement)) {
+      el.value = String(val);
+    }
+  }
+}
+
+function bindClass(el, val) {
+  if (isSignal(val)) {
+    _signal.effect.call(void 0, () => {
+      applyClass(el, val());
+    });
+  } else {
+    applyClass(el, val);
+  }
+}
+
+function applyClass(el, val) {
+  if (typeof val === "string") {
+    el.className = val;
+  } else if (Array.isArray(val)) {
+    el.className = val.filter(Boolean).join(" ");
+  } else if (typeof val === "object" && val !== null) {
+    const classes = [];
+    for (const [cls, enabled] of Object.entries(val)) {
+      if (isSignal(enabled)) {
+        _signal.effect.call(void 0, () => {
+          el.classList.toggle(cls, Boolean(enabled()));
+        });
+      } else if (enabled) {
+        classes.push(cls);
+      }
+    }
+    if (classes.length) {
+      el.className = classes.join(" ");
+    }
+  }
+}
+
+function bindStyle(el, val) {
+  if (isSignal(val)) {
+    _signal.effect.call(void 0, () => {
+      applyStyle(el, val());
+    });
+  } else {
+    applyStyle(el, val);
+  }
+}
+
+function applyStyle(el, val) {
+  if (typeof val === "string") {
+    el.style.cssText = val;
+  } else if (typeof val === "object" && val !== null) {
+    for (const [prop, sVal] of Object.entries(val)) {
+      if (isSignal(sVal)) {
+        _signal.effect.call(void 0, () => {
+          (el.style )[prop] = sVal();
+        });
+      } else {
+        (el.style )[prop] = sVal;
+      }
+    }
+  }
+}
+
+function appendChildren(parent, children) {
+  for (const child of children) {
+    if (child == null || child === false) continue;
+
+    if (Array.isArray(child)) {
+      appendChildren(parent, child);
+    } else if (isSignal(child)) {
+      let currentMarker = document.createTextNode("");
+      parent.appendChild(currentMarker);
+
+      _signal.effect.call(void 0, () => {
+        const val = (child )();
+        if (val instanceof Node) {
+          parent.replaceChild(val, currentMarker);
+          currentMarker = val;
+        } else {
+          const text = val == null ? "" : String(val);
+          if (currentMarker.nodeType === Node.TEXT_NODE) {
+            currentMarker.nodeValue = text;
+          } else {
+            const textNode = document.createTextNode(text);
+            parent.replaceChild(textNode, currentMarker);
+            currentMarker = textNode;
+          }
+        }
+      });
+    } else if (child instanceof Node) {
+      parent.appendChild(child);
+    } else {
+      parent.appendChild(document.createTextNode(String(child)));
+    }
+  }
+}
+
+ function show(
+  condition,
+  thenFn,
+  elseFn
+) {
+  const container = document.createDocumentFragment();
+  let currentAnchor = document.createComment("show");
+  container.appendChild(currentAnchor);
+
+  let currentChild = null;
+
+  _signal.effect.call(void 0, () => {
+    const parent = currentAnchor.parentNode;
+    const cond = typeof condition === "function" ? (condition )() : condition;
+    const nextChildResult = cond ? thenFn() : elseFn ? elseFn() : null;
+
+    let nextNode = null;
+    if (nextChildResult instanceof Node) {
+      nextNode = nextChildResult;
+    } else if (nextChildResult != null && nextChildResult !== false) {
+      nextNode = document.createTextNode(String(nextChildResult));
+    }
+
+    if (parent) {
+      if (currentChild && currentChild.parentNode === parent) {
+        parent.removeChild(currentChild);
+        currentChild = null;
+      }
+      if (nextNode) {
+        parent.insertBefore(nextNode, currentAnchor);
+        currentChild = nextNode;
+      }
+    }
+  });
+
+  return container;
+} exports.show = show;
+
+ function each(
+  items,
+  renderItem
+) {
+  const fragment = document.createDocumentFragment();
+  const anchor = document.createComment("each");
+  fragment.appendChild(anchor);
+
+  let renderedNodes = [];
+
+  _signal.effect.call(void 0, () => {
+    const parent = anchor.parentNode;
+    if (!parent) return;
+
+    const list = typeof items === "function" ? (items )() : items;
+    for (const node of renderedNodes) {
+      if (node.parentNode === parent) {
+        parent.removeChild(node);
+      }
+    }
+    renderedNodes = [];
+
+    if (Array.isArray(list)) {
+      for (let i = 0; i < list.length; i++) {
+        const itemNode = renderItem(list[i], i);
+        parent.insertBefore(itemNode, anchor);
+        renderedNodes.push(itemNode);
+      }
+    }
+  });
+
+  return fragment;
+} exports.each = each;
+
+ const tags = {
+  div: (p, ...c) => h("div", p, ...c),
+  span: (p, ...c) => h("span", p, ...c),
+  button: (p, ...c) => h("button", p, ...c),
+  input: (p, ...c) => h("input", p, ...c),
+  textarea: (p, ...c) => h("textarea", p, ...c),
+  header: (p, ...c) => h("header", p, ...c),
+  main: (p, ...c) => h("main", p, ...c),
+  aside: (p, ...c) => h("aside", p, ...c),
+  section: (p, ...c) => h("section", p, ...c),
+  nav: (p, ...c) => h("nav", p, ...c),
+  article: (p, ...c) => h("article", p, ...c),
+  pre: (p, ...c) => h("pre", p, ...c),
+  code: (p, ...c) => h("code", p, ...c),
+  ul: (p, ...c) => h("ul", p, ...c),
+  li: (p, ...c) => h("li", p, ...c),
+  a: (p, ...c) => h("a", p, ...c),
+  p: (p, ...c) => h("p", p, ...c),
+  svg: (p, ...c) => h("svg", p, ...c),
+  path: (p, ...c) => h("path", p, ...c),
+}; exports.tags = tags;
+
+};
+__modules["types"] = function(module, exports, require) {
+"use strict";// types.ts —— 核心领域实体类型定义
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+};
+__modules["net"] = function(module, exports, require) {
+"use strict";Object.defineProperty(exports, "__esModule", {value: true}); function _optionalChain(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }// net.ts —— 高韧性网络层 (Bearer 鉴权、CSRF 防护、fetch+ReadableStream SSE 流)
+
+let authToken = "";
+
+// 初始化读取 token (同时支持 ?token= 与 #token=)
+try {
+  let qToken = new URLSearchParams(window.location.search).get("token");
+  if (!qToken && window.location.hash.includes("token=")) {
+    const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+    qToken = hashParams.get("token");
+  }
+  if (qToken) {
+    authToken = qToken;
+    localStorage.setItem("piz.token", authToken);
+  } else {
+    authToken = localStorage.getItem("piz.token") || "";
+  }
+} catch (_) {}
+
+ function getToken() {
+  return authToken;
+} exports.getToken = getToken;
+
+ function setToken(token) {
+  authToken = token.trim();
+  try {
+    if (authToken) {
+      localStorage.setItem("piz.token", authToken);
+    } else {
+      localStorage.removeItem("piz.token");
+    }
+  } catch (_) {}
+} exports.setToken = setToken;
+
+ async function apiFetch(
+  path,
+  init = {}
+) {
+  const headers = new Headers(init.headers || {});
+  headers.set("X-Requested-With", "piz");
+  if (authToken) {
+    headers.set("Authorization", `Bearer ${authToken}`);
+  }
+
+  const res = await fetch(path, {
+    ...init,
+    headers,
+  });
+
+  if (res.status === 401) {
+    window.dispatchEvent(new CustomEvent("piz:unauthorized"));
+    throw new Error("Unauthorized");
+  }
+
+  if (!res.ok) {
+    const txt = await res.text().catch(() => "");
+    throw new Error(`HTTP ${res.status}: ${txt}`);
+  }
+
+  const cType = res.headers.get("content-type") || "";
+  if (cType.includes("application/json")) {
+    return (await res.json()) ;
+  }
+  return (await res.text()) ;
+} exports.apiFetch = apiFetch;
+
+
+
+// 基于 fetch + ReadableStream 的 SSE 客户端 (EventSource 原生无法带 Authorization 头)
+ function connectEventStream(
+  onEvent,
+  onStateChange
+) {
+  let isClosed = false;
+  let retryCount = 0;
+  let abortCtrl = null;
+  let timer = null;
+
+  async function startStream() {
+    if (isClosed) return;
+    onStateChange("connecting");
+
+    abortCtrl = new AbortController();
+    const headers = {
+      Accept: "text/event-stream",
+      "X-Requested-With": "piz",
+    };
+    if (authToken) {
+      headers["Authorization"] = `Bearer ${authToken}`;
+    }
+
+    try {
+      const res = await fetch("/api/events", {
+        headers,
+        signal: abortCtrl.signal,
+      });
+
+      if (res.status === 401) {
+        onStateChange("disconnected");
+        window.dispatchEvent(new CustomEvent("piz:unauthorized"));
+        return;
+      }
+
+      if (!res.ok || !res.body) {
+        throw new Error(`SSE stream failed: HTTP ${res.status}`);
+      }
+
+      retryCount = 0;
+      onStateChange("connected");
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        let idx;
+        while ((idx = buffer.indexOf("\n\n")) !== -1) {
+          const chunk = buffer.slice(0, idx);
+          buffer = buffer.slice(idx + 2);
+
+          for (const line of chunk.split("\n")) {
+            if (!line.startsWith("data: ")) continue;
+            const rawData = line.slice(6).trim();
+            if (!rawData) continue;
+
+            try {
+              const parsed = JSON.parse(rawData);
+              if (parsed && parsed.type) {
+                onEvent(parsed);
+              } else if (parsed) {
+                onEvent({ type: "message", data: parsed });
+              }
+            } catch (err) {
+              console.warn("SSE JSON parse err:", err, rawData);
+            }
+          }
+        }
+      }
+    } catch (err) {
+      if (_optionalChain([err, 'optionalAccess', _2 => _2.name]) === "AbortError" || isClosed) return;
+      console.warn("SSE connection error:", err);
+    }
+
+    if (!isClosed) {
+      onStateChange("disconnected");
+      const delay = Math.min(1000 * Math.pow(1.5, retryCount), 10000);
+      retryCount++;
+      timer = setTimeout(startStream, delay);
+    }
+  }
+
+  startStream();
+
+  return () => {
+    isClosed = true;
+    if (timer) clearTimeout(timer);
+    if (abortCtrl) abortCtrl.abort();
+    onStateChange("disconnected");
+  };
+} exports.connectEventStream = connectEventStream;
+
+};
+__modules["diff"] = function(module, exports, require) {
+"use strict";Object.defineProperty(exports, "__esModule", {value: true});// diff.ts —— Git Unified Diff 解析与行级比对渲染器
+
+
+ function parseUnifiedDiff(rawDiff) {
+  if (!rawDiff || !rawDiff.trim()) return [];
+
+  const files = [];
+  const lines = rawDiff.split(/\r?\n/);
+  let currentFile = null;
+  let currentHunk = null;
+  let oldLineNo = 0;
+  let newLineNo = 0;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+
+    if (line.startsWith("diff --git ") || line.startsWith("--- ")) {
+      // 提取文件名
+      let path = "";
+      if (line.startsWith("diff --git ")) {
+        const parts = line.slice(11).split(" ");
+        if (parts.length >= 2) {
+          path = parts[1].replace(/^[ab]\//, "");
+        }
+      } else if (line.startsWith("--- ")) {
+        path = line.slice(4).trim().replace(/^[ab]\//, "");
+      }
+
+      if (!currentFile || currentFile.path !== path) {
+        currentFile = {
+          path: path || "unknown",
+          status: "modified",
+          additions: 0,
+          deletions: 0,
+          hunks: [],
+          raw: line + "\n",
+        };
+        files.push(currentFile);
+        currentHunk = null;
+      } else {
+        currentFile.raw += line + "\n";
+      }
+      continue;
+    }
+
+    if (line.startsWith("+++ ")) {
+      const p = line.slice(4).trim().replace(/^[ab]\//, "");
+      if (currentFile) {
+        if (p && p !== "/dev/null") currentFile.path = p;
+        currentFile.raw += line + "\n";
+      }
+      continue;
+    }
+
+    if (line.startsWith("@@ ")) {
+      if (!currentFile) {
+        currentFile = {
+          path: "diff",
+          status: "modified",
+          additions: 0,
+          deletions: 0,
+          hunks: [],
+          raw: "",
+        };
+        files.push(currentFile);
+      }
+      currentFile.raw += line + "\n";
+
+      // 解析 @@ -a,b +c,d @@
+      const match = /@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line);
+      if (match) {
+        oldLineNo = parseInt(match[1], 10);
+        newLineNo = parseInt(match[2], 10);
+      } else {
+        oldLineNo = 1;
+        newLineNo = 1;
+      }
+
+      currentHunk = {
+        header: line,
+        lines: [],
+      };
+      currentFile.hunks.push(currentHunk);
+      continue;
+    }
+
+    if (!currentHunk || !currentFile) {
+      if (currentFile) currentFile.raw += line + "\n";
+      continue;
+    }
+
+    currentFile.raw += line + "\n";
+
+    if (line.startsWith("+")) {
+      currentFile.additions++;
+      currentHunk.lines.push({
+        type: "add",
+        content: line.slice(1),
+        newNo: newLineNo++,
+      });
+    } else if (line.startsWith("-")) {
+      currentFile.deletions++;
+      currentHunk.lines.push({
+        type: "del",
+        content: line.slice(1),
+        oldNo: oldLineNo++,
+      });
+    } else if (line.startsWith(" ") || line === "") {
+      currentHunk.lines.push({
+        type: "context",
+        content: line.startsWith(" ") ? line.slice(1) : line,
+        oldNo: oldLineNo++,
+        newNo: newLineNo++,
+      });
+    }
+  }
+
+  // 计算文件状态
+  for (const f of files) {
+    if (f.deletions === 0 && f.additions > 0) {
+      f.status = "added";
+    } else if (f.additions === 0 && f.deletions > 0) {
+      f.status = "deleted";
+    } else {
+      f.status = "modified";
+    }
+  }
+
+  return files;
+} exports.parseUnifiedDiff = parseUnifiedDiff;
+
+};
+__modules["store"] = function(module, exports, require) {
+"use strict";Object.defineProperty(exports, "__esModule", {value: true}); function _optionalChain(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }// store.ts —— 全局响应式状态机
+var _signal = require('./signal');
+
+
+
+
+
+
+
+
+
+
+
+
+var _net = require('./net');
+var _diff = require('./diff');
+
+// 持久化辅助
+function getStored(key, fallback) {
+  try {
+    const v = localStorage.getItem(`piz.${key}`);
+    return v != null ? JSON.parse(v) : fallback;
+  } catch (_) {
+    return fallback;
+  }
+}
+
+function setStored(key, val) {
+  try {
+    localStorage.setItem(`piz.${key}`, JSON.stringify(val));
+  } catch (_) {}
+}
+
+ const theme = _signal.signal(
+  getStored("theme", _optionalChain([window, 'access', _2 => _2.matchMedia, 'optionalCall', _3 => _3("(prefers-color-scheme: light)"), 'access', _4 => _4.matches]) ? "light" : "dark")
+); exports.theme = theme;
+
+ const connectionStatus = _signal.signal("connecting"); exports.connectionStatus = connectionStatus;
+ const ws = _signal.signal(""); exports.ws = ws;
+ const branch = _signal.signal(""); exports.branch = branch;
+ const changesCount = _signal.signal(0); exports.changesCount = changesCount;
+
+ const activeSession = _signal.signal("default"); exports.activeSession = activeSession;
+ const sessions = _signal.signal([]); exports.sessions = sessions;
+ const turns = _signal.signal([]); exports.turns = turns;
+ const isStreaming = _signal.signal(false); exports.isStreaming = isStreaming;
+ const streamingTurnId = _signal.signal(null); exports.streamingTurnId = streamingTurnId;
+
+ const mode = _signal.signal(getStored("mode", "yolo")); exports.mode = mode;
+ const model = _signal.signal(""); exports.model = model;
+ const models = _signal.signal([]); exports.models = models;
+ const pct = _signal.signal(0); exports.pct = pct;
+
+ const deckTab = _signal.signal(getStored("deckTab", "diffs")); exports.deckTab = deckTab;
+ const deckOpen = _signal.signal(getStored("deckOpen", true)); exports.deckOpen = deckOpen;
+ const sidebarOpen = _signal.signal(getStored("sidebarOpen", true)); exports.sidebarOpen = sidebarOpen;
+
+ const diffs = _signal.signal([]); exports.diffs = diffs;
+ const activeDiffPath = _signal.signal(""); exports.activeDiffPath = activeDiffPath;
+ const terminalLines = _signal.signal([]); exports.terminalLines = terminalLines;
+ const jobs = _signal.signal([]); exports.jobs = jobs;
+ const files = _signal.signal([]); exports.files = files;
+
+ const pendingApproval = _signal.signal(null); exports.pendingApproval = pendingApproval;
+ const showSearchModal = _signal.signal(false); exports.showSearchModal = showSearchModal;
+ const showAuthModal = _signal.signal(false); exports.showAuthModal = showAuthModal;
+ const showSettingsModal = _signal.signal(false); exports.showSettingsModal = showSettingsModal;
+
+// 统计衍生物
+ const totalDiffStats = _signal.computed.call(void 0, () => {
+  let add = 0;
+  let del = 0;
+  for (const d of exports.diffs.call(void 0, )) {
+    add += d.additions;
+    del += d.deletions;
+  }
+  return { additions: add, deletions: del, files: exports.diffs.call(void 0, ).length };
+}); exports.totalDiffStats = totalDiffStats;
+
+ const activeDiffFile = _signal.computed.call(void 0, () => {
+  const curPath = exports.activeDiffPath.call(void 0, );
+  const list = exports.diffs.call(void 0, );
+  if (!list.length) return null;
+  return list.find((d) => d.path === curPath) || list[0];
+}); exports.activeDiffFile = activeDiffFile;
+
+// 主题切换
+ function toggleTheme() {
+  const next = exports.theme.call(void 0, ) === "dark" ? "light" : "dark";
+  exports.theme.set(next);
+  setStored("theme", next);
+  document.documentElement.setAttribute("data-color-scheme", next);
+} exports.toggleTheme = toggleTheme;
+
+// 工作台控制
+ function toggleDeck() {
+  const next = !exports.deckOpen.call(void 0, );
+  exports.deckOpen.set(next);
+  setStored("deckOpen", next);
+} exports.toggleDeck = toggleDeck;
+
+ function setDeckTab(tab) {
+  exports.deckTab.set(tab);
+  setStored("deckTab", tab);
+  if (!exports.deckOpen.call(void 0, )) {
+    exports.deckOpen.set(true);
+    setStored("deckOpen", true);
+  }
+} exports.setDeckTab = setDeckTab;
+
+ function toggleSidebar() {
+  const next = !exports.sidebarOpen.call(void 0, );
+  exports.sidebarOpen.set(next);
+  setStored("sidebarOpen", next);
+} exports.toggleSidebar = toggleSidebar;
+
+// 终端行追加
+ function appendTerminalLine(text, type = "stdout") {
+  const time = new Date().toLocaleTimeString();
+  const line = {
+    id: `tl_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+    time,
+    text,
+    type,
+  };
+  exports.terminalLines.update((prev) => [...prev.slice(-400), line]);
+} exports.appendTerminalLine = appendTerminalLine;
+
+// 核心网络同步
+ async function loadState() {
+  try {
+    const sName = exports.activeSession.call(void 0, );
+    const wName = exports.ws.call(void 0, );
+    const q = `?session=${encodeURIComponent(sName)}&ws=${encodeURIComponent(wName)}`;
+    const data = await _net.apiFetch.call(void 0, `/api/state${q}`);
+    if (data) {
+      _signal.batch.call(void 0, () => {
+        if (data.model) exports.model.set(data.model);
+        if (typeof data.pct === "number") exports.pct.set(data.pct);
+        if (data.mode && (data.mode === "yolo" || data.mode === "ask" || data.mode === "plan")) {
+          exports.mode.set(data.mode);
+        }
+        if (data.ws) exports.ws.set(data.ws);
+        if (data.branch) exports.branch.set(data.branch);
+        if (typeof data.changes === "number") exports.changesCount.set(data.changes);
+      });
+    }
+  } catch (err) {
+    console.warn("loadState error:", err);
+  }
+} exports.loadState = loadState;
+
+ async function loadModels() {
+  try {
+    const res = await _net.apiFetch.call(void 0, "/api/models");
+    const list = Array.isArray(res) ? res : Array.isArray(_optionalChain([res, 'optionalAccess', _5 => _5.models])) ? res.models : [];
+    exports.models.set(list);
+  } catch (err) {
+    console.warn("loadModels error:", err);
+  }
+} exports.loadModels = loadModels;
+
+ async function loadSessions() {
+  try {
+    const wName = exports.ws.call(void 0, );
+    const q = wName ? `?ws=${encodeURIComponent(wName)}` : "";
+    const res = await _net.apiFetch.call(void 0, `/api/sessions${q}`);
+    const list = Array.isArray(res) ? res : Array.isArray(_optionalChain([res, 'optionalAccess', _6 => _6.sessions])) ? res.sessions : [];
+    exports.sessions.set(
+      list.map((s) => ({
+        id: s.name,
+        name: s.name,
+        title: s.title || s.name,
+        updatedAt: s.ts || s.updated_at || Date.now(),
+        messageCount: s.msgs || s.msg_count || 0,
+        isCurrent: s.name === exports.activeSession.call(void 0, ),
+      }))
+    );
+  } catch (err) {
+    console.warn("loadSessions error:", err);
+  }
+} exports.loadSessions = loadSessions;
+
+ async function loadFiles(query = "") {
+  try {
+    const wName = exports.ws.call(void 0, );
+    const q = `?ws=${encodeURIComponent(wName)}&q=${encodeURIComponent(query)}`;
+    const res = await _net.apiFetch.call(void 0, `/api/files${q}`);
+    const items = Array.isArray(_optionalChain([res, 'optionalAccess', _7 => _7.items])) ? res.items : Array.isArray(res) ? res : [];
+    exports.files.set(items);
+  } catch (err) {
+    console.warn("loadFiles error:", err);
+  }
+} exports.loadFiles = loadFiles;
+
+ async function loadHistory() {
+  try {
+    const sName = exports.activeSession.call(void 0, );
+    const wName = exports.ws.call(void 0, );
+    const q = `?session=${encodeURIComponent(sName)}&ws=${encodeURIComponent(wName)}`;
+    const res = await _net.apiFetch.call(void 0, `/api/history${q}`);
+    const rawList = Array.isArray(_optionalChain([res, 'optionalAccess', _8 => _8.history]))
+      ? res.history
+      : Array.isArray(_optionalChain([res, 'optionalAccess', _9 => _9.messages]))
+      ? res.messages
+      : Array.isArray(res)
+      ? res
+      : [];
+
+    const turnList = [];
+    let currentAssistantTurn = null;
+
+    for (const m of rawList) {
+      if (m.role === "user") {
+        currentAssistantTurn = null;
+        turnList.push({
+          id: `u_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+          role: "user",
+          content: m.content || "",
+          steps: [],
+          timestamp: m.timestamp || Date.now(),
+        });
+      } else if (m.role === "assistant") {
+        currentAssistantTurn = {
+          id: `a_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+          role: "assistant",
+          content: m.content || "",
+          thought: m.thought || m.reasoning || "",
+          thoughtDurationMs: m.thought_duration,
+          steps: [],
+          timestamp: m.timestamp || Date.now(),
+        };
+        turnList.push(currentAssistantTurn);
+      } else if (m.role === "tool") {
+        const step = {
+          id: `st_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+          name: m.name || "Tool",
+          desc: typeof m.args === "string" ? m.args : JSON.stringify(m.args),
+          status: "done",
+          startedAt: Date.now(),
+          result: m.content || "",
+          args: m.args,
+        };
+        if (currentAssistantTurn) {
+          currentAssistantTurn.steps.push(step);
+        } else {
+          currentAssistantTurn = {
+            id: `a_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+            role: "assistant",
+            content: "",
+            steps: [step],
+            timestamp: Date.now(),
+          };
+          turnList.push(currentAssistantTurn);
+        }
+      }
+    }
+    exports.turns.set(turnList);
+  } catch (err) {
+    console.warn("loadHistory error:", err);
+  }
+} exports.loadHistory = loadHistory;
+
+ async function switchSession(name) {
+  if (exports.activeSession.call(void 0, ) === name) return;
+  exports.activeSession.set(name);
+  await loadState();
+  await loadHistory();
+  await loadSessions();
+} exports.switchSession = switchSession;
+
+ async function createSession() {
+  try {
+    const wName = exports.ws.call(void 0, );
+    const q = wName ? `?ws=${encodeURIComponent(wName)}` : "";
+    const res = await _net.apiFetch.call(void 0, `/api/action${q}`, {
+      method: "POST",
+      body: JSON.stringify({ act: "new" }),
+    });
+    if (res && res.name) {
+      await switchSession(res.name);
+    }
+  } catch (err) {
+    console.warn("createSession error:", err);
+  }
+} exports.createSession = createSession;
+
+ async function renameSession(id, title) {
+  try {
+    const wName = exports.ws.call(void 0, );
+    const q = `?session=${encodeURIComponent(id)}&ws=${encodeURIComponent(wName)}`;
+    await _net.apiFetch.call(void 0, `/api/title${q}`, {
+      method: "POST",
+      body: JSON.stringify({ title }),
+    });
+    await loadSessions();
+  } catch (err) {
+    console.warn("renameSession error:", err);
+  }
+} exports.renameSession = renameSession;
+
+ async function deleteSession(id) {
+  try {
+    const wName = exports.ws.call(void 0, );
+    const q = `?session=${encodeURIComponent(id)}&ws=${encodeURIComponent(wName)}`;
+    await _net.apiFetch.call(void 0, `/api/action${q}`, {
+      method: "POST",
+      body: JSON.stringify({ act: "delete" }),
+    });
+    if (exports.activeSession.call(void 0, ) === id) {
+      exports.activeSession.set("default");
+      await loadState();
+      await loadHistory();
+    }
+    await loadSessions();
+  } catch (err) {
+    console.warn("deleteSession error:", err);
+  }
+} exports.deleteSession = deleteSession;
+
+ async function switchMode(nextMode) {
+  exports.mode.set(nextMode);
+  setStored("mode", nextMode);
+  try {
+    const sName = exports.activeSession.call(void 0, );
+    const wName = exports.ws.call(void 0, );
+    const q = `?session=${encodeURIComponent(sName)}&ws=${encodeURIComponent(wName)}`;
+    await _net.apiFetch.call(void 0, `/api/mode${q}`, {
+      method: "POST",
+      body: JSON.stringify({ mode: nextMode }),
+    });
+  } catch (err) {
+    console.warn("switchMode error:", err);
+  }
+} exports.switchMode = switchMode;
+
+ async function switchModel(nextModel) {
+  exports.model.set(nextModel);
+  try {
+    const sName = exports.activeSession.call(void 0, );
+    const wName = exports.ws.call(void 0, );
+    const q = `?session=${encodeURIComponent(sName)}&ws=${encodeURIComponent(wName)}`;
+    await _net.apiFetch.call(void 0, `/api/model${q}`, {
+      method: "POST",
+      body: JSON.stringify({ model: nextModel }),
+    });
+  } catch (err) {
+    console.warn("switchModel error:", err);
+  }
+} exports.switchModel = switchModel;
+
+ async function interrupt() {
+  try {
+    const sName = exports.activeSession.call(void 0, );
+    const wName = exports.ws.call(void 0, );
+    const q = `?session=${encodeURIComponent(sName)}&ws=${encodeURIComponent(wName)}`;
+    await _net.apiFetch.call(void 0, `/api/interrupt${q}`, { method: "POST" });
+  } catch (err) {
+    console.warn("interrupt error:", err);
+  } finally {
+    exports.isStreaming.set(false);
+  }
+} exports.interrupt = interrupt;
+
+ async function approve(id, allow) {
+  try {
+    await _net.apiFetch.call(void 0, "/api/approve", {
+      method: "POST",
+      body: JSON.stringify({ id, allow }),
+    });
+    exports.pendingApproval.set(null);
+  } catch (err) {
+    console.warn("approve error:", err);
+  }
+} exports.approve = approve;
+
+ async function sendMessage(text) {
+  if (!text || !text.trim() || exports.isStreaming.call(void 0, )) return;
+
+  const userTurn = {
+    id: `u_${Date.now()}`,
+    role: "user",
+    content: text.trim(),
+    steps: [],
+    timestamp: Date.now(),
+  };
+
+  const assistantTurnId = `a_${Date.now()}`;
+  const assistantTurn = {
+    id: assistantTurnId,
+    role: "assistant",
+    content: "",
+    thought: "",
+    steps: [],
+    timestamp: Date.now(),
+    isStreaming: true,
+  };
+
+  _signal.batch.call(void 0, () => {
+    exports.turns.update((prev) => [...prev, userTurn, assistantTurn]);
+    exports.isStreaming.set(true);
+    exports.streamingTurnId.set(assistantTurnId);
+  });
+
+  try {
+    const sName = exports.activeSession.call(void 0, );
+    const wName = exports.ws.call(void 0, );
+    const q = `?session=${encodeURIComponent(sName)}&ws=${encodeURIComponent(wName)}`;
+    await _net.apiFetch.call(void 0, `/api/chat${q}`, {
+      method: "POST",
+      body: JSON.stringify({ message: text.trim() }),
+    });
+  } catch (err) {
+    console.error("sendMessage failed:", err);
+    _signal.batch.call(void 0, () => {
+      exports.turns.update((prev) =>
+        prev.map((t) =>
+          t.id === assistantTurnId
+            ? { ...t, content: `Error: ${err instanceof Error ? err.message : String(err)}`, isStreaming: false }
+            : t
+        )
+      );
+      exports.isStreaming.set(false);
+      exports.streamingTurnId.set(null);
+    });
+  }
+} exports.sendMessage = sendMessage;
+
+// 核心 SSE 事件调度
+ function handleSseEvent(event) {
+  const { type, data } = event;
+
+  switch (type) {
+    case "stream_start":
+      exports.isStreaming.set(true);
+      break;
+
+    case "stream": {
+      const chunk = typeof data === "string" ? data : _optionalChain([data, 'optionalAccess', _10 => _10.chunk]) || "";
+      const curId = exports.streamingTurnId.call(void 0, );
+      if (curId) {
+        exports.turns.update((prev) =>
+          prev.map((t) =>
+            t.id === curId ? { ...t, content: (t.content || "") + chunk } : t
+          )
+        );
+      }
+      break;
+    }
+
+    case "thought": {
+      const thoughtChunk = typeof data === "string" ? data : _optionalChain([data, 'optionalAccess', _11 => _11.chunk]) || "";
+      const curId = exports.streamingTurnId.call(void 0, );
+      if (curId) {
+        exports.turns.update((prev) =>
+          prev.map((t) =>
+            t.id === curId ? { ...t, thought: (t.thought || "") + thoughtChunk } : t
+          )
+        );
+      }
+      break;
+    }
+
+    case "step_start": {
+      const curId = exports.streamingTurnId.call(void 0, );
+      const step = {
+        id: data.id || `st_${Date.now()}`,
+        name: data.name || "Task Step",
+        desc: data.desc,
+        status: "running",
+        startedAt: Date.now(),
+        args: data.args,
+      };
+      if (curId) {
+        exports.turns.update((prev) =>
+          prev.map((t) =>
+            t.id === curId ? { ...t, steps: [...t.steps, step] } : t
+          )
+        );
+      }
+      appendTerminalLine(`▶ [Step] ${step.name}: ${step.desc || ""}`, "cmd");
+      break;
+    }
+
+    case "step_end": {
+      const curId = exports.streamingTurnId.call(void 0, );
+      if (curId && data.id) {
+        exports.turns.update((prev) =>
+          prev.map((t) =>
+            t.id === curId
+              ? {
+                  ...t,
+                  steps: t.steps.map((st) =>
+                    st.id === data.id
+                      ? {
+                          ...st,
+                          status: data.error ? "error" : "done",
+                          durationMs: Date.now() - st.startedAt,
+                          result: data.result,
+                          error: data.error,
+                        }
+                      : st
+                  ),
+                }
+              : t
+          )
+        );
+      }
+      break;
+    }
+
+    case "tool_diff": {
+      if (data && data.diff) {
+        const parsed = _diff.parseUnifiedDiff.call(void 0, data.diff);
+        exports.diffs.set(parsed);
+        if (parsed.length > 0) {
+          exports.activeDiffPath.set(parsed[0].path);
+          setDeckTab("diffs");
+        }
+      }
+      break;
+    }
+
+    case "terminal_out": {
+      const text = typeof data === "string" ? data : _optionalChain([data, 'optionalAccess', _12 => _12.text]) || "";
+      appendTerminalLine(text, _optionalChain([data, 'optionalAccess', _13 => _13.stream]) === "stderr" ? "stderr" : "stdout");
+      break;
+    }
+
+    case "job_update": {
+      if (data && data.id) {
+        exports.jobs.update((prev) => {
+          const idx = prev.findIndex((j) => j.id === data.id);
+          const item = {
+            id: data.id,
+            name: data.name || "Background Job",
+            role: data.role,
+            status: data.status || "running",
+            startedAt: data.startedAt || Date.now(),
+            finishedAt: data.finishedAt,
+            summary: data.summary,
+          };
+          if (idx >= 0) {
+            const next = [...prev];
+            next[idx] = { ...next[idx], ...item };
+            return next;
+          }
+          return [...prev, item];
+        });
+      }
+      break;
+    }
+
+    case "permission_request": {
+      if (data && data.id) {
+        exports.pendingApproval.set({
+          id: data.id,
+          type: data.type || "execute",
+          command: data.command,
+          desc: data.desc,
+          path: data.path,
+        });
+      }
+      break;
+    }
+
+    case "stream_end":
+      _signal.batch.call(void 0, () => {
+        exports.isStreaming.set(false);
+        const curId = exports.streamingTurnId.call(void 0, );
+        if (curId) {
+          exports.turns.update((prev) =>
+            prev.map((t) => (t.id === curId ? { ...t, isStreaming: false } : t))
+          );
+        }
+        exports.streamingTurnId.set(null);
+      });
+      loadState();
+      break;
+  }
+} exports.handleSseEvent = handleSseEvent;
+
+// 统一应用启动
+ function boot() {
+  document.documentElement.setAttribute("data-color-scheme", exports.theme.call(void 0, ));
+
+  _net.connectEventStream.call(void 0, handleSseEvent, (st) => {
+    exports.connectionStatus.set(st);
+  });
+
+  loadState();
+  loadModels();
+  loadSessions();
+  loadHistory();
+  loadFiles();
+
+  window.addEventListener("piz:unauthorized", () => {
+    exports.showAuthModal.set(true);
+  });
+} exports.boot = boot;
+
+};
+__modules["topbar"] = function(module, exports, require) {
+"use strict";Object.defineProperty(exports, "__esModule", {value: true});// topbar.ts —— 顶栏工作台导航与全局状态指示
+var _dom = require('./dom');
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+var _store = require('./store');
+
+
+ function renderTopBar() {
+  return _dom.tags.header(
+    { class: "topbar" },
+    // 左侧：品牌与会话谱系
+    _dom.tags.div(
+      { class: "tb-left" },
+      _dom.tags.button(
+        {
+          class: "tb-btn tb-icon-btn",
+          title: "Toggle Sidebar (Ctrl+B)",
+          onclick: _store.toggleSidebar,
+        },
+        _dom.tags.svg(
+          { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2" },
+          _dom.tags.path({ d: "M3 3h18v18H3z" }),
+          _dom.tags.path({ d: "M9 3v18" })
+        )
+      ),
+      _dom.tags.div(
+        { class: "tb-brand" },
+        _dom.tags.svg(
+          { class: "tb-logo", viewBox: "0 0 24 18", fill: "currentColor" },
+          _dom.tags.path({
+            d: "M2.4 1.8h17.2a1.7 1.7 0 0 1 0 3.4H10l10 8.2A1.8 1.8 0 0 1 18.65 16.45H3.2a1.7 1.7 0 0 1 0-3.4h9.4L2.7 4.9A1.8 1.8 0 0 1 4.1 1.8z",
+          })
+        ),
+        _dom.tags.span({ class: "tb-title" }, "piz")
+      ),
+      _dom.tags.span({ class: "tb-sep" }, "/"),
+      // 工作区与分支
+      () => {
+        const w = _store.ws.call(void 0, ) || "workspace";
+        const b = _store.branch.call(void 0, );
+        const ch = _store.changesCount.call(void 0, );
+        const branchPart = b ? ` (${b})` : "";
+        const chPart = ch > 0 ? ` · ${ch}Δ` : "";
+        return _dom.tags.span({ class: "tb-ws-badge", title: `Workspace: ${w}${branchPart}` }, `${w}${branchPart}${chPart}`);
+      },
+      _dom.tags.span({ class: "tb-sep" }, "/"),
+      _dom.tags.button(
+        {
+          class: "tb-session-btn",
+          title: "Double click to rename session",
+          ondblclick: () => {
+            const cur = _store.activeSession.call(void 0, );
+            const next = prompt("Rename session:", cur);
+            if (next && next.trim()) _store.renameSession.call(void 0, cur, next.trim());
+          },
+        },
+        () => {
+          const cur = _store.activeSession.call(void 0, );
+          const s = _store.sessions.call(void 0, ).find((x) => x.id === cur);
+          return s ? s.title : cur;
+        }
+      )
+    ),
+
+    // 中间：模式切换胶囊
+    _dom.tags.div(
+      { class: "tb-center" },
+      _dom.tags.div(
+        { class: "mode-pill" },
+        renderModeBtn("yolo", "⚡ YOLO", "Full auto-execution"),
+        renderModeBtn("ask", "🛡 Ask", "Ask before destructive operations"),
+        renderModeBtn("plan", "📋 Plan", "Analysis & plan only, no write")
+      )
+    ),
+
+    // 右侧：模型、Token、Deck 开关、主题
+    _dom.tags.div(
+      { class: "tb-right" },
+      // 搜索/命令面板
+      _dom.tags.button(
+        {
+          class: "tb-btn tb-search-btn",
+          title: "Search / Command Palette (Ctrl+K)",
+          onclick: () => _store.showSearchModal.set(true),
+        },
+        _dom.tags.span({ class: "search-icon" }, "⌕"),
+        _dom.tags.span({ class: "search-key" }, "⌘K")
+      ),
+      // 模型下拉
+      _dom.tags.div(
+        { class: "model-selector-wrap" },
+        _dom.tags.select(
+          {
+            class: "model-select",
+            value: () => _store.model.call(void 0, ),
+            onchange: (e) => {
+              const target = e.target ;
+              if (target.value) _store.switchModel.call(void 0, target.value);
+            },
+          },
+          () => {
+            const list = _store.models.call(void 0, );
+            const cur = _store.model.call(void 0, );
+            const opts = list.map((m) =>
+              _dom.tags.option({ value: m, selected: m === cur }, m)
+            );
+            if (cur && !list.includes(cur)) {
+              opts.unshift(_dom.tags.option({ value: cur, selected: true }, cur));
+            }
+            return opts;
+          }
+        )
+      ),
+      // Token 使用率胶囊
+      _dom.tags.div(
+        {
+          class: "token-pill",
+          title: "Context Window Usage",
+        },
+        _dom.tags.span({ class: "token-dot" }),
+        () => `${_store.pct.call(void 0, )}% ctx`
+      ),
+      // 工作台 Deck 切换按钮
+      _dom.tags.button(
+        {
+          class: () => `tb-btn tb-deck-btn ${_store.deckOpen.call(void 0, ) ? "is-active" : ""}`,
+          title: "Toggle Workspace Deck (Diffs/Terminal/Jobs)",
+          onclick: _store.toggleDeck,
+        },
+        _dom.tags.svg(
+          { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2" },
+          _dom.tags.path({ d: "M3 3h18v18H3z" }),
+          _dom.tags.path({ d: "M15 3v18" })
+        ),
+        _dom.tags.span({ class: "tb-deck-label" }, "Deck")
+      ),
+      // 主题切换
+      _dom.tags.button(
+        {
+          class: "tb-btn tb-icon-btn",
+          title: "Toggle Theme",
+          onclick: _store.toggleTheme,
+        },
+        () => (_store.theme.call(void 0, ) === "dark" ? "☀" : "🌙")
+      ),
+      // 设置按钮
+      _dom.tags.button(
+        {
+          class: "tb-btn tb-icon-btn",
+          title: "Settings",
+          onclick: () => _store.showSettingsModal.set(true),
+        },
+        "⚙"
+      ),
+      // 网络状态指示灯
+      _dom.tags.span({
+        class: () => `status-indicator ${_store.connectionStatus.call(void 0, )}`,
+        title: () => `Connection: ${_store.connectionStatus.call(void 0, )}`,
+      })
+    )
+  );
+} exports.renderTopBar = renderTopBar;
+
+function renderModeBtn(m, label, title) {
+  return _dom.tags.button(
+    {
+      class: () => `mode-btn ${_store.mode.call(void 0, ) === m ? "is-active" : ""}`,
+      title,
+      onclick: () => _store.switchMode.call(void 0, m),
+    },
+    label
+  );
+}
+
+};
+__modules["sidebar"] = function(module, exports, require) {
+"use strict";Object.defineProperty(exports, "__esModule", {value: true});// sidebar.ts —— 侧边会话抽屉与多会话管理
+var _dom = require('./dom');
+
+
+
+
+
+
+
+
+var _store = require('./store');
+var _signal = require('./signal');
+
+
+ function renderSidebar() {
+  const searchQuery = _signal.signal("");
+
+  const filteredSessions = () => {
+    const q = searchQuery().toLowerCase().trim();
+    const list = _store.sessions.call(void 0, );
+    if (!q) return list;
+    return list.filter((s) => (s.title || s.name).toLowerCase().includes(q));
+  };
+
+  return _dom.tags.aside(
+    {
+      class: () => `sidebar ${_store.sidebarOpen.call(void 0, ) ? "is-open" : "is-collapsed"}`,
+    },
+    // 侧栏顶操作
+    _dom.tags.div(
+      { class: "sidebar-hdr" },
+      _dom.tags.button(
+        {
+          class: "new-session-btn",
+          onclick: _store.createSession,
+        },
+        _dom.tags.span({ class: "btn-icon" }, "＋"),
+        _dom.tags.span({ class: "btn-text" }, "New Session")
+      )
+    ),
+
+    // 搜索框
+    _dom.tags.div(
+      { class: "sidebar-search-box" },
+      _dom.tags.input({
+        class: "sidebar-search-input",
+        placeholder: "Filter sessions...",
+        value: () => searchQuery(),
+        oninput: (e) => {
+          searchQuery.set((e.target ).value);
+        },
+      })
+    ),
+
+    // 会话列表
+    _dom.tags.div(
+      { class: "sidebar-list" },
+      _dom.each.call(void 0, filteredSessions, (item) => {
+        const isCurrent = () => _store.activeSession.call(void 0, ) === item.id;
+
+        return _dom.tags.div(
+          {
+            class: () => `session-item ${isCurrent() ? "is-active" : ""}`,
+            onclick: () => _store.switchSession.call(void 0, item.id),
+          },
+          _dom.tags.div(
+            { class: "session-item-body" },
+            _dom.tags.div({ class: "session-title" }, item.title || item.name),
+            _dom.tags.div(
+              { class: "session-meta" },
+              _dom.tags.span({ class: "session-badge" }, `${item.messageCount} msgs`),
+              _dom.tags.span({ class: "session-time" }, formatRelativeTime(item.updatedAt))
+            )
+          ),
+          // 悬浮操作
+          _dom.tags.div(
+            { class: "session-actions", onclick: (e) => e.stopPropagation() },
+            _dom.tags.button(
+              {
+                class: "session-act-btn",
+                title: "Rename",
+                onclick: () => {
+                  const val = prompt("Rename session:", item.title || item.name);
+                  if (val && val.trim()) _store.renameSession.call(void 0, item.id, val.trim());
+                },
+              },
+              "✎"
+            ),
+            _dom.tags.button(
+              {
+                class: "session-act-btn session-del-btn",
+                title: "Delete",
+                onclick: () => {
+                  if (confirm(`Delete session "${item.title || item.name}"?`)) {
+                    _store.deleteSession.call(void 0, item.id);
+                  }
+                },
+              },
+              "🗑"
+            )
+          )
+        );
+      })
+    ),
+
+    // 侧栏底端状态
+    _dom.tags.div(
+      { class: "sidebar-footer" },
+      _dom.tags.span({ class: "sidebar-info" }, () => `${_store.sessions.call(void 0, ).length} sessions`)
+    )
+  );
+} exports.renderSidebar = renderSidebar;
+
+function formatRelativeTime(ts) {
+  if (!ts) return "";
+  const sec = Math.max(1, Math.floor((Date.now() - ts) / 1000));
+  if (sec < 60) return `${sec}s ago`;
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  const days = Math.floor(hr / 24);
+  return `${days}d ago`;
+}
+
+};
+__modules["md"] = function(module, exports, require) {
+"use strict";Object.defineProperty(exports, "__esModule", {value: true});// md.ts —— 极速安全 Markdown 渲染器 (Fail-closed 防 XSS，流式容错)
+
+function escapeHtml(s) {
+  return s
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;"); exports.esc = esc;
- function histText(v) {
-  if (typeof v === "string") return v;
-  if (Array.isArray(v)) {
-    try {
-      return new TextDecoder("utf-8").decode(Uint8Array.from(v));
-    } catch (e) {
-      return "";
-    }
-  }
-  return v == null ? "" : String(v);
-} exports.histText = histText;
-
- function projectName(root) {
-  if (!root) return "";
-  const parts = String(root).replace(/\/+$/, "").split("/");
-  return parts[parts.length - 1] || root;
-} exports.projectName = projectName;
-
- function fmtTime(ts) {
-  if (!ts) return "";
-  const d = new Date(ts),
-    now = new Date();
-  if (d.toDateString() === now.toDateString())
-    return d.toTimeString().slice(0, 5);
-  const y = new Date(now);
-  y.setDate(y.getDate() - 1);
-  if (d.toDateString() === y.toDateString()) return "昨天";
-  return d.getMonth() + 1 + "月" + d.getDate() + "日";
-} exports.fmtTime = fmtTime;
-
- function fmtTok(n) {
-  n = +n || 0;
-  if (n >= 1e6) return (n / 1e6).toFixed(n % 1e6 ? 1 : 0) + "M";
-  if (n >= 1000) return (n / 1000).toFixed(n % 1000 ? 1 : 0) + "k";
-  return String(Math.round(n));
-} exports.fmtTok = fmtTok;
-
- function closeFences(s) {
-  const n = (s.match(/```/g) || []).length;
-  return n % 2 ? s + "\n```" : s;
-} exports.closeFences = closeFences;
-
- function nunit(n, one, many) {
-  const w = n === 1 ? one : many || one + "s";
-  return n + " " + w;
-} exports.nunit = nunit;
-
- function downloadText(name, text, mime) {
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(new Blob([text], { type: mime || "text/plain" }));
-  a.download = name;
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
-} exports.downloadText = downloadText;
-
-// ---- 工具分类/图标/参数 ----
- function toolType(n) {
-  if (/^(bash|exec|sh|git|cmd|powershell)$/.test(n)) return "term";
-  if (/^(edit|write|apply_patch)$/.test(n)) return "diff";
-  if (/^(read|skill|show)$/.test(n)) return "code";
-  if (/^todo_/.test(n)) return "todo";
-  if (/^(task|workflow|spawn_agent|wait_agent|send_agent|read_agent|close_agent|list_agents)$/.test(n))
-    return "agent";
-  return "sum";
-} exports.toolType = toolType;
- function parseToolArgs(raw) {
-  if (!raw) return {};
-  if (typeof raw === "object") return raw;
-  try {
-    const o = JSON.parse(raw);
-    return o && typeof o === "object" ? o : {};
-  } catch (e2) {
-    return {};
-  }
-} exports.parseToolArgs = parseToolArgs;
- function argsPreview(raw) {
-  const o = parseToolArgs(raw);
-  const s = o.command || o.path || o.pattern || o.query || raw || "";
-  return String(s).slice(0, 140);
-} exports.argsPreview = argsPreview;
- function toolIcon(n) {
-  if (/^(edit|write|apply_patch)$/.test(n)) return "✎";
-  if (/^(read|skill|show)$/.test(n)) return "≡";
-  if (n === "bash" || n === "exec") return "$";
-  return "⚙";
-} exports.toolIcon = toolIcon;
- function artifactName(out) {
-  const m = /\[Artifact stored: ([^\]\n]+?) \((\d+) bytes\)\]/.exec(out || "");
-  if (!m) return null;
-  const base = m[1].split(/[/\\]/).pop() || "";
-  return /^[\w.-]+$/.test(base) ? base : null;
-} exports.artifactName = artifactName;
- function workKind(name) {
-  const n = String(name || "");
-  if (n === "read" || n === "read_image") return "read";
-  if (/^(grep|find|ls)$/.test(n)) return "search";
-  if (/^(edit|write|multi_edit|apply_patch)$/.test(n)) return "edit";
-  if (n === "bash" || n === "exec") return "bash";
-  if (/^(web_search|fetch_url|webfetch|web_fetch|search_web|browse)$/.test(n) || /web/i.test(n))
-    return "web";
-  if (/^mcp/i.test(n) || /mcp/i.test(n)) return "mcp";
-  if (/^todo_/.test(n)) return "todo";
-  if (/^(task|workflow|spawn_agent|wait_agent|send_agent|read_agent|close_agent|list_agents)$/.test(n))
-    return "agent";
-  return "other";
-} exports.workKind = workKind;
- function ico(kind) {
-  const p = {
-    think:
-      '<circle cx="8" cy="6.5" r="4"/><path d="M6 11.2h4M6.4 13h3.2M8 2.2v-1M3.2 6.5h-1M13.8 6.5h1"/>',
-    read: '<path d="M3 2.6h6.6L13 6v7.4H3z"/><path d="M9.4 2.6V6H13"/>',
-    search: '<circle cx="7" cy="7" r="4"/><path d="M10.1 10.1L14 14"/>',
-    bash: '<rect x="2.4" y="3.2" width="11.2" height="9.6" rx="1.2"/><path d="M5 6.4l2 1.6-2 1.6M8.4 10.2h3"/>',
-    edit: '<path d="M9.2 2.8l4 4L6 14H2v-4z"/>',
-    web: '<circle cx="8" cy="8" r="5.6"/><path d="M2.4 8h11.2M8 2.4c2 2.4 2 8.8 0 11.2M8 2.4c-2 2.4-2 8.8 0 11.2"/>',
-    mcp: '<path d="M6 3.2h4v2.6h2.8v4H10v2.8H6v-2.8H3.2v-4H6z"/>',
-    todo: '<rect x="3" y="3" width="10" height="10" rx="2"/><path d="M5.4 8.1l1.8 1.8 3.5-3.7"/>',
-    agent: '<circle cx="8" cy="5.6" r="2.3"/><path d="M3.4 13c.5-2.3 2.3-3.5 4.6-3.5s4.1 1.2 4.6 3.5"/>',
-    tool: '<path d="M10.2 2.6l3.2 3.2-2 1-2.4 2.4-1.6-1.6 2.4-2.4zM3 13l4-4"/>',
-  };
-  return (
-    '<svg class="ico" viewBox="0 0 16 16" aria-hidden="true">' +
-    (p[kind] || p.tool) +
-    "</svg>"
-  );
-} exports.ico = ico;
- function icoKind(name) {
-  const k = workKind(name);
-  return k === "other" ? "tool" : k;
-} exports.icoKind = icoKind;
-
-// ---- 斜杠补全打分(模糊子序列) ----
- function slashStem(cmd) {
-  const s = cmd[0] === "/" ? cmd.slice(1) : cmd;
-  const i = s.indexOf(" ");
-  return i < 0 ? s : s.slice(0, i);
-} exports.slashStem = slashStem;
- function startsWithInsens(hay, needle) {
-  return hay.slice(0, needle.length).toLowerCase() === needle.toLowerCase();
-} exports.startsWithInsens = startsWithInsens;
- function indexOfInsens(hay, needle) {
-  return hay.toLowerCase().indexOf(needle.toLowerCase());
-} exports.indexOfInsens = indexOfInsens;
- function fuzzySubseq(hay, needle) {
-  if (!needle) return { from: 0, to: 0 };
-  let i = 0,
-    first = -1,
-    last = 0;
-  const n = needle.toLowerCase();
-  const h = hay.toLowerCase();
-  for (let hi = 0; hi < h.length; hi++) {
-    if (i < n.length && h[hi] === n[i]) {
-      if (first < 0) first = hi;
-      last = hi + 1;
-      i++;
-    }
-  }
-  return i === n.length ? { from: first, to: last } : null;
-} exports.fuzzySubseq = fuzzySubseq;
- function rankSlash(items, query) {
-  if (!query) return items.map((it) => ({ it, kind: 0, hlFrom: 0, hlLen: 0, score: 0 }));
-  const out = [];
-  for (const it of items) {
-    const name = slashStem(it.name);
-    if (startsWithInsens(name, query)) {
-      out.push({
-        it,
-        kind: 0,
-        hlFrom: 0,
-        hlLen: query.length,
-        score: 2000 + (name.length === query.length ? 1000 : 0) - Math.min(name.length, 500),
-      });
-      continue;
-    }
-    const span = fuzzySubseq(name, query);
-    if (span) {
-      out.push({
-        it,
-        kind: 1,
-        hlFrom: span.from,
-        hlLen: span.to - span.from,
-        score: 1000 - Math.min(span.to - span.from, 500),
-      });
-      continue;
-    }
-    const at = indexOfInsens(it.desc, query);
-    if (at >= 0) out.push({ it, kind: 2, hlFrom: at, hlLen: query.length, score: 100 });
-  }
-  out.sort((a, b) => a.kind - b.kind || b.score - a.score);
-  return out;
-} exports.rankSlash = rankSlash;
- function hlSpan(s, from, len) {
-  if (!len) return exports.esc.call(void 0, s);
-  return (
-    exports.esc.call(void 0, s.slice(0, from)) +
-    "<mark>" +
-    exports.esc.call(void 0, s.slice(from, from + len)) +
-    "</mark>" +
-    exports.esc.call(void 0, s.slice(from + len))
-  );
-} exports.hlSpan = hlSpan;
-
- function isMarkdownPath(p) {
-  return /\.(md|markdown|mdx)$/i.test(p || "");
-} exports.isMarkdownPath = isMarkdownPath;
- function looksLikeMd(t) {
-  if (!t || t.length < 8) return false;
-  return /^#{1,3}\s/m.test(t) || /```/.test(t) || /^\s*[-*]\s+\S/m.test(t);
-} exports.looksLikeMd = looksLikeMd;
-
-};
-__modules["bus"] = function(module, exports, require) {
-"use strict";Object.defineProperty(exports, "__esModule", {value: true}); function _optionalChain(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }// bus.ts —— 统一强类型事件总线 (Typed Event Bus)
-// 彻底解耦模块间动作分发，根除 *H 钩袋、手工接线板与循环依赖。
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-const listeners = new Map();
-
- function on(event, handler) {
-  let set = listeners.get(event);
-  if (!set) {
-    set = new Set();
-    listeners.set(event, set);
-  }
-  set.add(handler);
-  return () => {
-    _optionalChain([set, 'optionalAccess', _ => _.delete, 'call', _2 => _2(handler)]);
-  };
-} exports.on = on;
-
- function emit(
-  event,
-  ...args
-) {
-  const set = listeners.get(event);
-  if (set) {
-    for (const h of set) {
-      try {
-        h(args[0]);
-      } catch (err) {
-        console.error(`[piz bus] Error handling "${event}":`, err);
-      }
-    }
-  }
-} exports.emit = emit;
-
-};
-__modules["net"] = function(module, exports, require) {
-"use strict";Object.defineProperty(exports, "__esModule", {value: true}); function _optionalChain(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }// net.ts —— 服务器凭证 + fetch 全局包装(带 Bearer,401 → 登录页)。
-// 自 webui.js 切出;原 closure 变量 credential 改为模块私有,经 accessor 进出。
-// 登录成功后的 boot 续跑由 main 经 setOnAuthed 注入(解循环)。
-var _util = require('./util');
-var _state = require('./state');
-var _bus = require('./bus');
-
-const AUTH_KEY = "piz-web.credential";
-let credential = undefined;
-
- function readFragmentToken() {
-  const hash = location.hash || "";
-  if (!hash.startsWith("#")) return undefined;
-  const params = new URLSearchParams(hash.slice(1));
-  const token = params.get("token");
-  if (!token) return undefined;
-  const url = new URL(location.href);
-  url.hash = "";
-  history.replaceState(history.state, "", url.pathname + url.search);
-  return token;
-} exports.readFragmentToken = readFragmentToken;
- function initServerAuth() {
-  const frag = readFragmentToken();
-  if (frag) { setCredential(frag); return true; }
-  try {
-    const stored = sessionStorage.getItem(AUTH_KEY);
-    if (stored) { credential = stored; return true; }
-  } catch (e2) {}
-  return false;
-} exports.initServerAuth = initServerAuth;
- function setCredential(v) {
-  credential = v;
-  try { sessionStorage.setItem(AUTH_KEY, v); } catch (e3) {}
-} exports.setCredential = setCredential;
- function clearCredential() {
-  credential = undefined;
-  try { sessionStorage.removeItem(AUTH_KEY); } catch (e4) {}
-} exports.clearCredential = clearCredential;
- const getCredential = () => credential; exports.getCredential = getCredential;
- function showAuthPage(msg) {
-  _optionalChain([_util.$.call(void 0, "splash"), 'optionalAccess', _ => _.classList, 'access', _2 => _2.add, 'call', _3 => _3("hide")]);
-  _optionalChain([_util.$.call(void 0, "authPage"), 'optionalAccess', _4 => _4.classList, 'access', _5 => _5.add, 'call', _6 => _6("show")]);
-  if (msg) _util.$.call(void 0, "authErr").textContent = msg;
-  const inp = _util.$.call(void 0, "authTok") ;
-  if (inp) { inp.disabled = false; inp.focus(); }
-  const btn = _util.$.call(void 0, "authBtn") ;
-  if (btn) btn.disabled = true;
-} exports.showAuthPage = showAuthPage;
- function hideAuthPage() {
-  _optionalChain([_util.$.call(void 0, "authPage"), 'optionalAccess', _7 => _7.classList, 'access', _8 => _8.remove, 'call', _9 => _9("show")]);
-  _util.$.call(void 0, "authErr").textContent = "";
-} exports.hideAuthPage = hideAuthPage;
-
-// fetch 全局包装:带 Bearer + 401 → 登录页(kimi http.ts 等价)
- const rawFetch = window.fetch.bind(window); exports.rawFetch = rawFetch;
-window.fetch = (url, opts = {}) => {
-  opts = Object.assign({}, opts);
-  opts.headers = Object.assign({}, opts.headers || {});
-  if (credential) opts.headers["Authorization"] = "Bearer " + credential;
-  return exports.rawFetch.call(void 0, url, opts).then((res) => {
-    if (res.status === 401 && !opts.headers["X-Skip-Auth"]) {
-      clearCredential();
-      showAuthPage("凭证无效或已过期,请重新输入");
-    }
-    return res;
-  });
-};
-
-// 登录成功续跑 (向事件总线广播 auth:success)
- function setOnAuthed(f) { _bus.on.call(void 0, "auth:success", f); } exports.setOnAuthed = setOnAuthed;
-
-// 登录提交
-const authInp = _util.$.call(void 0, "authTok") ;
-authInp.addEventListener("input", () => {
-  (_util.$.call(void 0, "authBtn") ).disabled = !authInp.value.trim();
-});
-authInp.addEventListener("keydown", (e) => {
-  if (e.key === "Enter" && authInp.value.trim() && !(_util.$.call(void 0, "authBtn") ).disabled)
-    submitAuth();
-});
- async function submitAuth() {
-  const v = authInp.value.trim();
-  if (!v) return;
-  (_util.$.call(void 0, "authBtn") ).disabled = true;
-  authInp.disabled = true;
-  setCredential(v);
-  try {
-    const r = await exports.rawFetch.call(void 0, "/api/state?" + _state.wsp + "session=" + encodeURIComponent(_state.sess), {
-      headers: { Authorization: "Bearer " + v, "X-Skip-Auth": "1" },
-    });
-    if (r.ok) {
-      hideAuthPage();
-      _bus.emit.call(void 0, "auth:success");
-    } else {
-      clearCredential();
-      _util.$.call(void 0, "authErr").textContent = "连接失败,请检查 token";
-      authInp.disabled = false;
-      authInp.focus();
-      (_util.$.call(void 0, "authBtn") ).disabled = false;
-    }
-  } catch (e) {
-    clearCredential();
-    _util.$.call(void 0, "authErr").textContent = "无法连接服务器";
-    authInp.disabled = false;
-    (_util.$.call(void 0, "authBtn") ).disabled = false;
-  }
-} exports.submitAuth = submitAuth;
-(_util.$.call(void 0, "authBtn") ).onclick = submitAuth;
-
-};
-__modules["i18n"] = function(module, exports, require) {
-"use strict";Object.defineProperty(exports, "__esModule", {value: true});// i18n.ts —— WebUI 国际化多语言支持。默认英文 (en)，支持中文 (zh)。
-// 术语严格保持英文 (Token, Tokens, Session, Model, Provider, Sandbox, Context, MCP, Git, Diff, Workflow)。
-var _state = require('./state');
-
-
-
-const en = {
-  // Brand & connection
-  connecting: "Connecting to local server...",
-  authTitle: "Credentials Required",
-  authDesc: "This server is protected. Enter the token printed at startup (or configured via --token).",
-  connect: "Connect",
-  cantConnect: "Cannot connect to local server. Please ensure piz web is running.",
-
-  // Sidebar
-  collapseSidebar: "Collapse sidebar",
-  expandSidebar: "Expand sidebar",
-  searchSessions: "Search sessions...",
-  newSession: "New session",
-  settings: "Settings",
-
-  // Topbar
-  switchWorkspace: "Switch workspace",
-  session: "Session",
-  sessionActions: "Session actions",
-  rename: "Rename",
-  backgroundTasks: "Background tasks (j)",
-  scrollToBottom: "Scroll to bottom",
-
-  // Queue
-  queued: "Queued",
-  sendWhenReady: "Send when ready",
-  clear: "Clear",
-
-  // Composer
-  inputPlaceholder: "Message · / command · @./file · !command · Enter to send",
-  permMode: "Approval mode",
-  sandboxMode: "Bash sandbox",
-  slashCommandsTitle: "/ commands",
-  switchModel: "Switch model",
-  thinkingLevel: "Thinking level",
-  contextFull: "Context full",
-  send: "Send",
-  stop: "Stop",
-  sendMore: "Send more",
-  sendMorePh: "Send more…",
-
-  // Hero / Welcome
-  workspace: "Workspace",
-  startSession: "＋ Start session",
-  sugWhatProject: "What does this project do?",
-  sugRunTests: "Run tests for me",
-  sugRecentChanges: "What changed recently?",
-  heroHint: "Read, edit, run. Full control.",
-  keyCommands: "Commands",
-  keyJobs: "Jobs",
-  keyUsage: "Usage",
-  keySandbox: "Sandbox",
-  keyShortcuts: "Shortcuts",
-
-  // Menus & Actions
-  copyReply: "⧉ Copy last reply",
-  undoTurn: "↶ Undo turn",
-  renameSession: "✎ Rename session",
-  forkSession: "✱ Fork session",
-  exportHtml: "⎘ Export HTML",
-  dumpAll: "📋 Dump all",
-  tree: "☰ Message list",
-  plan: "✎ Plan",
-  planGoal: "Plan goal",
-  whatToAccomplish: "What to accomplish",
-  compactContext: "⚡ Compact context",
-  archiveSession: "🗄 Archive session",
-  deleteSession: "🗑 Delete session",
-  confirmDeleteSession: "Confirm delete this session?",
-  sessionTitle: "Session title",
-  defaultSession: "Default session",
-  statusAnswer: "Answer",
-  statusApproval: "Approval",
-  statusAborted: "Aborted",
-  renamed: "Renamed",
-  failed: "Failed",
-  forked: "Forked ",
-  forkHint: "New session name, empty for auto",
-  archive: "Archive",
-  archived: "Archived",
-  delete: "Delete",
-  deleteForever: "Delete forever",
-  restore: "Restore",
-  restored: "Restored ",
-  noMatchingSessions: "No matching sessions",
-  noSessionsHint: "No sessions yet. Send a message to start.",
-  addProject: "Add project",
-  currentDir: "Current directory",
-
-  // Settings
-  tabAuth: "Providers & Keys",
-  tabLook: "Appearance",
-  tabAgent: "Agent & Sandbox",
-  tabNote: "Notifications",
-  tabAbout: "About",
-  language: "Language",
-  scheme: "Color scheme",
-  schemeLight: "Light",
-  schemeDark: "Dark",
-  schemeSystem: "System",
-  accent: "Accent color",
-  accentMono: "Mono",
-  accentBlue: "Blue",
-  accentGreen: "Green",
-  accentAmber: "Amber",
-  density: "Density",
-  densityCozy: "Cozy",
-  densityCompact: "Compact",
-  wideScreen: "Wide screen",
-  wideScreenHint: "Widen chat column",
-  wideNarrow: "Standard",
-  wideWide: "Wide",
-  fontSize: "UI font size",
-  sessModel: "Session model",
-  selectModel: "Select model",
-  sessAppr: "Session approval",
-  defAppr: "Default approval",
-  sandbox: "Bash sandbox",
-  sandboxHint: "workspace: writable workspace; strict: no network",
-  defModel: "Default model",
-  defModelHint: "Used for new sessions",
-  notifyDone: "Notify on completion",
-  notifyDoneHint: "Browser system notification",
-  soundDone: "Sound on completion",
-  aboutConfigHint: "Config files located in ~/.piz/",
-  shortcutsHint: "Shortcuts",
-  builtinProvidersHint: "Built-in providers. Paste API key and save. Green dot = configured.",
-  configured: "Configured",
-  notConfigured: "Not configured",
-  replaceApiKey: "Replace API key",
-  pasteApiKey: "Paste API key",
-  save: "Save",
-  saved: "Saved ",
-  saveFail: "Save failed",
-  packages: "Packages",
-  plugins: "Plugins",
-  pluginHint: "task-delegation enables workflow / subagents. Takes effect next turn.",
-  ok: "OK",
-  cancel: "Cancel",
-  close: "Close",
-  noContent: "No content",
-
-  // Status & Toasts
-  copied: "Copied",
-  copyFailed: "Failed to copy",
-  undone: "Undone",
-  noUndo: "Nothing to undo",
-  compressing: "Compressing context...",
-  compressedOk: "Context compressed",
-  compressedFail: "Compression failed",
-  modelSwitchFail: "Failed to switch model",
-  thinkSwitchFail: "Failed to switch thinking level",
-  permSwitchFail: "Failed to switch approval mode",
-  sandboxSwitchFail: "Failed to switch sandbox",
-  statusLoadFail: "Failed to load state",
-  configLoadFail: "Failed to load config",
-  modelsLoadFail: "Failed to load models",
-  sessionsLoadFail: "Failed to load sessions",
-  actionFail: "Action failed",
-  setTitleFail: "Failed to set title",
-  working: "Working...",
-  done: "Done",
-  noModels: "No models available",
-  activeTasks: "Active tasks",
-  taskHistory: "Task history",
-  noTasks: "No background tasks",
-  kill: "Kill",
-  killed: "Killed",
-  killFailed: "Failed to kill",
-  expandMore: "Expand ▾",
-  foldLess: "Collapse ▴",
-  permRequired: "Permission Required",
-  awaitingApproval: "Awaiting approval",
-  allow: "Allow",
-  alwaysSession: "Always in session",
-  deny: "Deny",
-  apprFailed: "Approval failed",
-  contextCompressed: "Context compressed",
-  type: "Type",
-  timeout: "Timeout",
-  dataTransfer: "Data transfer",
-  round: "Attempt",
-  details: "Details",
-  clickDetails: "Click to view details",
-  subagent: "subagent",
-  subagents: "subagents",
-  cache: "Cache ",
-  context: "Context ",
-  copy: "Copy",
-  undo: "Undo",
-  regenerate: "Regenerate",
-  running: "Running...",
-  noOutput: "No output",
-  thinking: "Thinking",
-  thinkingActive: "Thinking...",
-  thoughtFor: "Thought for ",
-  tool: "Tool",
-  completed: "Completed",
-  disconnectedReconnecting: "Disconnected, reconnecting...",
-  retryNoInput: "No input to retry",
-  copiedLastReply: "Copied last reply",
-  noReplyYet: "No reply yet",
-};
-
-const zh = {
-  // Brand & connection
-  connecting: "正在连接本地服务器…",
-  authTitle: "需要凭证",
-  authDesc: "此服务器受保护。输入启动时打印的 Token（或 --token 设置的值）。",
-  connect: "连接",
-  cantConnect: "无法连接本地服务器，请确认 piz web 已启动。",
-
-  // Sidebar
-  collapseSidebar: "折叠侧栏",
-  expandSidebar: "展开侧栏",
-  searchSessions: "搜索 Session…",
-  newSession: "新建 Session",
-  settings: "设置",
-
-  // Topbar
-  switchWorkspace: "切换项目",
-  session: "Session",
-  sessionActions: "Session 操作",
-  rename: "重命名",
-  backgroundTasks: "后台任务 (j)",
-  scrollToBottom: "回到底部",
-
-  // Queue
-  queued: "待发",
-  sendWhenReady: "轮到就发",
-  clear: "清空",
-
-  // Composer
-  inputPlaceholder: "消息 · / 命令 · @./文件 · !命令 · Enter 发送",
-  permMode: "授权模式",
-  sandboxMode: "Bash Sandbox",
-  slashCommandsTitle: "/ 命令",
-  switchModel: "切换 Model",
-  thinkingLevel: "Thinking 等级",
-  contextFull: "Context 已满",
-  send: "发送",
-  stop: "停止",
-  sendMore: "接着发",
-  sendMorePh: "接着发…",
-
-  // Hero / Welcome
-  workspace: "项目",
-  startSession: "＋ Start Session",
-  sugWhatProject: "这个项目是做什么的?",
-  sugRunTests: "帮我跑一下测试",
-  sugRecentChanges: "最近改了什么?",
-  heroHint: "读、改、跑。全权受控。",
-  keyCommands: "Commands",
-  keyJobs: "Jobs",
-  keyUsage: "Token 用量",
-  keySandbox: "Sandbox",
-  keyShortcuts: "快捷键",
-
-  // Menus & Actions
-  copyReply: "⧉ 复制最后回复",
-  undoTurn: "↶ 撤销此轮",
-  renameSession: "✎ 重命名 Session",
-  forkSession: "✱ 派生 Session",
-  exportHtml: "⎘ 导出 HTML",
-  dumpAll: "📋 导出全部消息",
-  tree: "☰ 消息列表",
-  plan: "✎ Plan 计划",
-  planGoal: "Plan 目标",
-  whatToAccomplish: "要完成什么",
-  compactContext: "⚡ 压缩 Context",
-  archiveSession: "🗄 归档 Session",
-  deleteSession: "🗑 删除 Session",
-  confirmDeleteSession: "确认删除该 Session？",
-  sessionTitle: "Session 标题",
-  defaultSession: "默认 Session",
-  statusAnswer: "回答",
-  statusApproval: "审批",
-  statusAborted: "中止",
-  renamed: "已重命名",
-  failed: "失败",
-  forked: "已派生 ",
-  forkHint: "新 Session 名，留空自动",
-  archive: "归档",
-  archived: "已归档",
-  delete: "删除",
-  deleteForever: "永久删除",
-  restore: "恢复",
-  restored: "已恢复 ",
-  noMatchingSessions: "无匹配 Session",
-  noSessionsHint: "还没有 Session，发一条消息开始",
-  addProject: "添加项目",
-  currentDir: "当前目录",
-
-  // Settings
-  tabAuth: "Provider & Key",
-  tabLook: "外观",
-  tabAgent: "Agent & Sandbox",
-  tabNote: "通知",
-  tabAbout: "关于",
-  language: "语言",
-  scheme: "配色方案",
-  schemeLight: "浅色",
-  schemeDark: "深色",
-  schemeSystem: "跟随系统",
-  accent: "强调色",
-  accentMono: "墨",
-  accentBlue: "蓝",
-  accentGreen: "苔",
-  accentAmber: "赭",
-  density: "排版密度",
-  densityCozy: "舒适",
-  densityCompact: "紧凑",
-  wideScreen: "宽屏显示",
-  wideScreenHint: "加宽主对话列",
-  wideNarrow: "标准",
-  wideWide: "宽屏",
-  fontSize: "界面字号",
-  sessModel: "当前 Session Model",
-  selectModel: "选择 Model",
-  sessAppr: "Session 授权",
-  defAppr: "默认授权",
-  sandbox: "Bash Sandbox",
-  sandboxHint: "workspace: 工作区可写；strict: 严禁网络",
-  defModel: "默认 Model",
-  defModelHint: "新建 Session 时生效",
-  notifyDone: "执行完成通知",
-  notifyDoneHint: "浏览器系统通知",
-  soundDone: "完成提示音",
-  aboutConfigHint: "配置持久化于 ~/.piz/",
-  shortcutsHint: "快捷键",
-  builtinProvidersHint: "内置 Provider，粘贴 API key 保存即用。绿点 = 已配置。",
-  configured: "已配置",
-  notConfigured: "未配置",
-  replaceApiKey: "替换 API key",
-  pasteApiKey: "粘贴 API key",
-  save: "保存",
-  saved: "已保存 ",
-  saveFail: "保存失败",
-  packages: "Packages 资源包",
-  plugins: "Plugins 插件",
-  pluginHint: "task-delegation 启用 Workflow / Subagent。开关后下一轮生效。",
-  ok: "确定",
-  cancel: "取消",
-  close: "关闭",
-  noContent: "没有内容",
-
-  // Status & Toasts
-  copied: "已复制",
-  copyFailed: "复制失败",
-  undone: "已撤销",
-  noUndo: "无可撤销",
-  compressing: "正在压缩 Context…",
-  compressedOk: "Context 压缩完成",
-  compressedFail: "压缩失败",
-  modelSwitchFail: "切换 Model 失败",
-  thinkSwitchFail: "切换 Thinking 等级失败",
-  permSwitchFail: "切换授权模式失败",
-  sandboxSwitchFail: "切换 Sandbox 失败",
-  statusLoadFail: "状态加载失败",
-  configLoadFail: "配置加载失败",
-  modelsLoadFail: "Model 列表加载失败",
-  sessionsLoadFail: "Session 加载失败",
-  actionFail: "操作失败",
-  setTitleFail: "设置标题失败",
-  working: "正在工作…",
-  done: "已完成",
-  noModels: "无可用 Model",
-  activeTasks: "活跃任务",
-  taskHistory: "历史任务",
-  noTasks: "无后台任务",
-  kill: "终止",
-  killed: "已终止",
-  killFailed: "终止失败",
-  expandMore: "展开 ▾",
-  foldLess: "收起 ▴",
-  permRequired: "需要许可",
-  awaitingApproval: "等待审批",
-  allow: "允许",
-  alwaysSession: "本 Session 总是",
-  deny: "拒绝",
-  apprFailed: "审批失败",
-  contextCompressed: "Context 已压缩",
-  type: "类型",
-  timeout: "超时限制",
-  dataTransfer: "传输数据",
-  round: "执行轮次",
-  details: "详细内容",
-  clickDetails: "点击查看详情",
-  subagent: "Subagent",
-  subagents: "Subagents",
-  cache: "Cache ",
-  context: "Context ",
-  copy: "复制",
-  undo: "撤销",
-  regenerate: "重新生成",
-  running: "正在运行…",
-  noOutput: "暂无输出",
-  thinking: "思考",
-  thinkingActive: "思考中",
-  thoughtFor: "思考 ",
-  tool: "工具",
-  completed: "已完成",
-  disconnectedReconnecting: "连接断开，重连中…",
-  retryNoInput: "没有可重发的输入",
-  copiedLastReply: "已复制最后回复",
-  noReplyYet: "还没有回复",
-};
-
-const dicts = { en, zh };
-const listeners = [];
-
- function getLang() {
-  try {
-    const saved = localStorage.getItem("piz.lang") || _state.prefs.lang;
-    if (saved === "zh") return "zh";
-  } catch (e) {}
-  return "en";
-} exports.getLang = getLang;
-
- function t(key, fallback) {
-  const lang = getLang();
-  const d = dicts[lang] || en;
-  if (d[key] !== undefined) return d[key];
-  if (en[key] !== undefined) return en[key];
-  return fallback !== undefined ? fallback : key;
-} exports.t = t;
-
- function onLangChange(fn) {
-  listeners.push(fn);
-} exports.onLangChange = onLangChange;
-
- function setLang(lang) {
-  try {
-    localStorage.setItem("piz.lang", lang);
-    _state.prefs.lang = lang;
-    _state.savePrefs.call(void 0, );
-  } catch (e2) {}
-  applyI18n();
-  for (const fn of listeners) {
-    try {
-      fn(lang);
-    } catch (e3) {}
-  }
-} exports.setLang = setLang;
-
- function applyI18n() {
-  const lang = getLang();
-  try {
-    document.documentElement.lang = lang;
-  } catch (e4) {}
-
-  document.querySelectorAll("[data-i18n]").forEach((el) => {
-    const key = el.getAttribute("data-i18n");
-    if (key) el.textContent = t(key);
-  });
-
-  document.querySelectorAll("[data-i18n-title]").forEach((el) => {
-    const key = el.getAttribute("data-i18n-title");
-    if (key) el.setAttribute("title", t(key));
-  });
-
-  document.querySelectorAll("[data-i18n-ph]").forEach((el) => {
-    const key = el.getAttribute("data-i18n-ph");
-    if (key) {
-      const val = t(key);
-      (el ).placeholder = val;
-      (el ).dataset.ph = val;
-    }
-  });
-} exports.applyI18n = applyI18n;
-
-
-};
-__modules["ui"] = function(module, exports, require) {
-"use strict";Object.defineProperty(exports, "__esModule", {value: true});// ui.ts —— toast / 对话框 / seg 与 auth 面板 DOM 绑定。
-var _util = require('./util');
-var _state = require('./state');
-var _i18n = require('./i18n');
-var _bus = require('./bus');
-
-// ---- toast ----
-const toastEl = _util.$.call(void 0, "toast");
-let toastT = null;
- function showToast(t) {
-  toastEl.textContent = t;
-  toastEl.classList.add("show");
-  clearTimeout(toastT);
-  toastT = setTimeout(() => toastEl.classList.remove("show"), 2200);
-} exports.showToast = showToast;
-
-let dlgOnok = null,
-  dlgOncancel = null;
- function dlgCancel() {
-  if (dlgOncancel) dlgOncancel();
-} exports.dlgCancel = dlgCancel;
-let dlgPrevFocus = null;
- function closeDlg() {
-  const ov = _util.$.call(void 0, "overlay");
-  ov.classList.remove("open");
-  ov.innerHTML = "";
-  document.body.style.overflow = "";
-  dlgOnok = dlgOncancel = null;
-  // 焦点还给弹出前的元素(还在文档里才还)。
-  if (dlgPrevFocus && document.contains(dlgPrevFocus)) {
-    try { dlgPrevFocus.focus({ preventScroll: true }); } catch (e2) {}
-  }
-  dlgPrevFocus = null;
-} exports.closeDlg = closeDlg;
- function openDlg(opts) {
-  _bus.emit.call(void 0, "popups:dismiss");
-  const ov = _util.$.call(void 0, "overlay");
-  ov.classList.add("open");
-  document.body.style.overflow = "hidden";
-  ov.innerHTML =
-    '<div class="dlg ' +
-    (opts.cls || "") +
-    '" role="dialog" aria-modal="true"><div class="dlg-hd"><span>' +
-    _util.esc.call(void 0, opts.title || "") +
-    '</span><button class="dlg-x" id="dlgX" type="button" aria-label="' + _i18n.t.call(void 0, "close", "Close") + '">✕</button></div><div class="dlg-bd">' +
-    (opts.body || "") +
-    "</div>" +
-    (opts.ok
-      ? '<div class="dlg-ft">' +
-        (opts.cancel
-          ? '<button class="btn" id="dlgCancel" type="button">' +
-            _util.esc.call(void 0, opts.cancel) +
-            "</button>"
-          : "") +
-        '<button class="btn ' +
-        (opts.danger ? "btn-d" : "btn-p") +
-        '" id="dlgOk" type="button">' +
-        _util.esc.call(void 0, opts.ok) +
-        "</button></div>"
-      : "") +
-    "</div>";
-  dlgOnok = opts.onok || null;
-  dlgOncancel = opts.oncancel || null;
-  dlgPrevFocus = document.activeElement; // 关时还原焦点
-  _util.$.call(void 0, "dlgX").onclick = () => {
-    if (dlgOncancel) dlgOncancel();
-    closeDlg();
-  };
-  const cxl = _util.$.call(void 0, "dlgCancel");
-  if (cxl)
-    cxl.onclick = () => {
-      if (dlgOncancel) dlgOncancel();
-      closeDlg();
-    };
-  const ok = _util.$.call(void 0, "dlgOk");
-  if (ok)
-    ok.onclick = () => {
-      const r = dlgOnok && dlgOnok();
-      if (r !== false) closeDlg();
-    };
-  ov.onclick = (e) => {
-    if (e.target === ov) {
-      if (dlgOncancel) dlgOncancel();
-      closeDlg();
-    }
-  };
-  // 焦点陷阱:Tab / Shift+Tab 在对话框内循环,防止焦点逃逸至背后界面
-  const dlgEl = ov.querySelector(".dlg") ;
-  if (dlgEl) {
-    dlgEl.addEventListener("keydown", (e) => {
-      if (e.key !== "Tab") return;
-      const focusables = dlgEl.querySelectorAll(
-        'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
-      );
-      if (!focusables.length) return;
-      const first = focusables[0];
-      const last = focusables[focusables.length - 1];
-      if (e.shiftKey) {
-        if (document.activeElement === first) {
-          e.preventDefault();
-          last.focus();
-        }
-      } else {
-        if (document.activeElement === last) {
-          e.preventDefault();
-          first.focus();
-        }
-      }
-    });
-  }
-  if (opts.focus && _util.$.call(void 0, opts.focus)) {
-    const el = _util.$.call(void 0, opts.focus);
-    el.focus();
-    if (el.select) el.select();
-  } else {
-    // 默认焦点给第一个可输入控件,否则给主按钮 —— 键盘流不用先 Tab 一圈。
-    const el = ov.querySelector(
-      ".dlg-bd input, .dlg-bd textarea, .dlg-bd select, .dlg-bd button",
-    ) ;
-    const btn = el || _util.$.call(void 0, "dlgOk");
-    if (btn) btn.focus({ preventScroll: true });
-  }
-} exports.openDlg = openDlg;
- function askText(title, value, placeholder) {
-  return new Promise((resolve) => {
-    openDlg({
-      title,
-      body:
-        '<input id="dlgIn" class="dlg-in" value="' +
-        _util.esc.call(void 0, value || "") +
-        '" placeholder="' +
-        _util.esc.call(void 0, placeholder || "") +
-        '">',
-      ok: _i18n.t.call(void 0, "ok", "OK"),
-      cancel: _i18n.t.call(void 0, "cancel", "Cancel"),
-      focus: "dlgIn",
-      onok: () => {
-        resolve((_util.$.call(void 0, "dlgIn") ).value);
-      },
-      oncancel: () => resolve(null),
-    });
-    _util.$.call(void 0, "dlgIn").addEventListener("keydown", (e) => {
-      if (e.key === "Enter" && !e.isComposing && (e ).keyCode !== 229) {
-        e.preventDefault();
-        resolve((_util.$.call(void 0, "dlgIn") ).value);
-        closeDlg();
-      }
-    });
-  });
-} exports.askText = askText;
- function askYes(title, msg) {
-  return new Promise((resolve) => {
-    openDlg({
-      title,
-      body: '<p class="dlg-msg">' + _util.esc.call(void 0, msg) + "</p>",
-      ok: _i18n.t.call(void 0, "ok", "OK"),
-      danger: true,
-      cancel: _i18n.t.call(void 0, "cancel", "Cancel"),
-      onok: () => resolve(true),
-      oncancel: () => resolve(false),
-    });
-  });
-} exports.askYes = askYes;
-// 剪贴板 + toast
- function clipText(text, ok, fail) {
-  if (!text) {
-    showToast(fail || _i18n.t.call(void 0, "noContent", "No content"));
-    return;
-  }
-  if (navigator.clipboard && navigator.clipboard.writeText) {
-    navigator.clipboard
-      .writeText(text)
-      .then(() => showToast(ok || _i18n.t.call(void 0, "copied", "Copied")))
-      .catch(() => showToast(fail || _i18n.t.call(void 0, "copyFailed", "Failed to copy")));
-  } else showToast(fail || _i18n.t.call(void 0, "copyFailed", "Failed to copy"));
-} exports.clipText = clipText;
- function bindSeg(name, fn) {
-  const box = document.querySelector('[data-seg="' + name + '"]') ;
-  if (!box) return;
-  box.onclick = (e) => {
-    const b = e.target.closest("button");
-    if (!b) return;
-    for (const x of box.querySelectorAll("button")) x.classList.remove("on");
-    b.classList.add("on");
-    fn(b.getAttribute("data-v"));
-  };
-} exports.bindSeg = bindSeg;
- function bindAuthPanel() {
-  document.querySelectorAll(".auth-row").forEach((row) => {
-    const name = row.getAttribute("data-prov");
-    const inp = row.querySelector(".auth-key");
-    const save = row.querySelector(".auth-save");
-    const oauthBtn = row.querySelector(".auth-oauth");
-    if (save)
-      save.onclick = () => {
-        const key = (inp && inp.value) || "";
-        if (!key) {
-          showToast(_i18n.t.call(void 0, "pasteApiKey", "Please paste API key"));
-          return;
-        }
-        fetch("/api/config", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ setAuth: { name, key } }),
-        })
-          .then((r) => r.json())
-          .then((j) => {
-            showToast(j && j.ok ? _i18n.t.call(void 0, "saved", "Saved ") + name : _i18n.t.call(void 0, "saveFail", "Save failed"));
-            if (inp) inp.value = "";
-          })
-          .catch(() => showToast(_i18n.t.call(void 0, "saveFail", "Save failed")));
-      };
-    if (oauthBtn)
-      oauthBtn.onclick = async () => {
-        const hint = row.querySelector(".auth-dev");
-        try {
-          const r = await fetch("/api/oauth/start", {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ provider: name }),
-          });
-          const j = await r.json();
-          if (!j || !j.ok) {
-            showToast(_i18n.getLang.call(void 0, ) === "zh" ? "OAuth 启动失败" : "Failed to start OAuth");
-            return;
-          }
-          if (j.user_code) {
-            if (hint) {
-              hint.hidden = false;
-              hint.textContent = "Enter code " + j.user_code + " at " + (j.verification_uri || "");
-            }
-            if (j.verification_uri) window.open(j.verification_uri, "_blank");
-            showToast("code " + j.user_code);
-          } else if (j.url) {
-            window.open(j.url, "_blank");
-            showToast(_i18n.getLang.call(void 0, ) === "zh" ? "请在新标签页完成登录" : "Please complete login in new tab");
-          } else {
-            showToast(_i18n.getLang.call(void 0, ) === "zh" ? "OAuth 启动失败" : "Failed to start OAuth");
-            return;
-          }
-          const path = j.user_code ? "/api/oauth/poll?state=" : "/api/oauth/status?state=";
-          const t0 = Date.now();
-          const tick = async () => {
-            if (Date.now() - t0 > 180000) {
-              showToast(_i18n.getLang.call(void 0, ) === "zh" ? "OAuth 超时" : "OAuth timed out");
-              return;
-            }
-            const s = await fetch(path + encodeURIComponent(j.state)).then((x) => x.json());
-            if (s && s.done && s.ok) {
-              showToast(_i18n.getLang.call(void 0, ) === "zh" ? "已登录" : "Logged in");
-              if (hint) hint.hidden = true;
-              return;
-            }
-            if (s && s.done && !s.ok) {
-              showToast(_i18n.getLang.call(void 0, ) === "zh" ? "登录失败" : "Login failed");
-              return;
-            }
-            setTimeout(tick, 1500);
-          };
-          setTimeout(tick, 1500);
-        } catch (e3) {
-          showToast(_i18n.getLang.call(void 0, ) === "zh" ? "OAuth 启动失败" : "Failed to start OAuth");
-        }
-      };
-  });
-} exports.bindAuthPanel = bindAuthPanel;
-
-
-// ---- 外观方案(配色/强调色/密度/宽屏/字号):自 main 迁入 ----
- function setScheme(v) {
-  const map = { auto: "system", light: "light", dark: "dark", system: "system" };
-  const next = map[String(v || "").trim()];
-  if (!next) return false;
-  _state.prefs.scheme = next;
-  _state.savePrefs.call(void 0, );
-  applyScheme();
-  return true;
-} exports.setScheme = setScheme;
- function applyScheme() {
-  const root = document.documentElement;
-  root.dataset.colorScheme = _state.prefs.scheme || "dark";
-  root.dataset.accent = _state.prefs.accent || "mono";
-  root.dataset.density = _state.prefs.density || "cozy";
-  root.dataset.wide = _state.prefs.wide ? "1" : "";
-  const fs = (_state.prefs.uiFont || 14) + "px";
-  root.style.setProperty("--ui-font-size", fs);
-  root.style.setProperty("--text-base", fs);
-  const dark =
-    _state.prefs.scheme === "dark" ||
-    (_state.prefs.scheme === "system" &&
-      window.matchMedia &&
-      window.matchMedia("(prefers-color-scheme: dark)").matches);
-  const tm = document.querySelector('meta[name="theme-color"]');
-  if (tm) tm.setAttribute("content", dark ? "#151517" : "#ffffff");
-} exports.applyScheme = applyScheme;
-applyScheme();
-if (window.matchMedia) {
-  try {
-    (window.matchMedia("(prefers-color-scheme: dark)") ).addEventListener(
-      "change",
-      applyScheme,
-    );
-  } catch (e4) {}
+    .replace(/'/g, "&#39;");
 }
 
-};
-__modules["store"] = function(module, exports, require) {
-"use strict";Object.defineProperty(exports, "__esModule", {value: true});// store.ts —— composer 的草稿与历史(localStorage,按会话分键)。
-// 自 webui.js 切出;名与义一字未改。依赖仅 $ 与 sess,无迟绑钩。
-var _util = require('./util');
-var _state = require('./state');
+function renderInline(text) {
+  let s = escapeHtml(text);
 
- function autosizeInp() {
-  const i = _util.$.call(void 0, "inp") ;
-  if (!i) return;
-  i.style.height = "auto";
-  i.style.height = Math.min(i.scrollHeight, 180) + "px";
-} exports.autosizeInp = autosizeInp;
-function draftKey() {
-  return "piz.draft." + _state.sess;
-}
- function saveDraft() {
-  try {
-    const v = (_util.$.call(void 0, "inp") ).value;
-    if (v) localStorage.setItem(draftKey(), v);
-    else localStorage.removeItem(draftKey());
-  } catch (e) {}
-} exports.saveDraft = saveDraft;
- function restoreDraft() {
-  try {
-    const v = localStorage.getItem(draftKey());
-    if (v) {
-      (_util.$.call(void 0, "inp") ).value = v;
-      autosizeInp();
-    }
-  } catch (e2) {}
-} exports.restoreDraft = restoreDraft;
- function clearDraft() {
-  try {
-    localStorage.removeItem(draftKey());
-  } catch (e3) {}
-} exports.clearDraft = clearDraft;
-function histKey() {
-  return "piz.hist." + _state.sess;
-}
-function loadHist() {
-  try {
-    return JSON.parse(localStorage.getItem(histKey()) || "[]");
-  } catch (e4) {
-    return [];
-  }
-}
-let histIdx = -1,
-  histDraft = "";
- function pushHist(t) {
-  const a = loadHist().filter((x) => x !== t);
-  a.push(t);
-  while (a.length > 50) a.shift();
-  try {
-    localStorage.setItem(histKey(), JSON.stringify(a));
-  } catch (e5) {}
-  histIdx = -1;
-  histDraft = "";
-} exports.pushHist = pushHist;
- function histPrev() {
-  const a = loadHist();
-  if (!a.length) return;
-  if (histIdx < 0) {
-    histDraft = (_util.$.call(void 0, "inp") ).value;
-    histIdx = a.length;
-  }
-  if (histIdx > 0) histIdx--;
-  (_util.$.call(void 0, "inp") ).value = a[histIdx] || "";
-  autosizeInp();
-} exports.histPrev = histPrev;
- function histNext() {
-  const a = loadHist();
-  if (histIdx < 0) return;
-  histIdx++;
-  if (histIdx >= a.length) {
-    histIdx = -1;
-    (_util.$.call(void 0, "inp") ).value = histDraft;
-  } else (_util.$.call(void 0, "inp") ).value = a[histIdx] || "";
-  autosizeInp();
-} exports.histNext = histNext;
+  // 行内代码 `code`
+  s = s.replace(/`([^`]+)`/g, '<code class="inline-code">$1</code>');
+  // 粗体 **bold** or __bold__
+  s = s.replace(/(\*\*|__)(.*?)\1/g, "<strong>$2</strong>");
+  // 斜体 *italic* or _italic_
+  s = s.replace(/(\*|_)(.*?)\1/g, "<em>$2</em>");
+  // 删除线 ~~del~~
+  s = s.replace(/~~(.*?)~~/g, "<del>$1</del>");
+  // 链接 [text](url)
+  s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer" class="md-link">$1</a>');
 
-let lastUser = "";
- const getLastUser = () => lastUser; exports.getLastUser = getLastUser;
- const setLastUser = (v) => { lastUser = v; }; exports.setLastUser = setLastUser;
-
-let running = false;
- const getRunning = () => running; exports.getRunning = getRunning;
- const setRunning = (r) => { running = r; }; exports.setRunning = setRunning;
-
-};
-__modules["sessions"] = function(module, exports, require) {
-"use strict";Object.defineProperty(exports, "__esModule", {value: true});// sessions.ts —— 菜单助手 / 项目 / 会话列 / 会话操作。
-var _util = require('./util');
-var _state = require('./state');
-var _ui = require('./ui');
-var _i18n = require('./i18n');
-var _bus = require('./bus');
-
- const sessData = { list: [] , arch: [] , meta: {}  }; exports.sessData = sessData;
-
-let openMenu = null;
- function closeMenus() {
-  for (const m of document.querySelectorAll(".menu.open"))
-    m.classList.remove("open");
-  openMenu = null;
-} exports.closeMenus = closeMenus;
-_bus.on.call(void 0, "popups:dismiss", closeMenus);
-/// 统一锚定菜单(dsh Menu 原语之形):锚元素矩形 + 优先弹出方向/对齐。
-/// side: "bl"(默认 左下)| "br"(右下)| "tr"(右上)| "tl"(左上);
-/// 菜单卡片永远不越过视口(8px 边距),溢出时自动翻转。
- function openAt(id, btn, side = "bl") {
-  const m = _util.$.call(void 0, id);
-  const wasOpen = m.classList.contains("open");
-  closeMenus();
-  if (wasOpen) return;
-  m.classList.add("open");
-  const r = btn.getBoundingClientRect();
-  const mw = m.offsetWidth,
-    mh = m.offsetHeight;
-  const GAP = 4,
-    MARGIN = 8;
-  let left, top;
-  if (side === "bl" || side === "tl") left = Math.min(Math.max(r.left, MARGIN), innerWidth - mw - MARGIN);
-  else left = Math.min(Math.max(r.right - mw, MARGIN), innerWidth - mw - MARGIN);
-  if (side === "bl" || side === "br") {
-    top = r.bottom + GAP;
-    if (top + mh > innerHeight - MARGIN) top = Math.max(MARGIN, r.top - GAP - mh); // 翻上
-  } else {
-    top = r.top - GAP - mh;
-    if (top < MARGIN) top = Math.min(r.bottom + GAP, innerHeight - mh - MARGIN); // 翻下
-  }
-  m.style.left = left + "px";
-  m.style.top = top + "px";
-  openMenu = m;
-} exports.openAt = openAt;
-/// 菜单内容构造器:与 openAt 配套,产出 dsh 式菜单行(label + hint + check + danger)。
- function menuRow(opts
-
-
-
-
-
-
-) {
-  const d = document.createElement("div");
-  d.className = "mi" + (opts.check ? " check" : "") + (opts.danger ? " danger" : "");
-  d.innerHTML =
-    (opts.icon ? '<span class="mi-ic">' + opts.icon + "</span>" : "") +
-    '<span class="mi-tx">' + opts.label + "</span>" +
-    (opts.hint ? '<span class="mi-hint">' + opts.hint + "</span>" : "");
-  d.onclick = (e) => {
-    e.stopPropagation();
-    closeMenus();
-    opts.onclick();
-  };
-  return d;
-} exports.menuRow = menuRow;
- function menuSep() {
-  const d = document.createElement("div");
-  d.className = "sep";
-  return d;
-} exports.menuSep = menuSep;
- function menuLabel(text) {
-  const d = document.createElement("div");
-  d.className = "menu-label";
-  d.textContent = text;
-  return d;
-} exports.menuLabel = menuLabel;
-document.addEventListener("click", (e) => {
-  if (
-    !e.target.closest(".menu") &&
-    !e.target.closest(".ib") &&
-    !e.target.closest(".perm-pill") &&
-    !e.target.closest(".mode-pill") &&
-    !e.target.closest(".ch-brand") &&
-    !e.target.closest(".ws-chip") &&
-    !e.target.closest(".ch-ws") &&
-    !e.target.closest(".set-model-btn") &&
-    !e.target.closest(".kebab")
-  )
-    closeMenus();
-});
-
-// ---- 项目 ----
- function loadWorkspaces() {
-  return fetch("/api/workspaces")
-    .then((r) => r.json())
-    .catch(() => []);
-} exports.loadWorkspaces = loadWorkspaces;
- async function renderWsName() {
-  const list = await loadWorkspaces();
-  const cur = _state.ws || (list[0] ? list[0].root : "");
-  const nm = _util.projectName.call(void 0, cur) || "piz";
-  _util.$.call(void 0, "wsName").textContent = "piz";
-  _util.$.call(void 0, "tbWs").textContent = nm;
-  if (_util.$.call(void 0, "heroWsLbl")) _util.$.call(void 0, "heroWsLbl").textContent = nm || _i18n.t.call(void 0, "workspace", "Workspace");
-  if (_util.$.call(void 0, "hWs") && !_util.$.call(void 0, "hWs").textContent) {
-    _util.$.call(void 0, "hWs").textContent = nm;
-    if (_util.$.call(void 0, "hSep")) _util.$.call(void 0, "hSep").style.display = nm ? "" : "none";
-  }
-  return list;
-} exports.renderWsName = renderWsName;
- async function addProject() {
-  const root = await _ui.askText.call(void 0, _i18n.t.call(void 0, "addProject", "Add project"), "", _i18n.getLang.call(void 0, ) === "zh" ? "绝对路径，如 /home/me/proj" : "Absolute path, e.g. /home/me/proj");
-  if (!root) return;
-  fetch("/api/workspaces", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ root }),
-  })
-    .then((r) => r.json())
-    .then(() => {
-      location.href = _state.sessUrl.call(void 0, "default", root);
-    })
-    .catch(() => _ui.showToast.call(void 0, _i18n.getLang.call(void 0, ) === "zh" ? "无效目录" : "Invalid directory"));
-} exports.addProject = addProject;
- async function openWsMenu(btn) {
-  const list = await renderWsName();
-  const cur = _state.ws || (list[0] ? list[0].root : "");
-  const m = _util.$.call(void 0, "wsmenu");
-  m.innerHTML = "";
-  m.appendChild(menuLabel(_i18n.t.call(void 0, "workspace", "Workspace")));
-  for (const w of list) {
-    m.appendChild(
-      menuRow({
-        label: w.name || _util.projectName.call(void 0, w.root),
-        hint: w.root,
-        check: w.root === cur,
-        onclick: () => {
-          if (w.root !== cur) location.href = _state.sessUrl.call(void 0, "default", w.root);
-        },
-      }),
-    );
-  }
-  m.appendChild(menuSep());
-  m.appendChild(
-    menuRow({
-      label: _i18n.t.call(void 0, "addProject", "Add project") + "…",
-      icon: "＋",
-      onclick: () => addProject(),
-    }),
-  );
-  openAt("wsmenu", btn, "bl");
-} exports.openWsMenu = openWsMenu;
-// 侧栏内联过滤:搜索按钮原地变输入框(实时过滤会话;✕ 清空)
- function initSideFilter() {
-  const btn = _util.$.call(void 0, "searchBtn");
-  if (!btn || btn.dataset.done) return;
-  btn.dataset.done = "1";
-  const box = document.createElement("div");
-  box.className = "side-filter";
-  box.innerHTML =
-    '<span class="sf-ic">⌕</span><input type="text" placeholder="' + _i18n.t.call(void 0, "searchSessions", "Search sessions...") + '" spellcheck="false" /><button type="button" class="sf-x" title="' + _i18n.t.call(void 0, "clear", "Clear") + '">✕</button>';
-  const inp = box.querySelector("input") ;
-  const x = box.querySelector(".sf-x") ;
-
-  x.hidden = true;
-  let ft = 0;
-  inp.addEventListener("input", () => {
-    x.hidden = inp.value.length === 0;
-    clearTimeout(ft);
-    ft = setTimeout(() => {
-      sideQ = (inp.value || "").toLowerCase().trim();
-      loadSessions();
-    }, 120);
-  });
-  x.addEventListener("click", () => {
-    inp.value = "";
-    x.hidden = true;
-    sideQ = "";
-    loadSessions();
-    inp.focus();
-  });
-  btn.replaceWith(box);
-  sideFilterEl = inp;
-} exports.initSideFilter = initSideFilter;
-// 侧栏拖宽:5px 热区,记忆 localStorage
- function initSideGrip() {
-  if (document.getElementById("sideGrip")) return;
-  const side = _util.$.call(void 0, "side");
-  const rail = document.querySelector(".side-rail");
-  if (!side || !rail) return;
-  // grip 挂 side 内右缘(absolute),不得插入 grid —— 第 4 个子元素会破坏三列布局
-  side.style.position = "relative";
-  const g = document.createElement("div");
-  g.id = "sideGrip";
-  side.appendChild(g);
-  // --side-w 定义在 .app(局部变量),documentElement 上 set 会被遮蔽
-  const appEl = document.querySelector(".app");
-  try {
-    const w = localStorage.getItem("piz.sideW");
-    if (w && appEl) appEl.style.setProperty("--side-w", w + "px");
-  } catch (e2) {}
-  let dragging = false;
-  g.addEventListener("mousedown", (e) => {
-    dragging = true;
-    document.body.classList.add("gripping");
-    e.preventDefault();
-  });
-  window.addEventListener("mousemove", (e) => {
-    if (!dragging) return;
-    const w = Math.min(420, Math.max(200, e.clientX - side.getBoundingClientRect().left + 4));
-    appEl && appEl.style.setProperty("--side-w", w + "px");
-  });
-  window.addEventListener("mouseup", () => {
-    if (!dragging) return;
-    dragging = false;
-    document.body.classList.remove("gripping");
-    try {
-      localStorage.setItem("piz.sideW", String(Math.round(side.getBoundingClientRect().width)));
-    } catch (e3) {}
-  });
-} exports.initSideGrip = initSideGrip;
-
-(_util.$.call(void 0, "wsqBtn") ).onclick = (e) => {
-  e.stopPropagation();
-  openWsMenu(e.currentTarget);
-};
-
-// ---- 会话列表 ----
- function sessionRow(s, arch, wsRoot) {
-  const d = document.createElement("div");
-  const here = !_state.ws || !wsRoot || wsRoot === _state.ws;
-  d.className =
-    "se" +
-    (s.name === _state.sess && here ? " on" : "") +
-    (arch ? " arch" : "");
-  const title = s.title || (s.name === "default" ? _i18n.t.call(void 0, "defaultSession", "Default session") : s.name);
-  d.innerHTML =
-    '<div class="srow"><span class="lead">' +
-    (s.busy
-      ? '<span class="spin"></span>'
-      : s.unread
-        ? '<span class="unread-dot"></span>'
-        : "") +
-    '</span><span class="st">' +
-    _util.esc.call(void 0, title) +
-    "</span>" +
-    (s.status === "awaitingQuestion"
-      ? '<span class="tag info">' + _i18n.t.call(void 0, "statusAnswer", "Answer") + "</span>"
-      : "") +
-    (s.status === "awaitingApproval"
-      ? '<span class="tag warn">' + _i18n.t.call(void 0, "statusApproval", "Approval") + "</span>"
-      : "") +
-    (s.status === "aborted"
-      ? '<span class="tag danger">' + _i18n.t.call(void 0, "statusAborted", "Aborted") + "</span>"
-      : "") +
-    '<span class="sts">' +
-    _util.fmtTime.call(void 0, s.ts) +
-    '</span><button class="kebab" title="' + _i18n.t.call(void 0, "sessionActions", "Session actions") + '">⋯</button></div>';
-  d.onclick = () => {
-    if (s.name === _state.sess) {
-      _bus.emit.call(void 0, "session:select", s);
-    } else {
-      d.classList.add("switching");
-      const wrap = _util.$.call(void 0, "wrap");
-      if (wrap) wrap.style.opacity = "0.5";
-      location.href = _state.sessUrl.call(void 0, s.name, wsRoot);
-    }
-  };
-  const kb = d.querySelector(".kebab") ;
-  kb.onclick = (e) => {
-    e.stopPropagation();
-    openSessionMenu(kb, s, arch);
-  };
-  return d;
-} exports.sessionRow = sessionRow;
- function openSessionMenu(btn, s, arch) {
-  const m = _util.$.call(void 0, "kmenu");
-  m.innerHTML = "";
-  if (!arch) {
-    m.appendChild(
-      menuRow({
-        label: _i18n.t.call(void 0, "rename", "Rename"),
-        icon: "✎",
-        onclick: async () => {
-          const tName = await _ui.askText.call(void 0, _i18n.t.call(void 0, "renameSession", "Rename session"), s.title || s.name, _i18n.t.call(void 0, "sessionTitle", "Session title"));
-          if (tName === null) return;
-          act({ act: "rename", name: tName, session: s.name }, (j) => {
-            loadSessions();
-            _ui.showToast.call(void 0, j && j.ok ? _i18n.t.call(void 0, "renamed", "Renamed") : _i18n.t.call(void 0, "failed", "Failed"));
-          });
-        },
-      }),
-    );
-    m.appendChild(
-      menuRow({
-        label: _i18n.t.call(void 0, "forkSession", "Fork session"),
-        icon: "✱",
-        onclick: async () => {
-          const n = await _ui.askText.call(void 0, _i18n.t.call(void 0, "forkSession", "Fork session"), "", _i18n.t.call(void 0, "forkHint", "New session name, empty for auto"));
-          if (n === null) return;
-          act({ act: "fork", name: n || "", session: s.name }, (j) => {
-            if (j && j.name) {
-              _ui.showToast.call(void 0, _i18n.t.call(void 0, "forked", "Forked ") + j.name);
-              setTimeout(
-                () =>
-                  (location.href = _state.sessUrl.call(void 0, j.name)),
-                600,
-              );
-            }
-          });
-        },
-      }),
-    );
-    m.appendChild(
-      menuRow({
-        label: _i18n.t.call(void 0, "archive", "Archive"),
-        icon: "🗄",
-        onclick: () => {
-          act({ act: "archive", session: s.name }, (j) => {
-            if (j && j.ok) {
-              _ui.showToast.call(void 0, _i18n.t.call(void 0, "archived", "Archived"));
-              if (s.name === _state.sess)
-                setTimeout(() => (location.href = _state.sessUrl.call(void 0, "default")), 400);
-            }
-            loadSessions();
-          });
-        },
-      }),
-    );
-    m.appendChild(menuSep());
-  }
-  m.appendChild(
-    menuRow({
-      label: arch ? _i18n.t.call(void 0, "deleteForever", "Delete forever") : _i18n.t.call(void 0, "delete", "Delete"),
-      icon: "🗑",
-      danger: true,
-      onclick: async () => {
-        if (!(await _ui.askYes.call(void 0, _i18n.t.call(void 0, "deleteSession", "Delete session"), (arch ? _i18n.t.call(void 0, "deleteForever", "Delete forever ") : _i18n.t.call(void 0, "delete", "Delete ")) + s.name + "?"))) return;
-        act({ act: "delete", session: s.name }, () => {
-          loadSessions();
-        });
-      },
-    }),
-  );
-  if (arch) {
-    m.prepend(
-      menuRow({
-        label: _i18n.t.call(void 0, "restore", "Restore"),
-        icon: "↩",
-        onclick: () => {
-          act({ act: "restore", session: s.name }, () => {
-            loadSessions();
-            _ui.showToast.call(void 0, _i18n.t.call(void 0, "restored", "Restored ") + s.name);
-          });
-        },
-      }),
-    );
-  }
-  openAt("kmenu", btn);
-} exports.openSessionMenu = openSessionMenu;
- function loadSessions() {
-  Promise.all([
-    loadWorkspaces(),
-    fetch("/api/sessions?" + _state.wsp)
-      .then((r) => r.json())
-      .catch(() => []),
-  ])
-    .then(([projects, list]) => {
-      exports.sessData.list = list.filter((s) => !s.archived);
-      exports.sessData.arch = list.filter((s) => s.archived);
-      exports.sessData.meta = {};
-      for (const s of list) exports.sessData.meta[s.name] = s;
-      const sessList = exports.sessData.list,
-        archList = exports.sessData.arch;
-      const sl = _util.$.call(void 0, "slist");
-      sl.innerHTML = "";
-      const q = sideQ;
-      const show = (s) =>
-        !q || (s.name + (s.title || "")).toLowerCase().includes(q);
-      const cur = _state.ws || (projects[0] ? projects[0].root : "");
-      const lab = document.createElement("div");
-      lab.className = "side-lab";
-      lab.textContent = _i18n.t.call(void 0, "workspace", "Workspace");
-      sl.appendChild(lab);
-      if (!projects.length) {
-        const empty = document.createElement("div");
-        empty.className = "sg-name";
-        empty.style.padding = "6px 8px";
-        empty.textContent = _i18n.t.call(void 0, "currentDir", "Current directory");
-        sl.appendChild(empty);
-      }
-      for (const w of projects) {
-        const isCur = w.root === cur;
-        const gh = document.createElement("div");
-        gh.className = "sg-head" + (isCur ? " on" : "");
-        gh.title = w.root;
-        gh.innerHTML =
-          '<span class="sg-chev' +
-          (isCur ? " open" : "") +
-          '">▶</span><span class="sg-name">' +
-          _util.esc.call(void 0, w.name || _util.projectName.call(void 0, w.root)) +
-          "</span>" +
-          (isCur
-            ? '<span class="sg-cnt">' + sessList.length + "</span>"
-            : "");
-        sl.appendChild(gh);
-        if (isCur) {
-          const wrap = document.createElement("div");
-          wrap.className = "sg-chats";
-          const vis = sessList.filter(show);
-          if (!vis.length && q) {
-            const ne = document.createElement("div");
-            ne.className = "sg-name";
-            ne.textContent = _i18n.t.call(void 0, "noMatchingSessions", "No matching sessions");
-            wrap.appendChild(ne);
-          } else if (!vis.length) {
-            const ne = document.createElement("div");
-            ne.className = "sg-name";
-            ne.textContent = _i18n.t.call(void 0, "noSessionsHint", "No sessions yet. Send a message to start.");
-            wrap.appendChild(ne);
-          }
-          for (const s of vis) wrap.appendChild(sessionRow(s, false, w.root));
-          if (archList.length) {
-            const se = document.createElement("div");
-            se.className = "sg-arch";
-            se.innerHTML =
-              '<span class="sg-chev">▶</span><span>' + _i18n.t.call(void 0, "archive", "Archive") + '</span><span class="sg-arch-n">' +
-              archList.length +
-              "</span>";
-            const awrap = document.createElement("div");
-            awrap.className = "arch-chats";
-            awrap.hidden = true;
-            for (const s of archList)
-              awrap.appendChild(sessionRow(s, true, w.root));
-            wrap.appendChild(se);
-            wrap.appendChild(awrap);
-            se.onclick = (e) => {
-              e.stopPropagation();
-              const open = se.classList.toggle("open");
-              awrap.hidden = !open;
-            };
-          }
-          sl.appendChild(wrap);
-          gh.onclick = () => {
-            const open = (gh
-              .querySelector(".sg-chev") )
-              .classList.toggle("open");
-            wrap.style.display = open ? "" : "none";
-          };
-        } else {
-          gh.onclick = () => {
-            location.href = _state.sessUrl.call(void 0, "default", w.root);
-          };
-        }
-      }
-      const addp = document.createElement("button");
-      addp.className = "btn-add-proj";
-      addp.type = "button";
-      addp.innerHTML = '<span class="pl">＋</span><span>' + _i18n.t.call(void 0, "addProject", "Add project") + '</span>';
-      addp.onclick = () => addProject();
-      sl.appendChild(addp);
-      const sb = _util.$.call(void 0, "sbody");
-      if (sb) {
-        sb.innerHTML = "";
-        for (const s of sessList) sb.appendChild(sessionRow(s, false, cur));
-        if (!sessList.length && !archList.length) {
-          const ne2 = document.createElement("div");
-          ne2.className = "sg-name";
-          ne2.style.padding = "12px 14px";
-          ne2.textContent = _i18n.t.call(void 0, "noSessionsHint", "No sessions yet. Send a message to start.");
-          sb.appendChild(ne2);
-        }
-        if (archList.length) {
-          const se2 = document.createElement("div");
-          se2.className = "sg-sep";
-          sb.appendChild(se2);
-          const sh = document.createElement("div");
-          sh.className = "sg-arch";
-          sh.textContent = _i18n.t.call(void 0, "archive", "Archive") + " " + archList.length;
-          sb.appendChild(sh);
-          for (const s of archList)
-            sb.appendChild(sessionRow(s, true, cur));
-        }
-      }
-    })
-    .catch(() => _ui.showToast.call(void 0, _i18n.t.call(void 0, "sessionsLoadFail", "Failed to load sessions")));
-} exports.loadSessions = loadSessions;
-// 搜索框过滤态:内联侧栏过滤输入(loadSessions 的 show 读它)
-let sideQ = "";
- function currentFilterQ() {
-  return sideQ;
-} exports.currentFilterQ = currentFilterQ;
-let sideFilterEl = null;
- function setSideFilter(q) {
-  sideQ = q;
-  if (sideFilterEl) sideFilterEl.value = q;
-} exports.setSideFilter = setSideFilter;
-// 旧接口引用(searchQ 全局)保持兼容
- const searchQ = {
-  get value() {
-    return sideQ;
-  },
-  set value(v) {
-    sideQ = String(v || "");
-  },
-}; exports.searchQ = searchQ;
-
-// ---- 会话操作 ----
- function act(body, then) {
-  // body.session 可为指定目标(会话行菜单操作);缺省用当前打开的 sess。
-  const target = body && body.session ? body.session : _state.sess;
-  fetch("/api/action?" + _state.wsp + "session=" + encodeURIComponent(target), {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
-  })
-    .then((r) => r.json())
-    .then((j) => {
-      if (then) then(j);
-    })
-    .catch(() => _ui.showToast.call(void 0, _i18n.t.call(void 0, "actionFail", "Action failed")));
-} exports.act = act;
-
-
-};
-__modules["stream"] = function(module, exports, require) {
-"use strict";Object.defineProperty(exports, "__esModule", {value: true}); function _optionalChain(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }// stream.ts —— SSE:fetch + ReadableStream 解析(EventSource 不能带 Bearer),断线横幅 + 指数退避重连。
-// 自 webui.js 切出;ev.onmessage 由 main 指派(消息路由属聊天层)。
-var _util = require('./util');
-var _state = require('./state');
-var _i18n = require('./i18n');
-
- const ev = { onmessage: null }; exports.ev = ev;
-let sseRetry = 0;
- function handleSSELine(line) {
-  if (!line.startsWith("data: ")) return;
-  try {
-    _optionalChain([exports.ev, 'access', _ => _.onmessage, 'optionalCall', _2 => _2({ data: line.slice(6) })]);
-  } catch (e) {}
-} exports.handleSSELine = handleSSELine;
- async function connectSSE() {
-  try {
-    const res = await fetch("/api/events" + (_state.wsp ? "?" + _state.wsp : ""), {
-      headers: { accept: "text/event-stream" },
-    });
-    if (!res.ok || !res.body) {
-      sseDown();
-      sseRetry = Math.min(sseRetry + 1, 8);
-      setTimeout(connectSSE, 1000 * sseRetry);
-      return;
-    }
-    sseRetry = 0;
-    sseUp();
-    const reader = res.body.getReader();
-    const dec = new TextDecoder();
-    let buf = "";
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += dec.decode(value, { stream: true });
-      let idx;
-      while ((idx = buf.indexOf("\n\n")) !== -1) {
-        const chunk = buf.slice(0, idx);
-        buf = buf.slice(idx + 2);
-        for (const line of chunk.split("\n")) handleSSELine(line);
-      }
-    }
-  } catch (e2) {}
-  sseDown();
-  setTimeout(connectSSE, sseDelay());
-} exports.connectSSE = connectSSE;
-// 断线反馈:横幅 + 指数退避(1.5s→3s→6s→10s 封顶),连上即复位。
-let sseFails = 0;
-function sseDelay() {
-  return Math.min(10000, 1500 * Math.pow(2, sseFails++));
-}
-function sseDown() {
-  let b = _util.$.call(void 0, "ssebar");
-  if (!b) {
-    b = document.createElement("div");
-    b.id = "ssebar";
-    b.textContent = _i18n.t.call(void 0, "disconnectedReconnecting", "Disconnected, reconnecting...");
-    document.body.appendChild(b);
-  }
-  b.classList.add("on");
-}
-function sseUp() {
-  if (sseFails || _util.$.call(void 0, "ssebar")) {
-    sseFails = 0;
-    const b = _util.$.call(void 0, "ssebar");
-    if (b) b.classList.remove("on");
-  }
-}
-
-};
-__modules["model"] = function(module, exports, require) {
-"use strict";Object.defineProperty(exports, "__esModule", {value: true});// model.ts —— 模型/思考档/授权/沙箱/cost/ctx/turnMeta/头部渲染与 kebab 菜单。
-var _util = require('./util');
-var _state = require('./state');
-var _ui = require('./ui');
-var _sessions = require('./sessions');
-var _i18n = require('./i18n');
-var _bus = require('./bus');
-
-// ---- 模型 ----
- let curModel = ""; exports.curModel = curModel;
- let curThink = "high"; exports.curThink = curThink;
- let curTitle = ""; exports.curTitle = curTitle;
- let curVision = false; exports.curVision = curVision;
- const getCurModel = () => exports.curModel; exports.getCurModel = getCurModel;
- const getThink = () => exports.curThink; exports.getThink = getThink;
- const getCurTitle = () => exports.curTitle; exports.getCurTitle = getCurTitle;
- const getVision = () => exports.curVision; exports.getVision = getVision;
- function applyThink(t) {
-  exports.curThink = t;
-  renderThink();
-} exports.applyThink = applyThink;
- function applyTitle(t) {
-  exports.curTitle = t;
-} exports.applyTitle = applyTitle;
- async function applySessionModel(md) {
-  try {
-    const r = await fetch(
-      "/api/model?" + _state.wsp + "session=" + encodeURIComponent(_state.sess),
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ model: md }),
-      },
-    );
-    const j = await r.json().catch(() => ({}));
-    if (!r.ok || j.ok === false || !j.model) {
-      _ui.showToast.call(void 0, j.error || _i18n.t.call(void 0, "modelSwitchFail", "Failed to switch model"));
-      return false;
-    }
-    exports.curModel = j.model;
-    renderModel();
-    return true;
-  } catch (e2) {
-    _ui.showToast.call(void 0, _i18n.t.call(void 0, "modelSwitchFail", "Failed to switch model"));
-    return false;
-  }
-} exports.applySessionModel = applySessionModel;
-/// 模型选择卡片(dsh ModelSelect 之形):按 provider 分组 + sticky 组题 + 当前项尾勾。
-/// 模型 id 形如 "provider/model";无斜线的归「其他」组。向上弹出(锚在输入工具条)。
- function loadModels(sel) {
-  fetch("/api/models")
-    .then((r) => r.json())
-    .then((list) => {
-      if (!Array.isArray(list)) list = [];
-      const m = _util.$.call(void 0, "modelMenu");
-      m.innerHTML = "";
-      // 分组:provider 前缀 → 模型列表
-      const groups = new Map();
-      for (const md of list) {
-        const prov = md.includes("/") ? md.slice(0, md.indexOf("/")) : (_i18n.getLang.call(void 0, ) === "zh" ? "其他" : "Other");
-        if (!groups.has(prov)) groups.set(prov, []);
-        groups.get(prov).push(md);
-      }
-      const provs = [...groups.keys()].sort((a, b) => {
-        // 当前模型所在组置顶
-        const ca = exports.curModel.startsWith(a + "/") ? 0 : 1;
-        const cb = exports.curModel.startsWith(b + "/") ? 0 : 1;
-        return ca - cb || a.localeCompare(b);
-      });
-      for (const prov of provs) {
-        m.appendChild(_sessions.menuLabel.call(void 0, prov));
-        for (const md of groups.get(prov)) {
-          const short = md.includes("/") ? md.slice(md.indexOf("/") + 1) : md;
-          m.appendChild(
-            _sessions.menuRow.call(void 0, {
-              label: short,
-              check: md === exports.curModel,
-              onclick: async () => {
-                if (await applySessionModel(md)) _sessions.closeMenus.call(void 0, );
-              },
-            }),
-          );
-        }
-      }
-      if (!list.length) m.appendChild(_sessions.menuLabel.call(void 0, _i18n.t.call(void 0, "noModels", "No models available")));
-      _sessions.openAt.call(void 0, "modelMenu", sel, "tr");
-    })
-    .catch(() => _ui.showToast.call(void 0, _i18n.t.call(void 0, "modelsLoadFail", "Failed to load models")));
-} exports.loadModels = loadModels;
- function modelShort(m) {
-  if (!m) return _i18n.t.call(void 0, "selectModel", "Model");
-  const n = m.includes("/") ? m.slice(m.lastIndexOf("/") + 1) : m;
-  return n.length > 22 ? n.slice(0, 20) + "…" : n;
-} exports.modelShort = modelShort;
- function renderModel() {
-  const el = _util.$.call(void 0, "hModel");
-  if (!el) return;
-  el.textContent = modelShort(exports.curModel);
-  el.title = exports.curModel ? "Model: " + exports.curModel : _i18n.t.call(void 0, "switchModel", "Switch model");
-} exports.renderModel = renderModel;
-(_util.$.call(void 0, "hModel") ).onclick = (e) => {
-  e.stopPropagation();
-  loadModels(e.currentTarget);
-};
- const THINK_LEVELS = [
-  "off",
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
-]; exports.THINK_LEVELS = THINK_LEVELS;
- function renderThink() {
-  const el = _util.$.call(void 0, "hThink");
-  if (!el) return;
-  el.textContent = exports.curThink || "high";
-  el.title = _i18n.t.call(void 0, "thinkingLevel", "Thinking") + ": " + (exports.curThink || "high");
-} exports.renderThink = renderThink;
- async function setThink(level) {
-  try {
-    const r = await fetch("/api/config", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ setDefaultThinkingLevel: level }),
-    });
-    const j = await r.json().catch(() => ({}));
-    if (!r.ok || j.ok === false) {
-      _ui.showToast.call(void 0, j.error || _i18n.t.call(void 0, "thinkSwitchFail", "Failed to switch thinking level"));
-      return false;
-    }
-    if (j && j.defaultThinkingLevel) {
-      exports.curThink = j.defaultThinkingLevel;
-      renderThink();
-    }
-    return true;
-  } catch (e3) {
-    _ui.showToast.call(void 0, _i18n.t.call(void 0, "thinkSwitchFail", "Failed to switch thinking level"));
-    return false;
-  }
-} exports.setThink = setThink;
-(_util.$.call(void 0, "hThink") ).onclick = (e) => {
-  e.stopPropagation();
-  const m = _util.$.call(void 0, "thinkMenu");
-  m.innerHTML = "";
-  m.appendChild(_sessions.menuLabel.call(void 0, _i18n.t.call(void 0, "thinkingLevel", "Thinking level")));
-  exports.THINK_LEVELS.forEach((lv) => {
-    m.appendChild(
-      _sessions.menuRow.call(void 0, {
-        label: lv,
-        check: lv === exports.curThink,
-        onclick: () => setThink(lv),
-      }),
-    );
-  });
-  _sessions.openAt.call(void 0, "thinkMenu", e.currentTarget, "tr");
-};
-// ---- 授权模式(Codex /permissions: yolo / ask / read-only) ----
- let approvalMode = "yolo"; exports.approvalMode = approvalMode;
- const APPROVALS = [
-  { id: "yolo", label: "yolo", hint: () => (_i18n.getLang.call(void 0, ) === "zh" ? "不询问，默认" : "No confirmation, default") },
-  { id: "ask", label: "ask", hint: () => (_i18n.getLang.call(void 0, ) === "zh" ? "危险工具先问" : "Ask before dangerous tools") },
-  { id: "read-only", label: "read-only", hint: () => (_i18n.getLang.call(void 0, ) === "zh" ? "危险工具直接拒" : "Deny dangerous tools directly") },
-]; exports.APPROVALS = APPROVALS;
- const approvalLabel = () =>
-  (exports.APPROVALS.find((x) => x.id === exports.approvalMode) || ({} )).label; exports.approvalLabel = approvalLabel;
- const setApprovalMode = (v) => {
-  exports.approvalMode = v === "read-only" ? "read-only" : v;
-  setModeBtn();
-}; exports.setApprovalMode = setApprovalMode;
- function setModeBtn() {
-  const p = _util.$.call(void 0, "permPill");
-  const cur = exports.APPROVALS.find((x) => x.id === exports.approvalMode) || exports.APPROVALS[0];
-  p.textContent = cur.label;
-  p.className =
-    "perm-pill " +
-    (exports.approvalMode === "yolo"
-      ? "perm-allow"
-      : exports.approvalMode === "ask"
-        ? "perm-ask"
-        : "perm-deny");
-  p.title = _i18n.t.call(void 0, "permMode", "Approval mode") + ": " + (typeof cur.hint === "function" ? cur.hint() : cur.hint);
-} exports.setModeBtn = setModeBtn;
- async function setApproval(mode) {
-  exports.approvalMode = mode;
-  setModeBtn();
-  try {
-    const r = await fetch(
-      "/api/mode?" + _state.wsp + "session=" + encodeURIComponent(_state.sess),
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ mode }),
-      },
-    );
-    const j = await r.json().catch(() => ({}));
-    if (!r.ok || j.ok === false) {
-      _ui.showToast.call(void 0, j.error || _i18n.t.call(void 0, "permSwitchFail", "Failed to switch approval mode"));
-      return;
-    }
-    if (j.mode) exports.approvalMode = j.mode;
-    else if (j.auto !== undefined) exports.approvalMode = j.auto ? "yolo" : "ask";
-    setModeBtn();
-  } catch (e4) {
-    _ui.showToast.call(void 0, _i18n.t.call(void 0, "permSwitchFail", "Failed to switch approval mode"));
-  }
-} exports.setApproval = setApproval;
-(_util.$.call(void 0, "permPill") ).onclick = (e) => {
-  e.stopPropagation();
-  const m = _util.$.call(void 0, "permMenu");
-  m.innerHTML = "";
-  m.appendChild(_sessions.menuLabel.call(void 0, _i18n.t.call(void 0, "permMode", "Approval mode")));
-  exports.APPROVALS.forEach((it) => {
-    m.appendChild(
-      _sessions.menuRow.call(void 0, {
-        label: it.label,
-        hint: typeof it.hint === "function" ? it.hint() : it.hint,
-        check: it.id === exports.approvalMode,
-        onclick: () => setApproval(it.id),
-      }),
-    );
-  });
-  _sessions.openAt.call(void 0, "permMenu", e.currentTarget, "tr");
-};
-
- let sandboxMode = "off"; exports.sandboxMode = sandboxMode;
- const SANDBOXES = [
-  { id: "off", label: "off", hint: () => (_i18n.getLang.call(void 0, ) === "zh" ? "不隔离" : "No isolation") },
-  { id: "workspace", label: "workspace", hint: () => (_i18n.getLang.call(void 0, ) === "zh" ? "工作区可写，其余只读" : "Workspace writable, others read-only") },
-  { id: "strict", label: "strict", hint: () => (_i18n.getLang.call(void 0, ) === "zh" ? "工作区 + 断网" : "Workspace + no network") },
-]; exports.SANDBOXES = SANDBOXES;
- const getSandboxMode = () => exports.sandboxMode; exports.getSandboxMode = getSandboxMode;
- const getApprovalMode = () => exports.approvalMode; exports.getApprovalMode = getApprovalMode;
- const applySandboxLevel = (v) => {
-  exports.sandboxMode = v;
-  setSandboxBtn();
-}; exports.applySandboxLevel = applySandboxLevel;
- function setSandboxBtn() {
-  const p = _util.$.call(void 0, "sbPill");
-  if (!p) return;
-  const cur = exports.SANDBOXES.find((x) => x.id === exports.sandboxMode) || exports.SANDBOXES[0];
-  const be = (window ).sandboxBackend || "";
-  p.textContent =
-    cur.label === "off" ? "sb off" : be ? cur.label + "/" + be : cur.label;
-  p.className =
-    "perm-pill " +
-    (exports.sandboxMode === "strict" ? "perm-deny" : exports.sandboxMode === "workspace" ? "perm-ask" : "");
-  p.title = "Sandbox: " + (typeof cur.hint === "function" ? cur.hint() : cur.hint) + (be ? " · " + be : "");
-} exports.setSandboxBtn = setSandboxBtn;
- async function setSandbox(mode) {
-  exports.sandboxMode = mode;
-  setSandboxBtn();
-  try {
-    const r = await fetch("/api/config", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ setSandboxMode: mode }),
-    });
-    const j = await r.json().catch(() => ({}));
-    if (!r.ok || j.ok === false) {
-      _ui.showToast.call(void 0, j.error || _i18n.t.call(void 0, "sandboxSwitchFail", "Failed to switch sandbox"));
-      return;
-    }
-    if (j && j.sandboxMode) exports.sandboxMode = j.sandboxMode;
-    if (j && j.sandboxBackend) (window ).sandboxBackend = j.sandboxBackend;
-    setSandboxBtn();
-  } catch (e5) {
-    _ui.showToast.call(void 0, _i18n.t.call(void 0, "sandboxSwitchFail", "Failed to switch sandbox"));
-  }
-} exports.setSandbox = setSandbox;
-(_util.$.call(void 0, "sbPill") ).onclick = (e) => {
-  e.stopPropagation();
-  const m = _util.$.call(void 0, "sbMenu");
-  m.innerHTML = "";
-  m.appendChild(_sessions.menuLabel.call(void 0, _i18n.t.call(void 0, "sandboxMode", "Bash sandbox")));
-  exports.SANDBOXES.forEach((it) => {
-    m.appendChild(
-      _sessions.menuRow.call(void 0, {
-        label: it.label,
-        hint: typeof it.hint === "function" ? it.hint() : it.hint,
-        check: it.id === exports.sandboxMode,
-        onclick: () => setSandbox(it.id),
-      }),
-    );
-  });
-  _sessions.openAt.call(void 0, "sbMenu", e.currentTarget, "tr");
-};
-(_util.$.call(void 0, "modePill") ).onclick = () => {
-  const i = _util.$.call(void 0, "inp") ;
-  if (!i.value.startsWith("/")) i.value = "/";
-  i.focus();
-  i.dispatchEvent(new Event("input"));
-};
-// ---- 压缩提示 ----
- function setCost(n) {
-  const el = _util.$.call(void 0, "costLbl");
-  if (!el) return;
-  if (n == null || !(Number(n) > 0)) {
-    el.hidden = true;
-    el.textContent = "";
-    return;
-  }
-  const v = Number(n);
-  el.hidden = false;
-  el.textContent = v < 0.01 ? "$" + v.toFixed(4) : "$" + v.toFixed(3);
-  el.title = "Session cost";
-} exports.setCost = setCost;
- function setCtx(pct, used, win) {
-  const wrap = _util.$.call(void 0, "ctxWrap"),
-    fill = _util.$.call(void 0, "ctxFill"),
-    lbl = _util.$.call(void 0, "ctxLbl");
-  if (wrap && fill && lbl) {
-    const frac =
-      win > 0 ? used / win : Math.max(0, Math.min(1, (+pct || 0) / 100));
-    const n = Math.max(0, Math.min(100, frac * 100));
-    const C = 2 * Math.PI * 7;
-    (fill ).style.strokeDashoffset = String(C * (1 - frac));
-    lbl.textContent =
-      n < 1 && (used > 0 || pct > 0) ? "<1%" : Math.round(n) + "%";
-    wrap.hidden = false;
-    const pretty =
-      n < 0.1 && used > 0
-        ? "<0.1%"
-        : (n < 10 ? n.toFixed(1) : Math.round(n)) + "%";
-    wrap.dataset.baseTitle =
-      used != null && win
-        ? _util.fmtTok.call(void 0, used) + " / " + _util.fmtTok.call(void 0, win) + " · " + pretty
-        : _i18n.t.call(void 0, "context", "Context ") + pretty;
-    wrap.title = wrap.dataset.baseTitle;
-    (fill ).style.stroke =
-      n > 85 ? "var(--color-danger)" : "var(--color-accent)";
-  }
-  if ((win > 0 ? used / win : (+pct || 0) / 100) > 0.85) {
-    const c = _util.$.call(void 0, "compactChip");
-    c.style.display = "";
-    c.onclick = () => {
-      _ui.showToast.call(void 0, _i18n.t.call(void 0, "compressing", "Compressing context..."));
-      _sessions.act.call(void 0, { act: "compact" }, (j) => {
-        _ui.showToast.call(void 0, j && j.ok ? _i18n.t.call(void 0, "compressedOk", "Context compressed") : _i18n.t.call(void 0, "compressedFail", "Compression failed"));
-      });
-    };
-  } else _util.$.call(void 0, "compactChip").style.display = "none";
-} exports.setCtx = setCtx;
- function setTurnMeta(evt) {
-  const el = _util.$.call(void 0, "turnMeta");
-  if (!el) return;
-  const bits = [];
-  if (evt.cache !== undefined && evt.cache !== "")
-    bits.push(_i18n.t.call(void 0, "cache", "Cache ") + evt.cache + "%");
-  if (evt.tps) bits.push(evt.tps + " tok/s");
-  if (!bits.length) {
-    el.hidden = true;
-    return;
-  }
-  el.hidden = false;
-  el.textContent = bits.join(" · ");
-  const wrap = _util.$.call(void 0, "ctxWrap");
-  if (wrap && !wrap.hidden) {
-    const extra = [];
-    if (evt.cache !== undefined && evt.cache !== "") extra.push(_i18n.t.call(void 0, "cache", "Cache ") + evt.cache + "%");
-    if (evt.tps) extra.push(evt.tps + " tok/s");
-    wrap.title =
-      (wrap.dataset.baseTitle || wrap.title || _i18n.t.call(void 0, "context", "Context ")) +
-      (extra.length ? " · " + extra.join(" · ") : "");
-  }
-} exports.setTurnMeta = setTurnMeta;
-// ---- 头部 ----
- function renderHdr(s) {
-  const wsName = s.ws || _util.projectName.call(void 0, _state.ws) || "";
-  const hWs = _util.$.call(void 0, "hWs"),
-    hSep = _util.$.call(void 0, "hSep"),
-    hSes = _util.$.call(void 0, "hSes");
-  if (wsName) {
-    hWs.textContent = wsName;
-    hSep.style.display = "";
-    hWs.onclick = (e) => {
-      e.stopPropagation();
-      _sessions.openWsMenu.call(void 0, hWs);
-    };
-  } else {
-    hWs.textContent = "";
-    hSep.style.display = "none";
-  }
-  hSes.textContent = _state.sess === "default" ? _i18n.t.call(void 0, "defaultSession", "Default session") : s.title || _state.sess;
-  _util.$.call(void 0, "tbWs").textContent = wsName || "";
-  _util.$.call(void 0, "tbSe").textContent =
-    _state.sess === "default" ? _i18n.t.call(void 0, "defaultSession", "Default session") : s.title || _state.sess;
-  const git = _util.$.call(void 0, "hGit");
-  git.innerHTML = "";
-  if (s.branch) {
-    const pill = document.createElement("span");
-    pill.className = "ch-pill";
-    pill.innerHTML =
-      "<b>" +
-      _util.esc.call(void 0, s.branch) +
-      "</b>" +
-      (s.ahead ? ' <span class="ch-ahead">↑' + s.ahead + "</span>" : "") +
-      (s.behind
-        ? ' <span class="ch-behind">↓' + s.behind + "</span>"
-        : "");
-    git.appendChild(pill);
-  }
-  if (s.changes) {
-    const pill = document.createElement("span");
-    pill.className = "ch-pill";
-    pill.style.borderColor =
-      "color-mix(in srgb,var(--color-success) 20%,var(--color-line))";
-    pill.textContent = s.changes + (_i18n.getLang.call(void 0, ) === "zh" ? " 个变更" : " changes");
-    git.appendChild(pill);
-  }
-} exports.renderHdr = renderHdr;
- async function applySessionTitle(tStr, hdr) {
-  try {
-    const r = await fetch(
-      "/api/title?" + _state.wsp + "session=" + encodeURIComponent(_state.sess),
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ title: tStr }),
-      },
-    );
-    const j = await r.json().catch(() => ({}));
-    if (!r.ok || j.ok === false || j.title === undefined) {
-      _ui.showToast.call(void 0, j.error || _i18n.t.call(void 0, "setTitleFail", "Failed to set title"));
-      return false;
-    }
-    exports.curTitle = j.title;
-    if (hdr) renderHdr({ title: j.title });
-    _sessions.loadSessions.call(void 0, );
-    return true;
-  } catch (e6) {
-    _ui.showToast.call(void 0, _i18n.t.call(void 0, "setTitleFail", "Failed to set title"));
-    return false;
-  }
-} exports.applySessionTitle = applySessionTitle;
-(_util.$.call(void 0, "hSes") ).onclick = async () => {
-  const tStr = await _ui.askText.call(void 0, _i18n.t.call(void 0, "sessionTitle", "Session title"), exports.curTitle || "", "");
-  if (tStr === null) return;
-  await applySessionTitle(tStr, true);
-};
-(_util.$.call(void 0, "hKebab") ).onclick = (e) => {
-  e.stopPropagation();
-  const m = _util.$.call(void 0, "kmenu");
-  m.innerHTML = "";
-  const mi = (label, fn, danger) =>
-    m.appendChild(_sessions.menuRow.call(void 0, { label: label.replace(/^[^ ]+ /, ""), icon: label.slice(0, label.indexOf(" ")), danger, onclick: fn }));
-  mi(_i18n.t.call(void 0, "copyReply", "⧉ Copy last reply"), () => _bus.emit.call(void 0, "slash:run", { cmd: { name: "/copy" }, arg: "" }));
-  mi(_i18n.t.call(void 0, "exportHtml", "⎘ Export HTML"), () => _bus.emit.call(void 0, "slash:run", { cmd: { name: "/export" }, arg: "" }));
-  mi(_i18n.t.call(void 0, "tree", "☰ Message list"), () => _bus.emit.call(void 0, "slash:run", { cmd: { name: "/tree" }, arg: "" }));
-  mi(_i18n.t.call(void 0, "dumpAll", "📋 Dump all"), () => _bus.emit.call(void 0, "slash:run", { cmd: { name: "/dump" }, arg: "" }));
-  mi(_i18n.t.call(void 0, "plan", "✎ Plan"), async () => {
-    const g = await _ui.askText.call(void 0, _i18n.t.call(void 0, "planGoal", "Plan goal"), "", _i18n.t.call(void 0, "whatToAccomplish", "What to accomplish"));
-    if (g) _bus.emit.call(void 0, "slash:run", { cmd: { name: "/plan" }, arg: g });
-  });
-  mi(_i18n.t.call(void 0, "renameSession", "✎ Rename session"), async () => {
-    const tStr = await _ui.askText.call(void 0, _i18n.t.call(void 0, "sessionTitle", "Session title"), exports.curTitle || "", "");
-    if (tStr === null) return;
-    await applySessionTitle(tStr, false);
-  });
-  mi(_i18n.t.call(void 0, "forkSession", "✱ Fork session"), async () => {
-    const n = await _ui.askText.call(void 0, _i18n.t.call(void 0, "forkSession", "Fork session"), "", _i18n.t.call(void 0, "forkHint", "New session name, empty for auto"));
-    if (n === null) return;
-    _sessions.act.call(void 0, { act: "fork", name: n || "" }, (j) => {
-      if (j && j.name) {
-        _ui.showToast.call(void 0, _i18n.t.call(void 0, "forked", "Forked ") + j.name);
-        setTimeout(
-          () =>
-            (location.href = _state.sessUrl.call(void 0, j.name) ),
-          600,
-        );
-      }
-    });
-  });
-  m.appendChild(_sessions.menuSep.call(void 0, ));
-  mi(_i18n.t.call(void 0, "undoTurn", "↶ Undo turn"), () => {
-    _sessions.act.call(void 0, { act: "undo" }, (j) => {
-      _ui.showToast.call(void 0, j && j.ok ? _i18n.t.call(void 0, "undone", "Undone") : _i18n.t.call(void 0, "noUndo", "Nothing to undo"));
-      setTimeout(() => location.reload(), 400);
-    });
-  });
-  mi(_i18n.t.call(void 0, "compactContext", "⚡ Compact context"), () => {
-    _ui.showToast.call(void 0, _i18n.t.call(void 0, "compressing", "Compressing context..."));
-    _sessions.act.call(void 0, { act: "compact" }, (j) => {
-      _ui.showToast.call(void 0, j && j.ok ? _i18n.t.call(void 0, "compressedOk", "Context compressed") : _i18n.t.call(void 0, "compressedFail", "Compression failed"));
-    });
-  });
-  m.appendChild(_sessions.menuSep.call(void 0, ));
-  mi(
-    _i18n.t.call(void 0, "archiveSession", "🗄 Archive session"),
-    () => {
-      _sessions.act.call(void 0, { act: "archive" }, (j) => {
-        if (j && j.ok) {
-          _ui.showToast.call(void 0, _i18n.t.call(void 0, "archived", "Archived"));
-          setTimeout(() => (location.href = _state.sessUrl.call(void 0, "default") ), 400);
-        }
-      });
-    },
-    true,
-  );
-  _sessions.openAt.call(void 0, "kmenu", e.currentTarget, "br");
-};
-
-(_util.$.call(void 0, "tbKebab") ).onclick = (e) => {
-  e.stopPropagation();
-  (_util.$.call(void 0, "hKebab") ).onclick(e);
-};
-// ---- 启动时应用 /api/state 之模型簇字段 ----
- function applyBootState(s) {
-  if (s.model) {
-    exports.curModel = s.model;
-    renderModel();
-  }
-  if (typeof s.vision === "boolean") exports.curVision = s.vision;
-  if (s.think) {
-    exports.curThink = s.think;
-    renderThink();
-  }
-  if (s.title) {
-    exports.curTitle = s.title;
-  }
-  if (s.mode || s.auto !== undefined) {
-    exports.approvalMode = s.mode || (s.auto ? "yolo" : "ask");
-    setModeBtn();
-  }
-  renderHdr(s);
-} exports.applyBootState = applyBootState;
-
-_bus.on.call(void 0, "session:select", (s) => {
-  if (s && (s.mode || s.auto !== undefined)) {
-    exports.setApprovalMode.call(void 0, s.mode || (s.auto ? "yolo" : "ask"));
-  }
-});
-
-};
-__modules["md"] = function(module, exports, require) {
-"use strict";Object.defineProperty(exports, "__esModule", {value: true}); function _nullishCoalesce(lhs, rhsFn) { if (lhs != null) { return lhs; } else { return rhsFn(); } }// md.ts —— 极简 markdown / ansi / diff / todo 渲染,纯字符串进 HTML 出。
-// 块级:标题/表格/任务列表/嵌套列表/引用/分割线/围栏代码(含语法着色与头部栏)。
-var _util = require('./util');
-var _i18n = require('./i18n');
-
-// ---- 语法着色(轻量 tokenizer;关键字取常见语言并集) ----
-const KW = new Set(
-  (
-    "const let var fn pub function return if else elif for while do switch case default break continue " +
-    "import from export class struct enum union interface type extends implements new delete typeof instanceof " +
-    "in of try catch finally throw throws raise await async yield static this self super null undefined nil " +
-    "none None true false True False and or not is def pass with as print package go defer chan select match " +
-    "where mut impl trait use mod crate void int float double char bool string byte rune error any unknown " +
-    "never public private protected readonly abstract override virtual final sealed internal namespace " +
-    "using module requires concept template typename auto constexpr inline extern volatile register sizeof " +
-    "alignof noexcept comptime orelse unreachable errdefer test threadlocal callconv asm " +
-    "then done fi esac echo local declare shift trap source set unset eval exec " +
-    "begin end rescue ensure unless until when attr_accessor include extend require " +
-    "dyn box move Self unsafe"
-  ).split(/\s+/),
-);
-// # 行注释仅这些语言(zig/js 等把 # 当普通字符)
-const HASHLANG = new Set(
-  ("sh bash zsh shell py python ruby rb perl pl r yaml yml toml ini conf cfg makefile make dockerfile nim crystal elixir ex exs").split(/\s+/),
-);
-const TOK_RE =
-  /(\/\*[\s\S]*?\*\/)|(\/\/[^\n]*)|(#[^\n]*)|("(?:[^"\\\n]|\\.)*"?|'(?:[^'\\\n]|\\.)*'?|`(?:[^`\\]|\\.)*`?)|(\b\d[\d_]*(?:\.[\d_]+)?(?:[eE][+-]?\d+)?[a-zA-Z]*)|([A-Za-z_$][A-Za-z0-9_$]*)/g;
-
- function hlCode(code, lang) {
-  const hashC = HASHLANG.has(lang.toLowerCase());
-  let html = "";
-  let last = 0;
-  TOK_RE.lastIndex = 0;
-  let m;
-  while ((m = TOK_RE.exec(code)) !== null) {
-    if (m.index > last) html += _util.esc.call(void 0, code.slice(last, m.index));
-    const [full, blk, line, hash, str, num, word] = m;
-    if (blk || line) html += '<span class="tk-c">' + _util.esc.call(void 0, full) + "</span>";
-    else if (hash) html += hashC ? '<span class="tk-c">' + _util.esc.call(void 0, full) + "</span>" : _util.esc.call(void 0, full);
-    else if (str) html += '<span class="tk-s">' + _util.esc.call(void 0, full) + "</span>";
-    else if (num) html += '<span class="tk-n">' + _util.esc.call(void 0, full) + "</span>";
-    else if (word) {
-      if (KW.has(word)) html += '<span class="tk-k">' + _util.esc.call(void 0, full) + "</span>";
-      else if (code[TOK_RE.lastIndex] === "(") html += '<span class="tk-f">' + _util.esc.call(void 0, full) + "</span>";
-      else html += _util.esc.call(void 0, full);
-    }
-    last = TOK_RE.lastIndex;
-  }
-  if (last < code.length) html += _util.esc.call(void 0, code.slice(last));
-  return html;
-} exports.hlCode = hlCode;
-
-// ---- 代码块外壳:语言徽标 + 复制钮(点击委托在 chat.ts) ----
-function codeBlock(lang, body) {
-  const L = (lang || "").trim();
-  const inner = L ? hlCode(body, L) : _util.esc.call(void 0, body);
-  return (
-    '<div class="cb"><div class="cb-hd"><span class="cb-lang">' +
-    _util.esc.call(void 0, L) +
-    '</span><button class="pre-cp" type="button" title="' +
-    _i18n.t.call(void 0, "copy", "Copy") +
-    '">⧉</button></div><pre><code>' +
-    inner +
-    "</code></pre></div>"
-  );
-}
-
-// ---- 行内:转义优先,再码/粗/斜/删/链 ----
- function mdInline(s) {
-  const spans = [];
-  // 码段先占位,防内部字符被粗斜体吃掉
-  s = s.replace(/`([^`]+)`/g, (_m, c) => "\u0000" + (spans.push("<code>" + _util.esc.call(void 0, c) + "</code>") - 1) + "\u0000");
-  s = _util.esc.call(void 0, s);
-  s = s.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
-  s = s.replace(/(^|[^*])\*(?!\s|\*)([^*]*[^\s*])\*(?!\*)/g, "$1<em>$2</em>");
-  s = s.replace(/~~(.+?)~~/g, "<del>$1</del>");
-  s = s.replace(
-    /\[([^\]]+)\]\((https?:[^)\s]+)\)/g,
-    '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>',
-  );
-  s = s.replace(
-    /(^|[\s(>])((?:https?:\/\/)[^\s<>()"]+[^\s<>().,;:!?'"])/g,
-    '$1<a href="$2" target="_blank" rel="noopener noreferrer">$2</a>',
-  );
-  s = s.replace(/\u0000(\d+)\u0000/g, (_m, i) => spans[+i]);
   return s;
-} exports.mdInline = mdInline;
-
-// CJK 相邻行间不补空格
-function joinLines(a) {
-  let o = a[0] || "";
-  for (let i = 1; i < a.length; i++) {
-    const prev = o[o.length - 1] || "";
-    const cur = a[i][0] || "";
-    o += /[\u2e80-\u9fff\uff00-\uffef\u3000-\u303f]/.test(prev + cur) ? a[i] : " " + a[i];
-  }
-  return o;
 }
 
-// ---- 表格:表头行 + 界定行(|---|) ----
-function isTableAt(lines, i) {
-  if (i + 1 >= lines.length) return false;
-  const head = lines[i], sep = lines[i + 1];
-  if (!/^\s*\|?[\s:|-]+\|?\s*$/.test(sep) || !/-/.test(sep)) return false;
-  return /\|/.test(head) && /\|/.test(sep);
-}
-function splitRow(line) {
-  let t = line.trim();
-  if (t.startsWith("|")) t = t.slice(1);
-  if (t.endsWith("|")) t = t.slice(0, -1);
-  return t.split(/(?<!\\)\|/).map((c) => c.trim().replace(/\\\|/g, "|"));
-}
-function tableHtml(lines, start) {
-  const head = splitRow(lines[start]);
-  const seps = splitRow(lines[start + 1]);
-  const aligns = seps.map((s) =>
-    s.startsWith(":") && s.endsWith(":") ? "center" : s.endsWith(":") ? "right" : "left",
-  );
-  let html = '<div class="tbl"><table><thead><tr>';
-  head.forEach((c, i) => {
-    html += '<th style="text-align:' + (aligns[i] || "left") + '">' + mdInline(c) + "</th>";
-  });
-  html += "</tr></thead><tbody>";
-  let i = start + 2;
-  while (i < lines.length && /\|/.test(lines[i]) && lines[i].trim() !== "") {
-    const cells = splitRow(lines[i]);
-    html += "<tr>";
-    for (let c = 0; c < head.length; c++) {
-      html += '<td style="text-align:' + (aligns[c] || "left") + '">' + mdInline(cells[c] || "") + "</td>";
-    }
-    html += "</tr>";
-    i++;
-  }
-  html += "</tbody></table></div>";
-  return { html, next: i };
-}
+ function renderMarkdown(markdown) {
+  if (!markdown) return "";
 
-// ---- 列表:缩进栈出嵌套;任务项 [ ]/[x];懒续行并入上项 ----
-const ITEM_RE = /^(\s{0,12})([-*+]|(\d+)[.)])\s+(.*)$/;
-function listHtml(lines, start) {
-  const items = [];
-  let i = start;
-  while (i < lines.length) {
-    const m = ITEM_RE.exec(lines[i]);
-    if (m) {
-      items.push({ ind: m[1].length, ord: !!m[3], text: m[4] });
-      i++;
-      continue;
-    }
-    const last = items[items.length - 1];
-    if (last && lines[i].trim() !== "" && /^\s{2,}/.test(lines[i])) {
-      last.text += "\n" + lines[i].trim();
-      i++;
-      continue;
-    }
-    break;
-  }
-  let html = "";
-  const stack = [];
-  const closeTo = (ind) => {
-    while (stack.length && stack[stack.length - 1].ind > ind) {
-      html += stack.pop().ord ? "</ol>" : "</ul>";
-    }
-  };
-  for (const it of items) {
-    let top = stack[stack.length - 1];
-    if (top && it.ind < top.ind) closeTo(it.ind);
-    top = stack[stack.length - 1];
-    if (!top || it.ind > top.ind || (it.ind === top.ind && it.ord !== top.ord)) {
-      if (top && it.ind === top.ind) {
-        html += top.ord ? "</ol>" : "</ul>";
-        stack.pop();
-      }
-      html += it.ord ? "<ol>" : "<ul>";
-      stack.push({ ind: it.ind, ord: it.ord });
-    }
-    const tm = /^\[([ xX])\]\s+([\s\S]*)$/.exec(it.text);
-    if (tm) {
-      const done = tm[1] !== " ";
-      html +=
-        '<li class="task' +
-        (done ? " done" : "") +
-        '"><span class="task-box" aria-hidden="true">' +
-        (done ? "✓" : "") +
-        "</span><span>" +
-        mdInline(tm[2]) +
-        "</span></li>";
-    } else {
-      html += "<li>" + mdInline(joinLines(it.text.split("\n"))) + "</li>";
-    }
-  }
-  closeTo(-1);
-  return { html, next: i };
-}
+  const lines = markdown.split(/\r?\n/);
+  const out = [];
+  let inCodeBlock = false;
+  let codeBlockLang = "";
+  let codeBlockContent = [];
+  let inTable = false;
+  let inList = false;
+  let inBlockquote = false;
 
-// ---- 块级主体 ----
- function mdBlocks(src) {
-  const lines = String(src).replace(/\r\n/g, "\n").split("\n");
-  let html = "";
-  let i = 0;
-  let para = [];
-  const flushP = () => {
-    if (!para.length) return;
-    html += "<p>" + mdInline(joinLines(para)) + "</p>";
-    para = [];
-  };
-  while (i < lines.length) {
+  for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    if (/^\s*$/.test(line)) {
-      flushP();
-      i++;
-      continue;
-    }
-    // 围栏代码(吞到闭合;流式期由 closeFences 补闭合)
-    const fm = /^\s*```([^\s`]*)\s*$/.exec(line);
-    if (fm) {
-      flushP();
-      const body = [];
-      i++;
-      const closeRe = /^\s*```\s*$/;
-      while (i < lines.length && !closeRe.test(lines[i])) {
-        body.push(lines[i]);
-        i++;
-      }
-      i++; // 吃闭合行
-      html += codeBlock(fm[1] || "", body.join("\n"));
-      continue;
-    }
-    const hm = /^(#{1,6})\s+(.+?)\s*#*\s*$/.exec(line);
-    if (hm) {
-      flushP();
-      html += "<h" + hm[1].length + ">" + mdInline(hm[2]) + "</h" + hm[1].length + ">";
-      i++;
-      continue;
-    }
-    if (/^((-\s*){3,}|(\*\s*){3,}|(_\s*){3,})$/.test(line.trim() + " ")) {
-      flushP();
-      html += "<hr/>";
-      i++;
-      continue;
-    }
-    if (/^>\s?/.test(line)) {
-      flushP();
-      const qs = [];
-      while (i < lines.length) {
-        if (/^>\s?/.test(lines[i])) {
-          qs.push(lines[i].replace(/^>\s?/, ""));
-          i++;
-          continue;
-        }
-        // 空行续引用仅当后行仍是引用
-        if (lines[i].trim() === "" && i + 1 < lines.length && /^>\s?/.test(lines[i + 1])) {
-          qs.push("");
-          i++;
-          continue;
-        }
-        break;
-      }
-      const first = qs[0] || "";
-      const am = /^\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\](?:\s+(.*))?$/i.exec(first);
-      if (am) {
-        const kind = am[1].toUpperCase();
-        const rest = qs.slice(1);
-        if (am[2]) rest.unshift(am[2]);
-        const inner = mdBlocks(rest.join("\n"));
-        html += '<div class="callout callout-' + kind.toLowerCase() + '"><div class="callout-hd">' + kind + "</div>" + inner + "</div>";
+
+    // 代码块判定 ```lang
+    if (line.trim().startsWith("```")) {
+      if (inCodeBlock) {
+        // 闭合代码块
+        const codeText = escapeHtml(codeBlockContent.join("\n"));
+        out.push(
+          `<div class="code-block" data-lang="${codeBlockLang}">` +
+            `<div class="code-block-hdr">` +
+              `<span class="code-lang">${codeBlockLang || "text"}</span>` +
+              `<button class="copy-btn" onclick="navigator.clipboard.writeText(this.closest('.code-block').querySelector('code').innerText);this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500)">Copy</button>` +
+            `</div>` +
+            `<pre><code class="lang-${codeBlockLang}">${codeText}</code></pre>` +
+          `</div>`
+        );
+        inCodeBlock = false;
+        codeBlockLang = "";
+        codeBlockContent = [];
       } else {
-        html += "<blockquote>" + mdBlocks(qs.join("\n")) + "</blockquote>";
+        // 打开代码块
+        inCodeBlock = true;
+        codeBlockLang = line.trim().slice(3).trim();
+        codeBlockContent = [];
       }
       continue;
     }
-    if (isTableAt(lines, i)) {
-      flushP();
-      const t = tableHtml(lines, i);
-      html += t.html;
-      i = t.next;
+
+    if (inCodeBlock) {
+      codeBlockContent.push(line);
       continue;
     }
-    if (ITEM_RE.test(line)) {
-      flushP();
-      const l = listHtml(lines, i);
-      html += l.html;
-      i = l.next;
-      continue;
-    }
-    para.push(line);
-    i++;
-  }
-  flushP();
-  return html;
-} exports.mdBlocks = mdBlocks;
 
-// ---- 入口:助手消息与 inspect 共用 ----
- function md(raw) {
-  return mdBlocks(String(_nullishCoalesce(raw, () => ( ""))));
-} exports.md = md;
- function renderMd(src) {
-  return mdBlocks(String(_nullishCoalesce(src, () => ( ""))));
-} exports.renderMd = renderMd;
-
-// ---- ANSI(工具终端输出):语义类名,浅深两套色板在 webui.css ----
-const AC = {
-  "30": "30", "31": "31", "32": "32", "33": "33", "34": "34", "35": "35",
-  "36": "36", "37": "37", "90": "90", "91": "91", "92": "92", "93": "93",
-  "94": "94", "95": "95", "96": "96", "97": "97",
-};
- function ansiHtml(t) {
-  // 逐段包 span:颜色切换处收前段、开新段(旧实现把整段染成末尾色)
-  let o = "",
-    last = 0,
-    fg = null;
-  const re = /\x1b\[([0-9;]*)m/g;
-  let m;
-  const flush = (end) => {
-    const seg = _util.esc.call(void 0, t.slice(last, end));
-    if (!seg) return;
-    o += fg ? '<span class="ansi-' + fg + '">' + seg + "</span>" : seg;
-  };
-  while ((m = re.exec(t)) !== null) {
-    flush(m.index);
-    const c = m[1].split(";").filter(Boolean);
-    if (c.includes("0") || c.length === 0) fg = null;
-    else {
-      const col = AC[c.find((x) => AC[x]) || ""];
-      if (col) fg = col;
-    }
-    last = m.index + m[0].length;
-  }
-  flush(t.length);
-  return o;
-} exports.ansiHtml = ansiHtml;
-
-// ---- diff / todo(工具卡) ----
- function diffHtml(t) {
-  const lines = String(t || "").split("\n");
-  let html = "";
-  let file = "";
-  for (const l of lines) {
-    if (/^(edited|wrote|created)\b/i.test(l)) {
-      html += '<div class="diff-meta">' + _util.esc.call(void 0, l) + "</div>";
-      continue;
-    }
-    if (l.startsWith("+++ ")) {
-      file = l.slice(4).replace(/^[ab]\//, "");
-      continue;
-    }
-    if (l.startsWith("--- ")) continue;
-    if (l.startsWith("@@")) {
-      html +=
-        '<div class="diff-row hunk"><span class="g"></span><span class="ln">' +
-        _util.esc.call(void 0, l) +
-        "</span></div>";
-      continue;
-    }
-    if (l.startsWith("+")) {
-      html +=
-        '<div class="diff-row add"><span class="g">+</span><span class="ln">' +
-        _util.esc.call(void 0, l.slice(1)) +
-        "</span></div>";
-      continue;
-    }
-    if (l.startsWith("-")) {
-      html +=
-        '<div class="diff-row del"><span class="g">−</span><span class="ln">' +
-        _util.esc.call(void 0, l.slice(1)) +
-        "</span></div>";
-      continue;
-    }
-    html +=
-      '<div class="diff-row"><span class="g"></span><span class="ln">' + _util.esc.call(void 0, l) + "</span></div>";
-  }
-  if (file) html = '<div class="diff-file">' + _util.esc.call(void 0, file) + "</div>" + html;
-  return html;
-} exports.diffHtml = diffHtml;
- function todoHtml(t) {
-  let html = "";
-  for (const l of String(t || "").split("\n")) {
-    const m = /^\[([ x>X])\]\s*(.*)$/.exec(l);
-    if (m) {
-      const st = m[1] === "x" || m[1] === "X" ? "done" : m[1] === ">" ? "run" : "pend";
-      const bm = /^(.*)\s+@([A-Za-z][A-Za-z0-9_-]*)$/.exec(m[2]);
-      const tx = bm ? bm[1] : m[2];
-      const bind = bm ? bm[2] : "";
-      html +=
-        '<div class="todo-i ' +
-        st +
-        '"><span class="todo-box"></span><span class="todo-tx">' +
-        _util.esc.call(void 0, tx) +
-        (bind ? '<span class="todo-bind">@' + _util.esc.call(void 0, bind) + "</span>" : "") +
-        "</span></div>";
-    } else if (l.trim()) {
-      html += '<div class="todo-foot">' + _util.esc.call(void 0, l) + "</div>";
-    }
-  }
-  return html;
-} exports.todoHtml = todoHtml;
-
-};
-__modules["sheet"] = function(module, exports, require) {
-"use strict";Object.defineProperty(exports, "__esModule", {value: true}); function _optionalChain(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }// sheet.ts —— 移动 sheet(下滑关闭)、侧栏折叠钮、顶栏 sheet 钮、空态 welcome。
-// 自 webui.js 切出。setBtn 之线归 settings.ts(sheet↛settings,避环)。
-var _util = require('./util');
-var _state = require('./state');
-var _sessions = require('./sessions');
-var _bus = require('./bus');
-
-const sheet = _util.$.call(void 0, "sheet");
- function openSheet() {
-  _sessions.loadSessions.call(void 0, );
-  sheet.classList.add("open");
-  document.body.style.overflow = "hidden"; // 锁住背后滚动
-} exports.openSheet = openSheet;
- function closeSheet() {
-  sheet.classList.remove("open");
-  document.body.style.overflow = "";
-} exports.closeSheet = closeSheet;
-
-_bus.on.call(void 0, "session:select", () => closeSheet());
-// 下滑关闭:按住 grab/头部往下拖超过 70px 或快甩即收。
-(function () {
-  const pnl = _util.$.call(void 0, "spnl");
-  if (!pnl) return;
-  let y0 = 0,
-    dy = 0,
-    t0 = 0,
-    drag = false;
-  pnl.addEventListener("touchstart", (e) => {
-    const onHandle = e.target.closest(".grab, .shd");
-    const atTop = _util.$.call(void 0, "sbody") && (_util.$.call(void 0, "sbody") ).scrollTop <= 0;
-    drag = !!(onHandle || atTop);
-    y0 = e.touches[0].clientY;
-    t0 = Date.now();
-    dy = 0;
-    if (drag) pnl.style.transition = "none";
-  }, { passive: true });
-  pnl.addEventListener("touchmove", (e) => {
-    if (!drag) return;
-    dy = Math.max(0, e.touches[0].clientY - y0);
-    pnl.style.transform = "translateY(" + dy + "px)";
-  }, { passive: true });
-  pnl.addEventListener("touchend", () => {
-    if (!drag) return;
-    drag = false;
-    pnl.style.transition = "";
-    pnl.style.transform = "";
-    const fling = Date.now() - t0 < 250 && dy > 30;
-    if (dy > 70 || fling) closeSheet();
-  });
-})();
-(_util.$.call(void 0, "scrim") ).onclick = closeSheet;
-(_util.$.call(void 0, "scls") ).onclick = closeSheet;
-(_util.$.call(void 0, "tbMid") ).onclick = openSheet;
-(_util.$.call(void 0, "newBtn") ).onclick = () => {
-  location.href = _state.sessUrl.call(void 0, Math.random().toString(36).slice(2, 8));
-};
-(_util.$.call(void 0, "colBtn") ).onclick = () => {
-  document.body.classList.add("collapsed");
-  try {
-    localStorage.setItem("piz.sidebar", "1");
-  } catch (e2) {}
-};
-(_util.$.call(void 0, "expBtn") ).onclick = () => {
-  document.body.classList.remove("collapsed");
-  try {
-    localStorage.setItem("piz.sidebar", "0");
-  } catch (e3) {}
-};
-(document.querySelector(".ch-brand") ).onclick = (e) => {
-  e.stopPropagation();
-  _sessions.openWsMenu.call(void 0, e.currentTarget);
-};
-// 空状态
- function hideWelcome() {
-  const x = _util.$.call(void 0, "welcome");
-  if (x) x.remove();
-  _optionalChain([_util.$.call(void 0, "app"), 'optionalAccess', _ => _.classList, 'access', _2 => _2.remove, 'call', _3 => _3("hero")]);
-} exports.hideWelcome = hideWelcome;
-
-};
-__modules["plugins"] = function(module, exports, require) {
-"use strict";Object.defineProperty(exports, "__esModule", {value: true}); function _interopRequireWildcard(obj) { if (obj && obj.__esModule) { return obj; } else { var newObj = {}; if (obj != null) { for (var key in obj) { if (Object.prototype.hasOwnProperty.call(obj, key)) { newObj[key] = obj[key]; } } } newObj.default = obj; return newObj; } }// plugins.ts —— 插件 SDK v1:listener 总线、pluginUrl/pluginApi、loadPlugins、
-// window.piz、beforeunload 清理。自 webui.js 切出。
-// api.send 借 composer 之 getRunning/sendPlain,环引(plugins↔composer)为
-// build-web DFS 所禁,故以 pluginsH 钩袋迟取;chat/composer 直引本模块无环。
-var _state = require('./state');
-var _ui = require('./ui');
-var _store = require('./store');
-var _bus = require('./bus');
-
-const pluginListeners = new Map(),
-  msgRenderers = [],
-  pluginCleanups = [];
- const toolRenderers = new Map(); exports.toolRenderers = toolRenderers;
- const getToolRenderer = (n) => exports.toolRenderers.get(n); exports.getToolRenderer = getToolRenderer;
- function pluginEmit(type, detail) {
-  for (const fn of pluginListeners.get(type) || []) {
-    try {
-      fn(detail);
-    } catch (e) {
-      console.error("[piz plugin]", e);
-    }
-  }
-  window.dispatchEvent(new CustomEvent("piz:" + type, { detail }));
-} exports.pluginEmit = pluginEmit;
- function pluginOn(type, fn) {
-  const set = pluginListeners.get(type) || new Set();
-  set.add(fn);
-  pluginListeners.set(type, set);
-  return () => set.delete(fn);
-} exports.pluginOn = pluginOn;
- function pluginUrl(path) {
-  const u = new URL(path, location.href);
-  if (_state.ws) u.searchParams.set("ws", _state.ws);
-  return u.href;
-} exports.pluginUrl = pluginUrl;
- function pluginApi(meta) {
-  const owned = [];
-  const api = {
-    version: 1,
-    id: meta.id,
-    name: meta.name,
-    session: _state.sess,
-    workspace: _state.ws,
-    asset: (rel) =>
-      pluginUrl(new URL(rel, new URL(meta.base, location.href)).href),
-    on: (type, fn) => {
-      const off = pluginOn(type, fn);
-      owned.push(off);
-      return off;
-    },
-    toast: _ui.showToast,
-    fetch: async (path, opts) => {
-      const u = new URL(path, location.href);
-      if (u.origin !== location.origin || !u.pathname.startsWith("/api/"))
-        throw new Error(
-          "plugin fetch only allows same-origin /api routes",
-        );
-      if (_state.ws && !u.searchParams.has("ws")) u.searchParams.set("ws", _state.ws);
-      return fetch(u, opts);
-    },
-    send: (text) => {
-      if (_store.getRunning.call(void 0, )) return false;
-      _bus.emit.call(void 0, "chat:send", { text: String(text) });
-      return true;
-    },
-    ui: {
-      slot: (name) =>
-        document.querySelector('[data-piz-slot="' + name + '"]'),
-      mount: (slot, value) => {
-        const host = api.ui.slot(slot);
-        if (!host) throw new Error("unknown slot: " + slot);
-        const root = document.createElement("span");
-        root.dataset.pizPlugin = meta.id;
-        root.appendChild(
-          value instanceof Node
-            ? value
-            : document.createTextNode(String(value)),
-        );
-        host.appendChild(root);
-        owned.push(() => root.remove());
-        return root;
-      },
-      button: (slot, spec = {}) => {
-        const b = document.createElement("button");
-        b.type = "button";
-        b.className =
-          "piz-plugin-btn" + (spec.className ? " " + spec.className : "");
-        b.textContent = spec.label || meta.name;
-        b.title = spec.title || "";
-        if (spec.onClick) b.addEventListener("click", spec.onClick);
-        api.ui.mount(slot, b);
-        return b;
-      },
-    },
-    renderTool: (name, fn) => {
-      exports.toolRenderers.set(name, fn);
-      owned.push(() => {
-        if (exports.toolRenderers.get(name) === fn) exports.toolRenderers.delete(name);
-      });
-    },
-    renderMessage: (fn) => {
-      msgRenderers.push(fn);
-      owned.push(() => {
-        const i = msgRenderers.indexOf(fn);
-        if (i >= 0) msgRenderers.splice(i, 1);
-      });
-    },
-    storage: {
-      get: (key, fb = null) => {
-        try {
-          const v = localStorage.getItem(
-            "piz.plugin." + meta.id + "." + key,
-          );
-          return v === null ? fb : JSON.parse(v);
-        } catch (e2) {
-          return fb;
-        }
-      },
-      set: (key, value) =>
-        localStorage.setItem(
-          "piz.plugin." + meta.id + "." + key,
-          JSON.stringify(value),
-        ),
-      remove: (key) =>
-        localStorage.removeItem("piz.plugin." + meta.id + "." + key),
-    },
-  };
-  api.dispose = () => {
-    while (owned.length) {
-      try {
-        owned.pop()();
-      } catch (e3) {}
-    }
-  };
-  return Object.freeze(api);
-} exports.pluginApi = pluginApi;
- async function loadPlugins() {
-  try {
-    const r = await fetch("/api/plugins?" + _state.wsp);
-    if (!r.ok) throw new Error("manifest " + r.status);
-    const m = await r.json();
-    for (const meta of m.plugins || []) {
-      try {
-        if (meta.style) {
-          const l = document.createElement("link");
-          l.rel = "stylesheet";
-          l.href = pluginUrl(meta.style);
-          l.dataset.pizPlugin = meta.id;
-          document.head.appendChild(l);
-          pluginCleanups.push(() => l.remove());
-        }
-        const mod = await Promise.resolve().then(() => _interopRequireWildcard(require(pluginUrl(meta.entry))));
-        const activate =
-          typeof mod.activate === "function"
-            ? mod.activate
-            : typeof mod.default === "function"
-              ? mod.default
-              : null;
-        if (!activate) throw new Error("missing activate(api)");
-        const api = pluginApi(meta);
-        const cleanup = await activate(api);
-        pluginCleanups.push(() => {
-          try {
-            if (typeof cleanup === "function") cleanup();
-          } finally {
-            api.dispose();
-          }
-        });
-        pluginEmit("plugin-loaded", { plugin: meta });
-      } catch (e) {
-        console.error("[piz plugin " + meta.id + "]", e);
-        pluginEmit("plugin-error", { plugin: meta, error: String(e) });
+    // 表格判定 | a | b |
+    if (line.trim().startsWith("|") && line.trim().endsWith("|")) {
+      if (!inTable) {
+        inTable = true;
+        out.push('<div class="table-wrap"><table>');
       }
+      // 忽略分隔线 |---|---|
+      if (/^\|[\s\-:|]+\|$/.test(line.trim())) {
+        continue;
+      }
+      const cells = line
+        .trim()
+        .slice(1, -1)
+        .split("|")
+        .map((c) => c.trim());
+      const isHeader = i + 1 < lines.length && /^\|[\s\-:|]+\|$/.test(lines[i + 1].trim());
+      const tag = isHeader ? "th" : "td";
+      out.push("<tr>" + cells.map((c) => `<${tag}>${renderInline(c)}</${tag}>`).join("") + "</tr>");
+      continue;
+    } else if (inTable) {
+      inTable = false;
+      out.push("</table></div>");
     }
-    pluginEmit("ready", {
-      apiVersion: m.apiVersion || 1,
-      plugins: m.plugins || [],
-    });
-  } catch (e) {
-    console.error("[piz plugins]", e);
+
+    // 引用块 > quote
+    if (line.startsWith("> ") || line === ">") {
+      if (!inBlockquote) {
+        inBlockquote = true;
+        out.push("<blockquote>");
+      }
+      out.push(`<p>${renderInline(line.slice(2))}</p>`);
+      continue;
+    } else if (inBlockquote) {
+      inBlockquote = false;
+      out.push("</blockquote>");
+    }
+
+    // 列表判定 - item or * item or 1. item
+    const listMatch = line.match(/^(\s*)([-*]|\d+\.)\s+(.*)$/);
+    if (listMatch) {
+      if (!inList) {
+        inList = true;
+        out.push("<ul>");
+      }
+      let content = listMatch[3];
+      // 任务列表 [ ] or [x]
+      if (content.startsWith("[ ] ")) {
+        content = `<input type="checkbox" disabled class="task-chk"> ` + content.slice(4);
+      } else if (content.startsWith("[x] ")) {
+        content = `<input type="checkbox" checked disabled class="task-chk"> ` + content.slice(4);
+      }
+      out.push(`<li>${renderInline(content)}</li>`);
+      continue;
+    } else if (inList) {
+      inList = false;
+      out.push("</ul>");
+    }
+
+    // 空行
+    if (!line.trim()) {
+      continue;
+    }
+
+    // 标题 # ## ###
+    const hMatch = line.match(/^(#{1,6})\s+(.*)$/);
+    if (hMatch) {
+      const level = hMatch[1].length;
+      out.push(`<h${level}>${renderInline(hMatch[2])}</h${level}>`);
+      continue;
+    }
+
+    // 分隔线 ---
+    if (/^(\*{3,}|-{3,}|_{3,})$/.test(line.trim())) {
+      out.push("<hr />");
+      continue;
+    }
+
+    // 常规段落
+    out.push(`<p>${renderInline(line)}</p>`);
   }
-} exports.loadPlugins = loadPlugins;
-(window ).piz = Object.freeze({
-  version: 1,
-  on: pluginOn,
-  session: _state.sess,
-  workspace: _state.ws,
-  slots: ["header", "composer", "status"],
-});
-window.addEventListener("beforeunload", () => {
-  while (pluginCleanups.length) {
-    try {
-      pluginCleanups.pop()();
-    } catch (e4) {}
+
+  // 兜底闭合流式未完结结构
+  if (inCodeBlock) {
+    const codeText = escapeHtml(codeBlockContent.join("\n"));
+    out.push(
+      `<div class="code-block is-streaming" data-lang="${codeBlockLang}">` +
+        `<div class="code-block-hdr">` +
+          `<span class="code-lang">${codeBlockLang || "text"}</span>` +
+        `</div>` +
+        `<pre><code class="lang-${codeBlockLang}">${codeText}</code></pre>` +
+      `</div>`
+    );
   }
-});
+  if (inTable) out.push("</table></div>");
+  if (inBlockquote) out.push("</blockquote>");
+  if (inList) out.push("</ul>");
+
+  return out.join("\n");
+} exports.renderMarkdown = renderMarkdown;
 
 };
 __modules["chat"] = function(module, exports, require) {
-"use strict";Object.defineProperty(exports, "__esModule", {value: true}); function _nullishCoalesce(lhs, rhsFn) { if (lhs != null) { return lhs; } else { return rhsFn(); } }// chat.ts —— 线程渲染核心:滚动贴底/回底钮、会话内搜索、历史重放、消息流、
-// 工作卡(work/Flow 工作流图)、工具卡与 inspect 窗格、审批卡、系统行。
-// 自 webui.js 切出。main 之物(欢迎页/插件/授权/发送)经 chatH 钩袋注入,别名包装保调用点不改;
-// 活读改 H.getX()(lastUser),活写改 H.setX()(lastUser、histStart/histTotal 由 setHistRange)。
-
-
-
-var _util = require('./util');
+"use strict";Object.defineProperty(exports, "__esModule", {value: true});// chat.ts —— 对话流视图 (Turn 境界、思考流折叠、步骤轨迹与 Markdown 渲染)
+var _dom = require('./dom');
+var _store = require('./store');
 var _md = require('./md');
-var _state = require('./state');
-var _ui = require('./ui');
-var _sessions = require('./sessions');
-var _model = require('./model');
-var _sheet = require('./sheet');
-var _plugins = require('./plugins');
-var _i18n = require('./i18n');
-var _store = require('./store');
-var _bus = require('./bus');
 
-// ---- 渲染 ----
- const th = _util.$.call(void 0, "thread"); exports.th = th;
-let stick = true;
-// 代码块复制:一次性委托(钮随 md.ts 的 <pre> 渲染;inspect 窗格同沾)
-document.addEventListener("click", (e) => {
-  const b = e.target && e.target.closest ? e.target.closest(".pre-cp") : null;
-  if (!b) return;
-  const box = b.closest(".cb") || b.parentElement;
-  const code = box && box.querySelector("code");
-  _ui.clipText.call(void 0, code ? code.textContent || "" : "", _i18n.t.call(void 0, "copied", "Copied"), _i18n.t.call(void 0, "copyFailed", "Failed to copy"));
-});
-// 回到底部:非贴底且有溢出时现身
-const toB = _util.$.call(void 0, "toBottom");
-function updToBottom() {
-  const p = _util.$.call(void 0, "panes");
-  const overflow = p.scrollHeight - p.clientHeight > 40;
-  toB.hidden = stick || !overflow;
-}
-toB.onclick = () => {
-  const p = _util.$.call(void 0, "panes");
-  stick = true;
-  p.scrollTop = p.scrollHeight;
-  updToBottom();
-};
-_util.$.call(void 0, "panes").addEventListener("scroll", () => {
-  const p = _util.$.call(void 0, "panes");
-  stick = p.scrollHeight - p.scrollTop - p.clientHeight < 80;
-  updToBottom();
-});
- function scrl() {
-  if (replayQuiet) return;
-  if (stick) _util.$.call(void 0, "panes").scrollTop = _util.$.call(void 0, "panes").scrollHeight;
-  updToBottom();
-} exports.scrl = scrl;
-let replayQuiet = false;
-let webFindQ = "",
-  webFindIdx = -1;
- async function findInThread(q, reverse, retried) {
-  q = String(q || "").trim();
-  if (!q) return false;
-  if (q !== webFindQ) {
-    webFindQ = q;
-    webFindIdx = reverse ? 1e9 : -1;
-  }
-  const nodes = exports.th.querySelectorAll(".u-bub, .md, .p, .bb-pad");
-  const hits = [];
-  const low = q.toLowerCase();
-  nodes.forEach((el) => {
-    if ((el.textContent || "").toLowerCase().indexOf(low) >= 0) hits.push(el);
-  });
-  exports.th.querySelectorAll(".find-hit").forEach((e) => e.classList.remove("find-hit"));
-  if (!hits.length) {
-    if (!retried && histStart > 0) {
-      await loadOlder();
-      return findInThread(q, reverse, true);
-    }
-    return false;
-  }
-  if (reverse) webFindIdx = (webFindIdx - 1 + hits.length) % hits.length;
-  else webFindIdx = (webFindIdx + 1) % hits.length;
-  const el = hits[webFindIdx];
-  el.classList.add("find-hit");
-  el.scrollIntoView({ block: "center", behavior: "smooth" });
-  return true;
-} exports.findInThread = findInThread;
-document.addEventListener("keydown", (ev) => {
-  if (ev.key !== "F3" || !webFindQ) return;
-  ev.preventDefault();
-  findInThread(webFindQ, ev.shiftKey);
-});
-let histStart = 0,
-  histTotal = 0;
- function setHistRange(start, total) {
-  histStart = start;
-  histTotal = total;
-} exports.setHistRange = setHistRange;
- function getWebFindQ() {
-  return webFindQ;
-} exports.getWebFindQ = getWebFindQ;
- function paintHistMore() {
-  let b = _util.$.call(void 0, "hist-more") ;
-  if (!b) {
-    b = document.createElement("button");
-    b.id = "hist-more";
-    b.className = "hist-more";
-    b.type = "button";
-    b.onclick = () => loadOlder();
-    exports.th.insertBefore(b, exports.th.firstChild);
-  } else if (exports.th.firstChild !== b) exports.th.insertBefore(b, exports.th.firstChild);
-  const n = histStart;
-  b.hidden = n <= 0;
-  b.textContent = n > 0 ? (_i18n.getLang.call(void 0, ) === "zh" ? "↑ 更早 " + n + " 条" : "↑ Load " + n + " earlier") : "";
-} exports.paintHistMore = paintHistMore;
- function replayHist(items, prepend) {
-  if (!items || !items.length) return;
-  _sheet.hideWelcome.call(void 0, );
-  const saved = [];
-  if (prepend) {
-    const more = _util.$.call(void 0, "hist-more");
-    while (exports.th.firstChild) {
-      const n = exports.th.firstChild;
-      exports.th.removeChild(n);
-      if (n !== more) saved.push(n);
-    }
-  }
-  replayQuiet = true;
-  try {
-    for (const h of items) {
-      const text = _util.histText.call(void 0, h.content);
-      if (h.role === "user") {
-        finishRsn();
-        finishWork();
-        _store.setLastUser.call(void 0, text);
-        addUser(h.has_image && !text ? "[image]" : h.has_image ? text + "  [image]" : text, h.image_file ? "/api/image?name=" + encodeURIComponent(h.image_file) : null);
-      } else if (h.role === "assistant") {
-        const rsn = _util.histText.call(void 0, h.reasoning);
-        if (rsn) addRsn(rsn);
-        if (text) {
-          finishRsn();
-          const e = asstEl().querySelector(".md") ;
-          e.textContent = text;
-          finishAsst();
-        }
-      } else if (h.role === "system") {
-        continue;
-      } else {
-        const name = h.name || "tool";
-        const args = h.args || "";
-        if (isWorkflow(name, args, text)) exports.Flow.upsert(args, text);
-        else {
-          addTool(name, args);
-          toolDone(name, false, text);
-        }
-      }
-    }
-    finishWork();
-  } finally {
-    replayQuiet = false;
-  }
-  if (prepend) {
-    for (const n of saved) exports.th.appendChild(n);
-  }
-  paintHistMore();
-} exports.replayHist = replayHist;
- async function loadOlder() {
-  if (histStart <= 0) return;
-  const lim = 80;
-  const off = Math.max(0, histStart - lim);
-  const take = histStart - off;
-  const r = await fetch(
-    "/api/history?" + _state.wsp + "session=" + encodeURIComponent(_state.sess) + "&offset=" + off + "&limit=" + take,
-  );
-  if (!r.ok) return;
-  const j = await r.json();
-  const panes = _util.$.call(void 0, "panes");
-  const oldH = panes.scrollHeight;
-  replayHist(j.history || [], true);
-  histStart = _nullishCoalesce(j.start, () => ( off));
-  histTotal = _nullishCoalesce(j.total, () => ( histTotal));
-  paintHistMore();
-  panes.scrollTop += panes.scrollHeight - oldH;
-} exports.loadOlder = loadOlder;
-let curAsst = null,
-  rsnEl = null,
-  undoBtn = null;
-// 重载后流之续:以末条 a-turn 为活泡。
- function resumeAsst() {
-  const la = exports.th.querySelector(".a-turn:last-child");
-  if (la) {
-    curAsst = la;
-    curAsst.classList.add("gen");
-  }
-} exports.resumeAsst = resumeAsst;
-let workEl = null;
-let workCounts = { read: 0, search: 0, edit: 0, bash: 0, web: 0, mcp: 0, todo: 0, agent: 0, other: 0 };
-let turnAt = 0;
- function noteTurn() {
-  if (!turnAt) turnAt = Date.now();
-} exports.noteTurn = noteTurn;
-function workBitsHtml(live) {
-  const bits = [];
-  if (workCounts.read) bits.push(_util.ico.call(void 0, "read") + "<span>" + _util.nunit.call(void 0, workCounts.read, "file") + "</span>");
-  if (workCounts.search) bits.push(_util.ico.call(void 0, "search") + "<span>" + _util.nunit.call(void 0, workCounts.search, "search", "searches") + "</span>");
-  if (workCounts.web) bits.push(_util.ico.call(void 0, "web") + "<span>" + _util.nunit.call(void 0, workCounts.web, "web") + "</span>");
-  if (workCounts.mcp) bits.push(_util.ico.call(void 0, "mcp") + "<span>" + _util.nunit.call(void 0, workCounts.mcp, "MCP") + "</span>");
-  if (workCounts.bash) bits.push(_util.ico.call(void 0, "bash") + "<span>" + _util.nunit.call(void 0, workCounts.bash, "command") + "</span>");
-  if (workCounts.edit) bits.push(_util.ico.call(void 0, "edit") + "<span>" + _util.nunit.call(void 0, workCounts.edit, "edit") + "</span>");
-  if (workCounts.todo) bits.push(_util.ico.call(void 0, "todo") + "<span>" + _util.nunit.call(void 0, workCounts.todo, "plan") + "</span>");
-  if (workCounts.agent) bits.push(_util.ico.call(void 0, "agent") + "<span>" + _util.nunit.call(void 0, workCounts.agent, "agent") + "</span>");
-  if (workCounts.other) bits.push(_util.ico.call(void 0, "tool") + "<span>" + _util.nunit.call(void 0, workCounts.other, "tool") + "</span>");
-  if (!bits.length) return live ? (_i18n.getLang.call(void 0, ) === "zh" ? "正在工作" : "Working...") : (_i18n.getLang.call(void 0, ) === "zh" ? "已完成" : "Completed");
-  return bits.map((b) => '<span class="work-chip">' + b + "</span>").join('<span class="work-dot">·</span>');
-}
-function refreshWorkSum(live) {
-  if (!workEl) return;
-  const sum = workEl.querySelector(".work-sum");
-  const bits = sum.querySelector(".work-bits") || sum;
-  bits.innerHTML = workBitsHtml(live);
-  sum.classList.toggle("edit", !live && workCounts.edit > 0);
-}
-function ensureWork() {
-  if (workEl && workEl.isConnected) return workEl;
-  const el = document.createElement("div");
-  el.className = "work live";
-  el.innerHTML =
-    '<button type="button" class="work-sum"><span class="work-caret">▸</span><span class="work-bits">' +
-    (_i18n.getLang.call(void 0, ) === "zh" ? "正在工作" : "Working...") +
-    '</span></button><div class="work-list"></div>';
-  (el.querySelector(".work-sum") ).onclick = () => el.classList.toggle("open");
-  exports.th.appendChild(el);
-  workEl = el;
-  workCounts = { read: 0, search: 0, edit: 0, bash: 0, web: 0, mcp: 0, todo: 0, agent: 0, other: 0 };
-  return workEl;
-}
- const Flow = {
-  el: null,
-  id: "",
-  goal: "",
-  nodes: [],
-  args: "",
-  out: "",
-  done: false,
-  openId: "",
-  ident(args, out) {
-    const o = _util.parseToolArgs.call(void 0, args);
-    const gm = /^Workflow\s+"([^"]+)"/.exec(String(out || ""));
-    const goal = (o.goal && String(o.goal)) || (gm && gm[1]) || "";
-    const ids = (Array.isArray(o.nodes) ? o.nodes.map((n) => n && n.id) : this.nodesFrom(out).map((n) => n.id))
-      .filter(Boolean)
-      .join(">");
-    return { goal, ids };
-  },
-  nodesFrom(out) {
-    const nodes = [];
-    const re = /===\s+([A-Za-z][A-Za-z0-9_-]*)\b(?:\s+\(([^)]+)\))?\s+(ok|FAILED|skipped)/g;
-    let m;
-    while ((m = re.exec(String(out || "")))) {
-      nodes.push({
-        id: m[1],
-        role: m[2] || "",
-        needs: [],
-        st: m[3] === "ok" ? "ok" : m[3] === "FAILED" ? "fail" : "skip",
-        last: "",
-        body: "",
-        idx: nodes.length + 1,
-      });
-    }
-    return nodes;
-  },
-  slice(out, id) {
-    if (!out || !id) return "";
-    const re = new RegExp("===\\s+" + id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\b[^\\n]*===\\n");
-    const m = re.exec(out);
-    if (!m) return "";
-    const rest = out.slice(m.index + m[0].length);
-    const next = rest.search(/\n===\s+/);
-    return (next < 0 ? rest : rest.slice(0, next)).trim();
-  },
-  parse(args, out) {
-    const o = _util.parseToolArgs.call(void 0, args);
-    let nodes = (Array.isArray(o.nodes) ? o.nodes : [])
-      .map((n, i) => ({
-        id: String((n && n.id) || ""),
-        role: (n && n.role) || "",
-        needs: Array.isArray(n && n.needs) ? n.needs : [],
-        st: "wait",
-        last: "",
-        body: "",
-        idx: i + 1,
-      }))
-      .filter((n) => n.id);
-    if (!nodes.length) nodes = this.nodesFrom(out);
-    let goal = o.goal ? String(o.goal) : "";
-    if (!goal) {
-      const gm = /^Workflow\s+"([^"]+)"/.exec(String(out || ""));
-      if (gm) goal = gm[1];
-    }
-    return { goal, nodes };
-  },
-  same(a, b) {
-    if (a.goal && b.goal) return a.goal === b.goal;
-    if (a.ids && b.ids) return a.ids === b.ids;
-    return false;
-  },
-  applyOut(out) {
-    if (!out) return;
-    this.out = out;
-    for (const e of this.nodesFrom(out)) {
-      let n = this.nodes.find((x) => x.id === e.id);
-      if (!n) {
-        e.idx = this.nodes.length + 1;
-        this.nodes.push(e);
-        n = e;
-      } else {
-        n.st = e.st;
-        if (e.role && !n.role) n.role = e.role;
-      }
-      n.body = this.slice(out, n.id);
-    }
-  },
-  queue() {
-    if (!pendingByName.workflow) pendingByName.workflow = [];
-    if (this.id && !pendingByName.workflow.includes(this.id)) pendingByName.workflow.push(this.id);
-  },
-  upsert(args, out) {
-    const parsed = this.parse(args, out);
-    const want = this.ident(args, out);
-    if (this.el && this.el.isConnected && this.same(want, this.ident(this.args, this.out))) {
-      if (args) this.args = args;
-      if (parsed.goal) this.goal = parsed.goal;
-      if (parsed.nodes.length && !this.nodes.length) this.nodes = parsed.nodes;
-      if (out) {
-        this.applyOut(out);
-        this.done = true;
-        if (cards[this.id]) {
-          cards[this.id].out = this.out;
-          cards[this.id].done = true;
-          cards[this.id].args = this.args;
-        }
-      } else if (!this.done) this.queue();
-      this.paint();
-      return this.id;
-    }
-    finishWork();
-    seq++;
-    this.id = "t" + seq;
-    this.args = args || "";
-    this.goal = parsed.goal;
-    this.nodes = parsed.nodes;
-    this.out = out || "";
-    this.done = !!out;
-    this.openId = "";
-    if (out) this.applyOut(out);
-    this.el = document.createElement("section");
-    this.el.className = "flow";
-    this.el.id = this.id;
-    this.el.dataset.ty = "agent";
-    exports.th.appendChild(this.el);
-    cards[this.id] = {
-      el: this.el,
-      name: "workflow",
-      ty: "agent",
-      args: this.args,
-      out: this.out,
-      done: this.done,
-    };
-    if (!this.done) this.queue();
-    this.paint();
-    curAsst = null;
-    scrl();
-    return this.id;
-  },
-  event(idx, kind, text) {
-    if (!this.el || !this.el.isConnected || this.done) return false;
-    let n = kind === "notice" && text ? this.nodes.find((x) => x.id === text) : null;
-    if (!n) n = this.nodes.find((x) => x.idx === Number(idx));
-    if (!n) return false;
-    if (kind === "notice") n.st = n.st === "wait" ? "run" : n.st;
-    else if (kind === "tool_start") {
-      n.st = "run";
-      n.last = text || n.last;
-    } else if (kind === "tool_done") n.last = text || n.last;
-    else if (kind === "finished") n.st = n.st === "fail" ? "fail" : "ok";
-    else if (kind === "tool_failed") n.st = "fail";
-    this.paint();
-    return true;
-  },
-  finish(out) {
-    this.applyOut(out);
-    this.done = true;
-    if (cards[this.id]) {
-      cards[this.id].out = this.out;
-      cards[this.id].done = true;
-    }
-    this.paint();
-  },
-  nodeHtml(n) {
-    const open = this.openId === n.id;
-    const act2 = n.st === "run" ? n.last || "running" : n.st === "fail" ? "fail" : n.st === "skip" ? "skip" : "";
-    let bodyHtml = "";
-    if (open) {
-      if (n.body) {
-        bodyHtml = '<pre class="flow-body">' + _util.esc.call(void 0, n.body) + "</pre>";
-      } else {
-        const isZh = _i18n.getLang.call(void 0, ) === "zh";
-        const lines = [
-          (isZh ? "节点状态: " : "Status: ") + (n.st || "pending"),
-          n.role ? (isZh ? "执行角色: " : "Role: ") + n.role : "",
-          n.last ? (isZh ? "最近活动: " : "Activity: ") + n.last : (isZh ? "执行中，暂无标准输出" : "Running, no output yet"),
-        ].filter(Boolean);
-        bodyHtml = '<div class="flow-body flow-info">' + lines.map((l) => "<div>" + _util.esc.call(void 0, l) + "</div>").join("") + "</div>";
-      }
-    }
-    return (
-      '<li class="flow-n ' +
-      n.st +
-      (open ? " open" : "") +
-      '" data-id="' +
-      _util.esc.call(void 0, n.id) +
-      '" title="' +
-      (_i18n.getLang.call(void 0, ) === "zh" ? "点击查看节点详情" : "Click to view details") +
-      '"><i class="flow-dot"></i><div class="flow-main"><div class="flow-row"><b>' +
-      _util.esc.call(void 0, n.id) +
-      "</b>" +
-      (n.role ? "<em>" + _util.esc.call(void 0, n.role) + "</em>" : "") +
-      (act2 ? '<span class="flow-act">' + _util.esc.call(void 0, act2) + "</span>" : "") +
-      '<span class="flow-arr">' + (open ? "▾" : "▸") + "</span>" +
-      "</div>" +
-      bodyHtml +
-      "</div></li>"
-    );
-  },
-  paint() {
-    if (!this.el) return;
-    const doneN = this.nodes.filter((n) => n.st === "ok" || n.st === "fail" || n.st === "skip").length;
-    const meta = this.nodes.length ? doneN + "/" + this.nodes.length : "";
-    this.el.classList.toggle("done", this.done);
-    this.el.innerHTML =
-      '<div class="flow-hd"><span class="flow-k">workflow</span>' +
-      (this.goal ? '<div class="flow-goal">' + _util.esc.call(void 0, this.goal) + "</div>" : "") +
-      (meta ? '<div class="flow-meta">' + _util.esc.call(void 0, meta) + "</div>" : "") +
-      '</div><ol class="flow-list">' +
-      this.nodes.map((n) => this.nodeHtml(n)).join("") +
-      "</ol>";
-    const hd = this.el.querySelector(".flow-hd");
-    if (hd) hd.onclick = () => exports.inspect.open(this.el);
-    this.el.querySelectorAll(".flow-n").forEach((li) => {
-      li.onclick = (e) => {
-        e.stopPropagation();
-        const id = li.getAttribute("data-id");
-        this.openId = this.openId === id ? "" : id;
-        this.paint();
-      };
-    });
-    if (exports.inspect.src === this.id) exports.inspect.paint(this.el);
-  },
-  html() {
-    return this.el ? this.el.innerHTML : "";
-  },
-}; exports.Flow = Flow;
- function isWorkflow(name, args, out) {
-  if (name === "workflow") return true;
-  const o = _util.parseToolArgs.call(void 0, args || "");
-  if (Array.isArray(o.nodes) && o.nodes.length) return true;
-  return /^Workflow\b/.test(String(out || ""));
-} exports.isWorkflow = isWorkflow;
- function addSub(idx, kind, text) {
-  if (exports.Flow.event(idx, kind, text)) return;
-  // 其余 subagent 事件不再刷对话流(对齐 dsh:活动收进 jobs/活动条,不染 transcript);
-  // SSE 的 subagent 活动仍由 /api/activity 轮询条呈现。
-} exports.addSub = addSub;
- function finishWork() {
-  if (!workEl) return;
-  workEl.querySelectorAll(".tcall:not(.done):not(.err)").forEach((d) => {
-    d.classList.add("done");
-    const g = d.querySelector(".st-glyph");
-    if (g) {
-      g.className = "st-glyph ok";
-    }
-  });
-  refreshWorkSum(false);
-  workEl.classList.remove("live");
-  workEl.classList.remove("open");
-  workEl = null;
-} exports.finishWork = finishWork;
- function stampTurn() {
-  if (!turnAt) return;
-  const sec = Math.max(1, Math.round((Date.now() - turnAt) / 1000));
-  turnAt = 0;
-  const isZh = _i18n.getLang.call(void 0, ) === "zh";
-  const label =
-    sec < 60
-      ? (isZh ? "用了 " + sec + "s" : "took " + sec + "s")
-      : (isZh ? "用了 " + Math.floor(sec / 60) + "m " + (sec % 60) + "s" : "took " + Math.floor(sec / 60) + "m " + (sec % 60) + "s");
-  const host =
-    exports.th.querySelector(".a-turn:last-of-type") ||
-    exports.th.querySelector(".work:last-of-type");
-  if (!host || host.querySelector(".a-meta")) return;
-  const m = document.createElement("div");
-  m.className = "a-meta";
-  m.textContent = label;
-  host.appendChild(m);
-} exports.stampTurn = stampTurn;
-function pruneTranscript() {
-  const kids = [...exports.th.querySelectorAll(":scope > .u-turn, :scope > .a-turn")] ;
-  const cap = 200;
-  if (kids.length <= cap) return;
-  const drop = kids.length - cap + 32;
-  for (let i = 0; i < drop; i++) kids[i].remove();
-  const more = _util.$.call(void 0, "hist-more");
-  if (more) more.hidden = false;
-}
- function addUser(txt, imgSrc) {
-  _sheet.hideWelcome.call(void 0, );
-  finishWork();
-  noteTurn();
-  pruneTranscript();
-  const t = document.createElement("div");
-  t.className = "u-turn";
-  t.innerHTML =
-    '<div class="u-bub"></div><div class="u-ops"><button type="button" class="copy-chip" title="' +
-    t("copy", "Copy") +
-    '">⧉</button><button type="button" class="undo-chip" title="' +
-    t("undo", "Undo") +
-    '">↶</button></div>';
-  const bub = t.querySelector(".u-bub");
-  if (imgSrc) {
-    const im = document.createElement("img");
-    im.className = "u-img";
-    im.alt = "image";
-    im.src = imgSrc;
-    bub.appendChild(im);
-  }
-  const shown = String(txt || "").replace(/\s*\[image\]\s*$/, "").replace(/^\[image\]$/, "");
-  if (shown) {
-    const s = document.createElement("span");
-    s.textContent = shown;
-    bub.appendChild(s);
-    // 折叠阈值:长文本且多行,收为 7 行内 + 展开钮(dsh 用户消息折叠开头同法)
-    const tlines = shown.split("\n");
-    const long = shown.length > 340 && (tlines.length > 7 || shown.length > 900);
-    if (long) {
-      bub.classList.add("folded");
-      const more = document.createElement("button");
-      more.type = "button";
-      more.className = "fold-more";
-      more.textContent = _i18n.getLang.call(void 0, ) === "zh" ? "展开 ▾" : "Expand ▾";
-      more.onclick = () => bub.classList.remove("folded");
-      bub.appendChild(document.createElement("br"));
-      bub.appendChild(more);
-    }
-  } else if (!imgSrc) {
-    bub.textContent = txt || "";
-  }
-  const rawUser = shown || txt || "";
-  (t.querySelector(".copy-chip") ).onclick = () => _ui.clipText.call(void 0, rawUser, t("copied", "Copied"), t("copyFailed", "Failed to copy"));
-  (t.querySelector(".undo-chip") ).onclick = () => {
-    _sessions.act.call(void 0, { act: "undo" }, (j) => {
-      _ui.showToast.call(void 0, j && j.ok ? t("undone", "Undone") : t("noUndo", "Nothing to undo"));
-      setTimeout(() => location.reload(), 400);
-    });
-  };
-  // 轮首时间戳(dsh 用户消息行 12px 灰):每次用户消息记录发问时刻
-  const ts = document.createElement("div");
-  ts.className = "turn-ts";
-  ts.textContent = new Date().toTimeString().slice(0, 5);
-  exports.th.appendChild(ts);
-  exports.th.appendChild(t);
-  scrl();
-  curAsst = null;
-} exports.addUser = addUser;
- function asstEl() {
-  if (!curAsst) {
-    curAsst = document.createElement("div");
-    curAsst.className = "a-turn";
-    curAsst.innerHTML = '<div class="a-msg"><div class="md"></div></div>';
-    exports.th.appendChild(curAsst);
-    scrl();
-  }
-  return curAsst;
-} exports.asstEl = asstEl;
-let mdTimer = 0;
- function paintAsst(final) {
-  if (!curAsst) return;
-  const e = curAsst.querySelector(".md");
-  if (!e) return;
-  const raw = e.dataset.raw || "";
-  // 未变不画 —— 流式期 dataset.raw 涨但定时器空跑时省一次全量重排。
-  if (!final && e.dataset.painted === String(raw.length)) return;
-  e.dataset.painted = String(raw.length);
-  e.innerHTML = _md.md.call(void 0, final ? raw : _util.closeFences.call(void 0, raw));
-  scrl();
-} exports.paintAsst = paintAsst;
- function addAsst(txt) {
-  if (!txt) return;
-  const el = asstEl();
-  el.classList.add("gen");
-  const e = el.querySelector(".md");
-  e.dataset.raw = (e.dataset.raw || "") + txt;
-  if (!mdTimer) {
-    // 自适应节流:回复越长全量重排越贵,间隔跟着涨(80→160→280ms)。
-    const n = e.dataset.raw.length;
-    const iv = n > 20000 ? 280 : n > 5000 ? 160 : 80;
-    mdTimer = setTimeout(() => {
-      mdTimer = 0;
-      paintAsst(false);
-    }, iv);
-  }
-  scrl();
-} exports.addAsst = addAsst;
- function finishAsst() {
-  if (mdTimer) {
-    clearTimeout(mdTimer);
-    mdTimer = 0;
-  }
-  if (curAsst) {
-    const e = curAsst.querySelector(".md");
-    const raw = e.dataset.raw || e.textContent;
-    e.dataset.raw = raw;
-    e.dataset.painted = String(raw.length);
-    e.innerHTML = _md.md.call(void 0, raw);
-    curAsst.classList.remove("gen");
-    if (!curAsst.querySelector(".a-ops")) {
-      const ops = document.createElement("div");
-      ops.className = "a-ops";
-      ops.innerHTML =
-        '<button type="button" class="copy-a" title="' +
-        _i18n.t.call(void 0, "copy", "Copy") +
-        '">⧉</button>' +
-        (_store.getLastUser.call(void 0, ) ? '<button type="button" class="redo-a" title="' + (_i18n.getLang.call(void 0, ) === "zh" ? "重新生成" : "Regenerate") + '">↻</button>' : "");
-      (ops.querySelector(".copy-a") ).onclick = () => _ui.clipText.call(void 0, raw, _i18n.t.call(void 0, "copied", "Copied"), _i18n.t.call(void 0, "copyFailed", "Failed to copy"));
-      const redo = ops.querySelector(".redo-a") ;
-      if (redo) redo.onclick = () => _bus.emit.call(void 0, "chat:retry");
-      curAsst.appendChild(ops);
-    }
-    _plugins.pluginEmit.call(void 0, "message-rendered", {
-      role: "assistant",
-      text: raw,
-      element: e,
-    });
-    curAsst = null;
-  }
-} exports.finishAsst = finishAsst;
- function addRsn(txt) {
-  if (!txt) return;
-  if (!rsnEl) {
-    const el = document.createElement("div");
-    el.className = "think";
-    el.innerHTML =
-      '<button type="button" class="think-sum"><span class="work-caret">▸</span>' +
-      _util.ico.call(void 0, "think") +
-      '<span class="think-txt">' +
-      (_i18n.getLang.call(void 0, ) === "zh" ? "思考中" : "Thinking...") +
-      '</span></button><pre class="tk"></pre>';
-    (el.querySelector(".think-sum") ).onclick = () => el.classList.toggle("open");
-    exports.th.appendChild(el);
-    rsnEl = el;
-    scrl();
-  }
-  const tc = rsnEl.querySelector(".tk");
-  // 流式 chunk 挤压成词,逐 chunk 换行会每词一行(客实测截图)。
-  // 与 addAsst 同法:累积 raw + 节流重画,断行只落句读/换行处。
-  tc.dataset.raw = (tc.dataset.raw || "") + txt;
-  if (!rsnTm) {
-    rsnTm = setTimeout(() => {
-      rsnTm = 0;
-      paintRsn();
-    }, 90);
-  }
-  scrl();
-  if (exports.inspect.thinkEl === rsnEl && _util.$.call(void 0, "inspect") && !_util.$.call(void 0, "inspect").hidden) exports.inspect.openThink(rsnEl);
-} exports.addRsn = addRsn;
-let rsnTm = 0;
-function paintRsn() {
-  if (!rsnEl) return;
-  const tc = rsnEl.querySelector(".tk");
-  const raw = tc.dataset.raw || "";
-  // 断行:句读/分号/引号后换行;压缩连续换行;黏合流式碎片
-  let out = raw
-    .replace(/([。！？!?;；]|：|——|\.{2,}|\n)/g, "$1\n")
-    .replace(/\n{2,}/g, "\n\n")
-    .trim();
-  tc.textContent = out;
-}
- function finishRsn() {
-  if (!rsnEl) return;
-  paintRsn();
-  rsnTm && (clearTimeout(rsnTm), (rsnTm = 0));
-  const txt = rsnEl.querySelector(".think-txt");
-  if (txt) txt.textContent = _i18n.getLang.call(void 0, ) === "zh" ? "思考" : "Thinking";
-  rsnEl = null;
-} exports.finishRsn = finishRsn;
-// 工具卡
-const cards = {};
-let seq = 0;
-const pendingByName = {};
- const inspect = {
-  src: "",
-  kind(d) {
-    if (!d) return _i18n.t.call(void 0, "tool", "Tool");
-    const ty = d.dataset.ty;
-    const isZh = _i18n.getLang.call(void 0, ) === "zh";
-    if (ty === "diff") return isZh ? "Diff 变更" : "Diff";
-    if (ty === "code") return isZh ? "文件" : "File";
-    if (ty === "term") return isZh ? "终端输出" : "Terminal";
-    if (ty === "todo") return isZh ? "规划" : "Plan";
-    if (ty === "agent") return (cards[d.id] && cards[d.id].name) === "workflow" ? "Workflow" : "Subagent";
-    const n = (cards[d.id] && cards[d.id].name) || "";
-    if (/^(ls|find)$/.test(n)) return isZh ? "文件列表" : "Files";
-    if (/^(grep|search)$/.test(n)) return isZh ? "搜索结果" : "Search";
-    return n || (isZh ? "输出" : "Output");
-  },
-  pathOf(d) {
-    const c = cards[d.id];
-    if (!c) return "";
-    const o = _util.parseToolArgs.call(void 0, c.args);
-    return String(o.path || o.file || "");
-  },
-  title(d) {
-    const p = this.pathOf(d);
-    if (p) return p.split(/[/\\]/).pop() || p;
-    const c = cards[d.id];
-    const isZh = _i18n.getLang.call(void 0, ) === "zh";
-    if (!c) return isZh ? "详情" : "Details";
-    const o = _util.parseToolArgs.call(void 0, c.args);
-    if (c.name === "workflow") return String(o.goal || "Workflow");
-    return String(o.command || c.name || (isZh ? "详情" : "Details"));
-  },
-  workEl: null,
-  setHead(k, t) {
-    const hk = _util.$.call(void 0, "inspK");
-    const ht = _util.$.call(void 0, "inspT");
-    if (ht) {
-      ht.textContent = t || k || "";
-      ht.title = t || k || "";
-    }
-    if (hk) {
-      hk.textContent = k && k !== t ? k : "";
-      hk.hidden = !hk.textContent;
-    }
-  },
-  show() {
-    const el = _util.$.call(void 0, "inspect");
-    if (el) el.hidden = false;
-  },
-  open(d) {
-    if (!d) return;
-    this.workEl = null;
-    if (this.src && cards[this.src]) cards[this.src].el.classList.remove("watching");
-    this.src = d.id;
-    d.classList.add("watching");
-    this.show();
-    this.paintInto(d, _util.$.call(void 0, "inspBd"));
-  },
-  thinkEl: null,
-  openThink(el) {
-    if (!el) return;
-    this.workEl = null;
-    this.thinkEl = el;
-    this.src = "";
-    this.show();
-    this.setHead(_i18n.getLang.call(void 0, ) === "zh" ? "思考过程" : "Thinking", _i18n.getLang.call(void 0, ) === "zh" ? "思考过程" : "Thinking");
-    const txt = el.querySelector(".tk");
-    const box = document.createElement("div");
-    box.className = "insp-think";
-    box.textContent = txt ? txt.textContent : "";
-    const host = _util.$.call(void 0, "inspBd");
-    if (host) host.replaceChildren(box);
-  },
+var _signal = require('./signal');
 
-  close() {
-    const el = _util.$.call(void 0, "inspect");
-    if (!el) return;
-    if (this.src && cards[this.src]) cards[this.src].el.classList.remove("watching");
-    this.src = "";
-    this.workEl = null;
-    this.thinkEl = null;
-    el.hidden = true;
-    const bd = _util.$.call(void 0, "inspBd");
-    if (bd) bd.innerHTML = "";
-  },
-  async paintInto(d, host) {
-    if (!d || !host) return;
-    const c = cards[d.id];
-    this.setHead(this.kind(d), this.title(d));
-    if (c && !c.done) {
-      if (c.name === "workflow" || d.classList.contains("flow")) {
-        host.innerHTML = '<div class="flow">' + exports.Flow.html() + "</div>";
-        return;
-      }
-      host.innerHTML = '<div class="insp-wait">' + (_i18n.getLang.call(void 0, ) === "zh" ? "正在运行…" : "Running...") + '</div>';
-      return;
-    }
-    let out = (c && c.out) || "";
-    const path = this.pathOf(d);
-    if (path && d.dataset.ty === "code") {
-      try {
-        const r = await fetch("/api/file?" + _state.wsp + "path=" + encodeURIComponent(path));
-        if (r.ok) {
-          const j = await r.json();
-          if (j && j.text) out = j.text;
-        }
-      } catch (e2) {}
-    }
-    if (!out) {
-      host.innerHTML = '<div class="insp-wait">' + (_i18n.getLang.call(void 0, ) === "zh" ? "暂无输出" : "No output") + '</div>';
-      return;
-    }
-    d.dataset.out = out;
-    host.replaceChildren(toolBody(d.dataset.ty || "code", out, path, c && c.args));
-  },
-  paint(d) {
-    this.paintInto(d, _util.$.call(void 0, "inspBd"));
-  },
-  init() {
-    const x = _util.$.call(void 0, "inspX");
-    if (x) x.onclick = () => exports.inspect.close();
-    window.addEventListener(
-      "click",
-      (e) => {
-        const el = _util.$.call(void 0, "inspect");
-        if (!el || el.hidden) return;
-        if (window.innerWidth <= 840) {
-          const target = e.target ;
-          if (!el.contains(target) && !target.closest(".bh, .think-sum, .insp-x, .plan-sum")) {
-            exports.inspect.close();
-          }
-        }
+ function renderChatStream() {
+  let userScrolledUp = false;
+
+  const container = _dom.tags.div(
+    {
+      class: "chat-stream",
+      onscroll: (e) => {
+        const el = e.target ;
+        const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+        userScrolledUp = distFromBottom > 80;
       },
-      true,
-    );
-  },
-}; exports.inspect = inspect;
- function addTool(name, args) {
-  if (isWorkflow(name, args)) return exports.Flow.upsert(args || "", "");
-  seq++;
-  const id = "t" + seq;
-  const ty = _util.toolType.call(void 0, name);
-  const d = document.createElement("div");
-  d.className = "tcall";
-  d.id = id;
-  d.dataset.ty = ty;
-  d.innerHTML =
-    '<div class="bh">' +
-    '<span class="st-glyph run"></span>' +
-    _util.ico.call(void 0, _util.icoKind.call(void 0, name)) +
-    '<span class="a">' +
-    _util.esc.call(void 0, name) +
-    '</span><span class="p">' +
-    _util.esc.call(void 0, _util.argsPreview.call(void 0, args || "")) +
-    '</span></div><div class="bb"><div class="bb-pad"></div></div>';
-  (d.querySelector(".bh") ).onclick = () => exports.inspect.open(d);
-  const w = ensureWork();
-  workCounts[_util.workKind.call(void 0, name)]++;
-  refreshWorkSum(true);
-  w.querySelector(".work-list").appendChild(d);
-  scrl();
-  cards[id] = { el: d, name, ty, args: args || "", out: "", done: false };
-  (pendingByName[name] || (pendingByName[name] = [])).push(id);
-  // 工具打断流式回复:前缀文本若已吐出即收尾(修 gen 悬挂——旧 turn 永久带
-  // 生成光标的病),空的话直接丢弃空壳。
-  if (curAsst) {
-    const e = curAsst.querySelector(".md");
-    if (e && (e.dataset.raw || "").length > 0) finishAsst();
-    else {
-      curAsst.classList.remove("gen");
-      curAsst = null;
-    }
-  } else curAsst = null;
-  return id;
-} exports.addTool = addTool;
- async function fillTool(d) {
-  const ty = d.dataset.ty || "sum";
-  let out = d.dataset.out || "";
-  const art = _util.artifactName.call(void 0, out);
-  if (art && !d.dataset.full) {
-    try {
-      const r = await fetch("/api/artifact?name=" + encodeURIComponent(art));
-      const j = await r.json();
-      if (j && j.ok && typeof j.text === "string") {
-        d.dataset.full = "1";
-        d.dataset.out = j.text;
-        out = j.text;
-      }
-    } catch (e3) {}
-  }
-  const bd = d.querySelector(".bb-pad");
-  const card = cards[d.id];
-  const custom = card && _plugins.getToolRenderer.call(void 0, card.name);
-  if (custom) {
-    try {
-      const node = custom({
-        name: card.name,
-        args: card.args,
-        output: out,
-        error: d.classList.contains("err"),
-        element: d,
-      });
-      if (node instanceof Node) {
-        bd.replaceChildren(node);
-        return;
-      }
-    } catch (x) {
-      console.error("[piz plugin]", x);
-    }
-  }
-  const c = cards[d.id];
-  const o = c ? _util.parseToolArgs.call(void 0, c.args) : {};
-  bd.replaceChildren(toolBody(ty, out, String(o.path || o.file || ""), (c && c.args) || ""));
-} exports.fillTool = fillTool;
- function toolDone(name, err, summary) {
-  const q = pendingByName[name];
-  const id = q && q.shift();
-  if (!id) return;
-  const c = cards[id];
-  if (!c) return;
-  const d = c.el;
-  d.classList.add(err ? "err" : "done");
-  const g = d.querySelector(".st-glyph");
-  if (g) {
-    g.className = "st-glyph " + (err ? "err" : "ok");
-  }
-  c.out = summary || "";
-  c.done = true;
-  d.dataset.out = c.out;
-  if (name === "workflow") exports.Flow.finish(c.out);
-  if (name === "todo" && !err) planStrip(c);
-  if (exports.inspect.src === id && _util.$.call(void 0, "inspect") && !_util.$.call(void 0, "inspect").hidden) exports.inspect.paint(d);
-  else if (err) exports.inspect.open(d);
-} exports.toolDone = toolDone;
-// 审批
- function addPerm(id, name, args) {
-  _sheet.hideWelcome.call(void 0, );
-  const d = document.createElement("div");
-  d.className = "pc";
-  d.dataset.pid = id;
-  const o = _util.parseToolArgs.call(void 0, args);
-  const kind = name === "bash" ? "shell" : "file";
-  let body = "";
-  if (kind === "shell") {
-    body =
-      '<div class="body"><div class="shell-cmd"><span class="shell-dollar">$</span>' +
-      _util.esc.call(void 0, String(o.command || args || "").slice(0, 300)) +
-      "</div></div>";
-  } else
-    body =
-      '<div class="body"><pre class="shell-cmd">' +
-      _util.esc.call(void 0, String(o.path || args || "").slice(0, 300)) +
-      "</pre></div>";
-  d.innerHTML =
-    '<div class="ah"><span class="ah-ic">?</span><span class="akind">' +
-    _i18n.t.call(void 0, "permRequired", "Permission Required") +
-    '</span><span class="apath">' +
-    _util.esc.call(void 0, name) +
-    (o.path && kind === "shell" ? "  " + _util.esc.call(void 0, String(o.path).slice(0, 80)) : "") +
-    '</span><span class="aw">' +
-    _i18n.t.call(void 0, "awaitingApproval", "Awaiting approval") +
-    '</span></div>' +
-    body +
-    '<div class="pb"><button class="ok">' +
-    _i18n.t.call(void 0, "allow", "Allow") +
-    '</button><button class="alw">' +
-    _i18n.t.call(void 0, "alwaysSession", "Always this session") +
-    '</button><button class="no">' +
-    _i18n.t.call(void 0, "deny", "Deny") +
-    '</button></div>';
-  (d.querySelector(".ok") ).onclick = (e) => {
-    e.stopPropagation();
-    appr(d, id, true, false);
-  };
-  (d.querySelector(".alw") ).onclick = (e) => {
-    e.stopPropagation();
-    appr(d, id, true, true);
-  };
-  (d.querySelector(".no") ).onclick = (e) => {
-    e.stopPropagation();
-    appr(d, id, false, false);
-  };
-  const dk = _util.$.call(void 0, "dock");
-  dk.appendChild(d);
-  scrl();
-} exports.addPerm = addPerm;
-async function appr(card, id, allow, always) {
-  card.querySelectorAll("button").forEach((b) => (b.disabled = true));
-  try {
-    if (always) await _model.setApproval.call(void 0, "yolo");
-    const r = await fetch("/api/approve", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ id, allow }),
-    });
-    const j = await r.json().catch(() => ({}));
-    if (!r.ok || j.ok === false) {
-      _ui.showToast.call(void 0, j.error || _i18n.t.call(void 0, "apprFailed", "Approval failed"));
-      card.querySelectorAll("button").forEach((b) => (b.disabled = false));
-      return;
-    }
-    card.remove();
-  } catch (e4) {
-    _ui.showToast.call(void 0, _i18n.t.call(void 0, "apprFailed", "Approval failed"));
-    card.querySelectorAll("button").forEach((b) => (b.disabled = false));
-  }
-}
- function addNotice(txt) {
-  if (!txt) return;
-  _sheet.hideWelcome.call(void 0, );
-  const d = document.createElement("div");
-  d.className = "sys-line";
-  d.textContent = txt;
-  exports.th.appendChild(d);
-  scrl();
-} exports.addNotice = addNotice;
-// 压缩检查点(dsh checkpoint row):消息流内一行,点开摘要;静止时仅悬停显示展开指示
-let cpOpen = null;
- function addCheckpoint(summary, folded, kept) {
-  _sheet.hideWelcome.call(void 0, );
-  if (cpOpen) {
-    cpOpen.classList.remove("open");
-    cpOpen = null;
-  }
-  const d = document.createElement("div");
-  d.className = "cp";
-  const n = Number(folded) || 0;
-  const k = Number(kept) || 0;
-  const same = exports.th.lastElementChild && exports.th.lastElementChild.classList && exports.th.lastElementChild.classList.contains("cp");
-  const isZh = _i18n.getLang.call(void 0, ) === "zh";
-  d.innerHTML =
-    '<button type="button" class="cp-sum" aria-expanded="false"><span class="cp-ic">⧉</span><span class="cp-t">' +
-    (isZh ? "Context 已在此压缩整理" : "Context compacted") +
-    '</span>' +
-    (same ? "" : '<span class="cp-meta">' + (isZh ? "折叠 " + n + " 条 · 保留 " + fmtK(k) + " tok" : "Folded " + n + " msgs · Kept " + fmtK(k) + " tok") + '</span>') +
-    '<span class="cp-caret">▸</span></button>' +
-    '<div class="cp-body"></div>';
-  const bd = d.querySelector(".cp-body");
-  if (summary) bd.textContent = summary;
-  (d.querySelector(".cp-sum") ).onclick = () => {
-    d.classList.toggle("open");
-    (d.querySelector(".cp-sum") ).setAttribute("aria-expanded", String(d.classList.contains("open")));
-  };
-  exports.th.appendChild(d);
-  cpOpen = d;
-  scrl();
-} exports.addCheckpoint = addCheckpoint;
-// todo 计划条(dsh input dock 计划条之形):todo 工具完成时,输入区上方一条
-// 📋 计划 · x/y 完成,点击打开检视查看全表;无计划即隐藏。
- function planStrip(c) {
-  const txt = c.out || "";
-  const done = (txt.match(/\[x\]/gi) || []).length;
-  const open = (txt.match(/\[ \]/g) || []).length;
-  const total = done + open;
-  const strip = _util.$.call(void 0, "planStrip") ;
-  if (!strip || !total) return;
-  strip.hidden = false;
-  const isZh = _i18n.getLang.call(void 0, ) === "zh";
-  strip.innerHTML =
-    '<button type="button" class="plan-sum"><span class="plan-ic">📋</span><span class="plan-t">' +
-    (isZh ? "计划" : "Plan") +
-    '</span><span class="plan-meta">' +
-    done +
-    "/" +
-    total +
-    (isZh ? " 完成" : " completed") +
-    '</span><span class="plan-caret">▸</span></button>';
-  (strip.querySelector(".plan-sum") ).onclick = () => exports.inspect.open(c.el);
-} exports.planStrip = planStrip;
-function fmtK(n) {
-  if (n >= 1000) {
-    const k = n / 1000;
-    return (k >= 100 ? Math.round(k) : Math.round(k * 10) / 10) + "k";
-  }
-  return String(Math.round(n));
-}
-function agentHtml(out, args) {
-  if (exports.Flow.el && (exports.Flow.out === out || exports.Flow.args === args || _util.parseToolArgs.call(void 0, args).nodes)) {
-    return exports.Flow.html();
-  }
-  const o = _util.parseToolArgs.call(void 0, args);
-  let html = "";
-  const desc = o.description || o.task || o.prompt || "";
-  if (desc) html += '<div class="agent-desc">' + _util.esc.call(void 0, desc) + "</div>";
-  if (out) html += '<pre class="code">' + _util.esc.call(void 0, out) + "</pre>";
-  return html;
-}
- function toolBody(ty, out, path, args) {
-  const text = String(out || "");
-  if (ty === "term") {
-    const pre = document.createElement("pre");
-    pre.className = "term";
-    // 与 code 同帽:超长输出别让 ansi 逐字扫拖住主线程。
-    const capped = text.length > 32000 ? text.slice(0, 32000) + "\n…" : text;
-    pre.innerHTML = _md.ansiHtml.call(void 0, capped);
-    return pre;
-  }
-  if (ty === "diff") {
-    const box = document.createElement("div");
-    box.className = "diff-view";
-    box.innerHTML = _md.diffHtml.call(void 0, text);
-    return box;
-  }
-  if (ty === "todo") {
-    const box = document.createElement("div");
-    box.className = "todo-view";
-    box.innerHTML = _md.todoHtml.call(void 0, text);
-    return box;
-  }
-  if (ty === "agent") {
-    const box = document.createElement("div");
-    box.className = "agent-view";
-    box.innerHTML = agentHtml(text, args || "");
-    return box;
-  }
-  if (_util.isMarkdownPath.call(void 0, path) || (ty === "code" && _util.looksLikeMd.call(void 0, text))) {
-    const box = document.createElement("div");
-    box.className = "insp-md";
-    box.innerHTML = _md.renderMd.call(void 0, text);
-    return box;
-  }
-  const pre = document.createElement("pre");
-  pre.className = "code";
-  pre.textContent = text.length > 32000 ? text.slice(0, 32000) + "\n…" : text;
-  return pre;
-} exports.toolBody = toolBody;
-
-// 验证钩(Playwright 驱动;生产无副作用,不挂全局业务)
-if (typeof window !== "undefined") {
-  (window ).pizDbg = { addCheckpoint, planStrip };
-}
-
-};
-__modules["slash"] = function(module, exports, require) {
-"use strict";Object.defineProperty(exports, "__esModule", {value: true});// slash.ts —— 斜杠命令目录/菜单/bang 提示/@文件补全 + runSlash 全分发。
-var _util = require('./util');
-var _state = require('./state');
-var _ui = require('./ui');
-var _sessions = require('./sessions');
-var _store = require('./store');
-
-
-
-
-var _model = require('./model');
-var _chat = require('./chat');
-var _i18n = require('./i18n');
-var _bus = require('./bus');
-
-const openSearch = () => _bus.emit.call(void 0, "search:open");
-const attachClipboardImage = () => new Promise((resolve) => {
-  _bus.emit.call(void 0, "composer:paste-image", { callback: resolve });
-});
-const refreshSend = () => _bus.emit.call(void 0, "composer:refresh-send");
-const ensureActPoll = () => _bus.emit.call(void 0, "composer:ensure-act-poll");
-const sendPlain = async (text) => { _bus.emit.call(void 0, "chat:send", { text }); };
-
-const SLASH_EN = [
-  { name: "/help", desc: "list commands" },
-  { name: "/login", desc: "save API key", accepts: true },
-  { name: "/new", desc: "new session" },
-  { name: "/clear", desc: "clear and restart" },
-  { name: "/sessions", desc: "search sessions" },
-  { name: "/resume", desc: "switch to n-th session", accepts: true },
-  { name: "/undo", desc: "undo last turn" },
-  { name: "/compact", desc: "compact context" },
-  { name: "/fast-compress", desc: "fast compress state" },
-  { name: "/fork", desc: "fork session" },
-  { name: "/title", desc: "change session title", accepts: true },
-  { name: "/model", desc: "switch model" },
-  { name: "/refresh", desc: "refresh provider models" },
-  { name: "/think", desc: "thinking level", accepts: true },
-  { name: "/permissions", desc: "approval: yolo/ask/read-only", accepts: true },
-  { name: "/sandbox", desc: "bash sandbox: off/workspace/strict", accepts: true },
-  { name: "/status", desc: "current status" },
-  { name: "/doctor", desc: "environment health check" },
-  { name: "/init", desc: "write AGENTS.md (no overwrite)" },
-  { name: "/diff", desc: "git status + diffstat" },
-  { name: "/commit", desc: "commit staged changes", accepts: true },
-  { name: "/log", desc: "git log --oneline", accepts: true },
-  { name: "/branch", desc: "current & recent branches" },
-  { name: "/mcp", desc: "list MCP servers" },
-  { name: "/reload", desc: "reload settings.json" },
-  { name: "/theme", desc: "appearance: light/dark/system", accepts: true },
-  { name: "/paste", desc: "paste image from clipboard" },
-  { name: "/usage", desc: "token usage ledger" },
-  { name: "/jobs", desc: "running & background jobs", accepts: true },
-  { name: "/find", desc: "find in thread", accepts: true },
-  { name: "/plan", desc: "write PLAN.md before executing", accepts: true },
-  { name: "/queue", desc: "clear input queue" },
-  { name: "/memory", desc: "cross-session memory", accepts: true },
-  { name: "/plugins", desc: "list or toggle plugins", accepts: true },
-  { name: "/pkg", desc: "installed packages" },
-  { name: "/tree", desc: "message tree" },
-  { name: "/copy", desc: "copy last reply" },
-  { name: "/export", desc: "export HTML" },
-  { name: "/dump", desc: "dump session to clipboard" },
-  { name: "/redo", desc: "redo last user input" },
-];
-
-const SLASH_ZH = [
-  { name: "/help", desc: "命令列表" },
-  { name: "/login", desc: "保存 API key", accepts: true },
-  { name: "/new", desc: "新建 Session" },
-  { name: "/clear", desc: "清空并重开" },
-  { name: "/sessions", desc: "搜索 Session" },
-  { name: "/resume", desc: "切到第 n 个 Session", accepts: true },
-  { name: "/undo", desc: "撤销上一轮" },
-  { name: "/compact", desc: "压缩 Context" },
-  { name: "/fast-compress", desc: "快压状态" },
-  { name: "/fork", desc: "派生 Session" },
-  { name: "/title", desc: "修改 Session 标题", accepts: true },
-  { name: "/model", desc: "切换 Model" },
-  { name: "/refresh", desc: "拉取 Provider Model 列表" },
-  { name: "/think", desc: "Thinking 等级", accepts: true },
-  { name: "/permissions", desc: "授权 yolo/ask/read-only", accepts: true },
-  { name: "/sandbox", desc: "Bash Sandbox: off/workspace/strict", accepts: true },
-  { name: "/status", desc: "当前状态" },
-  { name: "/doctor", desc: "环境体检" },
-  { name: "/init", desc: "初始化 AGENTS.md" },
-  { name: "/diff", desc: "Git status + diffstat" },
-  { name: "/commit", desc: "提交已暂存（需说明）", accepts: true },
-  { name: "/log", desc: "Git log --oneline", accepts: true },
-  { name: "/branch", desc: "当前与最近分支" },
-  { name: "/mcp", desc: "MCP Server 列表" },
-  { name: "/reload", desc: "重读 settings.json" },
-  { name: "/theme", desc: "外观 light/dark/system", accepts: true },
-  { name: "/paste", desc: "从剪贴板附图" },
-  { name: "/usage", desc: "Token 用量账本" },
-  { name: "/jobs", desc: "在跑 / 后台 Jobs", accepts: true },
-  { name: "/find", desc: "搜对话", accepts: true },
-  { name: "/plan", desc: "生成 PLAN.md 再执行", accepts: true },
-  { name: "/queue", desc: "清空输入队列" },
-  { name: "/memory", desc: "跨 Session 记忆", accepts: true },
-  { name: "/plugins", desc: "列出或开关插件", accepts: true },
-  { name: "/pkg", desc: "已安装 Packages" },
-  { name: "/tree", desc: "消息树" },
-  { name: "/copy", desc: "复制最后一条回复" },
-  { name: "/export", desc: "导出 HTML" },
-  { name: "/dump", desc: "整段 Session 到剪贴板" },
-  { name: "/redo", desc: "重发上一次输入" },
-];
-
-let customSlash = null;
- function getSlashList() {
-  if (customSlash) return customSlash;
-  return _i18n.getLang.call(void 0, ) === "zh" ? SLASH_ZH : SLASH_EN;
-} exports.getSlashList = getSlashList;
-
- function findSlash(cmd) {
-  return getSlashList().find((s) => s.name === cmd);
-} exports.findSlash = findSlash;
- function applyHelpCatalog(j) {
-  if (j && Array.isArray(j.commands) && j.commands.length) {
-    customSlash = j.commands.map((c) => ({
-      name: c.name,
-      desc: c.desc,
-      accepts: !!c.accepts,
-    }));
-    (window ).HELP_KEYS = Array.isArray(j.keys) ? j.keys : (window ).HELP_KEYS || [];
-  }
-} exports.applyHelpCatalog = applyHelpCatalog;
- function loadHelpCatalog() {
-  return fetch("/api/help?" + _state.wsp + "session=" + encodeURIComponent(_state.sess))
-    .then((r) => r.json())
-    .then(applyHelpCatalog)
-    .catch(() => _ui.showToast.call(void 0, _i18n.t.call(void 0, "helpLoadFail", "Failed to load help catalog")));
-} exports.loadHelpCatalog = loadHelpCatalog;
-
-(window ).HELP_KEYS = (window ).HELP_KEYS || [
-  { name: "@./path", desc: "embed a file" },
-  { name: "!cmd", desc: "run shell, send to model" },
-  { name: "!!cmd", desc: "run shell, show only" },
-  { name: "?", desc: "shortcut overlay when empty" },
-  { name: "c", desc: "copy last reply when empty" },
-  { name: "d", desc: "doctor when empty" },
-  { name: "g", desc: "git diff when empty" },
-  { name: "l", desc: "git log when empty" },
-  { name: "r", desc: "redo last input when empty" },
-  { name: "s", desc: "sandbox picker when empty" },
-  { name: "j", desc: "list jobs when empty" },
-  { name: "u", desc: "token ledger when empty" },
-  { name: "Esc", desc: "abort; empty again edits last" },
-  { name: "Ctrl+C", desc: "clear; empty again quits" },
-  { name: "Ctrl+D", desc: "empty again quits" },
-  { name: "Tab", desc: "queue input while busy" },
-  { name: "Ctrl+B", desc: "background while busy" },
-  { name: "Ctrl+T", desc: "fold thinking" },
-  { name: "Ctrl+O", desc: "fold tool output" },
-  { name: "PgUp/PgDn", desc: "scroll transcript" },
-  { name: "Ctrl+↑/↓", desc: "scroll a few lines" },
-  { name: "wheel", desc: "scroll transcript" },
-  { name: "Alt+,/.", desc: "think less / more" },
-  { name: "Shift+↑/↓", desc: "think less / more" },
-];
-let slashItems = [],
-  slashIdx = 0,
-  pickKind = "",
-  atTok = null,
-  fileTimer = 0;
- function hideSlash() {
-  const m = _util.$.call(void 0, "slashMenu");
-  if (m) m.hidden = true;
-  slashItems = [];
-  pickKind = "";
-  atTok = null;
-  if (fileTimer) {
-    clearTimeout(fileTimer);
-    fileTimer = 0;
-  }
-} exports.hideSlash = hideSlash;
- function slashOpen() {
-  const m = _util.$.call(void 0, "slashMenu");
-  return m && !m.hidden && slashItems.length > 0;
-} exports.slashOpen = slashOpen;
- function renderSlash() {
-  const m = _util.$.call(void 0, "slashMenu");
-  if (!m) return;
-  if (!slashItems.length) {
-    m.hidden = true;
-    return;
-  }
-  m.hidden = false;
-  const file = pickKind === "file";
-  const foot = file
-    ? "<span>↑↓ 选择</span><span>Enter 填入</span><span>Tab 补全</span><span>Esc 关闭</span>"
-    : "<span>↑↓ 选择</span><span>Enter 执行</span><span>Tab 补全</span><span>Esc 关闭</span>";
-  m.innerHTML =
-    '<div class="slash-list">' +
-    slashItems
-      .map((it, i) => {
-        const name = file ? it.path || it.name : it.name;
-        const desc = file ? (it.dir ? "目录" : "文件") : it.desc;
-        const nameHl = (it.hlLen ? _util.hlSpan.call(void 0, name, it.hlFrom || 0, it.hlLen) : _util.esc.call(void 0, name)) + (file && it.dir ? '<span class="mark">/</span>' : "");
-        return (
-          '<div class="slash-item' +
-          (i === slashIdx ? " active" : "") +
-          '" data-i="' +
-          i +
-          '" role="option"><span class="slash-name">' +
-          nameHl +
-          '</span><span class="slash-desc">' +
-          _util.esc.call(void 0, desc || "") +
-          "</span></div>"
-        );
-      })
-      .join("") +
-    '</div><div class="slash-foot">' +
-    foot +
-    "</div>";
-  const on = m.querySelector(".slash-item.active");
-  if (on) on.scrollIntoView({ block: "nearest" });
-} exports.renderSlash = renderSlash;
- function updateSlashList(q) {
-  pickKind = "slash";
-  const ranked = _util.rankSlash.call(void 0, SLASH, q);
-  slashItems = ranked.map((r) =>
-    Object.assign({}, r.it, { hlFrom: r.hlFrom, hlLen: r.kind === 2 ? 0 : r.hlLen }),
-  );
-  if (slashIdx >= slashItems.length) slashIdx = 0;
-  renderSlash();
-} exports.updateSlashList = updateSlashList;
- function atToken(v, caret) {
-  const left = v.slice(0, caret == null ? v.length : caret);
-  const m = /(^|[\s])(@(?:\.\/[^\s]*|\.?))$/.exec(left);
-  if (!m) return null;
-  const raw = m[2];
-  return { start: left.length - raw.length, raw, q: raw.startsWith("@./") ? raw.slice(3) : "" };
-} exports.atToken = atToken;
- function scheduleFiles(tok) {
-  atTok = tok;
-  pickKind = "file";
-  if (fileTimer) clearTimeout(fileTimer);
-  fileTimer = setTimeout(async () => {
-    fileTimer = 0;
-    const cur = atToken((_util.$.call(void 0, "inp") ).value, (_util.$.call(void 0, "inp") ).selectionStart);
-    if (!cur) {
-      hideSlash();
-      return;
-    }
-    atTok = cur;
-    try {
-      const r = await fetch("/api/files?" + _state.wsp + "q=" + encodeURIComponent(cur.q));
-      const j = await r.json();
-      if (!j || !j.ok) {
-        slashItems = [];
-        renderSlash();
-        return;
-      }
-      slashItems = (j.items || []).map((it) =>
-        Object.assign({ desc: it.link ? "→ " + it.link : it.dir ? "目录" : "文件" }, it),
-      );
-      // 裸 @(无 ./):运行中的子代理候选排最前(插入字面 @label,不做继续语义)
-      if (!cur.q) {
-        const subs = (exports.subPool || [])
-          .filter((s) => s && s.kind === "subagent" && s.name)
-          .map((s) => ({
-            id: "@" + s.name,
-            name: s.name,
-            desc: "运行中 子代理",
-            sub: true,
-          }));
-        if (subs.length) slashItems = subs.concat(slashItems);
-      }
-      if (slashIdx >= slashItems.length) slashIdx = 0;
-      pickKind = "file";
-      renderSlash();
-    } catch (e2) {
-      hideSlash();
-    }
-  }, 60);
-} exports.scheduleFiles = scheduleFiles;
-// 运行子代理池(jobs 轮询灌入;裸 @ 候选)
- let subPool = []; exports.subPool = subPool;
- function setSubPool(list) {
-  exports.subPool = list || [];
-} exports.setSubPool = setSubPool;
- function insertFile() {
-  const it = slashItems[slashIdx];
-  const inp = _util.$.call(void 0, "inp") ;
-  const tok = atToken(inp.value, inp.selectionStart) || atTok;
-  if (!it || !tok) {
-    hideSlash();
-    return;
-  }
-  const prefix = inp.value.slice(0, tok.start);
-  const suffix = inp.value.slice(tok.start + tok.raw.length);
-  if (it.sub && it.name) {
-    // 子代理引用:插入字面 @label(不做继续语义,仅文本)
-    const filled = prefix + "@" + it.name + " ";
-    inp.value = filled + suffix;
-    inp.setSelectionRange(filled.length, filled.length);
-    hideSlash();
-  } else if (it.dir) {
-    const filled = prefix + "@./" + it.path + "/";
-    inp.value = filled + suffix;
-    inp.setSelectionRange(filled.length, filled.length);
-    hideSlash();
-    scheduleFiles(atToken(inp.value, filled.length));
-  } else {
-    const filled = prefix + "@./" + it.path + " ";
-    inp.value = filled + suffix;
-    inp.setSelectionRange(filled.length, filled.length);
-    hideSlash();
-  }
-  _store.autosizeInp.call(void 0, );
-  _store.saveDraft.call(void 0, );
-  refreshSend();
-} exports.insertFile = insertFile;
- function hideBang() {
-  const el = _util.$.call(void 0, "cmpHint");
-  if (!el) return;
-  el.hidden = true;
-  el.innerHTML = "";
-} exports.hideBang = hideBang;
- function showBang(v) {
-  const el = _util.$.call(void 0, "cmpHint");
-  if (!el) return;
-  const local = v.startsWith("!!");
-  const cmd = v.slice(local ? 2 : 1).trim();
-  el.hidden = false;
-  el.innerHTML = local
-    ? '<span class="bang-local">!! 只跑</span><b>' +
-      _util.esc.call(void 0, cmd || "…") +
-      "</b><span>结果留在本页，不送模型</span>"
-    : '<span class="bang-run">! 跑并送</span><b>' +
-      _util.esc.call(void 0, cmd || "…") +
-      "</b><span>输出会一并交给模型</span>";
-} exports.showBang = showBang;
- function updateComposerChrome() {
-  const inp = _util.$.call(void 0, "inp") ;
-  const v = inp.value;
-  if (v.startsWith("/") && v.indexOf("\n") < 0 && v.indexOf(" ") < 0) {
-    hideBang();
-    updateSlashList(v.slice(1));
-    return;
-  }
-  if (v.startsWith("!")) {
-    hideSlash();
-    showBang(v);
-    return;
-  }
-  const tok = atToken(v, inp.selectionStart);
-  if (tok) {
-    hideBang();
-    scheduleFiles(tok);
-    return;
-  }
-  hideSlash();
-  hideBang();
-} exports.updateComposerChrome = updateComposerChrome;
- function updateSlash() {
-  updateComposerChrome();
-} exports.updateSlash = updateSlash;
- function slashMove(d) {
-  if (!slashItems.length) return;
-  slashIdx = (slashIdx + d + slashItems.length) % slashItems.length;
-  renderSlash();
-} exports.slashMove = slashMove;
- function slashComplete() {
-  if (pickKind === "file") {
-    insertFile();
-    return;
-  }
-  const it = slashItems[slashIdx];
-  if (!it) return;
-  (_util.$.call(void 0, "inp") ).value = it.name + (it.accepts ? " " : "");
-  hideSlash();
-  _store.autosizeInp.call(void 0, );
-  _store.saveDraft.call(void 0, );
-} exports.slashComplete = slashComplete;
- function slashPick() {
-  if (pickKind === "file") {
-    insertFile();
-    return;
-  }
-  const it = slashItems[slashIdx];
-  if (!it) return;
-  if (it.accepts) {
-    (_util.$.call(void 0, "inp") ).value = it.name + " ";
-    hideSlash();
-    _store.autosizeInp.call(void 0, );
-    return;
-  }
-  (_util.$.call(void 0, "inp") ).value = it.name;
-  hideSlash();
-  send();
-} exports.slashPick = slashPick;
-(_util.$.call(void 0, "slashMenu") ).onmousedown = (e) => {
-  const it = e.target.closest(".slash-item");
-  if (!it) return;
-  e.preventDefault();
-  slashIdx = +it.getAttribute("data-i") || 0;
-  slashPick();
-};
-document.addEventListener("click", (e) => {
-  if (slashOpen() && !e.target.closest("#slashMenu, #inp, .mode-pill")) {
-    hideSlash();
-  }
-});
- async function runSlash(item, arg) {
-  switch (item.name) {
-    case "/login": {
-      const parts = (arg || "").trim().split(/\s+/);
-      const name = parts[0] || "";
-      const key = parts.slice(1).join(" ").trim();
-      if (!name || !key) {
-        _ui.showToast.call(void 0, "usage: /login <provider> <api-key>");
-        break;
-      }
-      fetch("/api/config", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ setAuth: { name, key } }),
-      })
-        .then((r) => r.json())
-        .then((j) => _ui.showToast.call(void 0, j && j.ok ? "saved " + name : "login failed"))
-        .catch(() => _ui.showToast.call(void 0, "登录失败"));
-      break;
-    }
-    case "/quit":
-      _ui.showToast.call(void 0, "close the tab to quit");
-      break;
-    case "/help":
-      _chat.addUser.call(void 0, "/help");
-      const cmds = SLASH.map((s) => s.name.padEnd(16) + s.desc).join("\n");
-      const keys = ((window ).HELP_KEYS || [])
-        .map((s) => String(s.name || "").padEnd(16) + (s.desc || ""))
-        .join("\n");
-      _chat.addAsst.call(void 0, 
-        cmds +
-          (keys ? "\n\n" + keys : "") +
-          "\n\n@./path 嵌文件 · !cmd 跑命令并送给模型 · !!cmd 只跑不送\nCtrl+K 搜会话 · 发送中再按 Enter 会接着发",
-      );
-      _chat.finishAsst.call(void 0, );
-      break;
-    case "/sessions":
-      openSearch();
-      break;
-    case "/new":
-    case "/clear":
-      location.href = _state.sessUrl.call(void 0, Math.random().toString(36).slice(2, 8));
-      break;
-    case "/undo":
-      _sessions.act.call(void 0, { act: "undo" }, (j) =>
-        _ui.showToast.call(void 0, j && j.ok ? "已撤销" : "撤销失败"),
-      );
-      break;
-    case "/compact":
-      _sessions.act.call(void 0, { act: "compact" }, (j) =>
-        _ui.showToast.call(void 0, j && j.ok ? "压缩完成" : "压缩失败"),
-      );
-      break;
-    case "/fork": {
-      const n =
-        arg || (await _ui.askText.call(void 0, "派生会话", "", "新会话名，留空自动"));
-      if (n === null) return;
-      _sessions.act.call(void 0, { act: "fork", name: n || "" }, (j) => {
-        if (j && j.ok && j.name) location.href = _state.sessUrl.call(void 0, j.name);
-        else _ui.showToast.call(void 0, "派生失败");
-      });
-      break;
-    }
-    case "/title": {
-      const t = arg || (await _ui.askText.call(void 0, "会话标题", _model.getCurTitle.call(void 0, ) || "", ""));
-      if (t === null || !t) return;
-      await _model.applySessionTitle.call(void 0, t, true);
-      break;
-    }
-    case "/refresh": {
-      _chat.addUser.call(void 0, "/refresh");
-      try {
-        const r = await fetch("/api/config", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ refreshModels: true }),
-        });
-        const j = await r.json().catch(() => ({}));
-        if (!r.ok || j.ok === false) {
-          _chat.addAsst.call(void 0, j.error || "cannot refresh models");
-        } else {
-          _chat.addAsst.call(void 0, "refreshed " + (j.refreshed || 0) + " provider(s), +" + (j.added || 0) + " models" +
-            (j.fail ? "\n" + j.fail + " provider(s) failed GET /models" : ""));
-        }
-      } catch (e3) {
-        _chat.addAsst.call(void 0, "cannot refresh models");
-      }
-      _chat.finishAsst.call(void 0, );
-      break;
-    }
-    case "/model":
-      (_util.$.call(void 0, "hModel") ).click();
-      break;
-    case "/permissions":
-    case "/approvals": {
-      const lv = (arg || "").trim();
-      if (!lv) {
-        (_util.$.call(void 0, "permPill") ).click();
-        break;
-      }
-      await _model.setApproval.call(void 0, lv);
-      _chat.addUser.call(void 0, "/permissions " + lv);
-      _chat.addAsst.call(void 0, "授权 " + _model.approvalLabel.call(void 0, ));
-      _chat.finishAsst.call(void 0, );
-      break;
-    }
-    case "/jobs": {
-      const raw = (arg || "").trim();
-      _chat.addUser.call(void 0, raw ? "/jobs " + raw : "/jobs");
-      try {
-        if (/^kill\s+\d+/.test(raw) || /^\d+$/.test(raw)) {
-          const pid = parseInt(raw.replace(/^kill\s+/, ""), 10);
-          const r = await fetch("/api/activity", {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ kill: pid }),
-          });
-          const j = await r.json();
-          _chat.addAsst.call(void 0, j.ok ? "killed pid " + pid : "no tracked job with that pid");
-        } else {
-          const r = await fetch("/api/activity");
-          const list = await r.json();
-          if (!list || !list.length) _chat.addAsst.call(void 0, "no running jobs");
-          else
-            _chat.addAsst.call(void 0, 
-              list
-                .map((a) => {
-                  const sec = Math.round((a.ms || 0) / 1000);
-                  return (
-                    (a.detached ? "~ " : "* ") +
-                    (a.pid ? "pid " + a.pid + "  " : "") +
-                    (a.name || "job") +
-                    " " +
-                    sec +
-                    "s" +
-                    (a.detail ? "  " + a.detail : "")
-                  );
-                })
-                .join("\n"),
-            );
-        }
-        ensureActPoll();
-      } catch (e4) {
-        _chat.addAsst.call(void 0, "cannot read activity");
-      }
-      _chat.finishAsst.call(void 0, );
-      break;
-    }
-    case "/usage": {
-      _chat.addUser.call(void 0, "/usage");
-      try {
-        const r = await fetch("/api/usage");
-        const j = await r.json();
-        const cost = j.usd > 0 ? "  $" + Number(j.usd).toFixed(4) : "";
-        const head = "usage  " + (j.lines || 0) + " turns  ↑" + _util.fmtTok.call(void 0, j.in || 0) + " ↓" + _util.fmtTok.call(void 0, j.out || 0) + cost;
-        _chat.addAsst.call(void 0, j.tail ? head + "\n" + j.tail : head);
-      } catch (e5) {
-        _chat.addAsst.call(void 0, "cannot read usage.jsonl");
-      }
-      _chat.finishAsst.call(void 0, );
-      break;
-    }
-    case "/sandbox": {
-      const lv = (arg || "").trim();
-      if (!lv) {
-        _chat.addUser.call(void 0, "/sandbox");
-        _chat.addAsst.call(void 0, "usage: /sandbox off|workspace|strict");
-        _chat.finishAsst.call(void 0, );
-        break;
-      }
-      _chat.addUser.call(void 0, "/sandbox " + lv);
-      await _model.setSandbox.call(void 0, lv);
-      _chat.addAsst.call(void 0, "sandbox " + _model.getSandboxMode.call(void 0, ));
-      _chat.finishAsst.call(void 0, );
-      break;
-    }
-    case "/think": {
-      const lv = (arg || "").trim();
-      if (!lv) {
-        (_util.$.call(void 0, "hThink") ).click();
-        break;
-      }
-      _chat.addUser.call(void 0, "/think " + lv);
-      await _model.setThink.call(void 0, lv);
-      _chat.addAsst.call(void 0, "思考 " + (_model.getThink.call(void 0, ) || lv));
-      _chat.finishAsst.call(void 0, );
-      break;
-    }
-    case "/find": {
-      const q = (arg || "").trim();
-      _chat.addUser.call(void 0, "/find" + (q ? " " + q : ""));
-      const e = _chat.asstEl.call(void 0, ).querySelector(".md");
-      if (!q && !_chat.getWebFindQ.call(void 0, )) e.textContent = "usage: /find <text>";
-      else if (_chat.findInThread.call(void 0, q || _chat.getWebFindQ.call(void 0, ), false)) e.textContent = "found: " + (q || _chat.getWebFindQ.call(void 0, ));
-      else e.textContent = "no match";
-      _chat.finishAsst.call(void 0, );
-      break;
-    }
-    case "/paste": {
-      _chat.addUser.call(void 0, "/paste");
-      try {
-        if (await attachClipboardImage()) {
-          _chat.addAsst.call(void 0, _model.getVision.call(void 0, ) ? "image attached — enter to send" : "image attached — this model has no vision");
-        } else {
-          _chat.addAsst.call(void 0, "no image on clipboard — use Ctrl+V");
-        }
-      } catch (e6) {
-        _chat.addAsst.call(void 0, "no image on clipboard — use Ctrl+V");
-      }
-      _chat.finishAsst.call(void 0, );
-      break;
-    }
-    case "/theme": {
-      const lv = (arg || "").trim().toLowerCase();
-      _chat.addUser.call(void 0, lv ? "/theme " + lv : "/theme");
-      if (!lv) {
-        _chat.addAsst.call(void 0, "theme " + (_state.prefs.scheme || "dark") + "\nusage: /theme light|dark|system");
-      } else if (_ui.setScheme.call(void 0, lv)) {
-        _chat.addAsst.call(void 0, "theme " + _state.prefs.scheme);
+    },
+    // 渲染每一轮对话
+    _dom.each.call(void 0, _store.turns, (turn) => {
+      if (turn.role === "user") {
+        return renderUserTurn(turn);
       } else {
-        _chat.addAsst.call(void 0, "usage: /theme light|dark|system");
+        return renderAssistantTurn(turn);
       }
-      _chat.finishAsst.call(void 0, );
-      break;
+    }),
+    // 空态欢迎页
+    () => {
+      if (_store.turns.call(void 0, ).length === 0) {
+        return renderEmptyState();
+      }
+      return null;
     }
-    case "/reload":
-      fetch("/api/slash?" + _state.wsp + "session=" + encodeURIComponent(_state.sess), {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ name: "reload", args: "" }),
-      })
-        .then((r) => r.json())
-        .then((j) => {
-          const text = (j && j.text) || "reload failed";
-          String(text)
-            .split("\n")
-            .forEach((line) => {
-              const m = line.match(/^(theme|approval|sandbox|think)\s+(\S+)/);
-              if (!m) return;
-              if (m[1] === "theme") _ui.setScheme.call(void 0, m[2]);
-              if (m[1] === "approval") _model.setApprovalMode.call(void 0, m[2]);
-              if (m[1] === "sandbox") _model.applySandboxLevel.call(void 0, m[2]);
-              if (m[1] === "think") _model.applyThink.call(void 0, m[2]);
-            });
-          _chat.addUser.call(void 0, "/reload");
-          _chat.addAsst.call(void 0, text);
-          _chat.finishAsst.call(void 0, );
-        })
-        .catch(() => {
-          _chat.addUser.call(void 0, "/reload");
-          _chat.addAsst.call(void 0, "reload failed");
-          _chat.finishAsst.call(void 0, );
-        });
-      break;
-    case "/mcp":
-      fetch("/api/slash?" + _state.wsp + "session=" + encodeURIComponent(_state.sess), {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ name: "mcp", args: "" }),
-      })
-        .then((r) => r.json())
-        .then((j) => {
-          _chat.addUser.call(void 0, "/mcp");
-          _chat.addAsst.call(void 0, (j && j.text) || "mcp failed");
-          _chat.finishAsst.call(void 0, );
-        })
-        .catch(() => {
-          _chat.addUser.call(void 0, "/mcp");
-          _chat.addAsst.call(void 0, "mcp failed");
-          _chat.finishAsst.call(void 0, );
-        });
-      break;
-    case "/branch":
-      fetch("/api/slash?" + _state.wsp + "session=" + encodeURIComponent(_state.sess), {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ name: "branch", args: "" }),
-      })
-        .then((r) => r.json())
-        .then((j) => {
-          _chat.addUser.call(void 0, "/branch");
-          _chat.addAsst.call(void 0, (j && j.text) || "branch failed");
-          _chat.finishAsst.call(void 0, );
-        })
-        .catch(() => {
-          _chat.addUser.call(void 0, "/branch");
-          _chat.addAsst.call(void 0, "branch failed");
-          _chat.finishAsst.call(void 0, );
-        });
-      break;
-    case "/log":
-      fetch("/api/slash?" + _state.wsp + "session=" + encodeURIComponent(_state.sess), {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ name: "log", args: arg || "" }),
-      })
-        .then((r) => r.json())
-        .then((j) => {
-          _chat.addUser.call(void 0, "/log" + (arg ? " " + arg : ""));
-          _chat.addAsst.call(void 0, (j && j.text) || "log failed");
-          _chat.finishAsst.call(void 0, );
-        })
-        .catch(() => {
-          _chat.addUser.call(void 0, "/log");
-          _chat.addAsst.call(void 0, "log failed");
-          _chat.finishAsst.call(void 0, );
-        });
-      break;
-    case "/commit":
-      fetch("/api/slash?" + _state.wsp + "session=" + encodeURIComponent(_state.sess), {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ name: "commit", args: arg || "" }),
-      })
-        .then((r) => r.json())
-        .then((j) => {
-          _chat.addUser.call(void 0, "/commit" + (arg ? " " + arg : ""));
-          _chat.addAsst.call(void 0, (j && j.text) || "commit failed");
-          _chat.finishAsst.call(void 0, );
-        })
-        .catch(() => {
-          _chat.addUser.call(void 0, "/commit");
-          _chat.addAsst.call(void 0, "commit failed");
-          _chat.finishAsst.call(void 0, );
-        });
-      break;
-    case "/diff":
-      fetch("/api/slash?" + _state.wsp + "session=" + encodeURIComponent(_state.sess), {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ name: "diff", args: "" }),
-      })
-        .then((r) => r.json())
-        .then((j) => {
-          _chat.addUser.call(void 0, "/diff");
-          _chat.addAsst.call(void 0, (j && j.text) || "diff failed");
-          _chat.finishAsst.call(void 0, );
-        })
-        .catch(() => {
-          _chat.addUser.call(void 0, "/diff");
-          _chat.addAsst.call(void 0, "diff failed");
-          _chat.finishAsst.call(void 0, );
-        });
-      break;
-    case "/init":
-      fetch("/api/slash?" + _state.wsp + "session=" + encodeURIComponent(_state.sess), {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ name: "init", args: "" }),
-      })
-        .then((r) => r.json())
-        .then((j) => {
-          _chat.addUser.call(void 0, "/init");
-          _chat.addAsst.call(void 0, (j && j.text) || "init failed");
-          _chat.finishAsst.call(void 0, );
-        })
-        .catch(() => {
-          _chat.addUser.call(void 0, "/init");
-          _chat.addAsst.call(void 0, "init failed");
-          _chat.finishAsst.call(void 0, );
-        });
-      break;
-    case "/doctor":
-      fetch("/api/slash?" + _state.wsp + "session=" + encodeURIComponent(_state.sess), {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ name: "doctor", args: "" }),
-      })
-        .then((r) => r.json())
-        .then((j) => {
-          _chat.addUser.call(void 0, "/doctor");
-          _chat.addAsst.call(void 0, (j && j.text) || "doctor failed");
-          _chat.finishAsst.call(void 0, );
-        })
-        .catch(() => {
-          _chat.addUser.call(void 0, "/doctor");
-          _chat.addAsst.call(void 0, "doctor failed");
-          _chat.finishAsst.call(void 0, );
-        });
-      break;
-    case "/status":
-      fetch("/api/config")
-        .then((r) => r.json())
-        .then((cfg) => {
-          const on = (Array.isArray(cfg.plugins) ? cfg.plugins : [])
-            .filter((p) => p && p.enabled && p.optional)
-            .map((p) => p.name);
-          _chat.addUser.call(void 0, "/status");
-          _chat.addAsst.call(void 0, 
-            "模型 " +
-              (_model.getCurModel.call(void 0, ) || "?") +
-              " · 思考 " +
-              (_model.getThink.call(void 0, ) || "high") +
-              " · 会话 " +
-              _state.sess +
-              " · 项目 " +
-              (_state.ws || ".") +
-              (on.length ? " · 插件 " + on.join(" ") : ""),
-          );
-          _chat.finishAsst.call(void 0, );
-        })
-        .catch(() => {
-          _chat.addUser.call(void 0, "/status");
-          _chat.addAsst.call(void 0, 
-            "模型 " +
-              (_model.getCurModel.call(void 0, ) || "?") +
-              " · 思考 " +
-              (_model.getThink.call(void 0, ) || "high") +
-              " · 会话 " +
-              _state.sess +
-              " · 项目 " +
-              (_state.ws || "."),
-          );
-          _chat.finishAsst.call(void 0, );
-        });
-      break;
-    case "/resume": {
-      const n = parseInt(arg || "", 10);
-      if (!arg || !n) {
-        openSearch();
-        break;
-      }
-      if (n < 1 || n > _sessions.sessData.list.length) {
-        _ui.showToast.call(void 0, "没有第 " + n + " 个会话（/sessions）");
-        break;
-      }
-      location.href = _state.sessUrl.call(void 0, _sessions.sessData.list[n - 1].name);
-      break;
+  );
+
+  // 自动滚动到底部
+  _signal.effect.call(void 0, () => {
+    // 触发依赖
+    _store.turns.call(void 0, );
+    _store.isStreaming.call(void 0, );
+    if (!userScrolledUp) {
+      setTimeout(() => {
+        container.scrollTop = container.scrollHeight;
+      }, 20);
     }
-    case "/plan": {
-      const goal =
-        (arg && arg.trim()) ||
-        (await _ui.askText.call(void 0, "计划目标", "", "要完成什么"));
-      if (!goal) return;
-      await sendPlain("/plan " + goal);
-      break;
-    }
-    case "/queue":
-      _bus.emit.call(void 0, "composer:clear-pending");
-      _sessions.act.call(void 0, { act: "queue" }, (j) => {
-        _ui.showToast.call(void 0, 
-          j && j.cleared
-            ? "已清空 " + j.cleared + " 条"
-            : "没有待发送的消息",
-        );
-      });
-      break;
-    case "/memory": {
-      const rest = (arg || "").trim();
-      if (rest === "clear") {
-        _sessions.act.call(void 0, { act: "memory-clear" }, (j) =>
-          _ui.showToast.call(void 0, j && j.ok ? "记忆已清空" : "清空失败"),
-        );
-        break;
-      }
-      if (rest.startsWith("set ")) {
-        const text = rest.slice(4).trim();
-        if (!text) {
-          _ui.showToast.call(void 0, "usage: /memory set <text>");
-          break;
-        }
-        _sessions.act.call(void 0, { act: "memory-set", name: text }, (j) =>
-          _ui.showToast.call(void 0, j && j.ok ? "记忆已写入" : "写入失败"),
-        );
-        break;
-      }
-      _sessions.act.call(void 0, { act: "memory" }, (j) => {
-        _chat.addUser.call(void 0, "/memory");
-        _chat.addAsst.call(void 0, 
-          (j && j.text) ||
-            "memory is empty — /memory set <text> to add",
-        );
-        _chat.finishAsst.call(void 0, );
-      });
-      break;
-    }
-    case "/plugins": {
-      const rest = (arg || "").trim();
-      if (!rest) {
-        fetch("/api/config")
-          .then((r) => r.json())
-          .then((cfg) => {
-            const plugs = Array.isArray(cfg.plugins) ? cfg.plugins : [];
-            const lines = plugs.map(
-              (p) =>
-                "  [" +
-                (p.enabled ? "on " : "off") +
-                "] " +
-                p.name,
-            );
-            _chat.addUser.call(void 0, "/plugins");
-            _chat.addAsst.call(void 0, 
-              "plugins (next turn):\n" +
-                lines.join("\n") +
-                "\nusage: /plugins on <name> | /plugins off <name>",
-            );
-            _chat.finishAsst.call(void 0, );
-          })
-          .catch(() => _ui.showToast.call(void 0, "plugins 读取失败"));
-        break;
-      }
-      const m = rest.match(/^(on|off)\s+(\S+)$/);
-      if (!m) {
-        _ui.showToast.call(void 0, "usage: /plugins on <name> | /plugins off <name>");
-        break;
-      }
-      const on = m[1] === "on";
-      fetch("/api/config", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ setPlugin: { name: m[2], enabled: on } }),
-      })
-        .then((r) => r.json())
-        .then((j) => {
-          if (j && j.ok === false) {
-            _ui.showToast.call(void 0, "插件开关失败");
-            return;
-          }
-          _ui.showToast.call(void 0, "plugin " + m[2] + (on ? " on" : " off") + " — next turn");
-          loadHelpCatalog();
-        })
-        .catch(() => _ui.showToast.call(void 0, "插件开关失败"));
-      break;
-    }
-    case "/pkg":
-      fetch("/api/packages?" + _state.wsp)
-        .then((r) => r.json())
-        .then((j) => {
-          function rows(arr, title) {
-            const xs = Array.isArray(arr) ? arr : [];
-            const body = xs.length
-              ? xs
-                  .map(
-                    (p) =>
-                      "  " +
-                      p.name +
-                      "  skills:" +
-                      (p.skills || 0) +
-                      " prompts:" +
-                      (p.prompts || 0),
-                  )
-                  .join("\n")
-              : "  (none)";
-            return title + " (" + xs.length + "):\n" + body;
-          }
-          _chat.addUser.call(void 0, "/pkg");
-          _chat.addAsst.call(void 0, 
-            rows(j.user, "user packages") +
-              "\n" +
-              rows(j.project, "project packages") +
-              "\ninstall: piz pkg install <path> [-l]",
-          );
-          _chat.finishAsst.call(void 0, );
-        })
-        .catch(() => {
-          _chat.addUser.call(void 0, "/pkg");
-          _chat.addAsst.call(void 0, "packages 读取失败");
-          _chat.finishAsst.call(void 0, );
-        });
-      break;
-    case "/tree":
-      _sessions.act.call(void 0, { act: "tree" }, (j) => {
-        _chat.addUser.call(void 0, "/tree");
-        _chat.addAsst.call(void 0, (j && j.text) || "no messages");
-        _chat.finishAsst.call(void 0, );
-      });
-      break;
-    case "/copy":
-      _sessions.act.call(void 0, { act: "copy" }, (j) =>
-        _ui.clipText.call(void 0, j && j.text, "已复制最后回复", "还没有回复"),
-      );
-      break;
-    case "/export":
-      _sessions.act.call(void 0, { act: "export" }, (j) => {
-        if (j && j.text) {
-          _util.downloadText.call(void 0, "piz-export.html", j.text, "text/html");
-          _ui.showToast.call(void 0, "已导出");
-        } else _ui.showToast.call(void 0, "导出失败");
-      });
-      break;
-    case "/dump":
-      _sessions.act.call(void 0, { act: "dump" }, (j) =>
-        _ui.clipText.call(void 0, j && j.text, "会话已复制", "没有内容"),
-      );
-      break;
-    case "/fast-compress":
-      _sessions.act.call(void 0, { act: "fast-compress" }, (j) => {
-        _chat.addUser.call(void 0, "/fast-compress");
-        _chat.addAsst.call(void 0, (j && j.text) || "fast-compress: ?");
-        _chat.finishAsst.call(void 0, );
-      });
-      break;
-    case "/redo":
-      if (!_store.getLastUser.call(void 0, )) {
-        _ui.showToast.call(void 0, "没有可重发的输入");
-        break;
-      }
-      await sendPlain(_store.getLastUser.call(void 0, ));
-      break;
-    default: {
-      const stem = String(item.name || "").replace(/^\//, "");
-      fetch("/api/slash?" + _state.wsp + "session=" + encodeURIComponent(_state.sess), {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ name: stem, args: arg || "" }),
-      })
-        .then((r) => r.json())
-        .then((j) => {
-          if (j && j.ok) {
-            _chat.addUser.call(void 0, "/" + stem + (arg ? " " + arg : ""));
-            _chat.addAsst.call(void 0, j.text || "");
-            _chat.finishAsst.call(void 0, );
-          } else _ui.showToast.call(void 0, (j && j.error) || "未知命令");
-        })
-        .catch(() => _ui.showToast.call(void 0, "未知命令"));
-      break;
-    }
-  }
-} exports.runSlash = runSlash;
-
-_bus.on.call(void 0, "slash:run", ({ cmd, arg }) => {
-  runSlash(cmd, arg || "");
-});
-_bus.on.call(void 0, "popups:dismiss", () => {
-  hideSlash();
-  hideBang();
-});
-
-};
-__modules["jobs"] = function(module, exports, require) {
-"use strict";Object.defineProperty(exports, "__esModule", {value: true}); function _nullishCoalesce(lhs, rhsFn) { if (lhs != null) { return lhs; } else { return rhsFn(); } } function _optionalChain(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }// jobs.ts —— 后台活动触发钮 + 弹层(借 dsh ui-jobs 之形)。
-// header 一颗 ⠿ 钮,活动时带计数 badge;点开平铺列表,esc/点外关。
-// 数据同 composer 活动条(/api/activity 轮询),本模块只做容器与渲染,无轮询。
-// dsh 对齐:活跃行在前(startedAt 升序=早开始在前,以 elapsed 降序近似);
-// 已见但结束的行走「终态」区(finishedAt 降序=最新完成在前)弱化保留,
-// 失败 detail 是唯一可读之处,不过滤;耗时钟打开且含活物才跑。
-var _util = require('./util');
-var _slash = require('./slash');
-var _i18n = require('./i18n');
-
-let live = [];
-let gone = [];
-let tickTimer = 0;
-
-function keyOf(a) {
-  return a.kind + ":" + a.name;
-}
-
-function isOpen() {
-  return _nullishCoalesce(_optionalChain([_util.$.call(void 0, "jobsPop"), 'optionalAccess', _ => _.classList, 'access', _2 => _2.contains, 'call', _3 => _3("open")]), () => ( false));
-}
-
- function setupJobs() {
-  const btn = _util.$.call(void 0, "hJobs");
-  if (!btn) return;
-  btn.onclick = (e) => {
-    e.stopPropagation();
-    toggleJobs();
-  };
-  document.addEventListener("click", (e) => {
-    if (!isOpen()) return;
-    const tEl = e.target ;
-    if (_optionalChain([tEl, 'access', _4 => _4.closest, 'optionalCall', _5 => _5("#jobsPop,#hJobs")])) return;
-    closeJobs();
   });
-  document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && isOpen()) closeJobs();
-  });
-} exports.setupJobs = setupJobs;
 
- function closeJobs() {
-  _optionalChain([_util.$.call(void 0, "jobsPop"), 'optionalAccess', _6 => _6.classList, 'access', _7 => _7.remove, 'call', _8 => _8("open")]);
-  _optionalChain([_util.$.call(void 0, "hJobs"), 'optionalAccess', _9 => _9.classList, 'access', _10 => _10.remove, 'call', _11 => _11("open")]);
-  if (tickTimer) {
-    clearInterval(tickTimer);
-    tickTimer = 0;
-  }
-} exports.closeJobs = closeJobs;
+  return container;
+} exports.renderChatStream = renderChatStream;
 
- function toggleJobs() {
-  if (isOpen()) {
-    closeJobs();
-    return;
-  }
-  const p = _util.$.call(void 0, "jobsPop");
-  if (p) p.classList.add("open");
-  _optionalChain([_util.$.call(void 0, "hJobs"), 'optionalAccess', _12 => _12.classList, 'access', _13 => _13.add, 'call', _14 => _14("open")]);
-  refreshJobs(live);
-  startTickIfNeeded();
-} exports.toggleJobs = toggleJobs;
-
-function fmtSec(ms) {
-  const s = ms / 1000;
-  if (s < 10) return s.toFixed(1) + "s";
-  if (s < 3600) return Math.round(s) + "s";
-  return Math.round(s / 60) + "m";
-}
-
-let openJobKey = null;
-
-function fmtRow(a, gone_, i) {
-  const k = keyOf(a);
-  const isOpen = openJobKey === k;
-  const sec = fmtSec(a.ms || 0);
-  const lim = a.limit_ms && !a.detached ? "/" + Math.round(a.limit_ms / 1000) + "s" : "";
-  const by = a.bytes ? " · " + _util.fmtTok.call(void 0, a.bytes) : "";
-  const retry = a.attempt > 1 && !gone_ ? " · retry " + (a.attempt - 1) : "";
-  const glyph = a.detached ? "~" : a.kind === "subagent" ? "●" : a.kind === "http" ? "↻" : "▸";
-  const det = a.detail ? '<span class="jr-d">' + _util.esc.call(void 0, a.detail) + "</span>" : "";
-  let expandHtml = "";
-  if (isOpen) {
-    const details = [
-      a.kind ? "<div><b>" + _i18n.t.call(void 0, "type", "Type") + ":</b> " + _util.esc.call(void 0, a.kind) + "</div>" : "",
-      a.pid ? "<div><b>PID:</b> " + _util.esc.call(void 0, String(a.pid)) + "</div>" : "",
-      a.limit_ms ? "<div><b>" + _i18n.t.call(void 0, "timeout", "Timeout") + ":</b> " + Math.round(a.limit_ms / 1000) + "s</div>" : "",
-      a.bytes ? "<div><b>" + _i18n.t.call(void 0, "dataTransfer", "Data transfer") + ":</b> " + _util.fmtTok.call(void 0, a.bytes) + "</div>" : "",
-      a.attempt ? "<div><b>" + _i18n.t.call(void 0, "round", "Attempt") + ":</b> " + a.attempt + "</div>" : "",
-      a.detail ? '<div><b>' + _i18n.t.call(void 0, "details", "Details") + ':</b><pre class="jr-code">' + _util.esc.call(void 0, a.detail) + "</pre></div>" : "",
-    ].filter(Boolean).join("");
-    expandHtml = '<div class="jr-exp">' + (details || "<i>" + (_i18n.getLang.call(void 0, ) === "zh" ? "暂无附加参数" : "No extra parameters") + "</i>") + "</div>";
-  }
-  return (
-    '<div class="jr' + (a.detached ? " bg" : "") + (gone_ ? " gone" : "") + (isOpen ? " open" : "") + '" data-key="' + _util.esc.call(void 0, k) + '" title="' + _i18n.t.call(void 0, "clickDetails", "Click to view details") + '">' +
-    '<div class="jr-main">' +
-    '<span class="jr-g">' + glyph + "</span>" +
-    '<span class="jr-n">' + _util.esc.call(void 0, a.name || "job") + "</span>" +
-    det +
-    '<span class="jr-t" data-i="' + i + '">' + sec + lim + by + retry + (gone_ ? " · " + _i18n.t.call(void 0, "done", "Done") : "") + "</span>" +
-    '<span class="jr-arr">' + (isOpen ? "▾" : "▸") + "</span>" +
-    "</div>" +
-    expandHtml +
-    "</div>"
+function renderEmptyState() {
+  return _dom.tags.div(
+    { class: "chat-empty-state" },
+    _dom.tags.div(
+      { class: "empty-brand" },
+      _dom.tags.svg(
+        { class: "empty-logo", viewBox: "0 0 24 18", fill: "currentColor" },
+        _dom.tags.path({
+          d: "M2.4 1.8h17.2a1.7 1.7 0 0 1 0 3.4H10l10 8.2A1.8 1.8 0 0 1 18.65 16.45H3.2a1.7 1.7 0 0 1 0-3.4h9.4L2.7 4.9A1.8 1.8 0 0 1 4.1 1.8z",
+        })
+      ),
+      _dom.tags.h2({ class: "empty-title" }, "piz - Agentic Workspace"),
+      _dom.tags.p({ class: "empty-subtitle" }, "极速、安全的下一代自律型智能体工作台")
+    ),
+    _dom.tags.div(
+      { class: "empty-prompts" },
+      _dom.tags.div(
+        { class: "prompt-card" },
+        _dom.tags.div({ class: "prompt-card-title" }, "⚡ 快速诊断与修复"),
+        _dom.tags.div({ class: "prompt-card-desc" }, "分析编译报错、内存泄漏或逻辑缺陷并立即提出补丁")
+      ),
+      _dom.tags.div(
+        { class: "prompt-card" },
+        _dom.tags.div({ class: "prompt-card-title" }, "🛠 代码审查与 Diff"),
+        _dom.tags.div({ class: "prompt-card-desc" }, "在右侧检视台实时审查变更行数、Hunk 差异与终端输出")
+      ),
+      _dom.tags.div(
+        { class: "prompt-card" },
+        _dom.tags.div({ class: "prompt-card-title" }, "🛡 安全审计与攻防"),
+        _dom.tags.div({ class: "prompt-card-desc" }, "污点分析、权限防范、最小权限原则审查与闭环验证")
+      )
+    )
   );
 }
 
+function renderUserTurn(turn) {
+  return _dom.tags.div(
+    { class: "turn turn-user", id: turn.id },
+    _dom.tags.div(
+      { class: "turn-inner" },
+      _dom.tags.div({ class: "turn-avatar user-avatar" }, "U"),
+      _dom.tags.div(
+        { class: "turn-body" },
+        _dom.tags.div({ class: "user-bubble" }, turn.content)
+      )
+    )
+  );
+}
 
-function startTickIfNeeded() {
-  if (!isOpen()) return;
-  if (tickTimer) return;
-  // 只有列表里确实有会动的东西时,时钟才跑(dsh 同规)
-  if (live.length === 0) return;
-  tickTimer = setInterval(() => {
-    if (!isOpen()) {
-      clearInterval(tickTimer);
-      tickTimer = 0;
-      return;
+function renderAssistantTurn(turn) {
+  const thoughtCollapsed = _signal.signal(!turn.isStreaming && Boolean(turn.content));
+
+  return _dom.tags.div(
+    { class: "turn turn-assistant", id: turn.id },
+    _dom.tags.div(
+      { class: "turn-inner" },
+      _dom.tags.div({ class: "turn-avatar assistant-avatar" }, "π"),
+      _dom.tags.div(
+        { class: "turn-body" },
+        // 1. 思考流折叠
+        () => {
+          if (!turn.thought && !turn.isStreaming) return null;
+          if (!turn.thought && turn.isStreaming && turn.steps.length === 0) {
+            return _dom.tags.div(
+              { class: "thought-panel is-thinking" },
+              _dom.tags.span({ class: "thought-spinner" }),
+              _dom.tags.span({ class: "thought-label" }, "Thinking...")
+            );
+          }
+          if (!turn.thought) return null;
+
+          const durationText = turn.thoughtDurationMs
+            ? ` (${(turn.thoughtDurationMs / 1000).toFixed(1)}s)`
+            : "";
+
+          return _dom.tags.div(
+            { class: "thought-panel" },
+            _dom.tags.div(
+              {
+                class: "thought-header",
+                onclick: () => thoughtCollapsed.set(!thoughtCollapsed()),
+              },
+              _dom.tags.span({ class: "thought-chevron" }, () =>
+                thoughtCollapsed() ? "▸" : "▾"
+              ),
+              _dom.tags.span({ class: "thought-title" }, `Thinking Process${durationText}`),
+              turn.isStreaming
+                ? _dom.tags.span({ class: "thought-live-badge" }, "LIVE")
+                : null
+            ),
+            () => {
+              if (thoughtCollapsed()) return null;
+              return _dom.tags.div({ class: "thought-content" }, turn.thought || "");
+            }
+          );
+        },
+
+        // 2. 步骤执行轨 (Step Track)
+        () => {
+          if (!turn.steps || turn.steps.length === 0) return null;
+          return _dom.tags.div(
+            { class: "step-track" },
+            turn.steps.map((st) => renderStepCard(st))
+          );
+        },
+
+        // 3. 正文 Markdown
+        () => {
+          const content = turn.content || "";
+          if (!content && turn.isStreaming) {
+            return _dom.tags.div({ class: "markdown-body is-generating" }, _dom.tags.span({ class: "typing-cursor" }));
+          }
+
+          const html = _md.renderMarkdown.call(void 0, content);
+          const el = _dom.tags.div({ class: "markdown-body" });
+          el.innerHTML = html;
+          if (turn.isStreaming) {
+            const cursor = document.createElement("span");
+            cursor.className = "typing-cursor";
+            el.appendChild(cursor);
+          }
+          return el;
+        }
+      )
+    )
+  );
+}
+
+function renderStepCard(step) {
+  const isExpanded = _signal.signal(false);
+
+  return _dom.tags.div(
+    {
+      class: () => `step-card status-${step.status}`,
+    },
+    _dom.tags.div(
+      {
+        class: "step-card-hdr",
+        onclick: () => isExpanded.set(!isExpanded()),
+      },
+      _dom.tags.span({ class: "step-status-icon" }, () => {
+        if (step.status === "running") return "⟳";
+        if (step.status === "error") return "✕";
+        return "✓";
+      }),
+      _dom.tags.span({ class: "step-name" }, step.name),
+      step.desc ? _dom.tags.span({ class: "step-desc" }, step.desc) : null,
+      _dom.tags.span(
+        { class: "step-time" },
+        step.durationMs ? `${(step.durationMs / 1000).toFixed(2)}s` : "..."
+      ),
+      _dom.tags.span({ class: "step-chevron" }, () => (isExpanded() ? "▴" : "▾"))
+    ),
+    // 展开查看详情
+    () => {
+      if (!isExpanded()) return null;
+      return _dom.tags.div(
+        { class: "step-details" },
+        step.args
+          ? _dom.tags.div(
+              { class: "step-detail-row" },
+              _dom.tags.div({ class: "step-detail-lbl" }, "Arguments:"),
+              _dom.tags.pre(
+                { class: "step-detail-pre" },
+                typeof step.args === "string"
+                  ? step.args
+                  : JSON.stringify(step.args, null, 2)
+              )
+            )
+          : null,
+        step.result
+          ? _dom.tags.div(
+              { class: "step-detail-row" },
+              _dom.tags.div({ class: "step-detail-lbl" }, "Result:"),
+              _dom.tags.pre({ class: "step-detail-pre" }, step.result)
+            )
+          : null,
+        step.error
+          ? _dom.tags.div(
+              { class: "step-detail-row step-error" },
+              _dom.tags.div({ class: "step-detail-lbl" }, "Error:"),
+              _dom.tags.pre({ class: "step-detail-pre" }, step.error)
+            )
+          : null,
+        _dom.tags.div(
+          { class: "step-actions" },
+          _dom.tags.button(
+            {
+              class: "step-deck-btn",
+              onclick: () => {
+                _store.appendTerminalLine.call(void 0, `=== Step ${step.name} ===\n${step.result || step.error || ""}`, "system");
+                _store.setDeckTab.call(void 0, "terminal");
+              },
+            },
+            "Send to Terminal"
+          )
+        )
+      );
     }
-    live.forEach((a, i) => {
-      a.ms = (a.ms || 0) + 1000;
-      const el = document.querySelector('.jr-t[data-i="' + i + '"]');
-      if (el) {
-        const lim = a.limit_ms && !a.detached ? "/" + Math.round(a.limit_ms / 1000) + "s" : "";
-        const by = a.bytes ? " · " + _util.fmtTok.call(void 0, a.bytes) : "";
-        const retry = a.attempt > 1 ? " · retry " + (a.attempt - 1) : "";
-        el.textContent = fmtSec(a.ms) + lim + by + retry;
-      }
-    });
-  }, 1000);
-}
-
- function refreshJobs(list) {
-  _slash.setSubPool.call(void 0, list);
-  updateLineage(list);
-  // 终态归集:上次活跃、这次消失的 → 弱化保留(最新完成在前)
-  const nowIds = new Set(list.map(keyOf));
-  for (const j of live) {
-    if (!nowIds.has(keyOf(j))) gone.unshift(j);
-  }
-  live = list;
-  const n = list.length;
-  const btn = _util.$.call(void 0, "hJobs");
-  // 控件出现条件:至少有一个任务(含已结束的历史);零不宣告零
-  if (btn) btn.hidden = n === 0 && gone.length === 0;
-  const badge = _util.$.call(void 0, "hJobsBadge");
-  if (badge) {
-    badge.hidden = n === 0;
-    badge.textContent = String(n);
-  }
-  if (!isOpen()) {
-    const hb = _util.$.call(void 0, "hJobs");
-    if (_optionalChain([hb, 'optionalAccess', _15 => _15.classList, 'access', _16 => _16.contains, 'call', _17 => _17("open")])) hb.classList.remove("open");
-    return;
-  }
-  const p = _util.$.call(void 0, "jobsPop");
-  if (!p) return;
-  if (!n && !gone.length) {
-    closeJobs();
-    return;
-  }
-  // 排序:活跃 startedAt 升序(以 elapsed 降序近似)在前,终态 finishedAt 降序在后
-  const sortedLive = [...live].sort((a, b) => (b.ms || 0) - (a.ms || 0));
-  p.innerHTML =
-    sortedLive.map((a, i) => fmtRow(a, false, i)).join("") +
-    gone.map((a, i) => fmtRow(a, true, i + sortedLive.length)).join("");
-  p.querySelectorAll(".jr").forEach((el) => {
-    el.onclick = (e) => {
-      e.stopPropagation();
-      const k = el.getAttribute("data-key");
-      openJobKey = openJobKey === k ? null : k;
-      refreshJobs(live);
-    };
-  });
-  startTickIfNeeded();
-} exports.refreshJobs = refreshJobs;
-
-// 会话头谱系(dsh session.header.lineage 之简形):标题后 `/ N` 面包屑,
-// N=活动子代理数;悬停 title 列出运行中的子代理(只读,不做继续语义)。
-function updateLineage(list) {
-  const subs = (list || []).filter((j) => j && j.kind === "subagent" && j.name);
-  const ses = _util.$.call(void 0, "hSes");
-  let el = _util.$.call(void 0, "hLineage") ;
-  if (!subs.length) {
-    if (el) el.hidden = true;
-    return;
-  }
-  if (!el) {
-    if (!ses) return;
-    el = document.createElement("span");
-    el.id = "hLineage";
-    el.className = "lineage";
-    ses.insertAdjacentElement("afterend", el);
-  }
-  el.hidden = false;
-  el.innerHTML =
-    '<span class="lg-sep">/</span><span class="lg-n" title="' +
-    _util.esc.call(void 0, subs.map((s) => s.name + (s.detail ? " — " + s.detail : "")).join("\n")) +
-    '">' +
-    subs.length +
-    (subs.length > 1 ? (_i18n.getLang.call(void 0, ) === "zh" ? " 个 Subagent" : " subagents") : (_i18n.getLang.call(void 0, ) === "zh" ? " Subagent" : " subagent")) +
-    "</span>";
-}
-
-// 验证钩(Playwright 驱动)
-if (typeof window !== "undefined") {
-  (window ).pizDbgJobs = { refreshJobs, toggleJobs, closeJobs };
+  );
 }
 
 };
 __modules["composer"] = function(module, exports, require) {
-"use strict";Object.defineProperty(exports, "__esModule", {value: true});// composer.ts —— 发送生命周期:运行态/队列/活动条、SSE 事件路由(ev.onmessage)、
-// 输入框键盘与草稿、图片黏附、sendPlain/send。
-// 自 webui.js 切出。聊天渲染直引 chat.ts,插件直引 plugins.ts,无环无钩。
-var _util = require('./util');
-var _state = require('./state');
-var _ui = require('./ui');
-var _sessions = require('./sessions');
+"use strict";Object.defineProperty(exports, "__esModule", {value: true});// composer.ts —— 底部智能输入台 (自适应高度、斜杠补全、文件引用与流控)
+var _dom = require('./dom');
+
+
+
+
+
+
+
+
+
 var _store = require('./store');
-var _bus = require('./bus');
-var _stream = require('./stream');
+var _signal = require('./signal');
 
+ function renderComposer() {
+  const text = _signal.signal("");
+  const showSlashMenu = _signal.signal(false);
+  const showFileMenu = _signal.signal(false);
+  const menuIndex = _signal.signal(0);
 
+  let textareaEl = null;
 
-var _slash = require('./slash');
-
-
-
-var _chat = require('./chat');
-
-
-var _model = require('./model');
-var _plugins = require('./plugins');
-var _jobs = require('./jobs');
-var _i18n = require('./i18n');
-
-let running = false;
-let lastImgUrl = null;
-let pending = [];
-exports.getRunning = _store.getRunning; exports.getLastUser = _store.getLastUser; exports.setLastUser = _store.setLastUser;
- const clearPending = () => { pending = []; }; exports.clearPending = clearPending;
- function refreshSend() {
-  const tVal = (_util.$.call(void 0, "inp") ).value.trim();
-  const stop = running && !tVal;
-  _util.$.call(void 0, "send").textContent = stop ? "■" : "➤";
-  _util.$.call(void 0, "send").classList.toggle("stop", stop);
-  _util.$.call(void 0, "send").title = stop ? _i18n.t.call(void 0, "stop", "Stop") : running ? _i18n.t.call(void 0, "sendMore", "Send more") : _i18n.t.call(void 0, "send", "Send");
-  const inp = _util.$.call(void 0, "inp") ;
-  if (inp) {
-    inp.placeholder = running
-      ? _i18n.t.call(void 0, "sendMorePh", "Send more…")
-      : inp.dataset.ph || inp.placeholder;
-  }
-} exports.refreshSend = refreshSend;
- function setRun(r) {
-  running = r;
-  _store.setRunning.call(void 0, r);
-  refreshSend();
-  if (r) ensureActPoll();
-} exports.setRun = setRun;
-let actTimer = 0;
-function fmtActChip(a) {
-  const sec = a.ms < 10000 ? (a.ms / 1000).toFixed(1) : String(Math.round(a.ms / 1000));
-  const lim = a.limit_ms && !a.detached ? "/" + Math.round(a.limit_ms / 1000) + "s" : "";
-  const by = a.bytes ? " · " + _util.fmtTok.call(void 0, a.bytes) : "";
-  return (
-    '<span class="act-chip' +
-    (a.detached ? " bg" : "") +
-    '">' +
-    _util.esc.call(void 0, a.name || "job") +
-    " " +
-    sec +
-    "s" +
-    lim +
-    by +
-    (a.detached ? " · bg" : "") +
-    "</span>"
-  );
-}
-async function tickActivity() {
-  const el = _util.$.call(void 0, "actStrip");
-  try {
-    const r = await fetch("/api/activity");
-    const list = await r.json();
-    _jobs.refreshJobs.call(void 0, list);
-    if (!el) return 0;
-    if (!list || !list.length) {
-      el.hidden = true;
-      el.innerHTML = "";
-      return 0;
-    }
-    el.hidden = false;
-    el.innerHTML = list.map(fmtActChip).join("");
-    return list.length;
-  } catch (e2) {
-    return 0;
-  }
-}
- function ensureActPoll() {
-  if (actTimer) return;
-  actTimer = setInterval(async () => {
-    const n = await tickActivity();
-    if (!n && !running) {
-      clearInterval(actTimer);
-      actTimer = 0;
-    }
-  }, 400);
-} exports.ensureActPoll = ensureActPoll;
- function renderQueue() {
-  const box = _util.$.call(void 0, "qbox"),
-    items = _util.$.call(void 0, "qItems"),
-    count = _util.$.call(void 0, "qCount");
-  if (!box || !items) return;
-  if (!pending.length) {
-    box.hidden = true;
-    items.innerHTML = "";
-    return;
-  }
-  box.hidden = false;
-  count.textContent = pending.length === 1 ? _i18n.t.call(void 0, "queued", "Queued") : pending.length + (_i18n.getLang.call(void 0, ) === "zh" ? " 条待发" : " queued");
-  items.innerHTML = pending
-    .map((t) => '<div class="q-item">' + _util.esc.call(void 0, t) + "</div>")
-    .join("");
-} exports.renderQueue = renderQueue;
- function dropPending(text) {
-  const i = pending.indexOf(text);
-  if (i >= 0) pending.splice(i, 1);
-  else if (pending.length) pending.shift();
-  renderQueue();
-} exports.dropPending = dropPending;
-_stream.ev.onmessage = (e) => {
-  let evt;
-  try {
-    evt = JSON.parse(e.data);
-  } catch (e3) {
-    return;
-  }
-  if (evt.session && evt.session !== _state.sess) return;
-  _plugins.pluginEmit.call(void 0, "event", evt);
-  _plugins.pluginEmit.call(void 0, evt.type, evt);
-  switch (evt.type) {
-    case "user_message":
-      _store.setLastUser.call(void 0, evt.text || _store.getLastUser.call(void 0, ));
-      dropPending(evt.text);
-      _chat.addUser.call(void 0, evt.has_image && !evt.text ? "[image]" : evt.has_image ? (evt.text || "") + "  [image]" : (evt.text || ""), evt.image_file ? "/api/image?name=" + encodeURIComponent(evt.image_file) : evt.has_image ? lastImgUrl : null);
-      lastImgUrl = null;
-      _chat.noteTurn.call(void 0, );
-      setRun(true);
-      break;
-    case "queued":
-      if (evt.text && pending.indexOf(evt.text) < 0) pending.push(evt.text);
-      renderQueue();
-      break;
-    case "title":
-      if (evt.title) {
-        _model.applyTitle.call(void 0, evt.title);
-        if (_util.$.call(void 0, "hSes") && _state.sess !== "default") _util.$.call(void 0, "hSes").textContent = evt.title;
-        if (_util.$.call(void 0, "tbSe") && _state.sess !== "default") _util.$.call(void 0, "tbSe").textContent = evt.title;
-        _sessions.loadSessions.call(void 0, );
-      }
-      break;
-    case "notice":
-      _chat.addNotice.call(void 0, evt.text);
-      break;
-    case "checkpoint":
-      _chat.addCheckpoint.call(void 0, evt.summary, evt.folded, evt.kept);
-      break;
-    case "reasoning":
-      setRun(true);
-      _chat.addRsn.call(void 0, evt.text);
-      break;
-    case "message":
-      setRun(true);
-      _chat.addAsst.call(void 0, evt.text);
-      break;
-    case "tool_call":
-      _chat.addTool.call(void 0, evt.name, evt.args);
-      break;
-    case "tool_result":
-      _chat.toolDone.call(void 0, evt.name, evt.error, evt.summary);
-      break;
-    case "subagent":
-      _chat.addSub.call(void 0, evt.idx, evt.kind, evt.text);
-      break;
-    case "permission":
-      _chat.addPerm.call(void 0, evt.id, evt.name, evt.args);
-      break;
-    case "permission_result":
-      {
-        const pc = document.querySelector(
-          '.pc[data-pid="' + evt.id + '"]',
-        );
-        if (pc) pc.remove();
-      }
-      break;
-    case "turn_end":
-      _chat.finishAsst.call(void 0, );
-      _chat.finishRsn.call(void 0, );
-      _chat.finishWork.call(void 0, );
-      _chat.stampTurn.call(void 0, );
-      setRun(false);
-      if (
-        _state.prefs.notify &&
-        window.Notification &&
-        Notification.permission === "granted"
-      ) {
-        try {
-          new Notification("piz", { body: "本轮已完成" });
-        } catch (e4) {}
-      }
-      if (_state.prefs.sound) {
-        try {
-          const AC = (window ).AudioContext || (window ).webkitAudioContext;
-          const ac = new AC();
-          const o = ac.createOscillator();
-          const g = ac.createGain();
-          o.frequency.value = 880;
-          g.gain.value = 0.04;
-          o.connect(g);
-          g.connect(ac.destination);
-          o.start();
-          o.stop(ac.currentTime + 0.08);
-        } catch (e5) {}
-      }
-      break;
-    case "status":
-      if (evt.cost !== undefined) _model.setCost.call(void 0, evt.cost);
-      if (evt.pct !== undefined || evt.used !== undefined) {
-        _model.setCtx.call(void 0, evt.pct, evt.used, evt.window);
-      }
-      _model.setTurnMeta.call(void 0, evt);
-      if (evt.model) _model.renderModel.call(void 0, );
-      if (evt.think) _model.applyThink.call(void 0, evt.think);
-      break;
-  }
-};
-// ---- 发送 ----
-(_util.$.call(void 0, "qClr") ).onclick = () => _slash.runSlash.call(void 0, { name: "/queue" }, "");
-(_util.$.call(void 0, "send") ).onclick = () => {
-  if (running && !(_util.$.call(void 0, "inp") ).value.trim()) {
-    fetch(
-      "/api/interrupt?" + _state.wsp + "session=" + encodeURIComponent(_state.sess),
-      { method: "POST" },
-    );
-  } else send();
-};
- function toggleKeysHint() {
-  const el = _util.$.call(void 0, "keysHint");
-  if (!el) return;
-  if (!el.hidden) {
-    el.hidden = true;
-    el.innerHTML = "";
-    return;
-  }
-  el.hidden = false;
-  el.innerHTML =
-    "<div><kbd>/</kbd> 命令 · <kbd>@./</kbd> 文件 · <kbd>!</kbd> 本页命令</div>" +
-    "<div><kbd>j</kbd> 任务 · <kbd>u</kbd> 用量 · <kbd>g</kbd> 差异 · <kbd>l</kbd> 日志 · <kbd>c</kbd> 复制 · <kbd>s</kbd> 沙箱 · <kbd>?</kbd> 本卡</div>" +
-    "<div><kbd>Ctrl</kbd><kbd>K</kbd> 搜会话 · <kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>C</kbd> 复制回复</div>" +
-    "<div><kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>R</kbd> 重发 · <kbd>Ctrl</kbd><kbd>V</kbd> 贴图 · <kbd>Esc</kbd> 关</div>";
-} exports.toggleKeysHint = toggleKeysHint;
-document.addEventListener("click", (e) => {
-  const el = _util.$.call(void 0, "keysHint");
-  if (el && !el.hidden && !e.target.closest("#keysHint")) {
-    el.hidden = true;
-    el.innerHTML = "";
-  }
-});
-(_util.$.call(void 0, "inp") ).addEventListener("keydown", (e) => {
-  if (
-    !e.isComposing &&
-    e.keyCode !== 229 &&
-    !e.ctrlKey &&
-    !e.metaKey &&
-    !e.altKey &&
-    !(_util.$.call(void 0, "inp") ).value &&
-    !_slash.slashOpen.call(void 0, )
-  ) {
-    if (e.key === "u" || e.key === "U") {
-      e.preventDefault();
-      _slash.runSlash.call(void 0, { name: "/usage" }, "");
-      return;
-    }
-    if (e.key === "j" || e.key === "J") {
-      e.preventDefault();
-      _slash.runSlash.call(void 0, { name: "/jobs" }, "");
-      return;
-    }
-    if (e.key === "d" || e.key === "D") {
-      e.preventDefault();
-      _slash.runSlash.call(void 0, { name: "/doctor" }, "");
-      return;
-    }
-    if (e.key === "g" || e.key === "G") {
-      e.preventDefault();
-      _slash.runSlash.call(void 0, { name: "/diff" }, "");
-      return;
-    }
-    if (e.key === "l" || e.key === "L") {
-      e.preventDefault();
-      _slash.runSlash.call(void 0, { name: "/log" }, "");
-      return;
-    }
-    if (e.key === "r" || e.key === "R") {
-      e.preventDefault();
-      _slash.runSlash.call(void 0, { name: "/redo" }, "");
-      return;
-    }
-    if (e.key === "c" || e.key === "C") {
-      e.preventDefault();
-      _slash.runSlash.call(void 0, { name: "/copy" }, "");
-      return;
-    }
-    if (e.key === "s" || e.key === "S") {
-      e.preventDefault();
-      const p = _util.$.call(void 0, "sbPill");
-      if (p) p.click();
-      else _slash.runSlash.call(void 0, { name: "/sandbox" }, "");
-      return;
-    }
-    if (e.key === "?") {
-      e.preventDefault();
-      toggleKeysHint();
-      return;
-    }
-  }
-  if (_slash.slashOpen.call(void 0, )) {
-    if (e.key === "ArrowDown") {
-      e.preventDefault();
-      _slash.slashMove.call(void 0, 1);
-      return;
-    }
-    if (e.key === "ArrowUp") {
-      e.preventDefault();
-      _slash.slashMove.call(void 0, -1);
-      return;
-    }
-    if (e.key === "Tab") {
-      e.preventDefault();
-      _slash.slashComplete.call(void 0, );
-      return;
-    }
-    if (e.key === "Enter" && !e.isComposing && e.keyCode !== 229) {
-      e.preventDefault();
-      _slash.slashPick.call(void 0, );
-      return;
-    }
-    if (e.key === "Escape") {
-      e.preventDefault();
-      _slash.hideSlash.call(void 0, );
-      return;
-    }
-  }
-  const inpEl = _util.$.call(void 0, "inp") ;
-  if (
-    e.key === "ArrowUp" &&
-    !e.shiftKey &&
-    inpEl.selectionStart === 0 &&
-    inpEl.value.indexOf("\n") < 0
-  ) {
-    e.preventDefault();
-    _store.histPrev.call(void 0, );
-    return;
-  }
-  if (
-    e.key === "ArrowDown" &&
-    !e.shiftKey &&
-    inpEl.selectionStart === inpEl.value.length &&
-    inpEl.value.indexOf("\n") < 0
-  ) {
-    e.preventDefault();
-    _store.histNext.call(void 0, );
-    return;
-  }
-  if (e.key === "Enter" && !e.shiftKey && !e.isComposing && e.keyCode !== 229) {
-    e.preventDefault();
-    send();
-  }
-});
-(_util.$.call(void 0, "inp") ).addEventListener("input", () => {
-  const kh = _util.$.call(void 0, "keysHint");
-  if (kh && !kh.hidden && (_util.$.call(void 0, "inp") ).value) {
-    kh.hidden = true;
-    kh.innerHTML = "";
-  }
-  _store.autosizeInp.call(void 0, );
-  _store.saveDraft.call(void 0, );
-  _slash.updateSlash.call(void 0, );
-  refreshSend();
-});
-let pendingImg = null;
- function paintImgChip() {
-  let c = _util.$.call(void 0, "img-chip") ;
-  if (!c) {
-    c = document.createElement("div");
-    c.id = "img-chip";
-    c.className = "img-chip";
-    const box = _util.$.call(void 0, "inp").parentNode;
-    if (box) box.insertBefore(c, _util.$.call(void 0, "inp"));
-  }
-  if (!pendingImg) {
-    c.hidden = true;
-    c.innerHTML = "";
-    return;
-  }
-  c.hidden = false;
-  c.innerHTML = "<img alt=\"\" /><span>image</span><button type=button>✕</button>";
-  (c.querySelector("img") ).src = "data:" + pendingImg.mime + ";base64," + pendingImg.b64;
-  (c.querySelector("button") ).onclick = () => {
-    pendingImg = null;
-    paintImgChip();
-  };
-} exports.paintImgChip = paintImgChip;
- async function blobToChatImage(blob) {
-  const bmp = await createImageBitmap(blob);
-  const max = 1600;
-  let w = bmp.width,
-    h = bmp.height;
-  if (w > max || h > max) {
-    const s = max / Math.max(w, h);
-    w = Math.round(w * s);
-    h = Math.round(h * s);
-  }
-  const cv = document.createElement("canvas");
-  cv.width = w;
-  cv.height = h;
-  cv.getContext("2d").drawImage(bmp, 0, 0, w, h);
-  const url = cv.toDataURL("image/jpeg", 0.85);
-  const i = url.indexOf(",");
-  return { mime: "image/jpeg", b64: url.slice(i + 1) };
-} exports.blobToChatImage = blobToChatImage;
- async function attachClipboardImage() {
-  if (navigator.clipboard && (navigator.clipboard ).read) {
-    try {
-      const items = await (navigator.clipboard ).read();
-      for (const it of items) {
-        const type = (it.types || []).find((t) => String(t).indexOf("image/") === 0);
-        if (!type) continue;
-        const blob = await it.getType(type);
-        pendingImg = await blobToChatImage(blob);
-        paintImgChip();
-        return true;
-      }
-    } catch (e6) {}
-  }
-  return false;
-} exports.attachClipboardImage = attachClipboardImage;
-document.addEventListener("paste", async (ev) => {
-  const items = ev.clipboardData && ev.clipboardData.items;
-  if (!items) return;
-  for (const it of items) {
-    if (it.type && it.type.indexOf("image/") === 0) {
-      ev.preventDefault();
-      const blob = it.getAsFile();
-      if (!blob) return;
-      try {
-        pendingImg = await blobToChatImage(blob);
-        paintImgChip();
-      } catch (e7) {}
-      return;
-    }
-  }
-});
- async function sendPlain(t) {
-  if (!t && !pendingImg) return;
-  _store.setLastUser.call(void 0, t || "(image)");
-  let img = pendingImg;
-  lastImgUrl = img || null;
-  pendingImg = null;
-  if (img && !_model.getVision.call(void 0, )) {
-    _chat.addNotice.call(void 0, "image dropped: model has no vision");
-    img = null;
-    if (!t) {
-      paintImgChip();
-      return false;
-    }
-  }
-  paintImgChip();
-  setRun(true);
-  let ok = false;
-  try {
-    const body = { text: t || "" };
-    if (img) {
-      body.image = img.b64;
-      body.mime = img.mime;
-    }
-    const r = await fetch(
-      "/api/chat?" + _state.wsp + "session=" + encodeURIComponent(_state.sess),
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(body),
-      },
-    );
-    const j = await r.json().catch(() => ({}));
-    if (!r.ok || j.ok === false) {
-      _ui.showToast.call(void 0, j.error || "发送失败");
-    } else ok = true;
-  } catch (e8) {
-    _ui.showToast.call(void 0, "发送失败");
-  }
-  if (!ok) {
-    // 失败不吞草稿:文本塞回输入框,图也还回 pending。
-    setRun(false);
-    if (t && _util.$.call(void 0, "inp")) {
-      (_util.$.call(void 0, "inp") ).value = t;
-      _store.autosizeInp.call(void 0, );
-      refreshSend();
-    }
-    if (img && !pendingImg) {
-      pendingImg = img;
-      paintImgChip();
-    }
-  }
-  return ok;
-} exports.sendPlain = sendPlain;
- async function send() {
-  _slash.hideSlash.call(void 0, );
-  _slash.hideBang.call(void 0, );
-  const t = (_util.$.call(void 0, "inp") ).value.trim();
-  if (!t && !pendingImg) return;
-  if (t.startsWith("/")) {
-    const space = t.indexOf(" ");
-    const cmd = space < 0 ? t : t.slice(0, space);
-    const arg = space < 0 ? "" : t.slice(space + 1);
-    const item = _slash.findSlash.call(void 0, cmd);
-    if (item) {
-      (_util.$.call(void 0, "inp") ).value = "";
-      (_util.$.call(void 0, "inp") ).style.height = "auto";
-      _store.clearDraft.call(void 0, );
-      _slash.hideSlash.call(void 0, );
-      refreshSend();
-      _store.pushHist.call(void 0, t);
-      await _slash.runSlash.call(void 0, item, arg);
-      return;
-    }
-  }
-  (_util.$.call(void 0, "inp") ).value = "";
-  (_util.$.call(void 0, "inp") ).style.height = "auto";
-  _store.clearDraft.call(void 0, );
-  _store.pushHist.call(void 0, t);
-  _slash.hideSlash.call(void 0, );
-  refreshSend();
-  await sendPlain(t);
-  // 桌面端发完回焦,接着打下一行;触屏不弹键盘。
-  if (window.matchMedia("(hover: hover)").matches) _util.$.call(void 0, "inp").focus();
-} exports.send = send;
-
-_bus.on.call(void 0, "chat:send", ({ text }) => {
-  sendPlain(text);
-});
-_bus.on.call(void 0, "chat:retry", () => {
-  const u = _store.getLastUser.call(void 0, );
-  if (u) sendPlain(u);
-});
-_bus.on.call(void 0, "composer:refresh-send", () => {
-  refreshSend();
-});
-_bus.on.call(void 0, "composer:ensure-act-poll", () => {
-  ensureActPoll();
-});
-_bus.on.call(void 0, "composer:clear-pending", () => {
-  exports.clearPending.call(void 0, );
-  renderQueue();
-});
-_bus.on.call(void 0, "composer:paste-image", async ({ callback }) => {
-  const ok = await attachClipboardImage();
-  callback(ok);
-});
-
-};
-__modules["render"] = function(module, exports, require) {
-"use strict";Object.defineProperty(exports, "__esModule", {value: true});// render.ts —— 设置面板的纯 HTML 构造器(seg 开关 / auth 键列 / 资源包 / 插件行)。
-// 自 webui.js 切出;名与义一字未改。DOM 绑定(bindSeg/bindAuthPanel)留在 main。
-var _util = require('./util');
-var _i18n = require('./i18n');
-
- function segHtml(name, opts, cur) {
-  return (
-    '<div class="seg" data-seg="' +
-    name +
-    '">' +
-    opts
-      .map(
-        (o) =>
-          '<button type="button" data-v="' +
-          _util.esc.call(void 0, o.v) +
-          '" class="' +
-          (o.v === cur ? "on" : "") +
-          '">' +
-          _util.esc.call(void 0, o.l) +
-          "</button>",
-      )
-      .join("") +
-    "</div>"
-  );
-} exports.segHtml = segHtml;
-/// 供应商凭证卡片(dsh settings-models rowCard 之形):每 provider 一张卡 ——
-/// 头行(状态点 + 名称 + 协议 hint) + key 输入行 + OAuth 按钮。
-/// 已配 key = 绿实心点;未配 = 红实心点(dsh credentialDot 规范)。
- function authPanelHtml(cfg) {
-  const keysFirst = [
-    "deepseek",
-    "openai",
-    "anthropic",
-    "xai",
-    "openrouter",
-    "groq",
-    "mistral",
-    "together",
-    "fireworks",
-    "cerebras",
-    "moonshotai",
-    "huggingface",
-    "nvidia",
-    "zai",
-    "minimax",
+  const SLASH_COMMANDS = [
+    { cmd: "/help", desc: "Show available commands and usage" },
+    { cmd: "/diff", desc: "Open right deck to view code changes" },
+    { cmd: "/term", desc: "Open terminal viewer in deck" },
+    { cmd: "/jobs", desc: "View subagent hierarchy and jobs" },
+    { cmd: "/files", desc: "Browse workspace files" },
+    { cmd: "/clear", desc: "Create a fresh new session" },
+    { cmd: "/yolo", desc: "Switch mode to YOLO (auto-execute)" },
+    { cmd: "/ask", desc: "Switch mode to Ask (require approval)" },
   ];
-  const src = cfg.providers || [];
-  const by = {};
-  src.forEach((p) => {
-    by[p.name] = p;
-  });
-  const list = keysFirst.map((n) => by[n] || { name: n, hasKey: false });
-  const oauthLabel = {
-    openrouter: "Sign in with OpenRouter",
-    xai: "Sign in with xAI",
-    openai: "Sign in with ChatGPT",
-  };
-  return (
-    '<div class="prov-hint">' +
-    _i18n.t.call(void 0, "builtinProvidersHint", "Built-in providers. Paste API key and save. Green dot = configured.") +
-    "</div>" +
-    '<div class="prov-cards">' +
-    list
-      .map((p) => {
-        const oauthl = oauthLabel[p.name];
-        return (
-          '<div class="prov-card auth-row" data-prov="' +
-          _util.esc.call(void 0, p.name) +
-          '"><div class="prov-head"><span class="cred-dot ' +
-          (p.hasKey ? "cred-ok" : "cred-miss") +
-          '" title="' +
-          (p.hasKey ? _i18n.t.call(void 0, "configured", "Configured") : _i18n.t.call(void 0, "notConfigured", "Not configured")) +
-          '"></span><span class="prov-name">' +
-          _util.esc.call(void 0, p.name) +
-          "</span>" +
-          (p.api ? '<span class="prov-api">' + _util.esc.call(void 0, p.api) + "</span>" : "") +
-          "</div>" +
-          '<div class="auth-actions"><input class="set-sel auth-key" type="password" placeholder="' +
-          (p.hasKey ? _i18n.t.call(void 0, "replaceApiKey", "Replace API key") : _i18n.t.call(void 0, "pasteApiKey", "Paste API key")) +
-          '" autocomplete="off">' +
-          '<button type="button" class="btn auth-save">' +
-          _i18n.t.call(void 0, "save", "Save") +
-          "</button>" +
-          (oauthl ? '<button type="button" class="btn auth-oauth">' + oauthl + "</button>" : "") +
-          "</div>" +
-          '<div class="set-hint auth-dev" hidden></div></div>'
-        );
-      })
-      .join("") +
-    "</div>"
-  );
-} exports.authPanelHtml = authPanelHtml;
- function packageRows(data) {
-  const user = data && Array.isArray(data.user) ? data.user : [];
-  const proj = data && Array.isArray(data.project) ? data.project : [];
-  const title = _i18n.t.call(void 0, "packages", "Packages");
-  if (!user.length && !proj.length) {
-    return '<div class="set-row"><div class="set-lab">' + title + '<span class="set-hint">piz pkg install &lt;path&gt; [-l]</span></div></div>';
-  }
-  function one(p, scope) {
-    return (
-      '<div class="set-row"><div class="set-lab">' +
-      _util.esc.call(void 0, p.name || "") +
-      '<span class="set-hint">' +
-      scope +
-      " · skills:" +
-      (p.skills || 0) +
-      " prompts:" +
-      (p.prompts || 0) +
-      (p.web ? " · web" : "") +
-      "</span></div></div>"
-    );
-  }
-  let html =
-    '<div class="set-row"><div class="set-lab">' + title + '<span class="set-hint">~/.piz/packages &amp; .piz/packages</span></div></div>';
-  for (const p of user) html += one(p, "user");
-  for (const p of proj) html += one(p, "project");
-  return html;
-} exports.packageRows = packageRows;
- function pluginRows(list) {
-  const plugs = Array.isArray(list) ? list.filter((p) => p && p.optional) : [];
-  if (!plugs.length) return "";
-  let html =
-    '<div class="set-row"><div class="set-lab">' +
-    _i18n.t.call(void 0, "plugins", "Plugins") +
-    '<span class="set-hint">' +
-    _i18n.t.call(void 0, "pluginHint", "task-delegation enables workflow / subagents. Takes effect next turn.") +
-    "</span></div></div>";
-  for (const p of plugs) {
-    html +=
-      '<div class="set-row"><div class="set-lab">' +
-      _util.esc.call(void 0, p.name) +
-      '</div><button type="button" class="sw' +
-      (p.enabled ? " on" : "") +
-      '" data-plugin="' +
-      _util.esc.call(void 0, p.name) +
-      '"></button></div>';
-  }
-  return html;
-} exports.pluginRows = pluginRows;
 
+  function handleInput(e) {
+    const el = e.target ;
+    text.set(el.value);
+    autoResize(el);
 
-};
-__modules["settings"] = function(module, exports, require) {
-"use strict";Object.defineProperty(exports, "__esModule", {value: true});// settings.ts —— 设置对话框(openSettings)、会话搜索(openSearch)、全局键盘。
-// 自 webui.js 切出。模型态直引 model.ts;外观方案直引 ui.ts;无环。
-var _util = require('./util');
-var _state = require('./state');
-
-
-
-var _ui = require('./ui');
-var _render = require('./render');
-var _sessions = require('./sessions');
-var _sheet = require('./sheet');
-var _slash = require('./slash');
-
-
-
-var _model = require('./model');
-var _chat = require('./chat');
-var _store = require('./store');
-var _bus = require('./bus');
-var _i18n = require('./i18n');
-
-// 自 wired:设置钮(侧栏底部 foot;绑定居此避环)。
-(_util.$.call(void 0, "setBtn") ).onclick = () => openSettings();
-
- async function openSettings(activeTab = "auth") {
-  let cfg = {};
-  let models = [];
-  let pkgs = { user: [], project: [] };
-  try {
-    const [cr, mr, pr] = await Promise.all([
-      fetch("/api/config"),
-      fetch("/api/models"),
-      fetch("/api/packages?" + _state.wsp),
-    ]);
-    cfg = await cr.json();
-    models = await mr.json();
-    if (!Array.isArray(models)) models = [];
-    pkgs = await pr.json();
-  } catch (e2) {}
-  const defThink = cfg.defaultThinkingLevel || _model.getThink.call(void 0, ) || "high";
-  const defAppr = cfg.approvalMode || "yolo";
-  const defModel = cfg.defaultModel || "";
-  const thinkOpts = (typeof _model.THINK_LEVELS !== "undefined" ? _model.THINK_LEVELS : ["off", "low", "medium", "high"]).map(
-    (v) => ({ v, l: v }),
-  );
-  const apprOpts = (typeof _model.APPROVALS !== "undefined" ? _model.APPROVALS : []).map((x) => ({ v: x.id, l: x.label }));
-  function optHtml(id, cur, list) {
-    const xs = list.slice();
-    if (cur && xs.indexOf(cur) < 0) xs.unshift(cur);
-    if (!xs.length) xs.push(cur || "");
-    // 会话模型列:点击弹分组卡片菜单(modelMenu);默认模型仍是原生 select(选项即值)
-    if (id === "setSessModel") {
-      return (
-        '<button type="button" class="set-sel set-model-btn" id="setSessModel" title="' + _i18n.t.call(void 0, "selectModel", "Select model") + '">' +
-        _util.esc.call(void 0, cur || _i18n.t.call(void 0, "selectModel", "Select model")) +
-        "</button>"
-      );
+    const val = el.value;
+    if (val.startsWith("/")) {
+      showSlashMenu.set(true);
+      showFileMenu.set(false);
+      menuIndex.set(0);
+    } else if (val.includes("@")) {
+      showFileMenu.set(true);
+      showSlashMenu.set(false);
+      menuIndex.set(0);
+    } else {
+      showSlashMenu.set(false);
+      showFileMenu.set(false);
     }
-    return (
-      '<select id="' +
-      id +
-      '" class="set-sel">' +
-      xs
-        .map(
-          (m) =>
-            '<option value="' +
-            _util.esc.call(void 0, m) +
-            '"' +
-            (m === cur ? " selected" : "") +
-            ">" +
-            _util.esc.call(void 0, m) +
-            "</option>",
-        )
-        .join("") +
-      "</select>"
-    );
   }
-  // 自定义 provider(非内置目录)→ 账户 tab 底部卡片列表;内置键走 authPanelHtml
-  const builtin = new Set([
-    "deepseek", "openai", "anthropic", "xai", "openrouter", "groq",
-    "mistral", "together", "fireworks", "cerebras", "moonshotai",
-    "huggingface", "nvidia", "zai", "minimax",
-  ]);
-  const customs = (cfg.providers || []).filter((p) => !builtin.has(p.name));
-  const provHtml = customs.length
-    ? '<div class="prov-hint" style="margin-top:14px">' + (_i18n.getLang.call(void 0, ) === "zh" ? "自定义 Provider (见 ~/.piz/models.json)" : "Custom providers (~/.piz/models.json)") + "</div>" +
-      '<div class="prov-cards">' +
-      customs
-        .map(
-          (p) =>
-            '<div class="prov-card"><div class="prov-head"><span class="cred-dot ' +
-            (p.hasKey ? "cred-ok" : "cred-miss") +
-            '"></span><span class="prov-name">' +
-            _util.esc.call(void 0, p.name || "") +
-            "</span>" +
-            (p.api ? '<span class="prov-api">' + _util.esc.call(void 0, p.api) + "</span>" : "") +
-            (p.models && p.models.length ? '<span class="prov-api">' + p.models.length + (_i18n.getLang.call(void 0, ) === "zh" ? " 个 Model" : " models") + "</span>" : "") +
-            "</div></div>",
-        )
-        .join("") +
-      "</div>"
-    : "";
-  _ui.openDlg.call(void 0, {
-    cls: "set",
-    title: _i18n.t.call(void 0, "settings", "Settings"),
-    body:
-      '<div class="set-tabs" id="setTabs">' +
-      '<button type="button" data-tab="auth"' + (activeTab === "auth" ? ' class="on"' : "") + ">" + _i18n.t.call(void 0, "tabAuth", "Providers & Keys") + "</button>" +
-      '<button type="button" data-tab="look"' + (activeTab === "look" ? ' class="on"' : "") + ">" + _i18n.t.call(void 0, "tabLook", "Appearance") + "</button>" +
-      '<button type="button" data-tab="agent"' + (activeTab === "agent" ? ' class="on"' : "") + ">" + _i18n.t.call(void 0, "tabAgent", "Agent & Sandbox") + "</button>" +
-      '<button type="button" data-tab="note"' + (activeTab === "note" ? ' class="on"' : "") + ">" + _i18n.t.call(void 0, "tabNote", "Notifications") + "</button>" +
-      '<button type="button" data-tab="about"' + (activeTab === "about" ? ' class="on"' : "") + ">" + _i18n.t.call(void 0, "tabAbout", "About") + "</button>" +
-      "</div>" +
-      '<div id="setAuth"' + (activeTab === "auth" ? "" : " hidden") + ">" +
-      _render.authPanelHtml.call(void 0, cfg) +
-      provHtml +
-      "</div>" +
-      '<div id="setLook"' + (activeTab === "look" ? "" : " hidden") + ">" +
-      '<div class="set-row"><div class="set-lab">' + _i18n.t.call(void 0, "language", "Language") + "</div>" +
-      _render.segHtml.call(void 0, "lang", [{ v: "en", l: "English" }, { v: "zh", l: "中文" }], _i18n.getLang.call(void 0, )) +
-      "</div>" +
-      '<div class="set-row"><div class="set-lab">' + _i18n.t.call(void 0, "scheme", "Color scheme") + "</div>" +
-      _render.segHtml.call(void 0, "scheme", [{ v: "light", l: _i18n.t.call(void 0, "schemeLight", "Light") }, { v: "dark", l: _i18n.t.call(void 0, "schemeDark", "Dark") }, { v: "system", l: _i18n.t.call(void 0, "schemeSystem", "System") }], _state.prefs.scheme) +
-      "</div>" +
-      '<div class="set-row"><div class="set-lab">' + _i18n.t.call(void 0, "accent", "Accent color") + "</div>" +
-      _render.segHtml.call(void 0, "accent", [{ v: "mono", l: _i18n.t.call(void 0, "accentMono", "Mono") }, { v: "blue", l: _i18n.t.call(void 0, "accentBlue", "Blue") }, { v: "green", l: _i18n.t.call(void 0, "accentGreen", "Green") }, { v: "amber", l: _i18n.t.call(void 0, "accentAmber", "Amber") }], _state.prefs.accent) +
-      "</div>" +
-      '<div class="set-row"><div class="set-lab">' + _i18n.t.call(void 0, "density", "Density") + "</div>" +
-      _render.segHtml.call(void 0, "density", [{ v: "cozy", l: _i18n.t.call(void 0, "densityCozy", "Cozy") }, { v: "compact", l: _i18n.t.call(void 0, "densityCompact", "Compact") }], _state.prefs.density || "cozy") +
-      "</div>" +
-      '<div class="set-row"><div class="set-lab">' + _i18n.t.call(void 0, "wideScreen", "Wide screen") + '<span class="set-hint">' + _i18n.t.call(void 0, "wideScreenHint", "Widen chat column") + "</span></div>" +
-      _render.segHtml.call(void 0, "wide", [{ v: "0", l: _i18n.t.call(void 0, "wideNarrow", "Standard") }, { v: "1", l: _i18n.t.call(void 0, "wideWide", "Wide") }], _state.prefs.wide ? "1" : "0") +
-      "</div>" +
-      '<div class="set-row"><div class="set-lab">' + _i18n.t.call(void 0, "fontSize", "UI font size") + '</div><input id="setFont" class="num-in" type="number" min="12" max="20" value="' +
-      (_state.prefs.uiFont || 14) +
-      '"></div></div>' +
-      '<div id="setAgent"' + (activeTab === "agent" ? "" : " hidden") + ">" +
-      '<div class="set-row"><div class="set-lab">' + _i18n.t.call(void 0, "sessModel", "Session model") + "</div>" +
-      optHtml("setSessModel", _model.getCurModel.call(void 0, ), models) +
-      "</div>" +
-      '<div class="set-row"><div class="set-lab">' + _i18n.t.call(void 0, "thinkingLevel", "Thinking level") + '<span class="set-hint">' + (_i18n.getLang.call(void 0, ) === "zh" ? "写入默认并作用于当前 Session" : "Default and current session") + "</span></div>" +
-      _render.segHtml.call(void 0, "think", thinkOpts, defThink) +
-      "</div>" +
-      '<div class="set-row"><div class="set-lab">' + _i18n.t.call(void 0, "sessAppr", "Session approval") + "</div>" +
-      _render.segHtml.call(void 0, "sessappr", apprOpts.length ? apprOpts : [{ v: "yolo", l: "yolo" }, { v: "ask", l: "ask" }, { v: "read-only", l: "read-only" }], _model.getApprovalMode.call(void 0, )) +
-      "</div>" +
-      '<div class="set-row"><div class="set-lab">' + _i18n.t.call(void 0, "defAppr", "Default approval") + "</div>" +
-      _render.segHtml.call(void 0, "defappr", apprOpts.length ? apprOpts : [{ v: "yolo", l: "yolo" }, { v: "ask", l: "ask" }, { v: "read-only", l: "read-only" }], defAppr) +
-      "</div>" +
-      '<div class="set-row"><div class="set-lab">' + _i18n.t.call(void 0, "sandbox", "Bash sandbox") + '<span class="set-hint">' + _i18n.t.call(void 0, "sandboxHint", "workspace: writable workspace; strict: no network") + "</span></div>" +
-      _render.segHtml.call(void 0, "sandbox", [{ v: "off", l: "off" }, { v: "workspace", l: "workspace" }, { v: "strict", l: "strict" }], cfg.sandboxMode || "off") +
-      "</div>" +
-      '<div class="set-row"><div class="set-lab">' + _i18n.t.call(void 0, "defModel", "Default model") + '<span class="set-hint">' + _i18n.t.call(void 0, "defModelHint", "Used for new sessions") + "</span></div>" +
-      optHtml("setDefModel", defModel || _model.getCurModel.call(void 0, ), models) +
-      "</div>" +
-      _render.pluginRows.call(void 0, cfg.plugins) +
-      _render.packageRows.call(void 0, pkgs) +
-      "</div>" +
-      '<div id="setNote"' + (activeTab === "note" ? "" : " hidden") + ">" +
-      '<div class="set-row"><div class="set-lab">' + _i18n.t.call(void 0, "notifyDone", "Notify on completion") + '<span class="set-hint">' + _i18n.t.call(void 0, "notifyDoneHint", "Browser system notification") + '</span></div><button type="button" class="sw' +
-      (_state.prefs.notify ? " on" : "") +
-      '" id="swNotify"></button></div>' +
-      '<div class="set-row"><div class="set-lab">' + _i18n.t.call(void 0, "soundDone", "Sound on completion") + '</div><button type="button" class="sw' +
-      (_state.prefs.sound ? " on" : "") +
-      '" id="swSound"></button></div></div>' +
-      '<div id="setAbout"' + (activeTab === "about" ? "" : " hidden") + ">" +
-      '<div class="set-row"><div class="set-lab">piz web<span class="set-hint">' + _i18n.t.call(void 0, "aboutConfigHint", "Config files located in ~/.piz/") + "</span></div></div>" +
-      '<div class="set-row"><div class="set-lab">' + _i18n.t.call(void 0, "shortcutsHint", "Shortcuts") + '<span class="set-hint"><kbd>Ctrl</kbd><kbd>K</kbd> ' + _i18n.t.call(void 0, "searchSessions", "Search sessions") + ' · <kbd>Ctrl</kbd><kbd>,</kbd> ' + _i18n.t.call(void 0, "settings", "Settings") + ' · <kbd>/</kbd> ' + _i18n.t.call(void 0, "keyCommands", "Commands") + ' · <kbd>@./</kbd> ' + (_i18n.getLang.call(void 0, ) === "zh" ? "文件" : "files") + ' · <kbd>!</kbd> shell</span></div></div>' +
-      "</div>",
-  });
-  const tabs = _util.$.call(void 0, "setTabs");
-  const panels = { auth: _util.$.call(void 0, "setAuth"), look: _util.$.call(void 0, "setLook"), agent: _util.$.call(void 0, "setAgent"), note: _util.$.call(void 0, "setNote"), about: _util.$.call(void 0, "setAbout") };
-  _ui.bindAuthPanel.call(void 0, );
-  tabs.onclick = (e) => {
-    const b = e.target.closest("button");
-    if (!b) return;
-    for (const x of Array.from(tabs.querySelectorAll("button"))) x.classList.toggle("on", x === b);
-    for (const k of Object.keys(panels)) panels[k].hidden = k !== b.dataset.tab;
-  };
-  _ui.bindSeg.call(void 0, "lang", (v) => {
-    _i18n.setLang.call(void 0, (v || "en") );
-    openSettings("look");
-  });
 
-  _ui.bindSeg.call(void 0, "scheme", (v) => {
-    _ui.setScheme.call(void 0, v || "dark");
-  });
-  _ui.bindSeg.call(void 0, "accent", (v) => {
-    _state.prefs.accent = v || "mono";
-    _state.prefs.accentPicked = true;
-    _state.savePrefs.call(void 0, );
-    _ui.applyScheme.call(void 0, );
-  });
-  (_util.$.call(void 0, "setFont") ).onchange = () => {
-    _state.prefs.uiFont = Math.min(20, Math.max(12, +(_util.$.call(void 0, "setFont") ).value || 14));
-    _state.savePrefs.call(void 0, );
-    _ui.applyScheme.call(void 0, );
-  };
-  _ui.bindSeg.call(void 0, "density", (v) => {
-    _state.prefs.density = v || "cozy";
-    _state.savePrefs.call(void 0, );
-    _ui.applyScheme.call(void 0, );
-  });
-  _ui.bindSeg.call(void 0, "wide", (v) => {
-    _state.prefs.wide = v === "1";
-    _state.savePrefs.call(void 0, );
-    _ui.applyScheme.call(void 0, );
-  });
-  if (_util.$.call(void 0, "setSessModel"))
-    (_util.$.call(void 0, "setSessModel") ).onclick = (ev) => {
-      ev.stopPropagation();
-      _sessions.closeMenus.call(void 0, );
-      _model.loadModels.call(void 0, ev.currentTarget);
-    };
-  if (_util.$.call(void 0, "setDefModel"))
-    (_util.$.call(void 0, "setDefModel") ).onchange = () => {
-      fetch("/api/config", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ setDefaultModel: (_util.$.call(void 0, "setDefModel") ).value }),
-      })
-        .then((r) => r.json().catch(() => ({})))
-        .then((j) => {
-          if (j && j.ok === false) _ui.showToast.call(void 0, j.error || _i18n.t.call(void 0, "saveFail", "Save failed"));
-        })
-        .catch(() => _ui.showToast.call(void 0, _i18n.t.call(void 0, "saveFail", "Save failed")));
-    };
-  _ui.bindSeg.call(void 0, "think", (v) => _model.setThink.call(void 0, v || "high"));
-  _ui.bindSeg.call(void 0, "sessappr", (v) => _model.setApproval.call(void 0, v || "ask"));
-  _ui.bindSeg.call(void 0, "defappr", (v) => {
-    fetch("/api/config", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ setApprovalMode: v }),
-    })
-      .then((r) => r.json().catch(() => ({})))
-      .then((j) => {
-        if (j && j.ok === false) _ui.showToast.call(void 0, j.error || _i18n.t.call(void 0, "saveFail", "Save failed"));
-      })
-      .catch(() => _ui.showToast.call(void 0, _i18n.t.call(void 0, "saveFail", "Save failed")));
-  });
-  _ui.bindSeg.call(void 0, "sandbox", (v) => {
-    _model.setSandbox.call(void 0, v || "off");
-  });
-  document.querySelectorAll("[data-plugin]").forEach((btn) => {
-    btn.onclick = async () => {
-      const name = btn.getAttribute("data-plugin");
-      const on = !btn.classList.contains("on");
-      btn.classList.toggle("on", on);
-      try {
-        await fetch("/api/config", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ setPlugin: { name, enabled: on } }),
-        });
-      } catch (e3) {
-        btn.classList.toggle("on", !on);
-      }
-    };
-  });
-  (_util.$.call(void 0, "swNotify") ).onclick = async () => {
-    if (!_state.prefs.notify && window.Notification && Notification.permission === "default") {
-      try {
-        await Notification.requestPermission();
-      } catch (e4) {}
+  function autoResize(el) {
+    el.style.height = "auto";
+    const nextH = Math.min(Math.max(el.scrollHeight, 40), 220);
+    el.style.height = `${nextH}px`;
+  }
+
+  function doSend() {
+    const msg = text().trim();
+    if (!msg || _store.isStreaming.call(void 0, )) return;
+
+    // 本地拦截部分斜杠命令
+    if (msg === "/diff") {
+      _store.setDeckTab.call(void 0, "diffs");
+      text.set("");
+      if (textareaEl) textareaEl.value = "";
+      return;
     }
-    _state.prefs.notify = !_state.prefs.notify;
-    _util.$.call(void 0, "swNotify").classList.toggle("on", _state.prefs.notify);
-    _state.savePrefs.call(void 0, );
-  };
-  (_util.$.call(void 0, "swSound") ).onclick = () => {
-    _state.prefs.sound = !_state.prefs.sound;
-    _util.$.call(void 0, "swSound").classList.toggle("on", _state.prefs.sound);
-    _state.savePrefs.call(void 0, );
-  };
-} exports.openSettings = openSettings;
- function openSearch() {
-  const hits = _sessions.sessData.list.slice();
-  let sel = 0;
-  _ui.openDlg.call(void 0, {
-    cls: "wide",
-    title: _i18n.t.call(void 0, "searchSessions", "Search sessions"),
-    body:
-      '<input id="dlgIn" class="dlg-in" placeholder="' + (_i18n.getLang.call(void 0, ) === "zh" ? "按标题或名字过滤…" : "Filter by title or name…") + '">' +
-      '<div id="hitList" style="margin-top:8px;max-height:50vh;overflow:auto"></div>',
-    focus: "dlgIn",
-  });
-  const box = _util.$.call(void 0, "hitList");
-  const inp = _util.$.call(void 0, "dlgIn") ;
-  function paint() {
-    const q = (inp.value || "").toLowerCase().trim();
-    const shown = [];
-    for (const s of hits) {
-      const title = s.title || s.name || "";
-      const name = s.name || "";
-      if (q && !title.toLowerCase().includes(q) && !name.toLowerCase().includes(q))
-        continue;
-      shown.push(s);
-      if (shown.length >= 80) break;
+    if (msg === "/term") {
+      _store.setDeckTab.call(void 0, "terminal");
+      text.set("");
+      if (textareaEl) textareaEl.value = "";
+      return;
     }
-    if (sel >= shown.length) sel = Math.max(0, shown.length - 1);
-    box.innerHTML = shown.length
-      ? shown
-          .map(
-            (s, i) =>
-              '<div class="hit' +
-              (i === sel ? " on" : "") +
-              '" data-name="' +
-              _util.esc.call(void 0, s.name) +
-              '"><div class="hit-t">' +
-              _util.esc.call(void 0, s.title || s.name) +
-              '</div><div class="hit-s">' +
-              _util.esc.call(void 0, s.name) +
-              (s.msgs ? " · " + s.msgs + (_i18n.getLang.call(void 0, ) === "zh" ? " 条" : " msgs") : "") +
-              "</div></div>",
+    if (msg === "/jobs") {
+      _store.setDeckTab.call(void 0, "jobs");
+      text.set("");
+      if (textareaEl) textareaEl.value = "";
+      return;
+    }
+    if (msg === "/files") {
+      _store.setDeckTab.call(void 0, "files");
+      text.set("");
+      if (textareaEl) textareaEl.value = "";
+      return;
+    }
+    if (msg === "/clear") {
+      _store.createSession.call(void 0, );
+      text.set("");
+      if (textareaEl) textareaEl.value = "";
+      return;
+    }
+    if (msg === "/yolo") {
+      _store.switchMode.call(void 0, "yolo");
+      text.set("");
+      if (textareaEl) textareaEl.value = "";
+      return;
+    }
+    if (msg === "/ask") {
+      _store.switchMode.call(void 0, "ask");
+      text.set("");
+      if (textareaEl) textareaEl.value = "";
+      return;
+    }
+
+    _store.sendMessage.call(void 0, msg);
+    text.set("");
+    if (textareaEl) {
+      textareaEl.value = "";
+      autoResize(textareaEl);
+    }
+    showSlashMenu.set(false);
+    showFileMenu.set(false);
+  }
+
+  function handleKeyDown(e) {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      doSend();
+    } else if (e.key === "Escape") {
+      showSlashMenu.set(false);
+      showFileMenu.set(false);
+    }
+  }
+
+  return _dom.tags.div(
+    { class: "composer-wrap" },
+    // 斜杠菜单浮层
+    () => {
+      if (!showSlashMenu()) return null;
+      const q = text().toLowerCase();
+      const filtered = SLASH_COMMANDS.filter((c) => c.cmd.toLowerCase().startsWith(q));
+      if (!filtered.length) return null;
+
+      return _dom.tags.div(
+        { class: "popup-menu slash-menu" },
+        filtered.map((item, idx) =>
+          _dom.tags.div(
+            {
+              class: () => `menu-item ${menuIndex() === idx ? "is-selected" : ""}`,
+              onclick: () => {
+                text.set(item.cmd + " ");
+                if (textareaEl) {
+                  textareaEl.value = item.cmd + " ";
+                  textareaEl.focus();
+                }
+                showSlashMenu.set(false);
+              },
+            },
+            _dom.tags.span({ class: "menu-cmd" }, item.cmd),
+            _dom.tags.span({ class: "menu-desc" }, item.desc)
           )
-          .join("")
-      : '<div class="dlg-msg">' + _i18n.t.call(void 0, "noMatchingSessions", "No matching sessions") + "</div>";
+        )
+      );
+    },
 
-    const on = box.querySelector(".hit.on");
-    if (on) on.scrollIntoView({ block: "nearest" });
-    return shown;
-  }
-  function go(name) {
-    if (!name) return;
-    _ui.closeDlg.call(void 0, );
-    location.href =
-      "/?session=" +
-      encodeURIComponent(name) +
-      (_state.ws ? "&ws=" + encodeURIComponent(_state.ws) : "");
-  }
-  inp.addEventListener("input", () => {
-    sel = 0;
-    paint();
-  });
-  inp.addEventListener("keydown", (e) => {
-    const shown = paint();
-    if (e.key === "ArrowDown") {
-      e.preventDefault();
-      sel = Math.min(shown.length - 1, sel + 1);
-      paint();
-    } else if (e.key === "ArrowUp") {
-      e.preventDefault();
-      sel = Math.max(0, sel - 1);
-      paint();
-    } else if (e.key === "Enter") {
-      e.preventDefault();
-      if (shown[sel]) go(shown[sel].name);
-    }
-  });
-  box.onclick = (e) => {
-    const h = e.target.closest(".hit");
-    if (h) go(h.getAttribute("data-name"));
-  };
-  paint();
-} exports.openSearch = openSearch;
-// ---- 全局键盘(Ctrl+K/,/Shift+C/R、"/" 聚焦、Esc 级联) ----
-document.addEventListener("keydown", (e) => {
-  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
-    e.preventDefault();
-    openSearch();
-    return;
-  }
-  if ((e.metaKey || e.ctrlKey) && e.key === ",") {
-    e.preventDefault();
-    openSettings();
-    return;
-  }
-  if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "c") {
-    e.preventDefault();
-    const md = _chat.th.querySelector(".a-turn:last-of-type .md") ;
-    _ui.clipText.call(void 0, md && (md.dataset.raw || md.textContent), _i18n.t.call(void 0, "copiedLastReply", "Copied last reply"), _i18n.t.call(void 0, "noReplyYet", "No reply yet"));
-    return;
-  }
-  if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "r") {
-    e.preventDefault();
-    if (_store.getLastUser.call(void 0, )) _bus.emit.call(void 0, "chat:retry");
-    else _ui.showToast.call(void 0, _i18n.t.call(void 0, "retryNoInput", "No input to retry"));
-    return;
-  }
-  // 输入框外按 "/":聚焦输入框并直接进斜杠菜单。
-  if (
-    e.key === "/" &&
-    !e.metaKey &&
-    !e.ctrlKey &&
-    !e.altKey &&
-    !e.isComposing
-  ) {
-    const ae = document.activeElement ;
-    const editable =
-      ae &&
-      (ae.tagName === "INPUT" ||
-        ae.tagName === "TEXTAREA" ||
-        ae.isContentEditable);
-    if (!editable && !_util.$.call(void 0, "overlay").classList.contains("open")) {
-      e.preventDefault();
-      const inp = _util.$.call(void 0, "inp") ;
-      inp.focus();
-      if (!inp.value) {
-        inp.value = "/";
-        inp.dispatchEvent(new Event("input"));
-      }
-      return;
-    }
-  }
-  if (e.key === "Escape") {
-    if (document.querySelector(".menu.open")) {
-      e.preventDefault();
-      _sessions.closeMenus.call(void 0, );
-      return;
-    }
-    const kh = _util.$.call(void 0, "keysHint");
-    if (kh && !kh.hidden) {
-      kh.hidden = true;
-      kh.innerHTML = "";
-      return;
-    }
-    const sm = _util.$.call(void 0, "slashMenu");
-    if (sm && !sm.hidden) {
-      e.preventDefault();
-      _slash.hideSlash.call(void 0, );
-      _slash.hideBang.call(void 0, );
-      return;
-    }
-    const sheet = _util.$.call(void 0, "sheet");
-    if (sheet && sheet.classList.contains("open")) {
-      e.preventDefault();
-      _sheet.closeSheet.call(void 0, );
-      return;
-    }
-    if (_util.$.call(void 0, "overlay").classList.contains("open")) {
-      e.preventDefault();
-      _ui.dlgCancel.call(void 0, );
-      _ui.closeDlg.call(void 0, );
-      return;
-    }
-    if (_util.$.call(void 0, "inspect") && !_util.$.call(void 0, "inspect").hidden) {
-      e.preventDefault();
-      _chat.inspect.close();
-    }
-  }
-});
+    // @文件菜单浮层
+    () => {
+      if (!showFileMenu()) return null;
+      const atIdx = text().lastIndexOf("@");
+      const q = atIdx >= 0 ? text().slice(atIdx + 1).toLowerCase() : "";
+      const filtered = _store.files.call(void 0, )
+        .filter((f) => !f.dir && f.path.toLowerCase().includes(q))
+        .slice(0, 10);
+      if (!filtered.length) return null;
 
-_bus.on.call(void 0, "search:open", () => {
-  openSearch();
-});
+      return _dom.tags.div(
+        { class: "popup-menu file-menu" },
+        filtered.map((f, idx) =>
+          _dom.tags.div(
+            {
+              class: () => `menu-item ${menuIndex() === idx ? "is-selected" : ""}`,
+              onclick: () => {
+                const before = text().slice(0, atIdx);
+                const nextVal = `${before}@${f.path} `;
+                text.set(nextVal);
+                if (textareaEl) {
+                  textareaEl.value = nextVal;
+                  textareaEl.focus();
+                }
+                showFileMenu.set(false);
+              },
+            },
+            _dom.tags.span({ class: "file-icon" }, "📄"),
+            _dom.tags.span({ class: "file-path" }, f.path)
+          )
+        )
+      );
+    },
+
+    // 主输入框容器
+    _dom.tags.div(
+      { class: "composer-box" },
+      _dom.tags.textarea({
+        class: "composer-input",
+        placeholder: "Ask piz or type '/' for commands, '@' to reference files...",
+        rows: "1",
+        value: () => text(),
+        oninput: handleInput,
+        onkeydown: handleKeyDown,
+        ref: (el) => {
+          textareaEl = el;
+        },
+      }),
+
+      // 控制栏底排
+      _dom.tags.div(
+        { class: "composer-bar" },
+        _dom.tags.div(
+          { class: "composer-bar-left" },
+          _dom.tags.button(
+            {
+              class: "bar-tag-btn",
+              title: "Trigger Slash Commands",
+              onclick: () => {
+                text.set("/");
+                if (textareaEl) {
+                  textareaEl.value = "/";
+                  textareaEl.focus();
+                }
+                showSlashMenu.set(true);
+              },
+            },
+            "/"
+          ),
+          _dom.tags.button(
+            {
+              class: "bar-tag-btn",
+              title: "Reference File",
+              onclick: () => {
+                text.update((v) => v + "@");
+                if (textareaEl) {
+                  textareaEl.value = text();
+                  textareaEl.focus();
+                }
+                showFileMenu.set(true);
+              },
+            },
+            "@"
+          ),
+          _dom.tags.span(
+            { class: "mode-indicator-label" },
+            () => `Mode: ${_store.mode.call(void 0, ).toUpperCase()}`
+          )
+        ),
+        _dom.tags.div(
+          { class: "composer-bar-right" },
+          () => {
+            if (_store.isStreaming.call(void 0, )) {
+              return _dom.tags.button(
+                {
+                  class: "composer-send-btn is-stop",
+                  title: "Interrupt Generation (Esc)",
+                  onclick: _store.interrupt,
+                },
+                _dom.tags.span({ class: "btn-stop-icon" }, "■"),
+                _dom.tags.span({}, "Stop")
+              );
+            }
+            return _dom.tags.button(
+              {
+                class: "composer-send-btn",
+                title: "Send message (Enter)",
+                onclick: doSend,
+              },
+              _dom.tags.span({ class: "btn-send-icon" }, "↑"),
+              _dom.tags.span({}, "Send")
+            );
+          }
+        )
+      )
+    )
+  );
+} exports.renderComposer = renderComposer;
 
 };
-__modules["evolve"] = function(module, exports, require) {
-"use strict";Object.defineProperty(exports, "__esModule", {value: true}); function _optionalChain(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }// evolve.ts —— 自演化观测(采集端)。
-// 前端运行时错误 → POST /api/evolve/sink → 服务器落 ~/.piz/evolve/queue.jsonl。
-// 发送用 fetch keepalive:不阻塞、页面关闭也送达;失败静默,不干扰用户。
-// (曾用 sendBeacon —— 它带不了 Authorization 头,默认 token 模式下全线 401,管道静默失效。)
-// 去重:60 秒内同签名(where|msg 前 200 字符)只发一次。
+__modules["term"] = function(module, exports, require) {
+"use strict";Object.defineProperty(exports, "__esModule", {value: true});// term.ts —— 高保真 ANSI 颜色与控制序列转译器
 
-const SINK = "/api/evolve/sink";
+const ANSI_COLORS = {
+  30: "ansi-black",
+  31: "ansi-red",
+  32: "ansi-green",
+  33: "ansi-yellow",
+  34: "ansi-blue",
+  35: "ansi-magenta",
+  36: "ansi-cyan",
+  37: "ansi-white",
+  90: "ansi-bright-black",
+  91: "ansi-bright-red",
+  92: "ansi-bright-green",
+  93: "ansi-bright-yellow",
+  94: "ansi-bright-blue",
+  95: "ansi-bright-magenta",
+  96: "ansi-bright-cyan",
+  97: "ansi-bright-white",
+};
 
-let lastSig = "";
-let lastAt = 0;
+const ANSI_BG_COLORS = {
+  40: "ansi-bg-black",
+  41: "ansi-bg-red",
+  42: "ansi-bg-green",
+  43: "ansi-bg-yellow",
+  44: "ansi-bg-blue",
+  45: "ansi-bg-magenta",
+  46: "ansi-bg-cyan",
+  47: "ansi-bg-white",
+};
 
-function sink(kind, where, msg, stack) {
-  if (!msg && !stack) return;
-  const sig = (where + "|" + msg).slice(0, 200);
-  const now = Date.now();
-  if (sig === lastSig && now - lastAt < 60000) return;
-  lastSig = sig;
-  lastAt = now;
-  try {
-    const payload = JSON.stringify({
-      kind,
-      where: String(where || "").slice(0, 300),
-      msg: String(msg || "").slice(0, 2000),
-      stack: String(stack || "").slice(0, 4000),
-      ts: Math.floor(now / 1000),
-      session: "", // 调用时补
-      ua: String(navigator.userAgent || "").slice(0, 200),
-    });
-    // window.fetch 已被 net.ts 包装:自动带 Bearer;keepalive 等价 sendBeacon 的
-    // 「页面关闭也送达」,且能过鉴权。失败静默(采集不能成为缺陷)。
-    fetch(SINK, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: payload,
-      keepalive: true,
-    }).catch(() => {});
-  } catch (e2) {}
+ function ansiToHtml(input) {
+  if (!input) return "";
+
+  // 1. 转义基础 HTML 实体
+  let s = input
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+
+  // 2. 状态机解析 ANSI 转义码 \x1b[...m
+  const re = /\x1b\[([0-9;]*)m/g;
+  let out = "";
+  let lastIdx = 0;
+  const activeClasses = new Set();
+
+  let match;
+  while ((match = re.exec(s)) !== null) {
+    const textChunk = s.slice(lastIdx, match.index);
+    if (textChunk) {
+      if (activeClasses.size > 0) {
+        out += `<span class="${Array.from(activeClasses).join(" ")}">${textChunk}</span>`;
+      } else {
+        out += textChunk;
+      }
+    }
+    lastIdx = re.lastIndex;
+
+    const codes = match[1] ? match[1].split(";").map(Number) : [0];
+    for (const code of codes) {
+      if (code === 0) {
+        activeClasses.clear();
+      } else if (code === 1) {
+        activeClasses.add("ansi-bold");
+      } else if (code === 2) {
+        activeClasses.add("ansi-dim");
+      } else if (code === 3) {
+        activeClasses.add("ansi-italic");
+      } else if (code === 4) {
+        activeClasses.add("ansi-underline");
+      } else if (ANSI_COLORS[code]) {
+        // 清理旧前景色
+        for (const cls of activeClasses) {
+          if (cls.startsWith("ansi-") && !cls.startsWith("ansi-bg-") && !cls.startsWith("ansi-bold") && !cls.startsWith("ansi-dim") && !cls.startsWith("ansi-italic") && !cls.startsWith("ansi-underline")) {
+            activeClasses.delete(cls);
+          }
+        }
+        activeClasses.add(ANSI_COLORS[code]);
+      } else if (ANSI_BG_COLORS[code]) {
+        for (const cls of activeClasses) {
+          if (cls.startsWith("ansi-bg-")) activeClasses.delete(cls);
+        }
+        activeClasses.add(ANSI_BG_COLORS[code]);
+      }
+    }
+  }
+
+  const remaining = s.slice(lastIdx);
+  if (remaining) {
+    if (activeClasses.size > 0) {
+      out += `<span class="${Array.from(activeClasses).join(" ")}">${remaining}</span>`;
+    } else {
+      out += remaining;
+    }
+  }
+
+  return out;
+} exports.ansiToHtml = ansiToHtml;
+
+};
+__modules["deck"] = function(module, exports, require) {
+"use strict";Object.defineProperty(exports, "__esModule", {value: true});// deck.ts —— 右侧工作台检视 Deck (Diffs/Terminal/Jobs/Files)
+var _dom = require('./dom');
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+var _store = require('./store');
+var _term = require('./term');
+
+var _signal = require('./signal');
+var _net = require('./net');
+
+ function renderDeck() {
+  return _dom.tags.aside(
+    {
+      class: () => `workbench-deck ${_store.deckOpen.call(void 0, ) ? "is-open" : "is-closed"}`,
+    },
+    // Deck 顶栏选项卡
+    _dom.tags.header(
+      { class: "deck-header" },
+      _dom.tags.div(
+        { class: "deck-tabs" },
+        renderDeckTabBtn("diffs", "Diffs", () => {
+          const st = _store.totalDiffStats.call(void 0, );
+          return st.files > 0 ? `${st.files}` : "";
+        }),
+        renderDeckTabBtn("terminal", "Terminal", () => {
+          const len = _store.terminalLines.call(void 0, ).length;
+          return len > 0 ? `${len}` : "";
+        }),
+        renderDeckTabBtn("jobs", "Jobs", () => {
+          const runCount = _store.jobs.call(void 0, ).filter((j) => j.status === "running").length;
+          return runCount > 0 ? `${runCount}` : "";
+        }),
+        renderDeckTabBtn("files", "Files")
+      ),
+      _dom.tags.div(
+        { class: "deck-header-actions" },
+        _dom.tags.button(
+          {
+            class: "deck-close-btn",
+            title: "Close Deck (Ctrl+J)",
+            onclick: _store.toggleDeck,
+          },
+          "✕"
+        )
+      )
+    ),
+
+    // Deck 主体内容区（根据 deckTab 响应式切换）
+    _dom.tags.div(
+      { class: "deck-body" },
+      () => {
+        const current = _store.deckTab.call(void 0, );
+        switch (current) {
+          case "diffs":
+            return renderDiffsPanel();
+          case "terminal":
+            return renderTerminalPanel();
+          case "jobs":
+            return renderJobsPanel();
+          case "files":
+            return renderFilesPanel();
+        }
+      }
+    )
+  );
+} exports.renderDeck = renderDeck;
+
+function renderDeckTabBtn(tab, title, badgeFn) {
+  return _dom.tags.button(
+    {
+      class: () => `deck-tab-btn ${_store.deckTab.call(void 0, ) === tab ? "is-active" : ""}`,
+      onclick: () => _store.setDeckTab.call(void 0, tab),
+    },
+    _dom.tags.span({}, title),
+    () => {
+      const badge = badgeFn ? badgeFn() : "";
+      if (!badge) return null;
+      return _dom.tags.span({ class: "deck-tab-badge" }, badge);
+    }
+  );
 }
 
- function initEvolve() {
-  window.addEventListener("error", (e) => {
-    // 资源加载失败(target 非 window)不算缺陷,跳过
-    if (e.target && e.target !== window) return;
-    const where = e.filename
-      ? (e.filename.split("/").pop() || e.filename) + (e.lineno ? "#" + e.lineno : "") + (e.colno ? ":" + e.colno : "")
-      : "window";
-    sink("jserr", where, e.message || "", _optionalChain([e, 'access', _ => _.error, 'optionalAccess', _2 => _2.stack]) || "");
+// 1. Diffs 面板
+function renderDiffsPanel() {
+  const list = _store.diffs.call(void 0, );
+  const active = _store.activeDiffFile.call(void 0, );
+  const stats = _store.totalDiffStats.call(void 0, );
+
+  if (list.length === 0) {
+    return _dom.tags.div(
+      { class: "deck-empty" },
+      _dom.tags.div({ class: "deck-empty-icon" }, "⌥"),
+      _dom.tags.div({ class: "deck-empty-title" }, "No Changeset Detected"),
+      _dom.tags.div({ class: "deck-empty-desc" }, "File modifications generated by agent will stream here in real time.")
+    );
+  }
+
+  return _dom.tags.div(
+    { class: "diff-panel" },
+    // 变更文件选择条
+    _dom.tags.div(
+      { class: "diff-toolbar" },
+      _dom.tags.div(
+        { class: "diff-stats" },
+        _dom.tags.span({ class: "diff-stat-add" }, `+${stats.additions}`),
+        _dom.tags.span({ class: "diff-stat-del" }, `-${stats.deletions}`),
+        _dom.tags.span({ class: "diff-stat-files" }, `${stats.files} files`)
+      ),
+      _dom.tags.div(
+        { class: "diff-file-tabs" },
+        list.map((file) =>
+          _dom.tags.button(
+            {
+              class: () =>
+                `diff-file-btn ${active && active.path === file.path ? "is-active" : ""}`,
+              onclick: () => _store.activeDiffPath.set(file.path),
+            },
+            _dom.tags.span({ class: `diff-status-pill status-${file.status}` }, file.status[0].toUpperCase()),
+            _dom.tags.span({ class: "diff-tab-path" }, file.path),
+            _dom.tags.span({ class: "diff-tab-delta" }, `+${file.additions} -${file.deletions}`)
+          )
+        )
+      )
+    ),
+
+    // 当前选中的 Diff 视窗
+    _dom.tags.div(
+      { class: "diff-viewport" },
+      active
+        ? _dom.tags.div(
+            { class: "diff-file-view" },
+            _dom.tags.div(
+              { class: "diff-hunk-list" },
+              active.hunks.map((hunk) =>
+                _dom.tags.div(
+                  { class: "diff-hunk" },
+                  _dom.tags.div({ class: "diff-hunk-header" }, hunk.header),
+                  _dom.tags.div(
+                    { class: "diff-lines" },
+                    hunk.lines.map((line) =>
+                      _dom.tags.div(
+                        { class: `diff-line line-${line.type}` },
+                        _dom.tags.span({ class: "diff-line-old" }, line.oldNo ? String(line.oldNo) : ""),
+                        _dom.tags.span({ class: "diff-line-new" }, line.newNo ? String(line.newNo) : ""),
+                        _dom.tags.span({ class: "diff-line-marker" }, line.type === "add" ? "+" : line.type === "del" ? "-" : " "),
+                        _dom.tags.span({ class: "diff-line-content" }, line.content)
+                      )
+                    )
+                  )
+                )
+              )
+            )
+          )
+        : null
+    )
+  );
+}
+
+// 2. Terminal 面板
+function renderTerminalPanel() {
+  const autoScroll = _signal.signal(true);
+  let termEl = null;
+
+  _signal.effect.call(void 0, () => {
+    _store.terminalLines.call(void 0, );
+    if (autoScroll() && termEl) {
+      setTimeout(() => {
+        if (termEl) termEl.scrollTop = termEl.scrollHeight;
+      }, 10);
+    }
   });
-  window.addEventListener("unhandledrejection", (e) => {
-    const r = e.reason;
-    const msg = _optionalChain([r, 'optionalAccess', _3 => _3.message]) || String(r || "");
-    sink("unhandled", "promise", msg, _optionalChain([r, 'optionalAccess', _4 => _4.stack]) || "");
-  });
-  let ce = console.error;
-  console.error = function (...a) {
-    try {
-      const msg = a
-        .map((x) => (x && (x.message || x.stack)) || String(x || ""))
-        .join(" ")
-        .slice(0, 1000);
-      sink("console", "console.error", msg, "");
-    } catch (e3) {}
-    ce.apply(console, a );
+
+  return _dom.tags.div(
+    { class: "terminal-panel" },
+    // 终端控制条
+    _dom.tags.div(
+      { class: "terminal-bar" },
+      _dom.tags.div({ class: "terminal-bar-title" }, "Agent Output Terminal"),
+      _dom.tags.div(
+        { class: "terminal-bar-actions" },
+        _dom.tags.button(
+          {
+            class: () => `term-act-btn ${autoScroll() ? "is-active" : ""}`,
+            title: "Toggle Auto Scroll",
+            onclick: () => autoScroll.set(!autoScroll()),
+          },
+          "Auto-scroll"
+        ),
+        _dom.tags.button(
+          {
+            class: "term-act-btn",
+            title: "Clear output",
+            onclick: () => _store.terminalLines.set([]),
+          },
+          "Clear"
+        ),
+        _dom.tags.button(
+          {
+            class: "term-act-btn",
+            title: "Copy all output",
+            onclick: () => {
+              const full = _store.terminalLines.call(void 0, ).map((l) => l.text).join("\n");
+              navigator.clipboard.writeText(full);
+            },
+          },
+          "Copy"
+        )
+      )
+    ),
+
+    // 终端输出流
+    _dom.tags.div(
+      {
+        class: "terminal-screen",
+        ref: (el) => {
+          termEl = el;
+        },
+      },
+      _dom.each.call(void 0, _store.terminalLines, (line) => {
+        const row = _dom.tags.div({ class: `term-row row-${line.type}` });
+        row.innerHTML = `<span class="term-time">${line.time}</span> <span class="term-text">${_term.ansiToHtml.call(void 0, line.text)}</span>`;
+        return row;
+      }),
+      () => {
+        if (_store.terminalLines.call(void 0, ).length === 0) {
+          return _dom.tags.div({ class: "term-empty" }, "Terminal idle. Commands and logs will stream here.");
+        }
+        return null;
+      }
+    )
+  );
+}
+
+// 3. Jobs 面板
+function renderJobsPanel() {
+  const list = _store.jobs.call(void 0, );
+
+  if (list.length === 0) {
+    return _dom.tags.div(
+      { class: "deck-empty" },
+      _dom.tags.div({ class: "deck-empty-icon" }, "⚙"),
+      _dom.tags.div({ class: "deck-empty-title" }, "No Active Subagent Jobs"),
+      _dom.tags.div({ class: "deck-empty-desc" }, "Concurrent tasks, background workers, and subagent trees appear here.")
+    );
+  }
+
+  return _dom.tags.div(
+    { class: "jobs-panel" },
+    _dom.each.call(void 0, _store.jobs, (job) =>
+      _dom.tags.div(
+        { class: `job-card status-${job.status}` },
+        _dom.tags.div(
+          { class: "job-card-hdr" },
+          _dom.tags.span({ class: "job-status-dot" }),
+          _dom.tags.span({ class: "job-name" }, job.name),
+          job.role ? _dom.tags.span({ class: "job-role" }, job.role) : null,
+          _dom.tags.span({ class: "job-status-pill" }, job.status.toUpperCase())
+        ),
+        job.summary
+          ? _dom.tags.div({ class: "job-summary" }, job.summary)
+          : null
+      )
+    )
+  );
+}
+
+// 4. Files 面板
+function renderFilesPanel() {
+  const filter = _signal.signal("");
+  const selectedFile = _signal.signal(null);
+
+  const filtered = () => {
+    const q = filter().toLowerCase().trim();
+    const list = _store.files.call(void 0, );
+    if (!q) return list;
+    return list.filter((f) => f.path.toLowerCase().includes(q));
   };
-} exports.initEvolve = initEvolve;
+
+  return _dom.tags.div(
+    { class: "files-panel" },
+    // 检索条
+    _dom.tags.div(
+      { class: "files-search-bar" },
+      _dom.tags.input({
+        class: "files-search-input",
+        placeholder: "Search workspace files...",
+        value: () => filter(),
+        oninput: (e) => filter.set((e.target ).value),
+      }),
+      _dom.tags.button(
+        {
+          class: "files-refresh-btn",
+          title: "Refresh files",
+          onclick: () => _store.loadFiles.call(void 0, ),
+        },
+        "⟳"
+      )
+    ),
+
+    // 文件列表与预览
+    _dom.tags.div(
+      { class: "files-split" },
+      _dom.tags.div(
+        { class: "files-tree" },
+        _dom.each.call(void 0, filtered, (item) =>
+          _dom.tags.div(
+            {
+              class: () =>
+                `file-tree-item ${item.dir ? "is-dir" : "is-file"} ${selectedFile() && selectedFile().path === item.path ? "is-active" : ""}`,
+              onclick: async () => {
+                if (item.dir) return;
+                try {
+                  const res = await _net.apiFetch.call(void 0, `/api/file?path=${encodeURIComponent(item.path)}`);
+                  if (res && res.text != null) {
+                    selectedFile.set({ path: item.path, text: res.text });
+                  }
+                } catch (e) {
+                  console.error(e);
+                }
+              },
+            },
+            _dom.tags.span({ class: "item-icon" }, item.dir ? "📁" : "📄"),
+            _dom.tags.span({ class: "item-name" }, item.name)
+          )
+        )
+      ),
+      // 文件预览
+      _dom.tags.div(
+        { class: "file-preview-wrap" },
+        () => {
+          const cur = selectedFile();
+          if (!cur) {
+            return _dom.tags.div({ class: "file-preview-empty" }, "Select a file to inspect content.");
+          }
+          return _dom.tags.div(
+            { class: "file-preview" },
+            _dom.tags.div({ class: "file-preview-hdr" }, cur.path),
+            _dom.tags.pre({ class: "file-preview-code" }, cur.text)
+          );
+        }
+      )
+    )
+  );
+}
+
+};
+__modules["splitter"] = function(module, exports, require) {
+"use strict";Object.defineProperty(exports, "__esModule", {value: true});// splitter.ts —— 可拖拽双栏分隔调节器
+var _dom = require('./dom');
+var _signal = require('./signal');
+var _store = require('./store');
+
+const STORAGE_KEY = "piz.deckWidth";
+const initialWidth = (() => {
+  try {
+    const v = localStorage.getItem(STORAGE_KEY);
+    return v ? parseInt(v, 10) : 520;
+  } catch (_) {
+    return 520;
+  }
+})();
+
+ const deckWidth = _signal.signal(initialWidth); exports.deckWidth = deckWidth;
+
+ function renderSplitter() {
+  let isDragging = false;
+  let startX = 0;
+  let startW = 0;
+
+  function onMouseDown(e) {
+    if (!_store.deckOpen.call(void 0, )) return;
+    isDragging = true;
+    startX = e.clientX;
+    startW = exports.deckWidth.call(void 0, );
+    document.body.classList.add("is-resizing");
+
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onMouseUp);
+  }
+
+  function onMouseMove(e) {
+    if (!isDragging) return;
+    const delta = startX - e.clientX;
+    const nextW = Math.max(320, Math.min(window.innerWidth * 0.75, startW + delta));
+    exports.deckWidth.set(nextW);
+  }
+
+  function onMouseUp() {
+    if (!isDragging) return;
+    isDragging = false;
+    document.body.classList.remove("is-resizing");
+    try {
+      localStorage.setItem(STORAGE_KEY, String(exports.deckWidth.call(void 0, )));
+    } catch (_) {}
+    window.removeEventListener("mousemove", onMouseMove);
+    window.removeEventListener("mouseup", onMouseUp);
+  }
+
+  function onDblClick() {
+    const defaultW = Math.floor(window.innerWidth * 0.45);
+    exports.deckWidth.set(defaultW);
+    try {
+      localStorage.setItem(STORAGE_KEY, String(defaultW));
+    } catch (_) {}
+  }
+
+  return _dom.tags.div({
+    class: () => `workbench-splitter ${_store.deckOpen.call(void 0, ) ? "" : "is-hidden"}`,
+    onmousedown: onMouseDown,
+    ondblclick: onDblClick,
+    title: "Drag to resize workbench, double-click to reset",
+  });
+} exports.renderSplitter = renderSplitter;
+
+};
+__modules["modal"] = function(module, exports, require) {
+"use strict";Object.defineProperty(exports, "__esModule", {value: true});// modal.ts —— 权限审批弹窗、命令面板与设置弹窗
+var _dom = require('./dom');
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+var _store = require('./store');
+var _net = require('./net');
+var _signal = require('./signal');
+
+ function renderModals() {
+  const container = _dom.tags.div({ class: "modals-layer" });
+
+  // 1. 权限审批弹窗
+  container.appendChild(
+    _dom.tags.div(
+      {
+        class: () =>
+          `modal-backdrop ${_store.pendingApproval.call(void 0, ) ? "is-visible" : "is-hidden"}`,
+      },
+      () => {
+        const req = _store.pendingApproval.call(void 0, );
+        if (!req) return null;
+
+        return _dom.tags.div(
+          { class: "modal-card permission-modal" },
+          _dom.tags.div(
+            { class: "modal-hdr" },
+            _dom.tags.span({ class: "perm-icon" }, "🛡"),
+            _dom.tags.h3({ class: "modal-title" }, "Permission Approval Required")
+          ),
+          _dom.tags.div(
+            { class: "modal-body" },
+            _dom.tags.p({ class: "perm-desc" }, req.desc || "The agent is requesting authorization for the following action:"),
+            req.command
+              ? _dom.tags.pre({ class: "perm-command" }, req.command)
+              : null,
+            req.path
+              ? _dom.tags.div({ class: "perm-path" }, `Target: ${req.path}`)
+              : null
+          ),
+          _dom.tags.div(
+            { class: "modal-actions" },
+            _dom.tags.button(
+              {
+                class: "btn btn-deny",
+                onclick: () => _store.approve.call(void 0, req.id, false),
+              },
+              "Deny"
+            ),
+            _dom.tags.button(
+              {
+                class: "btn btn-allow",
+                onclick: () => _store.approve.call(void 0, req.id, true),
+              },
+              "Allow Execution"
+            )
+          )
+        );
+      }
+    )
+  );
+
+  // 2. Command Palette (Ctrl+K)
+  const cmdQuery = _signal.signal("");
+  container.appendChild(
+    _dom.tags.div(
+      {
+        class: () =>
+          `modal-backdrop ${_store.showSearchModal.call(void 0, ) ? "is-visible" : "is-hidden"}`,
+        onclick: (e) => {
+          if (e.target === e.currentTarget) _store.showSearchModal.set(false);
+        },
+      },
+      () => {
+        if (!_store.showSearchModal.call(void 0, )) return null;
+
+        const q = cmdQuery().toLowerCase().trim();
+        const sessionMatches = _store.sessions.call(void 0, ).filter((s) =>
+          (s.title || s.name).toLowerCase().includes(q)
+        );
+
+        return _dom.tags.div(
+          { class: "modal-card command-palette" },
+          _dom.tags.div(
+            { class: "palette-input-box" },
+            _dom.tags.span({ class: "palette-icon" }, "⌕"),
+            _dom.tags.input({
+              class: "palette-input",
+              placeholder: "Type a command or search sessions...",
+              autofocus: true,
+              value: () => cmdQuery(),
+              oninput: (e) => cmdQuery.set((e.target ).value),
+              onkeydown: (e) => {
+                if (e.key === "Escape") _store.showSearchModal.set(false);
+              },
+            })
+          ),
+          _dom.tags.div(
+            { class: "palette-list" },
+            // 动作
+            _dom.tags.div({ class: "palette-group-hdr" }, "Actions"),
+            _dom.tags.div(
+              {
+                class: "palette-item",
+                onclick: () => {
+                  _store.createSession.call(void 0, );
+                  _store.showSearchModal.set(false);
+                },
+              },
+              _dom.tags.span({ class: "palette-item-icon" }, "＋"),
+              _dom.tags.span({}, "Create New Session")
+            ),
+            _dom.tags.div(
+              {
+                class: "palette-item",
+                onclick: () => {
+                  _store.setDeckTab.call(void 0, "diffs");
+                  _store.showSearchModal.set(false);
+                },
+              },
+              _dom.tags.span({ class: "palette-item-icon" }, "⌥"),
+              _dom.tags.span({}, "View Code Diffs")
+            ),
+            _dom.tags.div(
+              {
+                class: "palette-item",
+                onclick: () => {
+                  _store.setDeckTab.call(void 0, "terminal");
+                  _store.showSearchModal.set(false);
+                },
+              },
+              _dom.tags.span({ class: "palette-item-icon" }, "⌨"),
+              _dom.tags.span({}, "Open Terminal Viewer")
+            ),
+            // 会话列表匹配
+            sessionMatches.length > 0
+              ? _dom.tags.div({ class: "palette-group-hdr" }, "Sessions")
+              : null,
+            sessionMatches.slice(0, 8).map((s) =>
+              _dom.tags.div(
+                {
+                  class: "palette-item",
+                  onclick: () => {
+                    _store.switchSession.call(void 0, s.id);
+                    _store.showSearchModal.set(false);
+                  },
+                },
+                _dom.tags.span({ class: "palette-item-icon" }, "💬"),
+                _dom.tags.span({ class: "palette-item-title" }, s.title || s.name),
+                _dom.tags.span({ class: "palette-item-badge" }, `${s.messageCount} msgs`)
+              )
+            )
+          )
+        );
+      }
+    )
+  );
+
+  // 3. Auth Modal
+  const inputTok = _signal.signal(_net.getToken.call(void 0, ));
+  container.appendChild(
+    _dom.tags.div(
+      {
+        class: () =>
+          `modal-backdrop ${_store.showAuthModal.call(void 0, ) ? "is-visible" : "is-hidden"}`,
+      },
+      () => {
+        if (!_store.showAuthModal.call(void 0, )) return null;
+
+        return _dom.tags.div(
+          { class: "modal-card auth-modal" },
+          _dom.tags.h3({ class: "modal-title" }, "Authentication Required"),
+          _dom.tags.p({ class: "auth-desc" }, "Please enter your server token to access piz."),
+          _dom.tags.input({
+            type: "password",
+            class: "auth-token-input",
+            placeholder: "Enter token...",
+            value: () => inputTok(),
+            oninput: (e) => inputTok.set((e.target ).value),
+          }),
+          _dom.tags.div(
+            { class: "modal-actions" },
+            _dom.tags.button(
+              {
+                class: "btn btn-primary",
+                onclick: () => {
+                  const t = inputTok().trim();
+                  if (t) {
+                    _net.setToken.call(void 0, t);
+                    _store.showAuthModal.set(false);
+                    window.location.reload();
+                  }
+                },
+              },
+              "Connect"
+            )
+          )
+        );
+      }
+    )
+  );
+
+  // 4. Settings Modal
+  container.appendChild(
+    _dom.tags.div(
+      {
+        class: () =>
+          `modal-backdrop ${_store.showSettingsModal.call(void 0, ) ? "is-visible" : "is-hidden"}`,
+        onclick: (e) => {
+          if (e.target === e.currentTarget) _store.showSettingsModal.set(false);
+        },
+      },
+      () => {
+        if (!_store.showSettingsModal.call(void 0, )) return null;
+
+        return _dom.tags.div(
+          { class: "modal-card settings-modal" },
+          _dom.tags.div(
+            { class: "modal-hdr" },
+            _dom.tags.h3({ class: "modal-title" }, "Workspace Settings"),
+            _dom.tags.button(
+              {
+                class: "modal-close-btn",
+                onclick: () => _store.showSettingsModal.set(false),
+              },
+              "✕"
+            )
+          ),
+          _dom.tags.div(
+            { class: "modal-body" },
+            _dom.tags.div(
+              { class: "settings-row" },
+              _dom.tags.label({}, "Active Model"),
+              _dom.tags.select(
+                {
+                  class: "settings-select",
+                  value: () => _store.model.call(void 0, ),
+                  onchange: (e) => _store.switchModel.call(void 0, (e.target ).value),
+                },
+                _store.models.call(void 0, ).map((m) => _dom.tags.option({ value: m, selected: m === _store.model.call(void 0, ) }, m))
+              )
+            ),
+            _dom.tags.div(
+              { class: "settings-row" },
+              _dom.tags.label({}, "Context Window Usage"),
+              _dom.tags.div({ class: "settings-stat" }, `${_store.pct.call(void 0, )}% utilized`)
+            ),
+            _dom.tags.div(
+              { class: "settings-row" },
+              _dom.tags.label({}, "Interface Architecture"),
+              _dom.tags.div({ class: "settings-stat" }, "WebUI Next v2.0 (Signals Reactive)")
+            )
+          )
+        );
+      }
+    )
+  );
+
+  return container;
+} exports.renderModals = renderModals;
 
 };
 __modules["main"] = function(module, exports, require) {
-"use strict"; function _optionalChain(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }      "use strict";
-      var _state = require('./state');
-      var _util = require('./util');
-      var _net = require('./net');
-      var _ui = require('./ui');
-      var _store = require('./store');
-      var _sessions = require('./sessions');
-      var _stream = require('./stream');
-      var _slash = require('./slash');
-      var _chat = require('./chat');
-      var _composer = require('./composer');
-      var _model = require('./model');
-      var _settings = require('./settings');
-      var _plugins = require('./plugins');
-      var _jobs = require('./jobs');
-      var _evolve = require('./evolve');
-      var _i18n = require('./i18n');
-      // 侧栏折叠态(piz.sidebar=1 则预合)
-      try {
-        if (localStorage.getItem("piz.sidebar") === "1")
-          document.body.classList.add("collapsed");
-      } catch (e2) {}
-      // ---- 启动门(kimi GlobalLoading + auth gate):splash → 探活 → 登录页或主界面 ----
-      let booted = false;
-      let splashAt = Date.now();
-      function boot() {
-        if (booted) return;
-        booted = true;
-        _i18n.applyI18n.call(void 0, );
-        _chat.inspect.init();
-        const isWarm = !!sessionStorage.getItem("piz.booted");
-        try { sessionStorage.setItem("piz.booted", "1"); } catch (e3) {}
-        const wait = isWarm ? 0 : Math.max(0, 450 - (Date.now() - splashAt));
-        if (wait === 0) {
-          _optionalChain([_util.$.call(void 0, "splash"), 'optionalAccess', _ => _.remove, 'call', _2 => _2()]);
-        } else {
-          setTimeout(() => {
-            _optionalChain([_util.$.call(void 0, "splash"), 'optionalAccess', _3 => _3.classList, 'access', _4 => _4.add, 'call', _5 => _5("hide")]);
-            setTimeout(() => _optionalChain([_util.$.call(void 0, "splash"), 'optionalAccess', _6 => _6.remove, 'call', _7 => _7()]), 350);
-          }, wait);
-        }
-        _stream.connectSSE.call(void 0, );
-        fetch("/api/state?" + _state.wsp + "session=" + encodeURIComponent(_state.sess))
-        .then((r) => r.json())
-        .then((s) => {
-          _chat.setHistRange.call(void 0, s.hist_start || 0, s.hist_total || (s.history ? s.history.length : 0));
-          if (s.history && s.history.length) {
-            _chat.replayHist.call(void 0, s.history, false);
-            if (s.running) _chat.resumeAsst.call(void 0, );
-          } else _chat.paintHistMore.call(void 0, );
-          if (s.cost !== undefined) _model.setCost.call(void 0, s.cost);
-          if (s.pct !== undefined || s.used !== undefined) _model.setCtx.call(void 0, s.pct, s.used, s.window);
-          if (s.running) _composer.setRun.call(void 0, true);
-          _model.applyBootState.call(void 0, s);
-        })
-        .catch(() => _ui.showToast.call(void 0, _i18n.t.call(void 0, "statusLoadFail", "Failed to load state")));
-      _model.setModeBtn.call(void 0, );
-      _model.setSandboxBtn.call(void 0, );
-      fetch("/api/config")
-        .then((r) => r.json())
-        .then((cfg) => {
-          if (cfg && cfg.sandboxMode) _model.applySandboxLevel.call(void 0, cfg.sandboxMode);
-          if (cfg && cfg.sandboxBackend) window.sandboxBackend = cfg.sandboxBackend;
-          _model.setSandboxBtn.call(void 0, );
-        })
-        .catch(() => _ui.showToast.call(void 0, _i18n.t.call(void 0, "configLoadFail", "Failed to load config")));
-      _slash.loadHelpCatalog.call(void 0, );
-      // todo 计划条插槽(dsh input dock 计划条):actStrip 之后、队列行之前
-      const ps = document.createElement("div");
-      ps.id = "planStrip";
-      ps.className = "plan-strip";
-      ps.hidden = true;
-      _optionalChain([_util.$.call(void 0, "actStrip"), 'optionalAccess', _8 => _8.insertAdjacentElement, 'call', _9 => _9("afterend", ps)]);
-      const welcome = document.createElement("div");
-      welcome.id = "welcome";
-      welcome.className = "empty-hint";
-      welcome.innerHTML =
-        '<div class="hero-card">' +
-        '<div class="empty-headline">' +
-        '<svg class="empty-logo" viewBox="0 0 24 18" fill="currentColor" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M2.4 1.8h17.2a1.7 1.7 0 0 1 0 3.4H10l10 8.2A1.8 1.8 0 0 1 18.65 16.45H3.2a1.7 1.7 0 0 1 0-3.4h9.4L2.7 4.9A1.8 1.8 0 0 1 4.1 1.8z"/></svg>' +
-        '<span class="empty-hint-title">piz</span></div>' +
-        '<button type="button" class="ws-chip" id="heroWs"><span class="ws-chip-ic">⌂</span><span id="heroWsLbl" data-i18n="workspace">' + _i18n.t.call(void 0, "workspace", "Workspace") + '</span><span class="ws-chip-chev">▾</span></button>' +
-        '<button type="button" class="hero-start" id="heroStart" data-i18n="startSession">' + _i18n.t.call(void 0, "startSession", "＋ Start session") + '</button>' +
-        '<div class="hero-sugs">' +
-        '<button type="button" class="hero-sug" data-i18n="sugWhatProject">' + _i18n.t.call(void 0, "sugWhatProject", "What does this project do?") + '</button>' +
-        '<button type="button" class="hero-sug" data-i18n="sugRunTests">' + _i18n.t.call(void 0, "sugRunTests", "Run tests for me") + '</button>' +
-        '<button type="button" class="hero-sug" data-i18n="sugRecentChanges">' + _i18n.t.call(void 0, "sugRecentChanges", "What changed recently?") + '</button>' +
-        '</div>' +
-        '<div class="empty-hint-text" data-i18n="heroHint">' + _i18n.t.call(void 0, "heroHint", "Read, edit, run. Full control.") + '</div>' +
-        '<div class="empty-keys"><span><kbd>/</kbd> <span data-i18n="keyCommands">' + _i18n.t.call(void 0, "keyCommands", "Commands") + '</span></span><span><kbd>j</kbd> <span data-i18n="keyJobs">' + _i18n.t.call(void 0, "keyJobs", "Jobs") + '</span></span><span><kbd>u</kbd> <span data-i18n="keyUsage">' + _i18n.t.call(void 0, "keyUsage", "Usage") + '</span></span><span><kbd>s</kbd> <span data-i18n="keySandbox">' + _i18n.t.call(void 0, "keySandbox", "Sandbox") + '</span></span><span><kbd>?</kbd> <span data-i18n="keyShortcuts">' + _i18n.t.call(void 0, "keyShortcuts", "Shortcuts") + '</span></span></div>' +
-        '</div>';
-      const wrap = _util.$.call(void 0, "wrap");
-      if (!_chat.th.children.length) {
-        wrap.prepend(welcome);
-        _util.$.call(void 0, "app").classList.add("hero");
-        _util.$.call(void 0, "heroWs").onclick = (e) => {
-          e.stopPropagation();
-          _sessions.openWsMenu.call(void 0, e.currentTarget);
-        };
-        _util.$.call(void 0, "heroStart").onclick = () => _util.$.call(void 0, "newBtn").click();
-        welcome.querySelectorAll(".hero-sug").forEach((b) => {
-          (b ).onclick = () => {
-            const inp = _util.$.call(void 0, "inp") ;
-            if (!inp) return;
-            inp.value = (b ).textContent || "";
-            inp.dispatchEvent(new Event("input"));
-            inp.focus();
-          };
-        });
+"use strict";// main.ts —— WebUI Next 根入口总装
+var _dom = require('./dom');
+var _topbar = require('./topbar');
+var _sidebar = require('./sidebar');
+var _chat = require('./chat');
+var _composer = require('./composer');
+var _deck = require('./deck');
+var _splitter = require('./splitter');
+var _modal = require('./modal');
+
+
+
+
+
+
+
+
+
+
+var _store = require('./store');
+
+function createApp() {
+  const root = _dom.tags.div({ class: "app-root" });
+
+  // 1. 顶栏
+  root.appendChild(_topbar.renderTopBar.call(void 0, ));
+
+  // 2. 主体三栏工作区容器 (Sidebar + Chat Area + Splitter + Deck)
+  const mainWorkspace = _dom.tags.div(
+    { class: "main-workspace" },
+    // 左侧边栏
+    _sidebar.renderSidebar.call(void 0, ),
+
+    // 中央会话流与输入台
+    _dom.tags.main(
+      { class: "chat-main-column" },
+      _chat.renderChatStream.call(void 0, ),
+      _composer.renderComposer.call(void 0, )
+    ),
+
+    // 双栏调节中缝
+    _splitter.renderSplitter.call(void 0, ),
+
+    // 右侧工作台检视 Deck
+    _deck.renderDeck.call(void 0, )
+  );
+
+  // 动态同步 Deck 宽度样式
+  _splitter.deckWidth.subscribe((w) => {
+    if (_store.deckOpen.call(void 0, )) {
+      mainWorkspace.style.setProperty("--deck-width", `${w}px`);
+    }
+  });
+
+  root.appendChild(mainWorkspace);
+
+  // 3. 模态层
+  root.appendChild(_modal.renderModals.call(void 0, ));
+
+  return root;
+}
+
+// 键盘快捷键
+function setupKeybindings() {
+  window.addEventListener("keydown", (e) => {
+    const isMeta = e.metaKey || e.ctrlKey;
+
+    if (isMeta && e.key === "k") {
+      e.preventDefault();
+      _store.showSearchModal.update((v) => !v);
+    } else if (isMeta && e.key === "b") {
+      e.preventDefault();
+      _store.toggleSidebar.call(void 0, );
+    } else if (isMeta && e.key === "j") {
+      e.preventDefault();
+      _store.toggleDeck.call(void 0, );
+    } else if (isMeta && e.shiftKey && (e.key === "D" || e.key === "d")) {
+      e.preventDefault();
+      _store.setDeckTab.call(void 0, "diffs");
+    } else if (isMeta && e.shiftKey && (e.key === "T" || e.key === "t")) {
+      e.preventDefault();
+      _store.setDeckTab.call(void 0, "terminal");
+    } else if (e.key === "Escape") {
+      if (_store.showSearchModal.call(void 0, )) {
+        _store.showSearchModal.set(false);
+      } else if (_store.isStreaming.call(void 0, )) {
+        _store.interrupt.call(void 0, );
       }
-      _sessions.initSideFilter.call(void 0, );
-      _sessions.initSideGrip.call(void 0, );
-      _sessions.renderWsName.call(void 0, );
-      _sessions.loadSessions.call(void 0, );
-      _plugins.loadPlugins.call(void 0, );
-      _jobs.setupJobs.call(void 0, );
-      _store.restoreDraft.call(void 0, );
-      // 全生命周期错误采集:页面加载即挂 window error/unhandledrejection/console.error
-      _evolve.initEvolve.call(void 0, );
-      }
-      _util.$.call(void 0, "searchBtn").onclick = () => _settings.openSearch.call(void 0, );
-      _net.setOnAuthed.call(void 0, boot);
-      _net.initServerAuth.call(void 0, );
-      const probe = _net.rawFetch.call(void 0, "/api/state?" + _state.wsp + "session=" + encodeURIComponent(_state.sess), {
-        headers: _net.getCredential.call(void 0, ) ? { Authorization: "Bearer " + _net.getCredential.call(void 0, ) } : {},
-      });
-      probe
-        .then((r) => {
-          if (r.ok) boot();
-          else if (r.status === 401) _net.showAuthPage.call(void 0, "");
-          else if (r.status === 403 && _state.ws) {
-            const u = new URL(location.href);
-            u.searchParams.delete("ws");
-            location.replace(u.pathname + u.search + u.hash);
-          } else {
-            setTimeout(() => location.reload(), 1500);
-          }
-        })
-        .catch(() => {
-          _util.$.call(void 0, "authErr").textContent = _i18n.t.call(void 0, "cantConnect", "Cannot connect to local server. Please ensure piz web is running.");
-          _net.showAuthPage.call(void 0, _i18n.t.call(void 0, "cantConnect", "Cannot connect to local server. Please ensure piz web is running."));
-        });
+    }
+  });
+}
+
+// 启动挂载
+function mount() {
+  const mountPoint = document.getElementById("app") || document.body;
+  mountPoint.innerHTML = "";
+  mountPoint.appendChild(createApp());
+
+  setupKeybindings();
+  _store.boot.call(void 0, );
+}
+
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", mount);
+} else {
+  mount();
+}
 
 };
 __req("main");

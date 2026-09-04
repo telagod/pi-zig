@@ -217,48 +217,43 @@ root 设成 `Agent.cwd`，`bash` 则直接以它作为子进程的工作目录�
 如果要暴露到非 loopback 地址（比如通过 SSH 端口转发之外的方式），当前实现**不够** ——
 Origin 校验挡的是浏览器发起的跨源请求，挡不住直接构造的 HTTP 请求。
 
-## 前端架构
+## 前端架构 (WebUI Next)
 
-源在 `src/webui/*.ts`,构建产单文件 `src/webui.js`(编译期 `@embedFile`,运行时零依赖)。
+源码位于 `src/webui/*.ts`，构建产单文件 `src/webui.js`（编译期 `@embedFile`，运行时零外部 npm 依赖）。
+架构彻底告别旧版命令式 `innerHTML` 与繁冗钩袋，全面基于**微型 Signals 响应式内核 + 声明式 DOM + 双栏工作台（Chat Stream + Workspace Deck）**。
 
-| 件 | 职 |
+| 模块 | 职责 |
 | --- | --- |
-| `bus.ts` | 统一强类型事件总线:动作解耦、弹窗收起、命令下发与消息发送广播 |
-| `state.ts` | URL 参数(session/ws)、prefs 本地偏好、sessUrl |
-| `util.ts` | 纯工具:DOM/转义/格式化、工具分类与图标、斜杠打分 |
-| `md.ts` | 块级 markdown(表格/任务列表/嵌套列表/引用,围栏代码带轻量语法着色)/ ansi / diff / todo 渲染(字符串→HTML) |
-| `render.ts` | 设置面板 HTML 构造器(seg/auth/资源包/插件行) |
-| `net.ts` | 服务器凭证、fetch 全局包装(Bearer/401)、登录页、`auth:success` 广播 |
-| `ui.ts` | toast、对话框(openDlg/askText/askYes/dlgCancel)、seg/auth 绑定、外观方案(setScheme/applyScheme);开窗发 `popups:dismiss` |
-| `store.ts` | composer 草稿与历史(localStorage)、`lastUser` 与 `running` 全局状态源 |
-| `sessions.ts` | 菜单助手/项目/会话列/act;切会话发 `session:select`，收听 `popups:dismiss` |
-| `stream.ts` | SSE(fetch+ReadableStream、断线横幅、退避重连);`ev.onmessage` 由 composer 指派 |
-| `slash.ts` | 斜杠目录/菜单/bang/@文件/runSlash 全分发;收听 `slash:run` 与 `popups:dismiss`，动作经 bus 广播 |
-| `chat.ts` | 线程渲染核心:滚动贴底、搜索、历史重放、消息流、work/Flow 卡、工具卡/inspect、审批;重发直发 `chat:retry` |
-| `jobs.ts` | 会话头后台活动钮+badge+弹层(借 dsh ui-jobs 之形);数据走 composer 轮询的 refreshJobs,无自轮询 |
-| `composer.ts` | 发送生命周期:运行态/队列/活动条、ev.onmessage 路由、键盘簇、图片、收听 `chat:send` / `chat:retry` |
-| `model.ts` | 模型/思考档/授权/沙箱/cost/ctx/turnMeta/头部渲染/kebab;收听 `session:select`，kebab 直发 `slash:run` |
-| `settings.ts` | openSettings/openSearch/全局键;收听 `search:open`，快捷键发 `chat:retry` |
-| `sheet.ts` | 移动 sheet/侧栏折叠/顶栏钮/hideWelcome;收听 `session:select` 自动收起 |
-| `plugins.ts` | 插件 SDK v1:总线/pluginApi/loadPlugins/window.piz;api.send 经 bus 广播 |
-| `main.ts` | 应用启动门(splash/探活/auth)、welcome 英雄位、纯净装配 |
+| `signal.ts` | 细粒度响应式微内核：`signal()`, `computed()`, `effect()`, `batch()`，依赖自动收集与精准局部刷新 |
+| `dom.ts` | 声明式响应式 DOM 构造器：`h()`, `tags.*`, `show()`, `each()`，信号自动挂载订阅，零虚拟 DOM 开销 |
+| `types.ts` | 领域实体类型契约：Turn, StepItem, FileDiff, JobItem, TerminalLine, SessionItem, Workspace |
+| `term.ts` | 高保真 ANSI 终端控制序列与 16/256 色转译器 |
+| `diff.ts` | Git Unified Diff 解析器与行级差异增删比对引擎（+/- 统计与 Hunk 分块） |
+| `md.ts` | 极速安全 Markdown 渲染器（防 XSS 转义、代码块复制、行内排版、流式未闭合容错） |
+| `net.ts` | 高韧性网络层：Bearer 鉴权、CSRF 防护、基于 `fetch + ReadableStream` 的 SSE 长连接与退避重试 |
+| `store.ts` | 全局响应式状态机：驱动会话池、流式生成、工作区状态、Deck 标签、审批流与状态持久化 |
+| `topbar.ts` | 顶栏工作台：工作区谱系、Git 分支与变更徽标、YOLO/Ask/Plan 模式胶囊、模型下拉、Token 环 |
+| `sidebar.ts` | 左侧会话抽屉：多会话列表、即时检索过滤、新建/重命名/删除、自适应折叠 |
+| `chat.ts` | 中央对话流：Turn 境界、思考流微动画与耗时折叠、步骤执行轨（Step Track）、工具展开下钻 |
+| `composer.ts` | 智能输入控制台：多行自适应高度、斜杠命令菜单 (`/`)、`@` 文件快速引用、流式打断控制 |
+| `deck.ts` | 右侧工作台检视 Deck：Diffs 实时变更审查器、Terminal ANSI 终端流、Jobs 子 Agent 拓扑树、Files 文件浏览器 |
+| `splitter.ts` | 响应式双栏拖拽调节中缝：自由调节工作台视窗宽度、双击重置、宽度持久化 |
+| `modal.ts` | 全局模态层：敏感操作权限审批 (Permission Gate)、`Ctrl+K` 命令面板、Token 登录弹窗、设置面板 |
+| `main.ts` | 根入口总装：全局热键 (`⌘K`, `⌘B`, `⌘J`, `Esc`) 绑定、DOM 挂载与启动探活 |
 
 ## 构建
 
 ```sh
 zig build web            # = piz build-web src/webui src/webui.js
-piz build-web            # 同上手写
+piz build-web            # 零参直接构建
 ```
 
-管线(`src/build_web.zig`):自 `main.ts` 顺相对 import DFS 拓扑排 → 逐件过 sucrase(typescript+imports 双变换,与 JS 扩展同款引擎)→ 迷你 require 运行头拼合。循环 import 报错;只认同目 `./x` 相对径。
+管线(`src/build_web.zig`)：自 `src/webui/main.ts` 顺相对 import DFS 拓扑排序 → 逐件过 sucrase (typescript+imports 双变换，内嵌 QuickJS) → 迷你 require 运行头拼合为单文件 `src/webui.js`。
 
 ## 规矩
 
-- **改前端改 `src/webui/*.ts`,勿手改 `src/webui.js`**(头部有 generated 标记);改毕 `zig build web` 重产并一并提交。
-- 模块间只许 `import { x } from "./y"`,禁动态 `import()`;新增模块无需注册,被 import 即入伙。
-- 迁出纪律:函数搬进模块须**纯**(无 main 闭包态);名不改,调用点不动。有闭包纠缠者(agentHtml/toolBody 之 Flow)留 main;互倚成环者(登录续 boot、对话框收菜单、会话行应 mode、slash 触聊天/模型)以迟绑钩注入,勿回环 import。
-- **嵌件陷阱**:`webui.js` 经 `@embedFile` 入 zig 二进制——改 TS 后须全量 `zig build` 重嵌,仅 `zig build web` 不起伺服新码(冒烟先构二进制,勿以旧品验新码)。
+- **改前端改 `src/webui/*.ts`，勿手改 `src/webui.js`**（头部有 generated 标记）；改毕 `zig build web` 重产并一并提交。
+- 模块间只许 `import { x } from "./y"`，禁动态 `import()`；新增模块无需注册，被 import 即入伙。
+- **状态单向流与响应式隔离**：所有共享状态一律入 `store.ts` 作为 Signals；组件只负责声明式结构与动作分发，禁在 DOM 节点中私存不可察业务状态。
+- **单二进制自洽性**：`webui.html`、`webui.css`、`webui.js` 经 `@embedFile` 封入 Zig 单二进制，零外部 node_modules 依赖。改动前端后须 `zig build` 刷新二进制。
 
-## 余缝
-
-尽徙矣。main 唯余 boot 与钩袋总成(~150 行)。铁律:build-web 以 DFS 拓扑排模块,**循环 import 即拒**(piz build-web 静默退出,唯 zig build web 见败);跨界调用先思方向,逆向者以钩袋迟取(modelH.runSlash、pluginsH.{getRunning,sendPlain} 即此遗痕)。chatH/slashH 尚余数钩(sendPlain/getLastUser 等),皆 composer↔chat↔slash 环之逆边,留之。

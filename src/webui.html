@@ -7,210 +7,24 @@
       content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover,interactive-widget=resizes-content"
     />
     <meta name="color-scheme" content="light dark" />
-    <meta name="theme-color" content="#151517" />
+    <meta name="theme-color" content="#0c0d0e" />
     <link
       rel="icon"
-      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 18'%3E%3Cpath fill='%23e8e8e8' d='M2.4 1.8h17.2a1.7 1.7 0 0 1 0 3.4H10l10 8.2A1.8 1.8 0 0 1 18.65 16.45H3.2a1.7 1.7 0 0 1 0-3.4h9.4L2.7 4.9A1.8 1.8 0 0 1 4.1 1.8z'/%3E%3C/svg%3E"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 18'%3E%3Cpath fill='%23388bfd' d='M2.4 1.8h17.2a1.7 1.7 0 0 1 0 3.4H10l10 8.2A1.8 1.8 0 0 1 18.65 16.45H3.2a1.7 1.7 0 0 1 0-3.4h9.4L2.7 4.9A1.8 1.8 0 0 1 4.1 1.8z'/%3E%3C/svg%3E"
     />
-    <title>piz</title>
+    <title>piz · Autonomous Agent Workspace</title>
     <link rel="stylesheet" href="/app.css" />
-    <script>try{if(sessionStorage.getItem("piz.booted"))document.documentElement.classList.add("warm-boot");}catch(e){}</script>
   </head>
   <body>
-    <!-- 连接 splash(kimi GlobalLoading) -->
-    <div class="gload" id="splash">
-      <div class="gload-box">
-        <div class="gload-brand">
-          <svg class="gload-logo" viewBox="0 0 24 18" fill="currentColor" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="piz">
-            <path d="M2.4 1.8h17.2a1.7 1.7 0 0 1 0 3.4H10l10 8.2A1.8 1.8 0 0 1 18.65 16.45H3.2a1.7 1.7 0 0 1 0-3.4h9.4L2.7 4.9A1.8 1.8 0 0 1 4.1 1.8z" />
-          </svg>
-          <span class="gload-word">piz</span>
-        </div>
-        <span class="spin"></span>
-        <div class="gload-text" data-i18n="connecting">Connecting to local server...</div>
+    <div id="app">
+      <div style="height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;background:#0c0d0e;color:#f0f3f6;font-family:-apple-system,sans-serif;">
+        <svg style="width:42px;height:32px;color:#388bfd;margin-bottom:16px;" viewBox="0 0 24 18" fill="currentColor">
+          <path d="M2.4 1.8h17.2a1.7 1.7 0 0 1 0 3.4H10l10 8.2A1.8 1.8 0 0 1 18.65 16.45H3.2a1.7 1.7 0 0 1 0-3.4h9.4L2.7 4.9A1.8 1.8 0 0 1 4.1 1.8z" />
+        </svg>
+        <div style="font-weight:600;font-size:16px;letter-spacing:-0.2px;">piz workspace</div>
+        <div style="font-size:12px;color:#636e7b;margin-top:4px;">Connecting to local core...</div>
       </div>
     </div>
-    <!-- 登录页(kimi auth-page) -->
-    <section class="auth-page" id="authPage">
-      <div class="auth-page-inner">
-        <div class="gload-brand">
-          <svg class="auth-page-logo" viewBox="0 0 24 18" fill="currentColor" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="piz">
-            <path d="M2.4 1.8h17.2a1.7 1.7 0 0 1 0 3.4H10l10 8.2A1.8 1.8 0 0 1 18.65 16.45H3.2a1.7 1.7 0 0 1 0-3.4h9.4L2.7 4.9A1.8 1.8 0 0 1 4.1 1.8z" />
-          </svg>
-          <span class="auth-word">piz</span>
-        </div>
-        <h1 data-i18n="authTitle">Credentials Required</h1>
-        <p data-i18n="authDesc">This server is protected. Enter the token printed at startup (or configured via <code>--token</code>).</p>
-        <input type="password" id="authTok" placeholder="Token" autocomplete="current-password" />
-        <div class="auth-err" id="authErr"></div>
-        <button id="authBtn" disabled data-i18n="connect">Connect</button>
-      </div>
-    </section>
-    <div id="app" class="app">
-      <aside id="side">
-        <div class="ch">
-          <div class="ch-brand">
-            <svg
-              class="ch-logo"
-              viewBox="0 0 24 18"
-              fill="currentColor"
-              xmlns="http://www.w3.org/2000/svg"
-              role="img"
-              aria-label="piz"
-            >
-              <path
-                d="M2.4 1.8h17.2a1.7 1.7 0 0 1 0 3.4H10l10 8.2A1.8 1.8 0 0 1 18.65 16.45H3.2a1.7 1.7 0 0 1 0-3.4h9.4L2.7 4.9A1.8 1.8 0 0 1 4.1 1.8z"
-              />
-            </svg>
-            <span class="ch-name" id="wsName">piz</span>
-          </div>
-          <div style="display: flex; gap: 2px">
-            <button class="ch-ib" id="colBtn" title="Collapse sidebar" data-i18n-title="collapseSidebar">◂</button>
-          </div>
-        </div>
-        <button class="search" id="searchBtn">
-          <span class="search-ic">⌕</span
-          ><span class="search-t" data-i18n="searchSessions">Search sessions...</span>
-        </button>
-        <button class="btn-new-chat" id="newBtn">
-          <span class="pl">＋</span><span data-i18n="newSession">New session</span>
-        </button>
-        <div class="sessions" id="slist"></div>
-        <div class="side-foot">
-          <button class="side-set" id="setBtn" title="Settings" data-i18n-title="settings">
-            <span class="side-set-ic">⚙</span><span data-i18n="settings">Settings</span>
-          </button>
-        </div>
-      </aside>
-      <div class="side-rail">
-        <button class="ch-ib" id="expBtn" title="Expand sidebar" data-i18n-title="expandSidebar">▸</button>
-      </div>
-      <main id="main">
-        <div class="topbar">
-          <button class="wsq" id="wsqBtn" title="Switch workspace" data-i18n-title="switchWorkspace">⌂</button>
-          <button class="tb-mid" id="tbMid">
-            <span class="tb-ws" id="tbWs">…</span><span class="tb-sl">/</span
-            ><span class="tb-se" id="tbSe" data-i18n="session">Session</span>
-          </button>
-          <button class="ib" id="tbKebab" title="Session actions" data-i18n-title="sessionActions">⋯</button>
-        </div>
-        <header class="chat-header" id="chatHdr">
-          <div class="ch-id">
-            <span class="ch-ws" id="hWs"></span
-            ><span class="ch-sep" id="hSep" style="display: none">/</span
-            ><span class="ch-ses" id="hSes" title="Rename" data-i18n-title="rename"></span>
-          </div>
-          <div class="ch-git" id="hGit"></div>
-          <div class="ch-spacer"></div>
-          <span id="plugin-header" data-piz-slot="header"></span
-          ><span id="plugin-status" data-piz-slot="status"></span>
-          <button class="ib" id="hJobs" title="Background tasks (j)" data-i18n-title="backgroundTasks" hidden
-            >⠿<span id="hJobsBadge" class="jobs-badge" hidden></span></button
-          >
-          <button class="ib" id="hKebab" title="Session actions" data-i18n-title="sessionActions">⋯</button>
-        </header>
-        <div id="stage">
-          <div id="col">
-            <div id="panes">
-              <div id="wrap" class=""><div id="thread"></div></div>
-              <button id="toBottom" type="button" title="Scroll to bottom" data-i18n-title="scrollToBottom" hidden>↓</button>
-            </div>
-            <div id="dock"></div>
-            <div id="cmp">
-          <div id="actStrip" class="act-strip" hidden></div>
-          <div id="qbox" hidden>
-            <div class="q-head">
-              <b id="qCount" data-i18n="queued">Queued</b><span class="q-to" data-i18n="sendWhenReady">Send when ready</span>
-              <button type="button" id="qClr" data-i18n="clear">Clear</button>
-            </div>
-            <div id="qItems"></div>
-          </div>
-          <div class="cmp-row">
-            <div class="composer-card">
-              <div id="slashMenu" class="slash-menu" hidden></div>
-              <div id="cmpHint" class="cmp-hint" hidden></div>
-              <div class="cin-wrap">
-                <textarea
-                  id="inp"
-                  rows="1"
-                  placeholder="Message · / command · @./file · !command · Enter to send"
-                  data-ph="Message · / command · @./file · !command · Enter to send"
-                  data-i18n-ph="inputPlaceholder"
-                ></textarea>
-              </div>
-              <div class="toolbar">
-                <div class="toolbar-left">
-                  <span
-                    class="perm-pill perm-allow"
-                    id="permPill"
-                    title="Approval mode"
-                    data-i18n-title="permMode"
-                    >yolo</span
-                  >
-                  <span class="perm-pill" id="sbPill" title="Bash sandbox" data-i18n-title="sandboxMode">off</span>
-                  <span class="mode-pill" id="modePill" title="/ commands" data-i18n-title="slashCommandsTitle"
-                    >/ commands</span
-                  >
-                  <span class="mode-pill" id="hModel" title="Switch model" data-i18n-title="switchModel">…</span>
-                  <span class="mode-pill" id="hThink" title="Thinking level" data-i18n-title="thinkingLevel">high</span>
-                  <span id="turnMeta" class="turn-meta" hidden></span>
-                  <button
-                    class="compact-chip"
-                    id="compactChip"
-                    style="display: none"
-                    data-i18n="contextFull"
-                  >
-                    Context full
-                  </button>
-                </div>
-                <div class="toolbar-right">
-                  <span id="costLbl" class="cost-lbl" hidden></span>
-                  <span id="ctxWrap" class="ctx-wrap" title="Context" hidden
-                    ><svg class="ctx-ring" viewBox="0 0 20 20" aria-hidden="true">
-                      <circle class="ctx-ring-track" cx="10" cy="10" r="7" fill="none" stroke-width="2.5"></circle>
-                      <circle id="ctxFill" class="ctx-ring-fill" cx="10" cy="10" r="7" fill="none" stroke-width="2.5" stroke-linecap="round" stroke-dasharray="43.98" stroke-dashoffset="43.98"></circle></svg
-                    ><span id="ctxLbl"></span></span
-                  ><span id="plugin-composer" data-piz-slot="composer"></span
-                  ><button id="send" title="Send" data-i18n-title="send">➤</button>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-          </div>
-          <aside id="inspect" hidden aria-label="Inspect">
-            <div class="insp-hd">
-              <div class="insp-hd-main">
-                <span class="insp-t" id="inspT"></span>
-                <span class="insp-k" id="inspK"></span>
-              </div>
-              <button class="insp-x" id="inspX" type="button" title="Close">×</button>
-            </div>
-            <div id="inspBd"></div>
-          </aside>
-        </div>
-      </main>
-    </div>
-    <div class="menu" id="kmenu"></div>
-    <div class="menu" id="wsmenu"></div>
-    <div class="menu model-menu" id="modelMenu"></div>
-    <div class="menu" id="thinkMenu"></div>
-    <div class="menu" id="permMenu"></div>
-    <div class="menu" id="sbMenu"></div>
-    <div class="menu jobs-pop" id="jobsPop"></div>
-    <div id="keysHint" hidden></div>
-    <div id="toast"></div>
-    <div id="overlay"></div>
-    <div id="sheet">
-      <div id="scrim"></div>
-      <div id="spnl">
-        <div class="grab"></div>
-        <div class="shd">
-          <span class="shd-t" data-i18n="session">Session</span><button id="scls">✕</button>
-        </div>
-        <div id="sbody"></div>
-      </div>
-    </div>
-    <script src="/app.js" defer></script>
+    <script src="/app.js"></script>
   </body>
 </html>
