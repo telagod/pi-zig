@@ -2043,19 +2043,17 @@ let slashItems = [],
       .map((it, i) => {
         const name = file ? it.path || it.name : it.name;
         const desc = file ? (it.dir ? "目录" : "文件") : it.desc;
-        const mark = file && it.dir ? '<span class="mark">/</span>' : "";
+        const nameHl = (it.hlLen ? _util.hlSpan.call(void 0, name, it.hlFrom || 0, it.hlLen) : _util.esc.call(void 0, name)) + (file && it.dir ? '<span class="mark">/</span>' : "");
         return (
           '<div class="slash-item' +
           (i === slashIdx ? " active" : "") +
           '" data-i="' +
           i +
           '" role="option"><span class="slash-name">' +
-          (it.hlLen ? _util.hlSpan.call(void 0, name, it.hlFrom || 0, it.hlLen) : _util.esc.call(void 0, name)) +
+          nameHl +
           '</span><span class="slash-desc">' +
           _util.esc.call(void 0, desc || "") +
-          "</span>" +
-          mark +
-          "</div>"
+          "</span></div>"
         );
       })
       .join("") +
@@ -4013,7 +4011,7 @@ function ensureWork() {
   const m = document.createElement("div");
   m.className = "a-meta";
   m.textContent = label;
-  host.prepend(m);
+  host.appendChild(m);
 } exports.stampTurn = stampTurn;
 function pruneTranscript() {
   const kids = [...exports.th.querySelectorAll(":scope > .u-turn, :scope > .a-turn")] ;

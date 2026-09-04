@@ -153,19 +153,17 @@ export function renderSlash() {
       .map((it, i) => {
         const name = file ? it.path || it.name : it.name;
         const desc = file ? (it.dir ? "目录" : "文件") : it.desc;
-        const mark = file && it.dir ? '<span class="mark">/</span>' : "";
+        const nameHl = (it.hlLen ? hlSpan(name, it.hlFrom || 0, it.hlLen) : esc(name)) + (file && it.dir ? '<span class="mark">/</span>' : "");
         return (
           '<div class="slash-item' +
           (i === slashIdx ? " active" : "") +
           '" data-i="' +
           i +
           '" role="option"><span class="slash-name">' +
-          (it.hlLen ? hlSpan(name, it.hlFrom || 0, it.hlLen) : esc(name)) +
+          nameHl +
           '</span><span class="slash-desc">' +
           esc(desc || "") +
-          "</span>" +
-          mark +
-          "</div>"
+          "</span></div>"
         );
       })
       .join("") +

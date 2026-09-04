@@ -116,6 +116,18 @@ if (scenario === 'chat') {
   await send('跑个慢命令看看');
   await page.waitForSelector('.a-turn, .work', { timeout: 30000 });
   await sleep(2600); // 工具在跑:活动条/jobs badge 应可见
+} else if (scenario === 'slash') {
+  await page.fill('#inp', '/');
+  await sleep(600);
+} else if (scenario === 'at') {
+  await page.fill('#inp', '@./');
+  await sleep(800);
+} else if (scenario === 'settings') {
+  await page.click('#setBtn');
+  await sleep(600);
+} else if (scenario === 'model') {
+  await page.click('#hModel');
+  await sleep(600);
 } else if (scenario === 'welcome' || scenario === 'snap') {
   await sleep(Number(opts.wait || 800));
 }

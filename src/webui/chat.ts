@@ -478,7 +478,7 @@ export function stampTurn() {
   const m = document.createElement("div");
   m.className = "a-meta";
   m.textContent = label;
-  host.prepend(m);
+  host.appendChild(m);
 }
 function pruneTranscript() {
   const kids = [...th.querySelectorAll(":scope > .u-turn, :scope > .a-turn")] as any[];
