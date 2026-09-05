@@ -313,3 +313,50 @@ export function iconFileText(size = 16, cls = ""): SVGElement {
 export function iconGlobe(size = 16, cls = ""): SVGElement {
   return createSvg("M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm0 0c2.5 2.7 4 6.2 4 10s-1.5 7.3-4 10c-2.5-2.7-4-6.2-4-10s1.5-7.3 4-10zM2 12h20", size, cls);
 }
+
+export function iconFlame(size = 16, cls = ""): SVGElement {
+  return createSvg(
+    "M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z",
+    size,
+    cls
+  );
+}
+
+export function iconSparkles(size = 16, cls = ""): SVGElement {
+  return createSvg(
+    "M12 3v3m0 12v3M3 12h3m12 0h3m-3.5-6.5l-2 2m-7 7l-2 2m0-11l2 2m7 7l2 2M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8z",
+    size,
+    cls
+  );
+}
+
+export function iconSnowflake(size = 16, cls = ""): SVGElement {
+  return createSvg(
+    "M12 2v20M2 12h20M4.93 4.93l14.14 14.14M4.93 19.07l14.14-14.14M12 7l-2-2m4 0l-2 2M12 17l-2 2m4 0l-2-2M7 12l-2-2m0 4l2-2M17 12l2-2m0 4l-2-2",
+    size,
+    cls
+  );
+}
+
+export function iconRotateCcw(size = 16, cls = ""): SVGElement {
+  return createSvg("M1 4v6h6M3.51 15a9 9 0 1 0 2.13-9.36L1 10", size, cls);
+}
+
+export function getThemeIcon(id: string, size = 14): SVGElement {
+  switch (id) {
+    case "dark":
+      return iconMoon(size);
+    case "abyss":
+      return iconFlame(size);
+    case "matrix":
+      return iconTerminal(size);
+    case "synthwave":
+      return iconSparkles(size);
+    case "amber":
+      return iconSun(size);
+    case "light":
+      return iconSnowflake(size);
+    default:
+      return iconPalette(size);
+  }
+}

@@ -67,6 +67,7 @@ import {
   iconSettings,
   iconCopy,
   iconPalette,
+  getThemeIcon,
 } from "./icons";
 
 export function renderModals(): HTMLElement {
@@ -438,7 +439,7 @@ export function renderModals(): HTMLElement {
                             { class: "theme-card-hdr" },
                             tags.div(
                               { class: "theme-card-title" },
-                              tags.span({ class: "theme-card-emoji" }, th.icon),
+                              tags.span({ class: "theme-card-icon" }, getThemeIcon(th.id, 16)),
                               tags.span({}, () => t(th.nameKey))
                             ),
                             () =>
@@ -536,8 +537,8 @@ export function renderModals(): HTMLElement {
                       { class: "settings-row" },
                       tags.div(
                         { class: "settings-row-info" },
-                        tags.label({}, "Default Thinking Level"),
-                        tags.div({ class: "settings-row-desc" }, "Allocate reasoning effort budget for chain-of-thought")
+                        tags.label({}, () => t("settings.thinking_budget")),
+                        tags.div({ class: "settings-row-desc" }, () => t("settings.thinking_desc"))
                       ),
                       tags.select(
                         {
@@ -554,8 +555,8 @@ export function renderModals(): HTMLElement {
                       { class: "settings-row" },
                       tags.div(
                         { class: "settings-row-info" },
-                        tags.label({}, "Approval Mode"),
-                        tags.div({ class: "settings-row-desc" }, "YOLO executes freely; ASK prompts; READ-ONLY restricts write tools")
+                        tags.label({}, () => t("settings.approval_mode")),
+                        tags.div({ class: "settings-row-desc" }, () => t("settings.approval_mode_desc"))
                       ),
                       tags.select(
                         {
@@ -563,17 +564,17 @@ export function renderModals(): HTMLElement {
                           value: () => mode(),
                           onchange: (e: Event) => switchMode((e.target as any).value),
                         },
-                        tags.option({ value: "yolo", selected: mode() === "yolo" }, "YOLO (Full Execution)"),
-                        tags.option({ value: "ask", selected: mode() === "ask" }, "ASK (Approval Required)"),
-                        tags.option({ value: "read-only", selected: mode() === "read-only" }, "READ-ONLY (Safe Inspection)")
+                        tags.option({ value: "yolo", selected: mode() === "yolo" }, "YOLO"),
+                        tags.option({ value: "ask", selected: mode() === "ask" }, "ASK"),
+                        tags.option({ value: "read-only", selected: mode() === "read-only" }, "READ-ONLY")
                       )
                     ),
                     tags.div(
                       { class: "settings-row" },
                       tags.div(
                         { class: "settings-row-info" },
-                        tags.label({}, "Context Window Utilization"),
-                        tags.div({ class: "settings-row-desc" }, "Proportion of active context tokens occupied")
+                        tags.label({}, () => t("settings.ctx_window")),
+                        tags.div({ class: "settings-row-desc" }, () => t("settings.ctx_window_desc"))
                       ),
                       tags.div({ class: "settings-stat" }, `${pct()}% utilized`)
                     )
@@ -586,8 +587,8 @@ export function renderModals(): HTMLElement {
                       { class: "settings-row" },
                       tags.div(
                         { class: "settings-row-info" },
-                        tags.label({}, "OS Sandbox Mode"),
-                        tags.div({ class: "settings-row-desc" }, "Isolates bash subprocess execution via bubblewrap or landlock")
+                        tags.label({}, () => t("settings.sandbox_level")),
+                        tags.div({ class: "settings-row-desc" }, () => t("settings.sandbox_desc"))
                       ),
                       tags.select(
                         {
@@ -595,18 +596,15 @@ export function renderModals(): HTMLElement {
                           value: () => sandboxMode(),
                           onchange: (e: Event) => setSandboxMode((e.target as HTMLSelectElement).value),
                         },
-                        tags.option({ value: "off", selected: sandboxMode() === "off" }, "off (Direct Host Access)"),
-                        tags.option({ value: "workspace", selected: sandboxMode() === "workspace" }, "workspace (Isolate to Workspace)"),
-                        tags.option({ value: "strict", selected: sandboxMode() === "strict" }, "strict (Read-only + Temp write)")
+                        tags.option({ value: "off", selected: sandboxMode() === "off" }, "off"),
+                        tags.option({ value: "workspace", selected: sandboxMode() === "workspace" }, "workspace"),
+                        tags.option({ value: "strict", selected: sandboxMode() === "strict" }, "strict")
                       )
                     ),
                     tags.div(
                       { class: "settings-info-box" },
-                      tags.div({ class: "info-box-title" }, "Security Boundaries"),
-                      tags.p(
-                        {},
-                        "Service binds strictly to loopback (127.0.0.1) with Bearer token authentication and strict Cross-Origin verification. In workspace sandbox mode, destructive file deletions outside the project tree are blocked."
-                      )
+                      tags.div({ class: "info-box-title" }, () => t("settings.sec_boundaries")),
+                      tags.p({}, () => t("settings.sec_boundaries_desc"))
                     )
                   );
 

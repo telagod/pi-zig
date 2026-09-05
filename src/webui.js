@@ -945,6 +945,9 @@ function getInitialLocale() {
     "sidebar.undo": "撤销上一轮操作",
     "sidebar.compact": "压缩上下文建立存档点",
     "sidebar.delete": "删除会话",
+    "sidebar.archive": "归档此会话",
+    "sidebar.restore": "恢复此会话",
+    "sidebar.archived_badge": "已归档",
     "sidebar.del_confirm": "确定要删除会话 \"{title}\" 吗？此操作无法撤销。",
     "sidebar.rename_prompt": "重命名会话：",
     "sidebar.no_sessions": "未找到匹配会话",
@@ -996,10 +999,18 @@ function getInitialLocale() {
     "deck.diff_scan": "重新扫描仓库 Diffs",
     "deck.diff_commit_placeholder": "输入提交信息 (Commit message)...",
     "deck.diff_commit_btn": "一键 Commit",
+    "deck.term_title": "智能体终端与执行日志",
+    "deck.term_autoscroll": "自动滚动",
     "deck.term_clear": "清空终端",
-    "deck.term_input_placeholder": "在此输入终端命令并回车执行...",
+    "deck.term_copy": "复制全部输出",
+    "deck.term_idle": "终端空闲，命令输出与执行日志将在此实时回显",
+    "deck.term_input_placeholder": "在此输入终端命令并回车执行 (如 git status)...",
+    "deck.jobs_title": "当前无正在运行的后台任务",
+    "deck.jobs_desc": "后台进程、工具调用与派生的子代理将在此集中展示与管控",
     "deck.jobs_empty": "当前没有正在运行的后台子任务或子代理",
     "deck.files_loading": "正在读取工作区文件树...",
+    "deck.files_search": "检索工作区文件...",
+    "deck.files_select_hint": "在左侧选择文件以检视内容",
 
     // 弹窗与设置
     "modal.close": "关闭",
@@ -1028,8 +1039,14 @@ function getInitialLocale() {
     "settings.active_model_desc": "驱动当前会话推理分析的主力模型",
     "settings.thinking_budget": "思考强度等级",
     "settings.thinking_desc": "调节推理大模型的深入思考预算限制",
+    "settings.approval_mode": "操作执行审批模式",
+    "settings.approval_mode_desc": "YOLO 极速全自动执行；ASK 关键操作确认；READ-ONLY 严格只读",
+    "settings.ctx_window": "上下文窗口占用率",
+    "settings.ctx_window_desc": "当前会话活跃 Token 占用模型上限的百分比",
     "settings.sandbox_level": "工作区沙箱隔离级别",
     "settings.sandbox_desc": "约束命令执行在特定目录范围或只读沙箱环境",
+    "settings.sec_boundaries": "安全边界声明",
+    "settings.sec_boundaries_desc": "服务严格绑定本机回环地址 (127.0.0.1)，受 Bearer Token 强鉴权与同源守卫护佑。工作区沙箱模式下，阻断项目树外的破坏性修改。",
     "settings.export_json": "导出为 JSON 结构化数据 (.json)",
     "settings.export_json_desc": "包含完整对话轮次与每步工具调用的原始数据",
     "settings.export_html": "导出为单文件独立网页 (.html)",
@@ -1090,6 +1107,9 @@ function getInitialLocale() {
     "sidebar.undo": "Undo last turn",
     "sidebar.compact": "Compact context and checkpoint",
     "sidebar.delete": "Delete session",
+    "sidebar.archive": "Archive session",
+    "sidebar.restore": "Restore session",
+    "sidebar.archived_badge": "Archived",
     "sidebar.del_confirm": "Are you sure you want to delete session \"{title}\"? This cannot be undone.",
     "sidebar.rename_prompt": "Rename session:",
     "sidebar.no_sessions": "No sessions found",
@@ -1141,10 +1161,18 @@ function getInitialLocale() {
     "deck.diff_scan": "Scan Workspace Diffs",
     "deck.diff_commit_placeholder": "Enter commit message...",
     "deck.diff_commit_btn": "Commit Changes",
+    "deck.term_title": "Agent Output Terminal",
+    "deck.term_autoscroll": "Auto-scroll",
     "deck.term_clear": "Clear Terminal",
-    "deck.term_input_placeholder": "Type shell command and press Enter...",
+    "deck.term_copy": "Copy All",
+    "deck.term_idle": "Terminal idle. Commands and logs will stream here.",
+    "deck.term_input_placeholder": "Type shell command and press Enter (e.g. git status)...",
+    "deck.jobs_title": "No Active Jobs or Subagents",
+    "deck.jobs_desc": "Background processes, tool executions, and delegated subagents appear here.",
     "deck.jobs_empty": "No active background processes or subagents",
     "deck.files_loading": "Loading workspace file tree...",
+    "deck.files_search": "Search workspace files...",
+    "deck.files_select_hint": "Select a file to inspect content.",
 
     // Modals & Settings
     "modal.close": "Close",
@@ -1173,8 +1201,14 @@ function getInitialLocale() {
     "settings.active_model_desc": "Large language model driving current session inference",
     "settings.thinking_budget": "Thinking Level",
     "settings.thinking_desc": "Budget limit for extended reasoning steps",
+    "settings.approval_mode": "Approval Mode",
+    "settings.approval_mode_desc": "YOLO executes freely; ASK prompts; READ-ONLY restricts write tools",
+    "settings.ctx_window": "Context Window Utilization",
+    "settings.ctx_window_desc": "Proportion of active context tokens occupied",
     "settings.sandbox_level": "Sandbox Isolation Level",
     "settings.sandbox_desc": "Restrict command execution to specific directories or read-only sandbox",
+    "settings.sec_boundaries": "Security Boundaries",
+    "settings.sec_boundaries_desc": "Service binds strictly to loopback (127.0.0.1) with Bearer token authentication and strict Cross-Origin verification.",
     "settings.export_json": "Export as JSON (.json)",
     "settings.export_json_desc": "Structured turns and step items for programmatic use",
     "settings.export_html": "Export as Standalone HTML (.html)",
@@ -1229,7 +1263,6 @@ var _i18n = require('./i18n'); _createNamedExportFrom(_i18n, 'locale', 'locale')
     id: "dark",
     nameKey: "theme.dark",
     descKey: "theme.dark_desc",
-    icon: "🌌",
     preview: { canvas: "#090a0c", surface: "#16191e", accent: "#4493f8" },
     isDark: true,
   },
@@ -1237,7 +1270,6 @@ var _i18n = require('./i18n'); _createNamedExportFrom(_i18n, 'locale', 'locale')
     id: "abyss",
     nameKey: "theme.abyss",
     descKey: "theme.abyss_desc",
-    icon: "🩸",
     preview: { canvas: "#0b0708", surface: "#1b0f14", accent: "#f43f5e" },
     isDark: true,
   },
@@ -1245,7 +1277,6 @@ var _i18n = require('./i18n'); _createNamedExportFrom(_i18n, 'locale', 'locale')
     id: "matrix",
     nameKey: "theme.matrix",
     descKey: "theme.matrix_desc",
-    icon: "🟢",
     preview: { canvas: "#020804", surface: "#0b1c10", accent: "#22c55e" },
     isDark: true,
   },
@@ -1253,7 +1284,6 @@ var _i18n = require('./i18n'); _createNamedExportFrom(_i18n, 'locale', 'locale')
     id: "synthwave",
     nameKey: "theme.synthwave",
     descKey: "theme.synthwave_desc",
-    icon: "🔮",
     preview: { canvas: "#090513", surface: "#190f2e", accent: "#d946ef" },
     isDark: true,
   },
@@ -1261,7 +1291,6 @@ var _i18n = require('./i18n'); _createNamedExportFrom(_i18n, 'locale', 'locale')
     id: "amber",
     nameKey: "theme.amber",
     descKey: "theme.amber_desc",
-    icon: "🍯",
     preview: { canvas: "#0d0905", surface: "#1e160d", accent: "#f59e0b" },
     isDark: true,
   },
@@ -1269,7 +1298,6 @@ var _i18n = require('./i18n'); _createNamedExportFrom(_i18n, 'locale', 'locale')
     id: "light",
     nameKey: "theme.light",
     descKey: "theme.light_desc",
-    icon: "❄️",
     preview: { canvas: "#f8fafc", surface: "#ffffff", accent: "#0284c7" },
     isDark: false,
   },
@@ -1582,6 +1610,7 @@ const urlParams = new URLSearchParams(window.location.search);
         updatedAt: s.ts || s.updated_at || Date.now(),
         messageCount: s.msgs || s.msg_count || 0,
         isCurrent: s.name === exports.activeSession.call(void 0, ),
+        archived: !!s.archived,
       }))
     );
   } catch (err) {
@@ -1792,6 +1821,25 @@ function parseRawHistoryMessages(rawList) {
     showToast(`Archive failed: ${err}`, "error");
   }
 } exports.archiveSession = archiveSession;
+
+ async function restoreSession(id) {
+  try {
+    const q = getQuery({ session: id });
+    const res = await _net.apiFetch.call(void 0, `/api/action${q}`, {
+      method: "POST",
+      body: JSON.stringify({ act: "restore" }),
+    });
+    if (res && res.ok) {
+      showToast("Session restored", "success");
+      await loadSessions();
+      await switchSession(id);
+    } else {
+      showToast("Restore failed", "error");
+    }
+  } catch (err) {
+    showToast(`Restore failed: ${err}`, "error");
+  }
+} exports.restoreSession = restoreSession;
 
  async function renameSession(id, title) {
   try {
@@ -2950,6 +2998,53 @@ function createSvg(
   return createSvg("M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm0 0c2.5 2.7 4 6.2 4 10s-1.5 7.3-4 10c-2.5-2.7-4-6.2-4-10s1.5-7.3 4-10zM2 12h20", size, cls);
 } exports.iconGlobe = iconGlobe;
 
+ function iconFlame(size = 16, cls = "") {
+  return createSvg(
+    "M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z",
+    size,
+    cls
+  );
+} exports.iconFlame = iconFlame;
+
+ function iconSparkles(size = 16, cls = "") {
+  return createSvg(
+    "M12 3v3m0 12v3M3 12h3m12 0h3m-3.5-6.5l-2 2m-7 7l-2 2m0-11l2 2m7 7l2 2M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8z",
+    size,
+    cls
+  );
+} exports.iconSparkles = iconSparkles;
+
+ function iconSnowflake(size = 16, cls = "") {
+  return createSvg(
+    "M12 2v20M2 12h20M4.93 4.93l14.14 14.14M4.93 19.07l14.14-14.14M12 7l-2-2m4 0l-2 2M12 17l-2 2m4 0l-2-2M7 12l-2-2m0 4l2-2M17 12l2-2m0 4l-2-2",
+    size,
+    cls
+  );
+} exports.iconSnowflake = iconSnowflake;
+
+ function iconRotateCcw(size = 16, cls = "") {
+  return createSvg("M1 4v6h6M3.51 15a9 9 0 1 0 2.13-9.36L1 10", size, cls);
+} exports.iconRotateCcw = iconRotateCcw;
+
+ function getThemeIcon(id, size = 14) {
+  switch (id) {
+    case "dark":
+      return iconMoon(size);
+    case "abyss":
+      return iconFlame(size);
+    case "matrix":
+      return iconTerminal(size);
+    case "synthwave":
+      return iconSparkles(size);
+    case "amber":
+      return iconSun(size);
+    case "light":
+      return iconSnowflake(size);
+    default:
+      return iconPalette(size);
+  }
+} exports.getThemeIcon = getThemeIcon;
+
 };
 __modules["topbar"] = function(module, exports, require) {
 "use strict";Object.defineProperty(exports, "__esModule", {value: true});// topbar.ts —— 顶栏工作台导航与全局状态指示
@@ -2987,6 +3082,7 @@ var _dom = require('./dom');
 
 
 var _store = require('./store');
+
 
 
 
@@ -3203,7 +3299,7 @@ var _icons = require('./icons');
                         _store.showThemeMenu.set(false);
                       },
                     },
-                    _dom.tags.span({ class: "tb-theme-emoji" }, th.icon),
+                    _dom.tags.span({ class: "tb-theme-icon" }, _icons.getThemeIcon.call(void 0, th.id, 14)),
                     _dom.tags.span({ class: "tb-theme-title" }, () => _store.t.call(void 0, th.nameKey)),
                     _dom.tags.div(
                       { class: "tb-theme-dots" },
@@ -3305,8 +3401,12 @@ var _dom = require('./dom');
 
 
 
+
+
 var _store = require('./store');
 var _signal = require('./signal');
+
+
 
 
 
@@ -3442,9 +3542,11 @@ var _icons = require('./icons');
       _dom.each.call(void 0, filteredSessions, (item) => {
         const isCurrent = () => _store.activeSession.call(void 0, ) === item.id;
 
+        const isArchived = !!item.archived;
+
         return _dom.tags.div(
           {
-            class: () => `session-item ${isCurrent() ? "is-active" : ""}`,
+            class: () => `session-item ${isCurrent() ? "is-active" : ""} ${isArchived ? "is-archived" : ""}`,
             onclick: () => _store.switchSession.call(void 0, item.id),
           },
           _dom.tags.div(
@@ -3453,50 +3555,76 @@ var _icons = require('./icons');
             _dom.tags.div(
               { class: "session-meta" },
               _dom.tags.span({ class: "session-badge" }, `${item.messageCount} msgs`),
+              isArchived ? _dom.tags.span({ class: "session-badge is-archived-badge" }, () => _store.t.call(void 0, "sidebar.archived_badge")) : null,
               _dom.tags.span({ class: "session-time" }, formatRelativeTime(item.updatedAt))
             )
           ),
           // 悬浮全功能操作条
           _dom.tags.div(
             { class: "session-actions", onclick: (e) => e.stopPropagation() },
-            _dom.tags.button(
-              {
-                class: "session-act-btn",
-                title: () => _store.t.call(void 0, "sidebar.rename"),
-                onclick: () => {
-                  const currentTitle = item.title || item.name;
-                  const next = prompt(_store.t.call(void 0, "sidebar.rename_prompt"), currentTitle);
-                  if (next && next.trim()) {
-                    _store.renameSession.call(void 0, item.id, next.trim());
-                  }
-                },
-              },
-              _icons.iconEdit.call(void 0, 12)
-            ),
-            _dom.tags.button(
-              {
-                class: "session-act-btn",
-                title: () => _store.t.call(void 0, "sidebar.fork"),
-                onclick: () => _store.forkSession.call(void 0, item.id),
-              },
-              _icons.iconFork.call(void 0, 12)
-            ),
-            _dom.tags.button(
-              {
-                class: "session-act-btn",
-                title: () => _store.t.call(void 0, "sidebar.undo"),
-                onclick: () => _store.undoSession.call(void 0, item.id),
-              },
-              _icons.iconUndo.call(void 0, 12)
-            ),
-            _dom.tags.button(
-              {
-                class: "session-act-btn",
-                title: () => _store.t.call(void 0, "sidebar.compact"),
-                onclick: () => _store.compactSession.call(void 0, item.id),
-              },
-              _icons.iconCompact.call(void 0, 12)
-            ),
+            !isArchived
+              ? _dom.tags.button(
+                  {
+                    class: "session-act-btn",
+                    title: () => _store.t.call(void 0, "sidebar.rename"),
+                    onclick: () => {
+                      const currentTitle = item.title || item.name;
+                      const next = prompt(_store.t.call(void 0, "sidebar.rename_prompt"), currentTitle);
+                      if (next && next.trim()) {
+                        _store.renameSession.call(void 0, item.id, next.trim());
+                      }
+                    },
+                  },
+                  _icons.iconEdit.call(void 0, 12)
+                )
+              : null,
+            !isArchived
+              ? _dom.tags.button(
+                  {
+                    class: "session-act-btn",
+                    title: () => _store.t.call(void 0, "sidebar.fork"),
+                    onclick: () => _store.forkSession.call(void 0, item.id),
+                  },
+                  _icons.iconFork.call(void 0, 12)
+                )
+              : null,
+            !isArchived
+              ? _dom.tags.button(
+                  {
+                    class: "session-act-btn",
+                    title: () => _store.t.call(void 0, "sidebar.undo"),
+                    onclick: () => _store.undoSession.call(void 0, item.id),
+                  },
+                  _icons.iconUndo.call(void 0, 12)
+                )
+              : null,
+            !isArchived
+              ? _dom.tags.button(
+                  {
+                    class: "session-act-btn",
+                    title: () => _store.t.call(void 0, "sidebar.compact"),
+                    onclick: () => _store.compactSession.call(void 0, item.id),
+                  },
+                  _icons.iconCompact.call(void 0, 12)
+                )
+              : null,
+            isArchived
+              ? _dom.tags.button(
+                  {
+                    class: "session-act-btn",
+                    title: () => _store.t.call(void 0, "sidebar.restore"),
+                    onclick: () => _store.restoreSession.call(void 0, item.id),
+                  },
+                  _icons.iconRotateCcw.call(void 0, 12)
+                )
+              : _dom.tags.button(
+                  {
+                    class: "session-act-btn",
+                    title: () => _store.t.call(void 0, "sidebar.archive"),
+                    onclick: () => _store.archiveSession.call(void 0, item.id),
+                  },
+                  _icons.iconArchive.call(void 0, 12)
+                ),
             _dom.tags.button(
               {
                 class: "session-act-btn session-del-btn",
@@ -4438,6 +4566,7 @@ var _signal = require('./signal');
 
 
 
+
 var _icons = require('./icons');
 
  function renderComposer() {
@@ -4700,14 +4829,14 @@ var _icons = require('./icons');
       if (val.startsWith("!!") && val.length > 2) {
         return _dom.tags.div(
           { class: "composer-inline-hint hint-local" },
-          _dom.tags.span({ class: "hint-icon" }, "🖥️"),
+          _dom.tags.span({ class: "hint-icon" }, _icons.iconTerminal.call(void 0, 14)),
           _dom.tags.span({}, `${_store.t.call(void 0, "composer.hint_local")} ${val.slice(2)}`)
         );
       }
       if (val.startsWith("!") && !val.startsWith("!!") && val.length > 1) {
         return _dom.tags.div(
           { class: "composer-inline-hint hint-model" },
-          _dom.tags.span({ class: "hint-icon" }, "⚡"),
+          _dom.tags.span({ class: "hint-icon" }, _icons.iconBolt.call(void 0, 14)),
           _dom.tags.span({}, `${_store.t.call(void 0, "composer.hint_model")} ${val.slice(1)}`)
         );
       }
@@ -4979,6 +5108,7 @@ var _term = require('./term');
 
 var _signal = require('./signal');
 var _net = require('./net');
+var _md = require('./md');
 
 
 
@@ -5225,7 +5355,7 @@ function renderTerminalPanel() {
     // 终端控制条
     _dom.tags.div(
       { class: "terminal-bar" },
-      _dom.tags.div({ class: "terminal-bar-title" }, "Agent Output Terminal"),
+      _dom.tags.div({ class: "terminal-bar-title" }, () => _store.t.call(void 0, "deck.term_title")),
       _dom.tags.div(
         { class: "terminal-bar-actions" },
         _dom.tags.button(
@@ -5234,7 +5364,7 @@ function renderTerminalPanel() {
             title: "Toggle Auto Scroll",
             onclick: () => autoScroll.set(!autoScroll()),
           },
-          "Auto-scroll"
+          () => _store.t.call(void 0, "deck.term_autoscroll")
         ),
         _dom.tags.button(
           {
@@ -5242,7 +5372,7 @@ function renderTerminalPanel() {
             title: "Clear output",
             onclick: () => _store.terminalLines.set([]),
           },
-          "Clear"
+          () => _store.t.call(void 0, "deck.term_clear")
         ),
         _dom.tags.button(
           {
@@ -5256,7 +5386,7 @@ function renderTerminalPanel() {
             },
           },
           () => (termCopied() ? _icons.iconCheck.call(void 0, 12) : _icons.iconCopy.call(void 0, 12)),
-          _dom.tags.span({}, () => (termCopied() ? "Copied" : "Copy"))
+          _dom.tags.span({}, () => (termCopied() ? _store.t.call(void 0, "chat.copied") : _store.t.call(void 0, "deck.term_copy")))
         )
       )
     ),
@@ -5276,7 +5406,7 @@ function renderTerminalPanel() {
       }),
       () => {
         if (_store.terminalLines.call(void 0, ).length === 0) {
-          return _dom.tags.div({ class: "term-empty" }, "Terminal idle. Commands and logs will stream here.");
+          return _dom.tags.div({ class: "term-empty" }, () => _store.t.call(void 0, "deck.term_idle"));
         }
         return null;
       }
@@ -5288,7 +5418,7 @@ function renderTerminalPanel() {
       _dom.tags.span({ class: "terminal-prompt-prefix" }, "$"),
       _dom.tags.input({
         class: "terminal-cmd-input",
-        placeholder: "Run shell command in workspace (e.g. git status, ls -la)...",
+        placeholder: () => _store.t.call(void 0, "deck.term_input_placeholder"),
         onkeydown: (e) => {
           if (e.key === "Enter") {
             const input = e.target ;
@@ -5314,8 +5444,8 @@ function renderJobsPanel() {
     return _dom.tags.div(
       { class: "deck-empty" },
       _dom.tags.div({ class: "deck-empty-icon" }, _icons.iconCpu.call(void 0, 28)),
-      _dom.tags.div({ class: "deck-empty-title" }, "No Active Jobs or Subagents"),
-      _dom.tags.div({ class: "deck-empty-desc" }, "Background processes, tool executions, and delegated subagents appear here.")
+      _dom.tags.div({ class: "deck-empty-title" }, () => _store.t.call(void 0, "deck.jobs_title")),
+      _dom.tags.div({ class: "deck-empty-desc" }, () => _store.t.call(void 0, "deck.jobs_desc"))
     );
   }
 
@@ -5399,7 +5529,7 @@ function renderFilesPanel() {
       { class: "files-search-bar" },
       _dom.tags.input({
         class: "files-search-input",
-        placeholder: "Search workspace files...",
+        placeholder: () => _store.t.call(void 0, "deck.files_search"),
         value: () => filter(),
         oninput: (e) => filter.set((e.target ).value),
       }),
@@ -5446,28 +5576,67 @@ function renderFilesPanel() {
         () => {
           const cur = selectedFile();
           if (!cur) {
-            return _dom.tags.div({ class: "file-preview-empty" }, "Select a file to inspect content.");
+            return _dom.tags.div({ class: "file-preview-empty" }, () => _store.t.call(void 0, "deck.files_select_hint"));
           }
+          const lines = cur.text.split("\n");
+          const ext = cur.path.split(".").pop() || "";
+          const fileCopied = _signal.signal(false);
+          const sizeKb = (new Blob([cur.text]).size / 1024).toFixed(1);
+
           return _dom.tags.div(
             { class: "file-preview" },
             _dom.tags.div(
               { class: "file-preview-hdr" },
-              _dom.tags.span({ class: "file-preview-path" }, cur.path),
-              _dom.tags.button(
-                {
-                  class: "file-ref-btn",
-                  title: "Insert reference @file into composer",
-                  onclick: () => {
-                    if ((window ).__pizAppendComposer) {
-                      (window ).__pizAppendComposer(`@${cur.path}`);
-                    }
+              _dom.tags.div(
+                { class: "file-preview-hdr-info" },
+                _dom.tags.span({ class: "file-preview-path" }, cur.path),
+                _dom.tags.span({ class: "file-preview-meta" }, `${lines.length} lines · ${sizeKb} KB`)
+              ),
+              _dom.tags.div(
+                { class: "file-preview-actions" },
+                _dom.tags.button(
+                  {
+                    class: "file-ref-btn",
+                    title: "Copy file content",
+                    onclick: () => {
+                      navigator.clipboard.writeText(cur.text);
+                      fileCopied.set(true);
+                      setTimeout(() => fileCopied.set(false), 2000);
+                    },
                   },
-                },
-                _icons.iconFile.call(void 0, 12),
-                _dom.tags.span({}, "Reference @")
+                  () => (fileCopied() ? _icons.iconCheck.call(void 0, 12) : _icons.iconCopy.call(void 0, 12)),
+                  _dom.tags.span({}, () => (fileCopied() ? _store.t.call(void 0, "chat.copied") : _store.t.call(void 0, "chat.copy")))
+                ),
+                _dom.tags.button(
+                  {
+                    class: "file-ref-btn",
+                    title: "Insert reference @file into composer",
+                    onclick: () => {
+                      if ((window ).__pizAppendComposer) {
+                        (window ).__pizAppendComposer(`@${cur.path}`);
+                      }
+                    },
+                  },
+                  _icons.iconFile.call(void 0, 12),
+                  _dom.tags.span({}, "Reference @")
+                )
               )
             ),
-            _dom.tags.pre({ class: "file-preview-code" }, cur.text)
+            _dom.tags.div(
+              { class: "file-code-container" },
+              _dom.tags.div(
+                { class: "file-code-table" },
+                ...lines.map((lineText, idx) => {
+                  const row = _dom.tags.div({ class: "file-code-row" });
+                  const num = _dom.tags.span({ class: "file-code-num" }, String(idx + 1));
+                  const textSpan = _dom.tags.span({ class: "file-code-text" });
+                  textSpan.innerHTML = _md.highlightCode.call(void 0, lineText, ext);
+                  row.appendChild(num);
+                  row.appendChild(textSpan);
+                  return row;
+                })
+              )
+            )
           );
         }
       )
@@ -5595,6 +5764,7 @@ var _dom = require('./dom');
 var _store = require('./store');
 var _net = require('./net');
 var _signal = require('./signal');
+
 
 
 
@@ -5986,7 +6156,7 @@ var _icons = require('./icons');
                             { class: "theme-card-hdr" },
                             _dom.tags.div(
                               { class: "theme-card-title" },
-                              _dom.tags.span({ class: "theme-card-emoji" }, th.icon),
+                              _dom.tags.span({ class: "theme-card-icon" }, _icons.getThemeIcon.call(void 0, th.id, 16)),
                               _dom.tags.span({}, () => _store.t.call(void 0, th.nameKey))
                             ),
                             () =>
@@ -6084,8 +6254,8 @@ var _icons = require('./icons');
                       { class: "settings-row" },
                       _dom.tags.div(
                         { class: "settings-row-info" },
-                        _dom.tags.label({}, "Default Thinking Level"),
-                        _dom.tags.div({ class: "settings-row-desc" }, "Allocate reasoning effort budget for chain-of-thought")
+                        _dom.tags.label({}, () => _store.t.call(void 0, "settings.thinking_budget")),
+                        _dom.tags.div({ class: "settings-row-desc" }, () => _store.t.call(void 0, "settings.thinking_desc"))
                       ),
                       _dom.tags.select(
                         {
@@ -6102,8 +6272,8 @@ var _icons = require('./icons');
                       { class: "settings-row" },
                       _dom.tags.div(
                         { class: "settings-row-info" },
-                        _dom.tags.label({}, "Approval Mode"),
-                        _dom.tags.div({ class: "settings-row-desc" }, "YOLO executes freely; ASK prompts; READ-ONLY restricts write tools")
+                        _dom.tags.label({}, () => _store.t.call(void 0, "settings.approval_mode")),
+                        _dom.tags.div({ class: "settings-row-desc" }, () => _store.t.call(void 0, "settings.approval_mode_desc"))
                       ),
                       _dom.tags.select(
                         {
@@ -6111,17 +6281,17 @@ var _icons = require('./icons');
                           value: () => _store.mode.call(void 0, ),
                           onchange: (e) => _store.switchMode.call(void 0, (e.target ).value),
                         },
-                        _dom.tags.option({ value: "yolo", selected: _store.mode.call(void 0, ) === "yolo" }, "YOLO (Full Execution)"),
-                        _dom.tags.option({ value: "ask", selected: _store.mode.call(void 0, ) === "ask" }, "ASK (Approval Required)"),
-                        _dom.tags.option({ value: "read-only", selected: _store.mode.call(void 0, ) === "read-only" }, "READ-ONLY (Safe Inspection)")
+                        _dom.tags.option({ value: "yolo", selected: _store.mode.call(void 0, ) === "yolo" }, "YOLO"),
+                        _dom.tags.option({ value: "ask", selected: _store.mode.call(void 0, ) === "ask" }, "ASK"),
+                        _dom.tags.option({ value: "read-only", selected: _store.mode.call(void 0, ) === "read-only" }, "READ-ONLY")
                       )
                     ),
                     _dom.tags.div(
                       { class: "settings-row" },
                       _dom.tags.div(
                         { class: "settings-row-info" },
-                        _dom.tags.label({}, "Context Window Utilization"),
-                        _dom.tags.div({ class: "settings-row-desc" }, "Proportion of active context tokens occupied")
+                        _dom.tags.label({}, () => _store.t.call(void 0, "settings.ctx_window")),
+                        _dom.tags.div({ class: "settings-row-desc" }, () => _store.t.call(void 0, "settings.ctx_window_desc"))
                       ),
                       _dom.tags.div({ class: "settings-stat" }, `${_store.pct.call(void 0, )}% utilized`)
                     )
@@ -6134,8 +6304,8 @@ var _icons = require('./icons');
                       { class: "settings-row" },
                       _dom.tags.div(
                         { class: "settings-row-info" },
-                        _dom.tags.label({}, "OS Sandbox Mode"),
-                        _dom.tags.div({ class: "settings-row-desc" }, "Isolates bash subprocess execution via bubblewrap or landlock")
+                        _dom.tags.label({}, () => _store.t.call(void 0, "settings.sandbox_level")),
+                        _dom.tags.div({ class: "settings-row-desc" }, () => _store.t.call(void 0, "settings.sandbox_desc"))
                       ),
                       _dom.tags.select(
                         {
@@ -6143,18 +6313,15 @@ var _icons = require('./icons');
                           value: () => _store.sandboxMode.call(void 0, ),
                           onchange: (e) => _store.setSandboxMode.call(void 0, (e.target ).value),
                         },
-                        _dom.tags.option({ value: "off", selected: _store.sandboxMode.call(void 0, ) === "off" }, "off (Direct Host Access)"),
-                        _dom.tags.option({ value: "workspace", selected: _store.sandboxMode.call(void 0, ) === "workspace" }, "workspace (Isolate to Workspace)"),
-                        _dom.tags.option({ value: "strict", selected: _store.sandboxMode.call(void 0, ) === "strict" }, "strict (Read-only + Temp write)")
+                        _dom.tags.option({ value: "off", selected: _store.sandboxMode.call(void 0, ) === "off" }, "off"),
+                        _dom.tags.option({ value: "workspace", selected: _store.sandboxMode.call(void 0, ) === "workspace" }, "workspace"),
+                        _dom.tags.option({ value: "strict", selected: _store.sandboxMode.call(void 0, ) === "strict" }, "strict")
                       )
                     ),
                     _dom.tags.div(
                       { class: "settings-info-box" },
-                      _dom.tags.div({ class: "info-box-title" }, "Security Boundaries"),
-                      _dom.tags.p(
-                        {},
-                        "Service binds strictly to loopback (127.0.0.1) with Bearer token authentication and strict Cross-Origin verification. In workspace sandbox mode, destructive file deletions outside the project tree are blocked."
-                      )
+                      _dom.tags.div({ class: "info-box-title" }, () => _store.t.call(void 0, "settings.sec_boundaries")),
+                      _dom.tags.p({}, () => _store.t.call(void 0, "settings.sec_boundaries_desc"))
                     )
                   );
 

@@ -51,6 +51,7 @@ import {
   iconActivity,
   iconRefresh,
   iconGlobe,
+  getThemeIcon,
 } from "./icons";
 
 export function renderTopBar(): HTMLElement {
@@ -249,7 +250,7 @@ export function renderTopBar(): HTMLElement {
                         showThemeMenu.set(false);
                       },
                     },
-                    tags.span({ class: "tb-theme-emoji" }, th.icon),
+                    tags.span({ class: "tb-theme-icon" }, getThemeIcon(th.id, 14)),
                     tags.span({ class: "tb-theme-title" }, () => t(th.nameKey)),
                     tags.div(
                       { class: "tb-theme-dots" },

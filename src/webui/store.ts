@@ -30,7 +30,6 @@ export const THEMES: ThemeMeta[] = [
     id: "dark",
     nameKey: "theme.dark",
     descKey: "theme.dark_desc",
-    icon: "🌌",
     preview: { canvas: "#090a0c", surface: "#16191e", accent: "#4493f8" },
     isDark: true,
   },
@@ -38,7 +37,6 @@ export const THEMES: ThemeMeta[] = [
     id: "abyss",
     nameKey: "theme.abyss",
     descKey: "theme.abyss_desc",
-    icon: "🩸",
     preview: { canvas: "#0b0708", surface: "#1b0f14", accent: "#f43f5e" },
     isDark: true,
   },
@@ -46,7 +44,6 @@ export const THEMES: ThemeMeta[] = [
     id: "matrix",
     nameKey: "theme.matrix",
     descKey: "theme.matrix_desc",
-    icon: "🟢",
     preview: { canvas: "#020804", surface: "#0b1c10", accent: "#22c55e" },
     isDark: true,
   },
@@ -54,7 +51,6 @@ export const THEMES: ThemeMeta[] = [
     id: "synthwave",
     nameKey: "theme.synthwave",
     descKey: "theme.synthwave_desc",
-    icon: "🔮",
     preview: { canvas: "#090513", surface: "#190f2e", accent: "#d946ef" },
     isDark: true,
   },
@@ -62,7 +58,6 @@ export const THEMES: ThemeMeta[] = [
     id: "amber",
     nameKey: "theme.amber",
     descKey: "theme.amber_desc",
-    icon: "🍯",
     preview: { canvas: "#0d0905", surface: "#1e160d", accent: "#f59e0b" },
     isDark: true,
   },
@@ -70,7 +65,6 @@ export const THEMES: ThemeMeta[] = [
     id: "light",
     nameKey: "theme.light",
     descKey: "theme.light_desc",
-    icon: "❄️",
     preview: { canvas: "#f8fafc", surface: "#ffffff", accent: "#0284c7" },
     isDark: false,
   },
@@ -383,6 +377,7 @@ export async function loadSessions() {
         updatedAt: s.ts || s.updated_at || Date.now(),
         messageCount: s.msgs || s.msg_count || 0,
         isCurrent: s.name === activeSession(),
+        archived: !!s.archived,
       }))
     );
   } catch (err) {
@@ -591,6 +586,25 @@ export async function archiveSession(id: string) {
     }
   } catch (err) {
     showToast(`Archive failed: ${err}`, "error");
+  }
+}
+
+export async function restoreSession(id: string) {
+  try {
+    const q = getQuery({ session: id });
+    const res = await apiFetch(`/api/action${q}`, {
+      method: "POST",
+      body: JSON.stringify({ act: "restore" }),
+    });
+    if (res && res.ok) {
+      showToast("Session restored", "success");
+      await loadSessions();
+      await switchSession(id);
+    } else {
+      showToast("Restore failed", "error");
+    }
+  } catch (err) {
+    showToast(`Restore failed: ${err}`, "error");
   }
 }
 

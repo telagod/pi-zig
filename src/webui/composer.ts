@@ -27,6 +27,7 @@ import {
   iconStop,
   iconFile,
   iconBolt,
+  iconTerminal,
   iconQuestion,
   iconShield,
   iconSparkle,
@@ -294,14 +295,14 @@ export function renderComposer(): HTMLElement {
       if (val.startsWith("!!") && val.length > 2) {
         return tags.div(
           { class: "composer-inline-hint hint-local" },
-          tags.span({ class: "hint-icon" }, "🖥️"),
+          tags.span({ class: "hint-icon" }, iconTerminal(14)),
           tags.span({}, `${t("composer.hint_local")} ${val.slice(2)}`)
         );
       }
       if (val.startsWith("!") && !val.startsWith("!!") && val.length > 1) {
         return tags.div(
           { class: "composer-inline-hint hint-model" },
-          tags.span({ class: "hint-icon" }, "⚡"),
+          tags.span({ class: "hint-icon" }, iconBolt(14)),
           tags.span({}, `${t("composer.hint_model")} ${val.slice(1)}`)
         );
       }

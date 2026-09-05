@@ -26,6 +26,7 @@ import { ansiToHtml } from "./term";
 import { DeckTab, JobItem, TerminalLine, FileTreeItem, ActivityItem } from "./types";
 import { signal, effect } from "./signal";
 import { apiFetch } from "./net";
+import { highlightCode } from "./md";
 import {
   iconDiff,
   iconTerminal,
@@ -272,7 +273,7 @@ function renderTerminalPanel(): HTMLElement {
     // 终端控制条
     tags.div(
       { class: "terminal-bar" },
-      tags.div({ class: "terminal-bar-title" }, "Agent Output Terminal"),
+      tags.div({ class: "terminal-bar-title" }, () => t("deck.term_title")),
       tags.div(
         { class: "terminal-bar-actions" },
         tags.button(
@@ -281,7 +282,7 @@ function renderTerminalPanel(): HTMLElement {
             title: "Toggle Auto Scroll",
             onclick: () => autoScroll.set(!autoScroll()),
           },
-          "Auto-scroll"
+          () => t("deck.term_autoscroll")
         ),
         tags.button(
           {
@@ -289,7 +290,7 @@ function renderTerminalPanel(): HTMLElement {
             title: "Clear output",
             onclick: () => terminalLines.set([]),
           },
-          "Clear"
+          () => t("deck.term_clear")
         ),
         tags.button(
           {
@@ -303,7 +304,7 @@ function renderTerminalPanel(): HTMLElement {
             },
           },
           () => (termCopied() ? iconCheck(12) : iconCopy(12)),
-          tags.span({}, () => (termCopied() ? "Copied" : "Copy"))
+          tags.span({}, () => (termCopied() ? t("chat.copied") : t("deck.term_copy")))
         )
       )
     ),
@@ -323,7 +324,7 @@ function renderTerminalPanel(): HTMLElement {
       }),
       () => {
         if (terminalLines().length === 0) {
-          return tags.div({ class: "term-empty" }, "Terminal idle. Commands and logs will stream here.");
+          return tags.div({ class: "term-empty" }, () => t("deck.term_idle"));
         }
         return null;
       }
@@ -335,7 +336,7 @@ function renderTerminalPanel(): HTMLElement {
       tags.span({ class: "terminal-prompt-prefix" }, "$"),
       tags.input({
         class: "terminal-cmd-input",
-        placeholder: "Run shell command in workspace (e.g. git status, ls -la)...",
+        placeholder: () => t("deck.term_input_placeholder"),
         onkeydown: (e: KeyboardEvent) => {
           if (e.key === "Enter") {
             const input = e.target as HTMLInputElement;
@@ -361,8 +362,8 @@ function renderJobsPanel(): HTMLElement {
     return tags.div(
       { class: "deck-empty" },
       tags.div({ class: "deck-empty-icon" }, iconCpu(28)),
-      tags.div({ class: "deck-empty-title" }, "No Active Jobs or Subagents"),
-      tags.div({ class: "deck-empty-desc" }, "Background processes, tool executions, and delegated subagents appear here.")
+      tags.div({ class: "deck-empty-title" }, () => t("deck.jobs_title")),
+      tags.div({ class: "deck-empty-desc" }, () => t("deck.jobs_desc"))
     );
   }
 
@@ -446,7 +447,7 @@ function renderFilesPanel(): HTMLElement {
       { class: "files-search-bar" },
       tags.input({
         class: "files-search-input",
-        placeholder: "Search workspace files...",
+        placeholder: () => t("deck.files_search"),
         value: () => filter(),
         oninput: (e: Event) => filter.set((e.target as HTMLInputElement).value),
       }),
@@ -493,28 +494,67 @@ function renderFilesPanel(): HTMLElement {
         () => {
           const cur = selectedFile();
           if (!cur) {
-            return tags.div({ class: "file-preview-empty" }, "Select a file to inspect content.");
+            return tags.div({ class: "file-preview-empty" }, () => t("deck.files_select_hint"));
           }
+          const lines = cur.text.split("\n");
+          const ext = cur.path.split(".").pop() || "";
+          const fileCopied = signal<boolean>(false);
+          const sizeKb = (new Blob([cur.text]).size / 1024).toFixed(1);
+
           return tags.div(
             { class: "file-preview" },
             tags.div(
               { class: "file-preview-hdr" },
-              tags.span({ class: "file-preview-path" }, cur.path),
-              tags.button(
-                {
-                  class: "file-ref-btn",
-                  title: "Insert reference @file into composer",
-                  onclick: () => {
-                    if ((window as any).__pizAppendComposer) {
-                      (window as any).__pizAppendComposer(`@${cur.path}`);
-                    }
+              tags.div(
+                { class: "file-preview-hdr-info" },
+                tags.span({ class: "file-preview-path" }, cur.path),
+                tags.span({ class: "file-preview-meta" }, `${lines.length} lines · ${sizeKb} KB`)
+              ),
+              tags.div(
+                { class: "file-preview-actions" },
+                tags.button(
+                  {
+                    class: "file-ref-btn",
+                    title: "Copy file content",
+                    onclick: () => {
+                      navigator.clipboard.writeText(cur.text);
+                      fileCopied.set(true);
+                      setTimeout(() => fileCopied.set(false), 2000);
+                    },
                   },
-                },
-                iconFile(12),
-                tags.span({}, "Reference @")
+                  () => (fileCopied() ? iconCheck(12) : iconCopy(12)),
+                  tags.span({}, () => (fileCopied() ? t("chat.copied") : t("chat.copy")))
+                ),
+                tags.button(
+                  {
+                    class: "file-ref-btn",
+                    title: "Insert reference @file into composer",
+                    onclick: () => {
+                      if ((window as any).__pizAppendComposer) {
+                        (window as any).__pizAppendComposer(`@${cur.path}`);
+                      }
+                    },
+                  },
+                  iconFile(12),
+                  tags.span({}, "Reference @")
+                )
               )
             ),
-            tags.pre({ class: "file-preview-code" }, cur.text)
+            tags.div(
+              { class: "file-code-container" },
+              tags.div(
+                { class: "file-code-table" },
+                ...lines.map((lineText, idx) => {
+                  const row = tags.div({ class: "file-code-row" });
+                  const num = tags.span({ class: "file-code-num" }, String(idx + 1));
+                  const textSpan = tags.span({ class: "file-code-text" });
+                  textSpan.innerHTML = highlightCode(lineText, ext);
+                  row.appendChild(num);
+                  row.appendChild(textSpan);
+                  return row;
+                })
+              )
+            )
           );
         }
       )

@@ -73,6 +73,7 @@ export interface SessionItem {
   updatedAt: number;
   messageCount: number;
   isCurrent?: boolean;
+  archived?: boolean;
 }
 
 export interface WorkspaceItem {
@@ -160,7 +161,6 @@ export interface ThemeMeta {
   id: ThemeId;
   nameKey: string;
   descKey: string;
-  icon: string;
   preview: {
     canvas: string;
     surface: string;

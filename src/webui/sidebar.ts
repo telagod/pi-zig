@@ -11,6 +11,8 @@ import {
   forkSession,
   undoSession,
   compactSession,
+  archiveSession,
+  restoreSession,
   workspaces,
   currentWs,
   wsName,
@@ -30,6 +32,8 @@ import {
   iconFork,
   iconUndo,
   iconCompact,
+  iconArchive,
+  iconRotateCcw,
   iconEdit,
   iconChevronDown,
 } from "./icons";
@@ -154,9 +158,11 @@ export function renderSidebar(): HTMLElement {
       each(filteredSessions, (item: SessionItem) => {
         const isCurrent = () => activeSession() === item.id;
 
+        const isArchived = !!item.archived;
+
         return tags.div(
           {
-            class: () => `session-item ${isCurrent() ? "is-active" : ""}`,
+            class: () => `session-item ${isCurrent() ? "is-active" : ""} ${isArchived ? "is-archived" : ""}`,
             onclick: () => switchSession(item.id),
           },
           tags.div(
@@ -165,50 +171,76 @@ export function renderSidebar(): HTMLElement {
             tags.div(
               { class: "session-meta" },
               tags.span({ class: "session-badge" }, `${item.messageCount} msgs`),
+              isArchived ? tags.span({ class: "session-badge is-archived-badge" }, () => t("sidebar.archived_badge")) : null,
               tags.span({ class: "session-time" }, formatRelativeTime(item.updatedAt))
             )
           ),
           // 悬浮全功能操作条
           tags.div(
             { class: "session-actions", onclick: (e: MouseEvent) => e.stopPropagation() },
-            tags.button(
-              {
-                class: "session-act-btn",
-                title: () => t("sidebar.rename"),
-                onclick: () => {
-                  const currentTitle = item.title || item.name;
-                  const next = prompt(t("sidebar.rename_prompt"), currentTitle);
-                  if (next && next.trim()) {
-                    renameSession(item.id, next.trim());
-                  }
-                },
-              },
-              iconEdit(12)
-            ),
-            tags.button(
-              {
-                class: "session-act-btn",
-                title: () => t("sidebar.fork"),
-                onclick: () => forkSession(item.id),
-              },
-              iconFork(12)
-            ),
-            tags.button(
-              {
-                class: "session-act-btn",
-                title: () => t("sidebar.undo"),
-                onclick: () => undoSession(item.id),
-              },
-              iconUndo(12)
-            ),
-            tags.button(
-              {
-                class: "session-act-btn",
-                title: () => t("sidebar.compact"),
-                onclick: () => compactSession(item.id),
-              },
-              iconCompact(12)
-            ),
+            !isArchived
+              ? tags.button(
+                  {
+                    class: "session-act-btn",
+                    title: () => t("sidebar.rename"),
+                    onclick: () => {
+                      const currentTitle = item.title || item.name;
+                      const next = prompt(t("sidebar.rename_prompt"), currentTitle);
+                      if (next && next.trim()) {
+                        renameSession(item.id, next.trim());
+                      }
+                    },
+                  },
+                  iconEdit(12)
+                )
+              : null,
+            !isArchived
+              ? tags.button(
+                  {
+                    class: "session-act-btn",
+                    title: () => t("sidebar.fork"),
+                    onclick: () => forkSession(item.id),
+                  },
+                  iconFork(12)
+                )
+              : null,
+            !isArchived
+              ? tags.button(
+                  {
+                    class: "session-act-btn",
+                    title: () => t("sidebar.undo"),
+                    onclick: () => undoSession(item.id),
+                  },
+                  iconUndo(12)
+                )
+              : null,
+            !isArchived
+              ? tags.button(
+                  {
+                    class: "session-act-btn",
+                    title: () => t("sidebar.compact"),
+                    onclick: () => compactSession(item.id),
+                  },
+                  iconCompact(12)
+                )
+              : null,
+            isArchived
+              ? tags.button(
+                  {
+                    class: "session-act-btn",
+                    title: () => t("sidebar.restore"),
+                    onclick: () => restoreSession(item.id),
+                  },
+                  iconRotateCcw(12)
+                )
+              : tags.button(
+                  {
+                    class: "session-act-btn",
+                    title: () => t("sidebar.archive"),
+                    onclick: () => archiveSession(item.id),
+                  },
+                  iconArchive(12)
+                ),
             tags.button(
               {
                 class: "session-act-btn session-del-btn",
