@@ -9,6 +9,9 @@ import {
   switchMode,
   setDeckTab,
   attachedImage,
+  attachedAttachment,
+  isModelVisionCapable,
+  showToast,
   slashCommands,
   executeSlash,
   activityList,
@@ -39,7 +42,7 @@ import {
   iconQuestion,
   iconShield,
   iconSparkle,
-  iconImage,
+  iconPaperclip,
   iconClose,
   iconSparkles,
   iconRefresh,
@@ -116,7 +119,7 @@ export function renderComposer(): HTMLElement {
     el.style.height = `${nextH}px`;
   }
 
-  // 剪贴板图片粘贴处理
+  // 剪贴板附件粘贴处理 (根据模型声明能力验证多模态图片或文本代码)
   function handlePaste(e: ClipboardEvent) {
     const items = e.clipboardData?.items;
     if (!items) return;
@@ -127,33 +130,78 @@ export function renderComposer(): HTMLElement {
         e.preventDefault();
         const file = item.getAsFile();
         if (!file) continue;
-        processImageFile(file);
+        processAttachmentFile(file);
+        break;
+      } else if (item.kind === "file") {
+        e.preventDefault();
+        const file = item.getAsFile();
+        if (!file) continue;
+        processAttachmentFile(file);
         break;
       }
     }
   }
 
-  function processImageFile(file: File) {
+  function processAttachmentFile(file: File) {
+    const isVision = isModelVisionCapable(model());
+    const isImage = file.type.startsWith("image/") || /\.(png|jpe?g|webp|svg|gif|bmp)$/i.test(file.name);
+
+    if (isImage) {
+      if (!isVision) {
+        showToast(t("composer.attach_no_vision"), "warning");
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        const result = ev.target?.result as string;
+        if (!result) return;
+        const match = result.match(/^data:([^;]+);base64,(.+)$/);
+        if (match) {
+          const item = {
+            mime: match[1],
+            data: match[2],
+            name: file.name || "pasted_image.png",
+            isImage: true,
+            size: file.size,
+          };
+          attachedAttachment.set(item);
+          attachedImage.set({
+            mime: match[1],
+            data: match[2],
+            name: file.name || "pasted_image.png",
+          });
+        }
+      };
+      reader.readAsDataURL(file);
+      return;
+    }
+
+    // 任意文本 / 代码 / 配置附件
+    if (file.size > 5 * 1024 * 1024) {
+      showToast("Attachment exceeds 5MB limit", "warning");
+      return;
+    }
+
     const reader = new FileReader();
     reader.onload = (ev) => {
-      const result = ev.target?.result as string;
-      if (!result) return;
-      const match = result.match(/^data:([^;]+);base64,(.+)$/);
-      if (match) {
-        attachedImage.set({
-          mime: match[1],
-          data: match[2],
-          name: file.name || "pasted_image.png",
+      const textVal = ev.target?.result;
+      if (typeof textVal === "string") {
+        attachedAttachment.set({
+          mime: file.type || "text/plain",
+          textContent: textVal,
+          name: file.name || "attachment.txt",
+          isImage: false,
+          size: file.size,
         });
       }
     };
-    reader.readAsDataURL(file);
+    reader.readAsText(file);
   }
 
   async function doSend() {
     const msg = text().trim();
-    const hasImg = Boolean(attachedImage());
-    if ((!msg && !hasImg) || isStreaming()) return;
+    const hasAtt = Boolean(attachedAttachment()) || Boolean(attachedImage());
+    if ((!msg && !hasAtt) || isStreaming()) return;
 
     // 斜杠命令拦截执行
     if (msg.startsWith("/")) {
@@ -319,24 +367,34 @@ export function renderComposer(): HTMLElement {
       return null;
     },
 
-    // 3. 图片附加预览条
+    // 3. 任意附件附加预览条 (支持多模态图片预览与代码文档附件标签)
     () => {
+      const att = attachedAttachment();
       const img = attachedImage();
-      if (!img) return null;
+      if (!att && !img) return null;
+      const isImg = att ? att.isImage : Boolean(img);
+      const name = att ? att.name : (img?.name || "image.png");
+      const sizeText = att && att.size ? ` (${Math.round(att.size / 1024)}KB)` : "";
+
       return tags.div(
         { class: "attached-img-bar" },
         tags.div(
           { class: "attached-img-pill" },
-          tags.img({
-            class: "attached-img-thumb",
-            src: `data:${img.mime};base64,${img.data}`,
-          }),
-          tags.span({ class: "attached-img-name" }, img.name || "image.png"),
+          isImg && (att?.data || img?.data)
+            ? tags.img({
+                class: "attached-img-thumb",
+                src: `data:${att?.mime || img?.mime || "image/png"};base64,${att?.data || img?.data}`,
+              })
+            : iconFile(14, "attached-file-icon"),
+          tags.span({ class: "attached-img-name" }, `${name}${sizeText}`),
           tags.button(
             {
               class: "attached-img-remove",
-              title: "Remove image",
-              onclick: () => attachedImage.set(null),
+              title: "Remove attachment",
+              onclick: () => {
+                attachedAttachment.set(null);
+                attachedImage.set(null);
+              },
             },
             iconClose(12)
           )
@@ -411,10 +469,13 @@ export function renderComposer(): HTMLElement {
       );
     },
 
-    // 隐藏的文件上传 input
+    // 隐藏的文件上传 input (根据模型声明能力动态约束 accept)
     tags.input({
       type: "file",
-      accept: "image/*",
+      accept: () =>
+        isModelVisionCapable(model())
+          ? "image/*,text/*,.pdf,.txt,.md,.json,.csv,.zig,.py,.js,.ts,.c,.h,.cpp,.html,.css,.sh,.rs,.go,.java,.xml,.yaml,.yml,.toml,.diff,.patch"
+          : "text/*,.txt,.md,.json,.csv,.zig,.py,.js,.ts,.c,.h,.cpp,.html,.css,.sh,.rs,.go,.java,.xml,.yaml,.yml,.toml,.diff,.patch",
       style: "display:none;",
       ref: (el: HTMLInputElement) => {
         fileInputEl = el;
@@ -422,7 +483,7 @@ export function renderComposer(): HTMLElement {
       onchange: (e: Event) => {
         const input = e.target as HTMLInputElement;
         if (input.files && input.files[0]) {
-          processImageFile(input.files[0]);
+          processAttachmentFile(input.files[0]);
           input.value = "";
         }
       },
@@ -503,51 +564,17 @@ export function renderComposer(): HTMLElement {
             }),
             () => `${pct()}% ctx`
           ),
+          // 通用附件按钮 (取代旧图片按钮，根据模型多模态能力动态限制文件类型)
           tags.button(
             {
-              class: "bar-tag-btn",
-              title: () => t("composer.attach_img"),
+              class: "bar-tag-btn composer-attach-btn",
+              title: () => t("composer.attach_file"),
               onclick: () => fileInputEl && fileInputEl.click(),
             },
-            iconImage(13)
+            iconPaperclip(13)
           ),
-          tags.button(
-            {
-              class: "bar-tag-btn",
-              title: () => t("composer.slash_menu"),
-              onclick: () => {
-                text.set("/");
-                if (textareaEl) {
-                  textareaEl.value = "/";
-                  textareaEl.focus();
-                }
-                showSlashMenu.set(true);
-              },
-            },
-            tags.span({ class: "bar-tag-text" }, "/")
-          ),
-          tags.button(
-            {
-              class: "bar-tag-btn",
-              title: () => t("composer.file_mention"),
-              onclick: () => {
-                text.update((v) => v + "@");
-                if (textareaEl) {
-                  textareaEl.value = text();
-                  textareaEl.focus();
-                }
-                showFileMenu.set(true);
-              },
-            },
-            tags.span({ class: "bar-tag-text" }, "@")
-          ),
-          // 模式切换胶囊 (YOLO / ASK / READ-ONLY 可在输入台直接点击切换)
-          tags.div(
-            { class: "composer-mode-pill mode-pill" },
-            renderComposerModeBtn("yolo", iconBolt, "mode.yolo", "mode.yolo_desc"),
-            renderComposerModeBtn("ask", iconQuestion, "mode.ask", "mode.ask_desc"),
-            renderComposerModeBtn("read-only", iconShield, "mode.read_only", "mode.read_only_desc")
-          ),
+          // 模式切换下拉栏目 (紧凑下拉选择 YOLO / ASK / READ-ONLY)
+          renderComposerModeDropdown(),
           // 沙箱药丸（点击轮切：off -> workspace -> strict）
           () => {
             const cur = sandboxMode();
@@ -601,25 +628,43 @@ export function renderComposer(): HTMLElement {
   );
 }
 
-function renderComposerModeBtn(
-  m: AppMode,
-  iconFn: (size: number, cls: string) => SVGElement,
-  labelKey: string,
-  titleKey: string
-): HTMLElement {
-  const isSelected = () => {
-    const cur = mode();
-    if (m === "read-only") return cur === "read-only" || cur === "plan";
-    return cur === m;
-  };
-
-  return tags.button(
+function renderComposerModeDropdown(): HTMLElement {
+  return tags.div(
     {
-      class: () => `mode-btn mode-btn-${m} ${isSelected() ? "is-active" : ""}`,
-      title: () => t(titleKey),
-      onclick: () => switchMode(m),
+      class: "composer-mode-wrap",
+      title: () => t("composer.mode_select_title"),
     },
-    iconFn(11, "mode-btn-icon"),
-    tags.span({ class: "mode-btn-label" }, () => t(labelKey))
+    () => {
+      const cur = mode();
+      if (cur === "yolo") {
+        return iconBolt(12, "composer-mode-icon mode-icon-yolo");
+      }
+      if (cur === "ask") {
+        return iconQuestion(12, "composer-mode-icon mode-icon-ask");
+      }
+      return iconShield(12, "composer-mode-icon mode-icon-readonly");
+    },
+    tags.select(
+      {
+        class: "composer-mode-select",
+        title: () => t("composer.mode_select_title"),
+        value: () => (mode() === "plan" ? "read-only" : mode()),
+        onchange: (e: Event) => {
+          const target = e.target as HTMLSelectElement;
+          if (target.value) {
+            switchMode(target.value as AppMode);
+          }
+        },
+      },
+      tags.option({ value: "yolo", selected: () => mode() === "yolo" }, () => t("mode.yolo")),
+      tags.option({ value: "ask", selected: () => mode() === "ask" }, () => t("mode.ask")),
+      tags.option(
+        {
+          value: "read-only",
+          selected: () => mode() === "read-only" || mode() === "plan",
+        },
+        () => t("mode.read_only")
+      )
+    )
   );
 }

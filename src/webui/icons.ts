@@ -342,6 +342,14 @@ export function iconRotateCcw(size = 16, cls = ""): SVGElement {
   return createSvg("M1 4v6h6M3.51 15a9 9 0 1 0 2.13-9.36L1 10", size, cls);
 }
 
+export function iconPaperclip(size = 16, cls = ""): SVGElement {
+  return createSvg(
+    "m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48",
+    size,
+    cls
+  );
+}
+
 export function getThemeIcon(id: string, size = 14): SVGElement {
   switch (id) {
     case "dark":

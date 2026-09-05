@@ -984,8 +984,10 @@ function getInitialLocale() {
     "chat.collapse_output": "收起输出",
     "chat.view_artifact": "查看产物检视",
 
-    // 智能输入台
-    "composer.placeholder": "向 piz 提问、粘贴图片 (Ctrl+V)、'/' 调用指令、'@' 选文件、'!cmd' 执行终端...",
+    "composer.placeholder": "向 piz 提问、粘贴附件 (Ctrl+V)、'/' 指令、'@' 选文件、'!cmd' 执行终端...",
+    "composer.attach_file": "添加附件",
+    "composer.attach_no_vision": "当前模型未声明视觉多模态能力，仅支持添加文本与代码附件",
+    "composer.mode_select_title": "切换执行模式",
     "composer.attach_img": "附加图片",
     "composer.slash_menu": "斜杠指令",
     "composer.file_mention": "引用文件",
@@ -1156,7 +1158,10 @@ function getInitialLocale() {
     "chat.view_artifact": "View Artifact",
 
     // Composer
-    "composer.placeholder": "Ask piz, paste images (Ctrl+V), type '/' for commands, '@' for files, '!cmd' for shell...",
+    "composer.placeholder": "Ask piz, paste attachments (Ctrl+V), type '/' for commands, '@' for files, '!cmd' for shell...",
+    "composer.attach_file": "Attach file",
+    "composer.attach_no_vision": "Current model does not declare vision capability; restricted to text and code attachments.",
+    "composer.mode_select_title": "Switch execution mode",
     "composer.attach_img": "Attach image",
     "composer.slash_menu": "Slash command",
     "composer.file_mention": "Mention file",
@@ -1377,6 +1382,40 @@ const urlParams = new URLSearchParams(window.location.search);
  const thinkingLevel = _signal.signal(getStored("think", "high")); exports.thinkingLevel = thinkingLevel;
  const attachedImage = _signal.signal(null); exports.attachedImage = attachedImage;
 
+
+
+
+
+
+
+
+
+
+ const attachedAttachment = _signal.signal(null); exports.attachedAttachment = attachedAttachment;
+ const hasVision = _signal.signal(false); exports.hasVision = hasVision;
+
+ function isModelVisionCapable(m) {
+  if (exports.hasVision.call(void 0, )) return true;
+  const name = (m || exports.model.call(void 0, ) || "").toLowerCase();
+  if (!name) return false;
+  const visionKeywords = [
+    "vision",
+    "-vl",
+    "gpt-4o",
+    "gpt-4.1",
+    "gpt-5",
+    "claude",
+    "gemini",
+    "grok",
+    "pixtral",
+    "glm-4v",
+    "qwen-vl",
+    "qwen2-vl",
+    "qwen2.5-vl",
+  ];
+  return visionKeywords.some((k) => name.includes(k));
+} exports.isModelVisionCapable = isModelVisionCapable;
+
  const deckTab = _signal.signal(getStored("deckTab", "diffs")); exports.deckTab = deckTab;
  const deckOpen = _signal.signal(getStored("deckOpen", true)); exports.deckOpen = deckOpen;
  const sidebarOpen = _signal.signal(getStored("sidebarOpen", true)); exports.sidebarOpen = sidebarOpen;
@@ -1540,6 +1579,7 @@ const urlParams = new URLSearchParams(window.location.search);
     if (data) {
       _signal.batch.call(void 0, () => {
         if (data.model) exports.model.set(data.model);
+        if (typeof data.vision === "boolean") exports.hasVision.set(data.vision);
         if (typeof data.pct === "number") exports.pct.set(data.pct);
         if (data.mode) {
           const m = data.mode === "read_only" ? "read-only" : data.mode;
@@ -2309,11 +2349,21 @@ function parseRawHistoryMessages(rawList) {
   text,
   imgObj
 ) {
-  if ((!text || !text.trim()) && !imgObj && !exports.attachedImage.call(void 0, )) return;
+  const att = exports.attachedAttachment.call(void 0, );
+  if ((!text || !text.trim()) && !imgObj && !exports.attachedImage.call(void 0, ) && !att) return;
   if (exports.isStreaming.call(void 0, )) return;
 
-  const currentImg = imgObj !== undefined ? imgObj : exports.attachedImage.call(void 0, );
-  const trimmedText = text.trim();
+  let currentImg = imgObj !== undefined ? imgObj : exports.attachedImage.call(void 0, );
+  let trimmedText = text.trim();
+
+  // 拼接文本/代码类型附件到提示词中
+  if (att && !att.isImage && att.textContent) {
+    const ext = att.name.split(".").pop() || "txt";
+    const snippet = `\n\n[Attached File: ${att.name}]\n\`\`\`${ext}\n${att.textContent}\n\`\`\``;
+    trimmedText = trimmedText ? `${trimmedText}${snippet}` : snippet.trim();
+  } else if (att && att.isImage && att.data) {
+    currentImg = { data: att.data, mime: att.mime, name: att.name };
+  }
 
   // 记录提示词历史
   if (trimmedText) pushPromptHistory(trimmedText);
@@ -2346,6 +2396,7 @@ function parseRawHistoryMessages(rawList) {
     exports.isStreaming.set(true);
     exports.streamingTurnId.set(assistantTurnId);
     exports.attachedImage.set(null);
+    exports.attachedAttachment.set(null);
   });
 
   try {
@@ -3050,6 +3101,14 @@ function createSvg(
  function iconRotateCcw(size = 16, cls = "") {
   return createSvg("M1 4v6h6M3.51 15a9 9 0 1 0 2.13-9.36L1 10", size, cls);
 } exports.iconRotateCcw = iconRotateCcw;
+
+ function iconPaperclip(size = 16, cls = "") {
+  return createSvg(
+    "m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48",
+    size,
+    cls
+  );
+} exports.iconPaperclip = iconPaperclip;
 
  function getThemeIcon(id, size = 14) {
   switch (id) {
@@ -4636,6 +4695,9 @@ var _dom = require('./dom');
 
 
 
+
+
+
 var _store = require('./store');
 
 var _signal = require('./signal');
@@ -4725,7 +4787,7 @@ var _icons = require('./icons');
     el.style.height = `${nextH}px`;
   }
 
-  // 剪贴板图片粘贴处理
+  // 剪贴板附件粘贴处理 (根据模型声明能力验证多模态图片或文本代码)
   function handlePaste(e) {
     const items = _optionalChain([e, 'access', _ => _.clipboardData, 'optionalAccess', _2 => _2.items]);
     if (!items) return;
@@ -4736,33 +4798,78 @@ var _icons = require('./icons');
         e.preventDefault();
         const file = item.getAsFile();
         if (!file) continue;
-        processImageFile(file);
+        processAttachmentFile(file);
+        break;
+      } else if (item.kind === "file") {
+        e.preventDefault();
+        const file = item.getAsFile();
+        if (!file) continue;
+        processAttachmentFile(file);
         break;
       }
     }
   }
 
-  function processImageFile(file) {
+  function processAttachmentFile(file) {
+    const isVision = _store.isModelVisionCapable.call(void 0, _store.model.call(void 0, ));
+    const isImage = file.type.startsWith("image/") || /\.(png|jpe?g|webp|svg|gif|bmp)$/i.test(file.name);
+
+    if (isImage) {
+      if (!isVision) {
+        _store.showToast.call(void 0, _store.t.call(void 0, "composer.attach_no_vision"), "warning");
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        const result = _optionalChain([ev, 'access', _3 => _3.target, 'optionalAccess', _4 => _4.result]) ;
+        if (!result) return;
+        const match = result.match(/^data:([^;]+);base64,(.+)$/);
+        if (match) {
+          const item = {
+            mime: match[1],
+            data: match[2],
+            name: file.name || "pasted_image.png",
+            isImage: true,
+            size: file.size,
+          };
+          _store.attachedAttachment.set(item);
+          _store.attachedImage.set({
+            mime: match[1],
+            data: match[2],
+            name: file.name || "pasted_image.png",
+          });
+        }
+      };
+      reader.readAsDataURL(file);
+      return;
+    }
+
+    // 任意文本 / 代码 / 配置附件
+    if (file.size > 5 * 1024 * 1024) {
+      _store.showToast.call(void 0, "Attachment exceeds 5MB limit", "warning");
+      return;
+    }
+
     const reader = new FileReader();
     reader.onload = (ev) => {
-      const result = _optionalChain([ev, 'access', _3 => _3.target, 'optionalAccess', _4 => _4.result]) ;
-      if (!result) return;
-      const match = result.match(/^data:([^;]+);base64,(.+)$/);
-      if (match) {
-        _store.attachedImage.set({
-          mime: match[1],
-          data: match[2],
-          name: file.name || "pasted_image.png",
+      const textVal = _optionalChain([ev, 'access', _5 => _5.target, 'optionalAccess', _6 => _6.result]);
+      if (typeof textVal === "string") {
+        _store.attachedAttachment.set({
+          mime: file.type || "text/plain",
+          textContent: textVal,
+          name: file.name || "attachment.txt",
+          isImage: false,
+          size: file.size,
         });
       }
     };
-    reader.readAsDataURL(file);
+    reader.readAsText(file);
   }
 
   async function doSend() {
     const msg = text().trim();
-    const hasImg = Boolean(_store.attachedImage.call(void 0, ));
-    if ((!msg && !hasImg) || _store.isStreaming.call(void 0, )) return;
+    const hasAtt = Boolean(_store.attachedAttachment.call(void 0, )) || Boolean(_store.attachedImage.call(void 0, ));
+    if ((!msg && !hasAtt) || _store.isStreaming.call(void 0, )) return;
 
     // 斜杠命令拦截执行
     if (msg.startsWith("/")) {
@@ -4928,24 +5035,34 @@ var _icons = require('./icons');
       return null;
     },
 
-    // 3. 图片附加预览条
+    // 3. 任意附件附加预览条 (支持多模态图片预览与代码文档附件标签)
     () => {
+      const att = _store.attachedAttachment.call(void 0, );
       const img = _store.attachedImage.call(void 0, );
-      if (!img) return null;
+      if (!att && !img) return null;
+      const isImg = att ? att.isImage : Boolean(img);
+      const name = att ? att.name : (_optionalChain([img, 'optionalAccess', _7 => _7.name]) || "image.png");
+      const sizeText = att && att.size ? ` (${Math.round(att.size / 1024)}KB)` : "";
+
       return _dom.tags.div(
         { class: "attached-img-bar" },
         _dom.tags.div(
           { class: "attached-img-pill" },
-          _dom.tags.img({
-            class: "attached-img-thumb",
-            src: `data:${img.mime};base64,${img.data}`,
-          }),
-          _dom.tags.span({ class: "attached-img-name" }, img.name || "image.png"),
+          isImg && (_optionalChain([att, 'optionalAccess', _8 => _8.data]) || _optionalChain([img, 'optionalAccess', _9 => _9.data]))
+            ? _dom.tags.img({
+                class: "attached-img-thumb",
+                src: `data:${_optionalChain([att, 'optionalAccess', _10 => _10.mime]) || _optionalChain([img, 'optionalAccess', _11 => _11.mime]) || "image/png"};base64,${_optionalChain([att, 'optionalAccess', _12 => _12.data]) || _optionalChain([img, 'optionalAccess', _13 => _13.data])}`,
+              })
+            : _icons.iconFile.call(void 0, 14, "attached-file-icon"),
+          _dom.tags.span({ class: "attached-img-name" }, `${name}${sizeText}`),
           _dom.tags.button(
             {
               class: "attached-img-remove",
-              title: "Remove image",
-              onclick: () => _store.attachedImage.set(null),
+              title: "Remove attachment",
+              onclick: () => {
+                _store.attachedAttachment.set(null);
+                _store.attachedImage.set(null);
+              },
             },
             _icons.iconClose.call(void 0, 12)
           )
@@ -5020,10 +5137,13 @@ var _icons = require('./icons');
       );
     },
 
-    // 隐藏的文件上传 input
+    // 隐藏的文件上传 input (根据模型声明能力动态约束 accept)
     _dom.tags.input({
       type: "file",
-      accept: "image/*",
+      accept: () =>
+        _store.isModelVisionCapable.call(void 0, _store.model.call(void 0, ))
+          ? "image/*,text/*,.pdf,.txt,.md,.json,.csv,.zig,.py,.js,.ts,.c,.h,.cpp,.html,.css,.sh,.rs,.go,.java,.xml,.yaml,.yml,.toml,.diff,.patch"
+          : "text/*,.txt,.md,.json,.csv,.zig,.py,.js,.ts,.c,.h,.cpp,.html,.css,.sh,.rs,.go,.java,.xml,.yaml,.yml,.toml,.diff,.patch",
       style: "display:none;",
       ref: (el) => {
         fileInputEl = el;
@@ -5031,7 +5151,7 @@ var _icons = require('./icons');
       onchange: (e) => {
         const input = e.target ;
         if (input.files && input.files[0]) {
-          processImageFile(input.files[0]);
+          processAttachmentFile(input.files[0]);
           input.value = "";
         }
       },
@@ -5112,51 +5232,17 @@ var _icons = require('./icons');
             }),
             () => `${_store.pct.call(void 0, )}% ctx`
           ),
+          // 通用附件按钮 (取代旧图片按钮，根据模型多模态能力动态限制文件类型)
           _dom.tags.button(
             {
-              class: "bar-tag-btn",
-              title: () => _store.t.call(void 0, "composer.attach_img"),
+              class: "bar-tag-btn composer-attach-btn",
+              title: () => _store.t.call(void 0, "composer.attach_file"),
               onclick: () => fileInputEl && fileInputEl.click(),
             },
-            _icons.iconImage.call(void 0, 13)
+            _icons.iconPaperclip.call(void 0, 13)
           ),
-          _dom.tags.button(
-            {
-              class: "bar-tag-btn",
-              title: () => _store.t.call(void 0, "composer.slash_menu"),
-              onclick: () => {
-                text.set("/");
-                if (textareaEl) {
-                  textareaEl.value = "/";
-                  textareaEl.focus();
-                }
-                showSlashMenu.set(true);
-              },
-            },
-            _dom.tags.span({ class: "bar-tag-text" }, "/")
-          ),
-          _dom.tags.button(
-            {
-              class: "bar-tag-btn",
-              title: () => _store.t.call(void 0, "composer.file_mention"),
-              onclick: () => {
-                text.update((v) => v + "@");
-                if (textareaEl) {
-                  textareaEl.value = text();
-                  textareaEl.focus();
-                }
-                showFileMenu.set(true);
-              },
-            },
-            _dom.tags.span({ class: "bar-tag-text" }, "@")
-          ),
-          // 模式切换胶囊 (YOLO / ASK / READ-ONLY 可在输入台直接点击切换)
-          _dom.tags.div(
-            { class: "composer-mode-pill mode-pill" },
-            renderComposerModeBtn("yolo", _icons.iconBolt, "mode.yolo", "mode.yolo_desc"),
-            renderComposerModeBtn("ask", _icons.iconQuestion, "mode.ask", "mode.ask_desc"),
-            renderComposerModeBtn("read-only", _icons.iconShield, "mode.read_only", "mode.read_only_desc")
-          ),
+          // 模式切换下拉栏目 (紧凑下拉选择 YOLO / ASK / READ-ONLY)
+          renderComposerModeDropdown(),
           // 沙箱药丸（点击轮切：off -> workspace -> strict）
           () => {
             const cur = _store.sandboxMode.call(void 0, );
@@ -5210,26 +5296,44 @@ var _icons = require('./icons');
   );
 } exports.renderComposer = renderComposer;
 
-function renderComposerModeBtn(
-  m,
-  iconFn,
-  labelKey,
-  titleKey
-) {
-  const isSelected = () => {
-    const cur = _store.mode.call(void 0, );
-    if (m === "read-only") return cur === "read-only" || cur === "plan";
-    return cur === m;
-  };
-
-  return _dom.tags.button(
+function renderComposerModeDropdown() {
+  return _dom.tags.div(
     {
-      class: () => `mode-btn mode-btn-${m} ${isSelected() ? "is-active" : ""}`,
-      title: () => _store.t.call(void 0, titleKey),
-      onclick: () => _store.switchMode.call(void 0, m),
+      class: "composer-mode-wrap",
+      title: () => _store.t.call(void 0, "composer.mode_select_title"),
     },
-    iconFn(11, "mode-btn-icon"),
-    _dom.tags.span({ class: "mode-btn-label" }, () => _store.t.call(void 0, labelKey))
+    () => {
+      const cur = _store.mode.call(void 0, );
+      if (cur === "yolo") {
+        return _icons.iconBolt.call(void 0, 12, "composer-mode-icon mode-icon-yolo");
+      }
+      if (cur === "ask") {
+        return _icons.iconQuestion.call(void 0, 12, "composer-mode-icon mode-icon-ask");
+      }
+      return _icons.iconShield.call(void 0, 12, "composer-mode-icon mode-icon-readonly");
+    },
+    _dom.tags.select(
+      {
+        class: "composer-mode-select",
+        title: () => _store.t.call(void 0, "composer.mode_select_title"),
+        value: () => (_store.mode.call(void 0, ) === "plan" ? "read-only" : _store.mode.call(void 0, )),
+        onchange: (e) => {
+          const target = e.target ;
+          if (target.value) {
+            _store.switchMode.call(void 0, target.value );
+          }
+        },
+      },
+      _dom.tags.option({ value: "yolo", selected: () => _store.mode.call(void 0, ) === "yolo" }, () => _store.t.call(void 0, "mode.yolo")),
+      _dom.tags.option({ value: "ask", selected: () => _store.mode.call(void 0, ) === "ask" }, () => _store.t.call(void 0, "mode.ask")),
+      _dom.tags.option(
+        {
+          value: "read-only",
+          selected: () => _store.mode.call(void 0, ) === "read-only" || _store.mode.call(void 0, ) === "plan",
+        },
+        () => _store.t.call(void 0, "mode.read_only")
+      )
+    )
   );
 }
 

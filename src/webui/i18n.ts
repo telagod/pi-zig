@@ -122,8 +122,10 @@ export const translations: Record<Locale, Record<string, string>> = {
     "chat.collapse_output": "收起输出",
     "chat.view_artifact": "查看产物检视",
 
-    // 智能输入台
-    "composer.placeholder": "向 piz 提问、粘贴图片 (Ctrl+V)、'/' 调用指令、'@' 选文件、'!cmd' 执行终端...",
+    "composer.placeholder": "向 piz 提问、粘贴附件 (Ctrl+V)、'/' 指令、'@' 选文件、'!cmd' 执行终端...",
+    "composer.attach_file": "添加附件",
+    "composer.attach_no_vision": "当前模型未声明视觉多模态能力，仅支持添加文本与代码附件",
+    "composer.mode_select_title": "切换执行模式",
     "composer.attach_img": "附加图片",
     "composer.slash_menu": "斜杠指令",
     "composer.file_mention": "引用文件",
@@ -294,7 +296,10 @@ export const translations: Record<Locale, Record<string, string>> = {
     "chat.view_artifact": "View Artifact",
 
     // Composer
-    "composer.placeholder": "Ask piz, paste images (Ctrl+V), type '/' for commands, '@' for files, '!cmd' for shell...",
+    "composer.placeholder": "Ask piz, paste attachments (Ctrl+V), type '/' for commands, '@' for files, '!cmd' for shell...",
+    "composer.attach_file": "Attach file",
+    "composer.attach_no_vision": "Current model does not declare vision capability; restricted to text and code attachments.",
+    "composer.mode_select_title": "Switch execution mode",
     "composer.attach_img": "Attach image",
     "composer.slash_menu": "Slash command",
     "composer.file_mention": "Mention file",

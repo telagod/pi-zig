@@ -126,6 +126,40 @@ export const pct = signal<number>(0);
 export const thinkingLevel = signal<string>(getStored("think", "high"));
 export const attachedImage = signal<{ data: string; mime: string; name?: string } | null>(null);
 
+export interface AttachedAttachment {
+  mime: string;
+  data?: string;
+  textContent?: string;
+  name: string;
+  isImage: boolean;
+  size?: number;
+}
+
+export const attachedAttachment = signal<AttachedAttachment | null>(null);
+export const hasVision = signal<boolean>(false);
+
+export function isModelVisionCapable(m?: string): boolean {
+  if (hasVision()) return true;
+  const name = (m || model() || "").toLowerCase();
+  if (!name) return false;
+  const visionKeywords = [
+    "vision",
+    "-vl",
+    "gpt-4o",
+    "gpt-4.1",
+    "gpt-5",
+    "claude",
+    "gemini",
+    "grok",
+    "pixtral",
+    "glm-4v",
+    "qwen-vl",
+    "qwen2-vl",
+    "qwen2.5-vl",
+  ];
+  return visionKeywords.some((k) => name.includes(k));
+}
+
 export const deckTab = signal<DeckTab>(getStored("deckTab", "diffs"));
 export const deckOpen = signal<boolean>(getStored("deckOpen", true));
 export const sidebarOpen = signal<boolean>(getStored("sidebarOpen", true));
@@ -289,6 +323,7 @@ export async function loadState() {
     if (data) {
       batch(() => {
         if (data.model) model.set(data.model);
+        if (typeof data.vision === "boolean") hasVision.set(data.vision);
         if (typeof data.pct === "number") pct.set(data.pct);
         if (data.mode) {
           const m = data.mode === "read_only" ? "read-only" : data.mode;
@@ -1058,11 +1093,21 @@ export async function sendMessage(
   text: string,
   imgObj?: { data: string; mime: string } | null
 ) {
-  if ((!text || !text.trim()) && !imgObj && !attachedImage()) return;
+  const att = attachedAttachment();
+  if ((!text || !text.trim()) && !imgObj && !attachedImage() && !att) return;
   if (isStreaming()) return;
 
-  const currentImg = imgObj !== undefined ? imgObj : attachedImage();
-  const trimmedText = text.trim();
+  let currentImg = imgObj !== undefined ? imgObj : attachedImage();
+  let trimmedText = text.trim();
+
+  // 拼接文本/代码类型附件到提示词中
+  if (att && !att.isImage && att.textContent) {
+    const ext = att.name.split(".").pop() || "txt";
+    const snippet = `\n\n[Attached File: ${att.name}]\n\`\`\`${ext}\n${att.textContent}\n\`\`\``;
+    trimmedText = trimmedText ? `${trimmedText}${snippet}` : snippet.trim();
+  } else if (att && att.isImage && att.data) {
+    currentImg = { data: att.data, mime: att.mime, name: att.name };
+  }
 
   // 记录提示词历史
   if (trimmedText) pushPromptHistory(trimmedText);
@@ -1095,6 +1140,7 @@ export async function sendMessage(
     isStreaming.set(true);
     streamingTurnId.set(assistantTurnId);
     attachedImage.set(null);
+    attachedAttachment.set(null);
   });
 
   try {

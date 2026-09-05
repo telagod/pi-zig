@@ -76,17 +76,25 @@ await page.waitForSelector('.workbench-deck', { timeout: 5000 });
 console.log('[OK] TopBar, Sidebar, ChatStream, Composer, Workbench Deck all present');
 
 console.log('[4/8] Testing Mode and Deck Tabs...');
-await page.locator('.mode-btn', { hasText: 'ASK' }).click();
+const modeSelect = page.locator('.composer-mode-select');
+await modeSelect.selectOption('ask');
 await sleep(150);
-await page.locator('.mode-btn', { hasText: 'READ-ONLY' }).click();
+await modeSelect.selectOption('read-only');
 await sleep(150);
-await page.locator('.mode-btn', { hasText: 'YOLO' }).click();
+await modeSelect.selectOption('yolo');
 await sleep(150);
 const topbarModeCount = await page.locator('.topbar .mode-pill').count();
 if (topbarModeCount === 0) {
-  console.log('[OK] TopBar mode pill completely removed (mode switching now cleanly in composer)');
+  console.log('[OK] TopBar mode pill completely removed (mode switching now cleanly in composer dropdown)');
 }
-console.log('[OK] Composer mode switching (YOLO/ASK/READ-ONLY) verified');
+console.log('[OK] Composer mode dropdown switching (YOLO/ASK/READ-ONLY) verified');
+
+const slashBtnCount = await page.locator('.bar-tag-btn .bar-tag-text', { hasText: '/' }).count();
+const atBtnCount = await page.locator('.bar-tag-btn .bar-tag-text', { hasText: '@' }).count();
+const attachBtnCount = await page.locator('.composer-attach-btn').count();
+if (slashBtnCount === 0 && atBtnCount === 0 && attachBtnCount > 0) {
+  console.log('[OK] Slash and @ buttons successfully removed; generic attachment button present');
+}
 
 // 标签切换
 await page.locator('.deck-tab-btn', { hasText: 'Terminal' }).click();
