@@ -280,7 +280,7 @@ button, input, select, textarea {
   min-height: 0;
 }
 
-/* ================= 顶栏 TopBar ================= */
+/* ================= 顶栏 TopBar 现代极简设计 ================= */
 .topbar {
   height: var(--topbar-height);
   background: var(--bg-surface);
@@ -288,75 +288,149 @@ button, input, select, textarea {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 12px;
+  padding: 0 14px;
   z-index: 20;
   user-select: none;
+  gap: 12px;
 }
 
-.tb-left, .tb-center, .tb-right {
+.tb-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.tb-center {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.tb-right {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-shrink: 0;
+}
+
+/* 左侧品牌与微型面包屑 */
+.tb-sidebar-btn {
+  color: var(--text-secondary);
+  border-radius: var(--radius-sm);
+  transition: all 0.15s ease;
+}
+
+.tb-sidebar-btn:hover {
+  color: var(--text-primary);
+  background: var(--bg-subtle);
 }
 
 .tb-brand {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-weight: 600;
-  font-size: 13.5px;
-  letter-spacing: -0.2px;
   color: var(--text-primary);
+  padding: 0 4px;
+  cursor: default;
 }
 
 .tb-logo {
-  width: 18px;
-  height: 14px;
+  width: 17px;
+  height: 13px;
   color: var(--accent-primary);
+  flex-shrink: 0;
 }
 
 .tb-title {
   font-family: var(--font-mono);
   font-weight: 700;
-  font-size: 13px;
+  font-size: 12.5px;
+  letter-spacing: -0.3px;
 }
 
 .tb-sep {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   color: var(--border-active);
-  font-size: 12px;
+  opacity: 0.6;
+  flex-shrink: 0;
 }
 
-.tb-ws-badge {
-  display: flex;
+.tb-sep-icon {
+  color: var(--text-muted);
+  opacity: 0.45;
+}
+
+/* 面包屑中的工作区与分支 (彻底消灭生硬黑框) */
+.tb-crumb {
+  display: inline-flex;
   align-items: center;
-  gap: 4px;
-  font-family: var(--font-mono);
-  font-size: 11.5px;
+  gap: 5px;
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.tb-crumb-ws {
   color: var(--text-secondary);
-  background: var(--bg-subtle);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-sm);
-  padding: 2px 7px;
-  max-width: 220px;
+  font-family: var(--font-mono);
+  max-width: 260px;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
+  padding: 4px 6px;
+  border-radius: var(--radius-sm);
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.tb-crumb-ws:hover {
+  background: var(--bg-subtle);
+  color: var(--text-primary);
 }
 
 .tb-branch-icon {
   color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.tb-crumb-name {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.tb-crumb-branch {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.tb-crumb-delta {
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  padding: 2px 5px;
+  border-radius: 4px;
+  background: rgba(245, 158, 11, 0.12);
+  color: var(--accent-amber);
+  border: 1px solid rgba(245, 158, 11, 0.25);
+  font-family: var(--font-mono);
 }
 
 .tb-session-btn {
   font-size: 12px;
+  font-weight: 500;
   color: var(--text-secondary);
-  padding: 3px 8px;
+  padding: 4px 8px;
   border-radius: var(--radius-sm);
-  max-width: 180px;
+  max-width: 220px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   cursor: pointer;
+  background: transparent;
+  border: none;
   transition: background 0.15s ease, color 0.15s ease;
 }
 
@@ -365,56 +439,298 @@ button, input, select, textarea {
   color: var(--text-primary);
 }
 
-/* 模式切换胶囊 */
+/* ================= 模式切换胶囊 (紧凑高级 Segmented Control) ================= */
 .mode-pill {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   background: var(--bg-subtle);
   border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
+  border-radius: 7px;
   padding: 2px;
   gap: 2px;
+  height: 28px;
+  box-sizing: border-box;
 }
 
 .mode-btn {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 5px;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 5px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
   font-size: 11px;
   font-weight: 500;
-  letter-spacing: 0.2px;
-  padding: 3px 8px;
-  border-radius: var(--radius-sm);
-  color: var(--text-muted);
+  letter-spacing: 0.3px;
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: all 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+  white-space: nowrap;
 }
 
 .mode-btn:hover {
   color: var(--text-secondary);
+  background: rgba(255, 255, 255, 0.03);
 }
 
 .mode-btn.is-active {
   background: var(--bg-elevated);
   color: var(--text-primary);
-  box-shadow: var(--shadow-sm);
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.22), 0 0 0 1px var(--border-subtle);
+}
+
+.mode-btn.is-active.mode-btn-yolo {
+  color: #f59e0b;
+}
+
+.mode-btn.is-active.mode-btn-read-only {
+  color: var(--accent-primary);
 }
 
 .mode-btn-icon {
   width: 12px;
   height: 12px;
+  flex-shrink: 0;
 }
 
-/* 顶部按钮 */
+/* ================= 右侧操作区组件群 ================= */
+
+/* 搜索胶囊按钮 */
+.tb-search-btn {
+  height: 28px;
+  padding: 0 8px;
+  border-radius: 6px;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-subtle);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  color: var(--text-muted);
+  transition: all 0.15s ease;
+}
+
+.tb-search-btn:hover {
+  border-color: var(--border-default);
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+}
+
+.tb-search-icon {
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
+.tb-search-placeholder {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  margin-right: 2px;
+}
+
+.search-key {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-muted);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  padding: 1px 5px;
+  line-height: 1.2;
+}
+
+/* AI 引擎与上下文舱 (Engine Box) */
+.tb-engine-box {
+  display: inline-flex;
+  align-items: center;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  height: 28px;
+  padding: 0 3px 0 7px;
+  gap: 4px;
+  box-sizing: border-box;
+  transition: border-color 0.15s ease;
+}
+
+.tb-engine-box:hover {
+  border-color: var(--border-default);
+}
+
+.model-prefix-icon {
+  color: var(--accent-primary);
+  opacity: 0.85;
+  flex-shrink: 0;
+}
+
+.model-selector-wrap {
+  display: inline-flex;
+  align-items: center;
+  position: relative;
+}
+
+.model-select {
+  appearance: none;
+  -webkit-appearance: none;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  background: transparent;
+  border: none;
+  outline: none;
+  padding: 0 22px 0 4px;
+  height: 24px;
+  line-height: 24px;
+  cursor: pointer;
+  max-width: 170px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: color 0.15s ease;
+}
+
+.model-select:hover, .model-select:focus {
+  color: var(--text-primary);
+}
+
+.model-selector-wrap::after {
+  content: "";
+  position: absolute;
+  right: 20px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 0;
+  height: 0;
+  border-left: 3px solid transparent;
+  border-right: 3px solid transparent;
+  border-top: 3.5px solid var(--text-muted);
+  pointer-events: none;
+}
+
+.model-refresh-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 3px;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: transform 0.25s ease, color 0.15s ease;
+  flex-shrink: 0;
+}
+
+.model-refresh-btn:hover {
+  color: var(--text-primary);
+  transform: rotate(180deg);
+}
+
+/* Token 使用率胶囊 (微型内嵌仪表) */
+.token-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4.5px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-muted);
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  cursor: pointer;
+  height: 20px;
+  box-sizing: border-box;
+  transition: all 0.15s ease;
+}
+
+.token-pill:hover {
+  border-color: var(--border-active);
+  color: var(--text-secondary);
+}
+
+.token-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent-green);
+  flex-shrink: 0;
+}
+
+.token-dot.is-healthy {
+  background: var(--accent-green);
+}
+
+.token-dot.is-warning {
+  background: var(--accent-amber);
+}
+
+.token-dot.is-danger {
+  background: var(--accent-red);
+}
+
+/* 工作台 Deck 按钮 */
+.tb-deck-btn {
+  height: 28px;
+  padding: 0 9px;
+  border-radius: 6px;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 1px solid transparent;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.tb-deck-btn:hover {
+  background: var(--bg-subtle);
+  color: var(--text-primary);
+}
+
+.tb-deck-btn.is-active {
+  background: var(--accent-primary-subtle);
+  color: var(--accent-primary);
+  border-color: rgba(59, 130, 246, 0.25);
+}
+
+.tb-deck-label {
+  font-size: 11.5px;
+  font-weight: 500;
+}
+
+/* 垂直微分割线 */
+.tb-divider {
+  width: 1px;
+  height: 14px;
+  background: var(--border-subtle);
+  margin: 0 1px;
+  flex-shrink: 0;
+}
+
+/* 辅助全局动作组 (Ghost Icons Group) */
+.tb-actions-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
 .tb-btn {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
   height: 28px;
-  padding: 0 8px;
+  padding: 0 6px;
   border-radius: var(--radius-sm);
-  color: var(--text-secondary);
+  color: var(--text-muted);
   font-size: 12px;
+  background: transparent;
+  border: none;
   cursor: pointer;
   transition: background 0.15s ease, color 0.15s ease;
 }
@@ -424,13 +740,9 @@ button, input, select, textarea {
   color: var(--text-primary);
 }
 
-.tb-btn.is-active {
-  background: var(--accent-primary-subtle);
-  color: var(--accent-primary);
-}
-
 .tb-icon-btn {
   width: 28px;
+  height: 28px;
   padding: 0;
 }
 
@@ -439,6 +751,7 @@ button, input, select, textarea {
   padding: 0 6px;
   font-weight: 600;
   font-size: 11px;
+  color: var(--text-secondary);
 }
 
 .tb-lang-label {
@@ -447,107 +760,48 @@ button, input, select, textarea {
   line-height: 1;
 }
 
-.sidebar-search-clear {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  color: var(--text-muted);
-  cursor: pointer;
-  flex-shrink: 0;
-}
-
-.sidebar-search-clear:hover {
-  color: var(--text-primary);
-  background: var(--bg-elevated);
-}
-
-.tb-search-btn {
-  gap: 6px;
-  background: var(--bg-subtle);
-  border: 1px solid var(--border-subtle);
-  padding: 0 8px;
-  font-size: 11.5px;
-}
-
-.search-key {
-  font-family: var(--font-mono);
-  font-size: 10.5px;
-  color: var(--text-muted);
-  background: var(--bg-surface);
-  border: 1px solid var(--border-subtle);
-  border-radius: 3px;
-  padding: 1px 4px;
-}
-
-.model-selector-wrap {
+.tb-act-badge-btn {
   position: relative;
 }
 
-.model-select {
-  appearance: none;
-  font-family: var(--font-mono);
-  font-size: 11.5px;
-  color: var(--text-secondary);
-  background: var(--bg-subtle);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-sm);
-  padding: 3px 20px 3px 8px;
-  cursor: pointer;
-  outline: none;
-  transition: border-color 0.15s ease;
+.tb-act-badge-btn.is-idle {
+  opacity: 0.55;
 }
 
-.model-select:hover, .model-select:focus {
-  border-color: var(--border-active);
-  color: var(--text-primary);
+.tb-act-badge-btn.has-active {
+  color: var(--accent-primary);
+  opacity: 1;
 }
 
-.model-selector-wrap::after {
-  content: "";
+.tb-count-badge {
   position: absolute;
-  right: 8px;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 0;
-  height: 0;
-  border-left: 3.5px solid transparent;
-  border-right: 3.5px solid transparent;
-  border-top: 4px solid var(--text-muted);
-  pointer-events: none;
+  top: 2px;
+  right: 2px;
+  min-width: 13px;
+  height: 13px;
+  padding: 0 3px;
+  border-radius: 10px;
+  background: var(--accent-primary);
+  color: #fff;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 13px;
+  text-align: center;
 }
 
-.token-pill {
+/* 网络状态指示器 */
+.tb-status-wrap {
   display: flex;
   align-items: center;
-  gap: 5px;
-  font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--text-muted);
-  padding: 2px 6px;
-  border-radius: var(--radius-sm);
-  background: var(--bg-subtle);
-}
-
-.token-dot {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: var(--accent-green);
-}
-
-.tb-deck-label {
-  margin-left: 4px;
-  font-size: 11.5px;
-  font-weight: 500;
+  justify-content: center;
+  padding-left: 2px;
 }
 
 .status-indicator {
   width: 6px;
   height: 6px;
   border-radius: 50%;
+  flex-shrink: 0;
 }
 
 .status-indicator.connected {
@@ -568,6 +822,23 @@ button, input, select, textarea {
   0% { opacity: 0.4; }
   50% { opacity: 1; }
   100% { opacity: 0.4; }
+}
+
+.sidebar-search-clear {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  color: var(--text-muted);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.sidebar-search-clear:hover {
+  color: var(--text-primary);
+  background: var(--bg-elevated);
 }
 
 /* ================= 侧栏 Sidebar ================= */
@@ -2366,11 +2637,12 @@ button, input, select, textarea {
   .token-pill {
     display: none;
   }
-  .tb-search-btn .search-key {
+  .tb-search-btn .search-key,
+  .tb-search-placeholder {
     display: none;
   }
-  .tb-ws-badge {
-    max-width: 130px;
+  .tb-crumb-ws {
+    max-width: 140px;
   }
 }
 
@@ -2384,16 +2656,19 @@ button, input, select, textarea {
   .tb-sep {
     display: none;
   }
-  .tb-ws-badge {
+  .tb-crumb-ws {
     display: none;
   }
-  .tb-btn[title="Keyboard Shortcuts (?)"] {
+  .tb-shortcuts-btn {
     display: none;
   }
   .tb-theme-wrap {
     display: none;
   }
   .tb-lang-btn {
+    display: none;
+  }
+  .tb-divider {
     display: none;
   }
   .model-select {
@@ -2462,9 +2737,12 @@ button, input, select, textarea {
     display: none;
   }
   .model-select {
-    max-width: 100px;
+    max-width: 90px;
     font-size: 11px;
-    padding: 2px 4px;
+    padding: 0 14px 0 2px;
+  }
+  .model-selector-wrap::after {
+    right: 4px;
   }
   .tb-right .tb-deck-label {
     display: none;
@@ -3294,22 +3572,6 @@ button, input, select, textarea {
   color: #fff;
 }
 
-.model-refresh-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 4px 6px;
-  background: var(--bg-surface);
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-sm);
-  color: var(--text-muted);
-  cursor: pointer;
-}
-
-.model-refresh-btn:hover {
-  color: var(--text-primary);
-  border-color: var(--border-active);
-}
 
 .diff-refresh-btn-large {
   display: inline-flex;

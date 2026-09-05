@@ -917,6 +917,7 @@ function getInitialLocale() {
     "theme.light": "极地素雪",
     "theme.light_desc": "玄冰无瑕，高净度纯粹日光",
     "topbar.search": "全局搜索与指令 (Ctrl+K)",
+    "topbar.search_short": "搜索或指令...",
     "topbar.settings": "全局工作区设置",
     "topbar.shortcuts": "快捷键帮助 (?)",
     "topbar.active_jobs": "后台活动进程与子代理任务",
@@ -1079,6 +1080,7 @@ function getInitialLocale() {
     "theme.light": "Polar Light",
     "theme.light_desc": "Pristine arctic daylight with pure contrast",
     "topbar.search": "Search & Command Palette (Ctrl+K)",
+    "topbar.search_short": "Search or jump...",
     "topbar.settings": "Workspace Settings",
     "topbar.shortcuts": "Keyboard Shortcuts (?)",
     "topbar.active_jobs": "Active processes & subagent jobs",
@@ -3101,17 +3103,19 @@ var _store = require('./store');
 
 
 
+
+
 var _icons = require('./icons');
 
  function renderTopBar() {
   return _dom.tags.header(
     { class: "topbar" },
-    // 左侧：品牌与会话谱系
+    // 左侧：品牌与工程上下文面包屑
     _dom.tags.div(
       { class: "tb-left" },
       _dom.tags.button(
         {
-          class: "tb-btn tb-icon-btn",
+          class: "tb-btn tb-icon-btn tb-sidebar-btn",
           title: () => _store.t.call(void 0, "topbar.toggle_sidebar"),
           onclick: _store.toggleSidebar,
         },
@@ -3127,24 +3131,27 @@ var _icons = require('./icons');
         ),
         _dom.tags.span({ class: "tb-title" }, "piz")
       ),
-      _dom.tags.span({ class: "tb-sep" }, "/"),
-      // 工作区与分支
+      _dom.tags.span({ class: "tb-sep" }, _icons.iconChevronRight.call(void 0, 10, "tb-sep-icon")),
+      // 工作区与分支 (轻量一体化面包屑，摒弃突兀黑框)
       () => {
         const w = _store.wsName.call(void 0, ) || "workspace";
         const b = _store.branch.call(void 0, );
         const ch = _store.changesCount.call(void 0, );
-        const branchPart = b ? ` (${b})` : "";
-        const chPart = ch > 0 ? ` · ${ch}Δ` : "";
-        return _dom.tags.span(
-          { class: "tb-ws-badge", title: `${_store.t.call(void 0, "topbar.workspace")}: ${w}${branchPart}` },
+        return _dom.tags.div(
+          {
+            class: "tb-crumb tb-crumb-ws",
+            title: `${_store.t.call(void 0, "topbar.workspace")}: ${w}${b ? ` (${b})` : ""}`,
+          },
           _icons.iconBranch.call(void 0, 12, "tb-branch-icon"),
-          _dom.tags.span({}, `${w}${branchPart}${chPart}`)
+          _dom.tags.span({ class: "tb-crumb-name" }, w),
+          b ? _dom.tags.span({ class: "tb-crumb-branch" }, `(${b})`) : null,
+          ch > 0 ? _dom.tags.span({ class: "tb-crumb-delta" }, `${ch}Δ`) : null
         );
       },
-      _dom.tags.span({ class: "tb-sep" }, "/"),
+      _dom.tags.span({ class: "tb-sep" }, _icons.iconChevronRight.call(void 0, 10, "tb-sep-icon")),
       _dom.tags.button(
         {
-          class: "tb-session-btn",
+          class: "tb-crumb tb-session-btn",
           title: () => _store.t.call(void 0, "topbar.session_rename"),
           ondblclick: () => {
             const cur = _store.activeSession.call(void 0, );
@@ -3162,7 +3169,7 @@ var _icons = require('./icons');
       )
     ),
 
-    // 中间：模式切换胶囊
+    // 中间：模式切换胶囊 (紧凑型 Segmented Control)
     _dom.tags.div(
       { class: "tb-center" },
       _dom.tags.div(
@@ -3173,80 +3180,75 @@ var _icons = require('./icons');
       )
     ),
 
-    // 右侧：活动指示、模型、Token、Deck 开关、语言、主题、设置
+    // 右侧：搜索胶囊、模型引擎舱、Deck 开关、全局工具动作组与状态
     _dom.tags.div(
       { class: "tb-right" },
-      // 后台活动指示钮（带活跃数字 badge）
-      _dom.tags.button(
-        {
-          class: () =>
-            `tb-btn tb-act-badge-btn ${_store.activityList.call(void 0, ).length > 0 ? "has-active" : ""}`,
-          title: () => _store.t.call(void 0, "topbar.active_jobs"),
-          onclick: () => _store.setDeckTab.call(void 0, "jobs"),
-        },
-        _icons.iconActivity.call(void 0, 14),
-        () => {
-          const count = _store.activityList.call(void 0, ).length;
-          if (count === 0) return null;
-          return _dom.tags.span({ class: "tb-count-badge" }, String(count));
-        }
-      ),
-      // 搜索/命令面板
+      // 搜索/命令面板胶囊
       _dom.tags.button(
         {
           class: "tb-btn tb-search-btn",
           title: () => _store.t.call(void 0, "topbar.search"),
           onclick: () => _store.showSearchModal.set(true),
         },
-        _icons.iconSearch.call(void 0, 13),
+        _icons.iconSearch.call(void 0, 13, "tb-search-icon"),
+        _dom.tags.span({ class: "tb-search-placeholder" }, () => _store.t.call(void 0, "topbar.search_short")),
         _dom.tags.span({ class: "search-key" }, "⌘K")
       ),
-      // 模型下拉与刷新
+      // 模型与使用量复合舱 (Engine Box)
       _dom.tags.div(
-        { class: "model-selector-wrap" },
-        _dom.tags.select(
+        { class: "tb-engine-box" },
+        _dom.tags.div(
+          { class: "model-selector-wrap" },
+          _icons.iconSparkles.call(void 0, 12, "model-prefix-icon"),
+          _dom.tags.select(
+            {
+              class: "model-select",
+              title: "Switch active LLM model",
+              value: () => _store.model.call(void 0, ),
+              onchange: (e) => {
+                const target = e.target ;
+                if (target.value) _store.switchModel.call(void 0, target.value);
+              },
+            },
+            () => {
+              const list = _store.models.call(void 0, );
+              const cur = _store.model.call(void 0, );
+              const opts = list.map((m) =>
+                _dom.tags.option({ value: m, selected: m === cur }, m)
+              );
+              if (cur && !list.includes(cur)) {
+                opts.unshift(_dom.tags.option({ value: cur, selected: true }, cur));
+              }
+              return opts;
+            }
+          ),
+          _dom.tags.button(
+            {
+              class: "model-refresh-btn",
+              title: () => _store.t.call(void 0, "topbar.refresh_models"),
+              onclick: _store.refreshModels,
+            },
+            _icons.iconRefresh.call(void 0, 11)
+          )
+        ),
+        // Token 使用率胶囊
+        _dom.tags.div(
           {
-            class: "model-select",
-            title: "Switch active LLM model",
-            value: () => _store.model.call(void 0, ),
-            onchange: (e) => {
-              const target = e.target ;
-              if (target.value) _store.switchModel.call(void 0, target.value);
+            class: "token-pill",
+            title: "Context Window Usage",
+            onclick: () => {
+              _store.loadUsage.call(void 0, );
+              _store.showSettingsModal.set(true);
             },
           },
-          () => {
-            const list = _store.models.call(void 0, );
-            const cur = _store.model.call(void 0, );
-            const opts = list.map((m) =>
-              _dom.tags.option({ value: m, selected: m === cur }, m)
-            );
-            if (cur && !list.includes(cur)) {
-              opts.unshift(_dom.tags.option({ value: cur, selected: true }, cur));
-            }
-            return opts;
-          }
-        ),
-        _dom.tags.button(
-          {
-            class: "model-refresh-btn",
-            title: () => _store.t.call(void 0, "topbar.refresh_models"),
-            onclick: _store.refreshModels,
-          },
-          _icons.iconRefresh.call(void 0, 11)
+          _dom.tags.span({
+            class: () => {
+              const p = _store.pct.call(void 0, );
+              return `token-dot ${p > 90 ? "is-danger" : p > 70 ? "is-warning" : "is-healthy"}`;
+            },
+          }),
+          () => `${_store.pct.call(void 0, )}% ctx`
         )
-      ),
-      // Token 使用率胶囊（点击可查看台账明细）
-      _dom.tags.div(
-        {
-          class: "token-pill",
-          title: "Context Window Usage",
-          onclick: () => {
-            _store.loadUsage.call(void 0, );
-            _store.showSettingsModal.set(true);
-          },
-        },
-        _dom.tags.span({ class: "token-dot" }),
-        () => `${_store.pct.call(void 0, )}% ctx`
       ),
       // 工作台 Deck 切换按钮
       _dom.tags.button(
@@ -3258,92 +3260,114 @@ var _icons = require('./icons');
         _icons.iconDeck.call(void 0, 14),
         _dom.tags.span({ class: "tb-deck-label" }, "Deck")
       ),
-      // 国际化语言切换按钮
-      _dom.tags.button(
-        {
-          class: "tb-btn tb-lang-btn",
-          title: () => _store.t.call(void 0, "topbar.toggle_lang"),
-          onclick: _store.toggleLocale,
-        },
-        _icons.iconGlobe.call(void 0, 13),
-        _dom.tags.span({ class: "tb-lang-label" }, () => (_store.locale.call(void 0, ) === "zh" ? "简" : "EN"))
-      ),
-      // 特色主题切换菜单
+      // 垂直微分割线
+      _dom.tags.span({ class: "tb-divider" }),
+      // 工具图标组
       _dom.tags.div(
-        { class: "tb-theme-wrap" },
+        { class: "tb-actions-group" },
+        // 后台活动指示钮
+        () => {
+          const count = _store.activityList.call(void 0, ).length;
+          return _dom.tags.button(
+            {
+              class: `tb-btn tb-icon-btn tb-act-badge-btn ${count > 0 ? "has-active" : "is-idle"}`,
+              title: () => _store.t.call(void 0, "topbar.active_jobs"),
+              onclick: () => _store.setDeckTab.call(void 0, "jobs"),
+            },
+            _icons.iconActivity.call(void 0, 14),
+            count > 0 ? _dom.tags.span({ class: "tb-count-badge" }, String(count)) : null
+          );
+        },
+        // 国际化语言切换按钮
         _dom.tags.button(
           {
-            class: () => `tb-btn tb-icon-btn tb-theme-btn ${_store.showThemeMenu.call(void 0, ) ? "is-active" : ""}`,
-            title: () => `${_store.t.call(void 0, "theme.name")}: ${_store.t.call(void 0, "theme." + _store.theme.call(void 0, ))}`,
-            onclick: (e) => {
-              e.stopPropagation();
-              _store.showThemeMenu.update((v) => !v);
-            },
+            class: "tb-btn tb-lang-btn",
+            title: () => _store.t.call(void 0, "topbar.toggle_lang"),
+            onclick: _store.toggleLocale,
           },
-          _icons.iconPalette.call(void 0, 15)
+          _icons.iconGlobe.call(void 0, 13),
+          _dom.tags.span({ class: "tb-lang-label" }, () => (_store.locale.call(void 0, ) === "zh" ? "简" : "EN"))
         ),
-        () =>
-          _store.showThemeMenu.call(void 0, )
-            ? _dom.tags.div(
-                {
-                  class: "tb-theme-dropdown",
-                  onclick: (e) => e.stopPropagation(),
-                },
-                _dom.tags.div({ class: "tb-theme-hdr" }, () => _store.t.call(void 0, "theme.name")),
-                _store.THEMES.map((th) =>
-                  _dom.tags.div(
-                    {
-                      class: () => `tb-theme-item ${_store.theme.call(void 0, ) === th.id ? "is-active" : ""}`,
-                      onclick: () => {
-                        _store.setTheme.call(void 0, th.id);
-                        _store.showThemeMenu.set(false);
-                      },
-                    },
-                    _dom.tags.span({ class: "tb-theme-icon" }, _icons.getThemeIcon.call(void 0, th.id, 14)),
-                    _dom.tags.span({ class: "tb-theme-title" }, () => _store.t.call(void 0, th.nameKey)),
+        // 特色主题切换菜单
+        _dom.tags.div(
+          { class: "tb-theme-wrap" },
+          _dom.tags.button(
+            {
+              class: () => `tb-btn tb-icon-btn tb-theme-btn ${_store.showThemeMenu.call(void 0, ) ? "is-active" : ""}`,
+              title: () => `${_store.t.call(void 0, "theme.name")}: ${_store.t.call(void 0, "theme." + _store.theme.call(void 0, ))}`,
+              onclick: (e) => {
+                e.stopPropagation();
+                _store.showThemeMenu.update((v) => !v);
+              },
+            },
+            _icons.iconPalette.call(void 0, 14)
+          ),
+          () =>
+            _store.showThemeMenu.call(void 0, )
+              ? _dom.tags.div(
+                  {
+                    class: "tb-theme-dropdown",
+                    onclick: (e) => e.stopPropagation(),
+                  },
+                  _dom.tags.div({ class: "tb-theme-hdr" }, () => _store.t.call(void 0, "theme.name")),
+                  _store.THEMES.map((th) =>
                     _dom.tags.div(
-                      { class: "tb-theme-dots" },
-                      _dom.tags.span({ class: "tb-theme-dot", style: `background: ${th.preview.canvas};` }),
-                      _dom.tags.span({ class: "tb-theme-dot", style: `background: ${th.preview.surface};` }),
-                      _dom.tags.span({ class: "tb-theme-dot", style: `background: ${th.preview.accent};` })
-                    ),
-                    () =>
-                      _store.theme.call(void 0, ) === th.id
-                        ? _dom.tags.span({ class: "tb-theme-check" }, _icons.iconCheck.call(void 0, 12))
-                        : null
+                      {
+                        class: () => `tb-theme-item ${_store.theme.call(void 0, ) === th.id ? "is-active" : ""}`,
+                        onclick: () => {
+                          _store.setTheme.call(void 0, th.id);
+                          _store.showThemeMenu.set(false);
+                        },
+                      },
+                      _dom.tags.span({ class: "tb-theme-icon" }, _icons.getThemeIcon.call(void 0, th.id, 14)),
+                      _dom.tags.span({ class: "tb-theme-title" }, () => _store.t.call(void 0, th.nameKey)),
+                      _dom.tags.div(
+                        { class: "tb-theme-dots" },
+                        _dom.tags.span({ class: "tb-theme-dot", style: `background: ${th.preview.canvas};` }),
+                        _dom.tags.span({ class: "tb-theme-dot", style: `background: ${th.preview.surface};` }),
+                        _dom.tags.span({ class: "tb-theme-dot", style: `background: ${th.preview.accent};` })
+                      ),
+                      () =>
+                        _store.theme.call(void 0, ) === th.id
+                          ? _dom.tags.span({ class: "tb-theme-check" }, _icons.iconCheck.call(void 0, 12))
+                          : null
+                    )
                   )
                 )
-              )
-            : null
+              : null
+        ),
+        // 快捷键帮助按钮
+        _dom.tags.button(
+          {
+            class: "tb-btn tb-icon-btn tb-shortcuts-btn",
+            title: () => _store.t.call(void 0, "topbar.shortcuts"),
+            onclick: () => _store.showShortcutsModal.set(true),
+          },
+          _icons.iconHelp.call(void 0, 14)
+        ),
+        // 设置按钮
+        _dom.tags.button(
+          {
+            class: "tb-btn tb-icon-btn tb-settings-btn",
+            title: () => _store.t.call(void 0, "topbar.settings"),
+            onclick: () => _store.showSettingsModal.set(true),
+          },
+          _icons.iconSettings.call(void 0, 14)
+        )
       ),
-      // 设置按钮
-      _dom.tags.button(
-        {
-          class: "tb-btn tb-icon-btn tb-settings-btn",
-          title: () => _store.t.call(void 0, "topbar.settings"),
-          onclick: () => _store.showSettingsModal.set(true),
-        },
-        _icons.iconSettings.call(void 0, 15)
-      ),
-      // 快捷键帮助按钮
-      _dom.tags.button(
-        {
-          class: "tb-btn tb-icon-btn tb-shortcuts-btn",
-          title: () => _store.t.call(void 0, "topbar.shortcuts"),
-          onclick: () => _store.showShortcutsModal.set(true),
-        },
-        _icons.iconHelp.call(void 0, 14)
-      ),
-      // 网络状态指示灯
-      _dom.tags.span({
-        class: () => `status-indicator ${_store.connectionStatus.call(void 0, )}`,
-        title: () =>
-          _store.connectionStatus.call(void 0, ) === "connected"
-            ? _store.t.call(void 0, "topbar.connected")
-            : _store.connectionStatus.call(void 0, ) === "connecting"
-            ? _store.t.call(void 0, "topbar.connecting")
-            : _store.t.call(void 0, "topbar.disconnected"),
-      })
+      // 网络连接指示灯
+      _dom.tags.div(
+        { class: "tb-status-wrap" },
+        _dom.tags.span({
+          class: () => `status-indicator ${_store.connectionStatus.call(void 0, )}`,
+          title: () =>
+            _store.connectionStatus.call(void 0, ) === "connected"
+              ? _store.t.call(void 0, "topbar.connected")
+              : _store.connectionStatus.call(void 0, ) === "connecting"
+              ? _store.t.call(void 0, "topbar.connecting")
+              : _store.t.call(void 0, "topbar.disconnected"),
+        })
+      )
     )
   );
 } exports.renderTopBar = renderTopBar;
@@ -3362,7 +3386,7 @@ function renderModeBtn(
 
   return _dom.tags.button(
     {
-      class: () => `mode-btn ${isSelected() ? "is-active" : ""}`,
+      class: () => `mode-btn mode-btn-${m} ${isSelected() ? "is-active" : ""}`,
       title: () => _store.t.call(void 0, titleKey),
       onclick: () => _store.switchMode.call(void 0, m),
     },
