@@ -19,6 +19,13 @@ import {
   getDraft,
   setDraft,
   promptHistory,
+  model,
+  models,
+  pct,
+  switchModel,
+  refreshModels,
+  loadUsage,
+  showSettingsModal,
   t,
 } from "./store";
 import { signal, effect } from "./signal";
@@ -33,6 +40,8 @@ import {
   iconSparkle,
   iconImage,
   iconClose,
+  iconSparkles,
+  iconRefresh,
 } from "./icons";
 
 export function renderComposer(): HTMLElement {
@@ -440,6 +449,59 @@ export function renderComposer(): HTMLElement {
         { class: "composer-bar" },
         tags.div(
           { class: "composer-bar-left" },
+          // 模型选择胶囊
+          tags.div(
+            { class: "composer-model-wrap", title: "Active LLM Model" },
+            iconSparkles(12, "composer-model-icon"),
+            tags.select(
+              {
+                class: "composer-model-select",
+                title: "Switch active LLM model",
+                value: () => model(),
+                onchange: (e: Event) => {
+                  const target = e.target as HTMLSelectElement;
+                  if (target.value) switchModel(target.value);
+                },
+              },
+              () => {
+                const list = models();
+                const cur = model();
+                const opts = list.map((m) =>
+                  tags.option({ value: m, selected: m === cur }, m)
+                );
+                if (cur && !list.includes(cur)) {
+                  opts.unshift(tags.option({ value: cur, selected: true }, cur));
+                }
+                return opts;
+              }
+            ),
+            tags.button(
+              {
+                class: "composer-model-refresh-btn",
+                title: () => t("topbar.refresh_models"),
+                onclick: refreshModels,
+              },
+              iconRefresh(11)
+            )
+          ),
+          // Token 上下文使用量胶囊
+          tags.button(
+            {
+              class: "composer-token-pill",
+              title: "Context Window Usage - Click for Token Ledger",
+              onclick: () => {
+                loadUsage();
+                showSettingsModal.set(true);
+              },
+            },
+            tags.span({
+              class: () => {
+                const p = pct();
+                return `token-dot ${p > 90 ? "is-danger" : p > 70 ? "is-warning" : "is-healthy"}`;
+              },
+            }),
+            () => `${pct()}% ctx`
+          ),
           tags.button(
             {
               class: "bar-tag-btn",

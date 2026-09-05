@@ -104,13 +104,19 @@ await sleep(150);
 console.log('[OK] All 4 Deck tabs (Diffs/Terminal/Jobs/Files) verified');
 
 console.log('[5/8] Testing Shortcuts, Settings, Tabs and Theme...');
-// 测试工作区选择器卡与下拉菜单
-await page.waitForSelector('.sidebar-ws-card');
-await page.locator('.sidebar-ws-card').click();
-await page.waitForSelector('.ws-dropdown');
-console.log('[OK] Workspace switcher card & dropdown verified');
-await page.locator('.sidebar-ws-card').click(); // 收起下拉
+// 测试侧边栏项目工程树与会话展开/折叠
+await page.waitForSelector('.project-group-header');
+await page.waitForSelector('.session-item');
+await page.locator('.project-group-header').first().click(); // 收起
 await sleep(150);
+await page.locator('.project-group-header').first().click(); // 展开
+await page.waitForSelector('.session-item');
+console.log('[OK] Sidebar project session tree & collapse/expand verified');
+
+// 验证输入框中模型选择器与 Token 胶囊就绪
+await page.waitForSelector('.composer-model-select');
+await page.waitForSelector('.composer-token-pill');
+console.log('[OK] Composer model selector & token pill present in input bar');
 
 // 测试 Ctrl+K 命令面板
 await page.keyboard.press('Control+k');

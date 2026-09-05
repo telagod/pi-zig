@@ -936,11 +936,14 @@ function getInitialLocale() {
 
     // 侧边栏
     "sidebar.project_ws": "项目工作区",
+    "sidebar.projects": "项目工作区",
+    "sidebar.projects_count": "{count} 个项目",
+    "sidebar.new_session_in_project": "在此项目中新建会话",
     "sidebar.switch_ws": "切换或注册外部项目工作区",
-    "sidebar.add_project": "添加新项目...",
+    "sidebar.add_project": "添加外部项目...",
     "sidebar.no_external_ws": "暂无已注册外部工作区",
     "sidebar.new_session": "新建会话",
-    "sidebar.filter_sessions": "过滤会话列表...",
+    "sidebar.filter_sessions": "搜索会话...",
     "sidebar.rename": "重命名",
     "sidebar.fork": "从此处分叉会话",
     "sidebar.undo": "撤销上一轮操作",
@@ -951,7 +954,7 @@ function getInitialLocale() {
     "sidebar.archived_badge": "已归档",
     "sidebar.del_confirm": "确定要删除会话 \"{title}\" 吗？此操作无法撤销。",
     "sidebar.rename_prompt": "重命名会话：",
-    "sidebar.no_sessions": "未找到匹配会话",
+    "sidebar.no_sessions": "暂无匹配会话",
     "sidebar.sessions_count": "{count} 个会话",
 
     // 会话聊天流与空态
@@ -1099,6 +1102,9 @@ function getInitialLocale() {
 
     // Sidebar
     "sidebar.project_ws": "PROJECT WORKSPACE",
+    "sidebar.projects": "PROJECTS",
+    "sidebar.projects_count": "{count} projects",
+    "sidebar.new_session_in_project": "New session in project",
     "sidebar.switch_ws": "Switch or register external project workspace",
     "sidebar.add_project": "Add Project...",
     "sidebar.no_external_ws": "No registered external workspaces",
@@ -1340,6 +1346,8 @@ const urlParams = new URLSearchParams(window.location.search);
 
  const activeSession = _signal.signal(urlParams.get("session") || "default"); exports.activeSession = activeSession;
  const sessions = _signal.signal([]); exports.sessions = sessions;
+ const projectSessions = _signal.signal({}); exports.projectSessions = projectSessions;
+ const expandedProjects = _signal.signal({}); exports.expandedProjects = expandedProjects;
  const turns = _signal.signal([]); exports.turns = turns;
  const isStreaming = _signal.signal(false); exports.isStreaming = isStreaming;
  const streamingTurnId = _signal.signal(null); exports.streamingTurnId = streamingTurnId;
@@ -1600,21 +1608,26 @@ const urlParams = new URLSearchParams(window.location.search);
   refreshDiffs(true);
 } exports.switchWorkspace = switchWorkspace;
 
- async function loadSessions() {
+ async function loadSessions(targetWs) {
   try {
-    const res = await _net.apiFetch.call(void 0, `/api/sessions${getQuery()}`);
+    const isCurrent = targetWs === undefined || targetWs === exports.currentWs.call(void 0, );
+    const q = targetWs !== undefined ? `?ws=${encodeURIComponent(targetWs)}` : getQuery();
+    const res = await _net.apiFetch.call(void 0, `/api/sessions${q}`);
     const list = Array.isArray(res) ? res : Array.isArray(_optionalChain([res, 'optionalAccess', _6 => _6.sessions])) ? res.sessions : [];
-    exports.sessions.set(
-      list.map((s) => ({
-        id: s.name,
-        name: s.name,
-        title: s.title || s.name,
-        updatedAt: s.ts || s.updated_at || Date.now(),
-        messageCount: s.msgs || s.msg_count || 0,
-        isCurrent: s.name === exports.activeSession.call(void 0, ),
-        archived: !!s.archived,
-      }))
-    );
+    const parsed = list.map((s) => ({
+      id: s.name,
+      name: s.name,
+      title: s.title || s.name,
+      updatedAt: s.ts || s.updated_at || Date.now(),
+      messageCount: s.msgs || s.msg_count || 0,
+      isCurrent: isCurrent && s.name === exports.activeSession.call(void 0, ),
+      archived: !!s.archived,
+    }));
+    if (isCurrent) {
+      exports.sessions.set(parsed);
+    }
+    const wsKey = (targetWs !== undefined ? targetWs : exports.currentWs.call(void 0, )) || "";
+    exports.projectSessions.update((prev) => ({ ...prev, [wsKey]: parsed }));
   } catch (err) {
     console.warn("loadSessions error:", err);
   }
@@ -3074,15 +3087,7 @@ var _dom = require('./dom');
 
 
 
-
-
-
-
-
-
 var _store = require('./store');
-
-
 
 
 
@@ -3187,62 +3192,6 @@ var _icons = require('./icons');
         },
         _icons.iconSearch.call(void 0, 13, "tb-search-icon"),
         _dom.tags.span({ class: "search-key" }, "⌘K")
-      ),
-      // 模型与使用量复合舱 (Engine Box，舒展呼吸感)
-      _dom.tags.div(
-        { class: "tb-engine-box" },
-        _dom.tags.div(
-          { class: "model-selector-wrap" },
-          _icons.iconSparkles.call(void 0, 12, "model-prefix-icon"),
-          _dom.tags.select(
-            {
-              class: "model-select",
-              title: "Switch active LLM model",
-              value: () => _store.model.call(void 0, ),
-              onchange: (e) => {
-                const target = e.target ;
-                if (target.value) _store.switchModel.call(void 0, target.value);
-              },
-            },
-            () => {
-              const list = _store.models.call(void 0, );
-              const cur = _store.model.call(void 0, );
-              const opts = list.map((m) =>
-                _dom.tags.option({ value: m, selected: m === cur }, m)
-              );
-              if (cur && !list.includes(cur)) {
-                opts.unshift(_dom.tags.option({ value: cur, selected: true }, cur));
-              }
-              return opts;
-            }
-          ),
-          _dom.tags.button(
-            {
-              class: "model-refresh-btn",
-              title: () => _store.t.call(void 0, "topbar.refresh_models"),
-              onclick: _store.refreshModels,
-            },
-            _icons.iconRefresh.call(void 0, 11)
-          )
-        ),
-        // Token 使用率胶囊
-        _dom.tags.div(
-          {
-            class: "token-pill",
-            title: "Context Window Usage",
-            onclick: () => {
-              _store.loadUsage.call(void 0, );
-              _store.showSettingsModal.set(true);
-            },
-          },
-          _dom.tags.span({
-            class: () => {
-              const p = _store.pct.call(void 0, );
-              return `token-dot ${p > 90 ? "is-danger" : p > 70 ? "is-warning" : "is-healthy"}`;
-            },
-          }),
-          () => `${_store.pct.call(void 0, )}% ctx`
-        )
       ),
       // 工作台 Deck 切换按钮
       _dom.tags.button(
@@ -3380,8 +3329,12 @@ window.addEventListener("pointerdown", (e) => {
 
 };
 __modules["sidebar"] = function(module, exports, require) {
-"use strict";Object.defineProperty(exports, "__esModule", {value: true});// sidebar.ts —— 侧边工作区与会话抽屉管理
+"use strict";Object.defineProperty(exports, "__esModule", {value: true});// sidebar.ts —— 现代化项目工作区与会话展开树管理 (Project Session Tree)
 var _dom = require('./dom');
+
+
+
+
 
 
 
@@ -3418,98 +3371,116 @@ var _signal = require('./signal');
 
 
 
+
+
 var _icons = require('./icons');
 
  function renderSidebar() {
   const searchQuery = _signal.signal("");
-  const showWsDropdown = _signal.signal(false);
 
-  const filteredSessions = () => {
-    const q = searchQuery().toLowerCase().trim();
-    const list = _store.sessions.call(void 0, );
-    if (!q) return list;
-    return list.filter((s) => (s.title || s.name).toLowerCase().includes(q));
-  };
+  // 聚合所有已知工程工作区 (当前工作区始终置顶，其余外部项目排列在后)
+  const allProjects = _signal.computed.call(void 0, () => {
+    const list = _store.workspaces.call(void 0, );
+    const cur = _store.currentWs.call(void 0, );
+    const curName = _store.wsName.call(void 0, ) || "workspace";
+
+    const exists = list.some((w) => w.root === cur);
+    if (!exists) {
+      return [
+        { root: cur, name: curName, isCurrent: true },
+        ...list.map((w) => ({ ...w, isCurrent: false })),
+      ];
+    }
+    return list.map((w) => ({
+      ...w,
+      isCurrent: w.root === cur,
+    }));
+  });
+
+  // 判断项目是否在树中展开 (当前活跃项目默认保持展开)
+  function isExpanded(root) {
+    const exp = _store.expandedProjects.call(void 0, );
+    if (exp[root] !== undefined) return exp[root];
+    return root === _store.currentWs.call(void 0, ) || !_store.currentWs.call(void 0, );
+  }
+
+  // 展开 / 折叠指定项目
+  function toggleProject(root) {
+    const nextState = !isExpanded(root);
+    _store.expandedProjects.update((prev) => ({ ...prev, [root]: nextState }));
+    if (nextState) {
+      const map = _store.projectSessions.call(void 0, );
+      if (!map[root]) {
+        _store.loadSessions.call(void 0, root);
+      }
+    }
+  }
+
+  // 获取特定项目的会话列表
+  function getSessionsForProject(root) {
+    if (root === _store.currentWs.call(void 0, )) {
+      return _store.sessions.call(void 0, );
+    }
+    const map = _store.projectSessions.call(void 0, );
+    return map[root] || [];
+  }
+
+  // 选择会话并切换到对应项目
+  async function handleSelectSession(projectRoot, sessionId) {
+    if (_store.currentWs.call(void 0, ) !== projectRoot) {
+      await _store.switchWorkspace.call(void 0, projectRoot);
+    }
+    if (_store.activeSession.call(void 0, ) !== sessionId) {
+      await _store.switchSession.call(void 0, sessionId);
+    }
+  }
+
+  // 在特定项目下快捷新建会话
+  async function handleCreateSessionInProject(e, projectRoot) {
+    e.stopPropagation();
+    if (_store.currentWs.call(void 0, ) !== projectRoot) {
+      await _store.switchWorkspace.call(void 0, projectRoot);
+    }
+    await _store.createSession.call(void 0, );
+  }
 
   return _dom.tags.aside(
     {
       class: () => `sidebar ${_store.sidebarOpen.call(void 0, ) ? "is-open" : "is-collapsed"}`,
     },
-    // 1. 顶层工作区选择卡
-    _dom.tags.div(
-      { class: "sidebar-ws-section" },
-      _dom.tags.div(
-        {
-          class: "sidebar-ws-card",
-          title: () => _store.t.call(void 0, "sidebar.switch_ws"),
-          onclick: () => showWsDropdown.set(!showWsDropdown()),
-        },
-        _dom.tags.div({ class: "ws-icon" }, _icons.iconFolder.call(void 0, 15)),
-        _dom.tags.div(
-          { class: "ws-info" },
-          _dom.tags.div({ class: "ws-label" }, () => _store.t.call(void 0, "sidebar.project_ws")),
-          _dom.tags.div({ class: "ws-name" }, () => _store.wsName.call(void 0, ) || "workspace")
-        ),
-        _dom.tags.span({ class: "ws-chevron" }, _icons.iconChevronDown.call(void 0, 12))
-      ),
-      // 工作区下拉选择单
-      () => {
-        if (!showWsDropdown()) return null;
-        const list = _store.workspaces.call(void 0, );
-
-        return _dom.tags.div(
-          { class: "ws-dropdown" },
-          _dom.tags.div({ class: "ws-dropdown-hdr" }, () => _store.t.call(void 0, "sidebar.project_ws")),
-          list.length > 0
-            ? list.map((w) =>
-                _dom.tags.div(
-                  {
-                    class: () =>
-                      `ws-dropdown-item ${_store.currentWs.call(void 0, ) === w.root ? "is-active" : ""}`,
-                    onclick: (e) => {
-                      e.stopPropagation();
-                      showWsDropdown.set(false);
-                      _store.switchWorkspace.call(void 0, w.root);
-                    },
-                  },
-                  _icons.iconFolder.call(void 0, 13),
-                  _dom.tags.div(
-                    { class: "ws-item-text" },
-                    _dom.tags.div({ class: "ws-item-name" }, w.name),
-                    _dom.tags.div({ class: "ws-item-root" }, w.root)
-                  )
-                )
-              )
-            : _dom.tags.div({ class: "ws-dropdown-empty" }, () => _store.t.call(void 0, "sidebar.no_external_ws")),
-          _dom.tags.div(
-            {
-              class: "ws-add-item",
-              onclick: (e) => {
-                e.stopPropagation();
-                showWsDropdown.set(false);
-                _store.showAddWorkspaceModal.set(true);
-              },
-            },
-            _icons.iconFolderPlus.call(void 0, 13),
-            _dom.tags.span({}, () => _store.t.call(void 0, "sidebar.add_project"))
-          )
-        );
-      }
-    ),
-
-    // 2. 侧栏操作区（新建会话与搜索）
+    // 1. 侧边栏顶栏操作群 (项目树标题 + 注册外部工程 + 极速新会话)
     _dom.tags.div(
       { class: "sidebar-hdr" },
-      _dom.tags.button(
-        {
-          class: "new-session-btn",
-          onclick: _store.createSession,
-        },
-        _icons.iconPlus.call(void 0, 13, "btn-icon"),
-        _dom.tags.span({ class: "btn-text" }, () => _store.t.call(void 0, "sidebar.new_session"))
+      _dom.tags.div(
+        { class: "sidebar-hdr-title-wrap" },
+        _dom.tags.span({ class: "sidebar-hdr-title" }, () => _store.t.call(void 0, "sidebar.projects")),
+        _dom.tags.span(
+          { class: "sidebar-hdr-badge" },
+          () => String(allProjects().length)
+        )
+      ),
+      _dom.tags.div(
+        { class: "sidebar-hdr-actions" },
+        _dom.tags.button(
+          {
+            class: "sidebar-hdr-btn",
+            title: () => _store.t.call(void 0, "sidebar.add_project"),
+            onclick: () => _store.showAddWorkspaceModal.set(true),
+          },
+          _icons.iconFolderPlus.call(void 0, 13)
+        ),
+        _dom.tags.button(
+          {
+            class: "sidebar-hdr-btn is-primary",
+            title: () => _store.t.call(void 0, "sidebar.new_session"),
+            onclick: _store.createSession,
+          },
+          _icons.iconPlus.call(void 0, 13)
+        )
       )
     ),
 
+    // 2. 跨工程会话过滤搜索框
     _dom.tags.div(
       { class: "sidebar-search-box" },
       _icons.iconSearch.call(void 0, 12, "sidebar-search-icon"),
@@ -3534,38 +3505,94 @@ var _icons = require('./icons');
           : null
     ),
 
-    // 3. 会话列表（支持重命名、Fork、Undo、Compact、删除）
+    // 3. 项目树与展开的会话列表 (Project Session Tree)
     _dom.tags.div(
-      { class: "sidebar-list" },
-      _dom.each.call(void 0, filteredSessions, (item) => {
-        const isCurrent = () => _store.activeSession.call(void 0, ) === item.id;
+      { class: "sidebar-project-tree" },
+      _dom.each.call(void 0, allProjects, (project) => {
+        const isCurrentProj = () => _store.currentWs.call(void 0, ) === project.root;
+        const projectExpanded = () => {
+          if (searchQuery().trim()) return true; // 搜索时自动展开以查看匹配会话
+          return isExpanded(project.root);
+        };
 
-        const isArchived = !!item.archived;
+        const projSessions = () => {
+          const raw = getSessionsForProject(project.root);
+          const q = searchQuery().toLowerCase().trim();
+          if (!q) return raw;
+          return raw.filter((s) => (s.title || s.name).toLowerCase().includes(q));
+        };
 
         return _dom.tags.div(
           {
-            class: () => `session-item ${isCurrent() ? "is-active" : ""} ${isArchived ? "is-archived" : ""}`,
-            onclick: () => _store.switchSession.call(void 0, item.id),
+            class: () =>
+              `project-group ${isCurrentProj() ? "is-current-project" : ""}`,
           },
+          // 项目树干节点 (Project Header)
           _dom.tags.div(
-            { class: "session-item-body" },
-            _dom.tags.div({ class: "session-title" }, item.title || item.name),
+            {
+              class: () =>
+                `project-group-header ${isCurrentProj() ? "is-active" : ""}`,
+              title: project.root || "Current project root",
+              onclick: () => toggleProject(project.root),
+            },
+            _dom.tags.span(
+              { class: "project-chevron" },
+              () =>
+                projectExpanded() ? _icons.iconChevronDown.call(void 0, 11) : _icons.iconChevronRight.call(void 0, 11)
+            ),
+            _dom.tags.span({ class: "project-folder-icon" }, _icons.iconFolder.call(void 0, 13)),
             _dom.tags.div(
-              { class: "session-meta" },
-              _dom.tags.span({ class: "session-badge" }, `${item.messageCount} msgs`),
-              isArchived ? _dom.tags.span({ class: "session-badge is-archived-badge" }, () => _store.t.call(void 0, "sidebar.archived_badge")) : null,
-              _dom.tags.span({ class: "session-time" }, formatRelativeTime(item.updatedAt))
+              { class: "project-name-wrap" },
+              _dom.tags.span({ class: "project-name" }, project.name),
+              isCurrentProj()
+                ? _dom.tags.span({ class: "project-current-dot", title: "Active project" })
+                : null,
+              isCurrentProj() && _store.branch.call(void 0, )
+                ? _dom.tags.span({ class: "project-branch-name" }, `(${_store.branch.call(void 0, )})`)
+                : null
+            ),
+            _dom.tags.span(
+              { class: "project-session-count" },
+              () => String(projSessions().length)
+            ),
+            _dom.tags.button(
+              {
+                class: "project-add-session-btn",
+                title: () => _store.t.call(void 0, "sidebar.new_session_in_project"),
+                onclick: (e) =>
+                  handleCreateSessionInProject(e, project.root),
+              },
+              _icons.iconPlus.call(void 0, 11)
             )
           ),
-          // 悬浮全功能操作条
-          _dom.tags.div(
-            { class: "session-actions", onclick: (e) => e.stopPropagation() },
-            !isArchived
-              ? _dom.tags.button(
+
+          // 项目展开的会话分支 (Sessions under this project)
+          () => {
+            if (!projectExpanded()) return null;
+            const sList = projSessions();
+
+            if (sList.length === 0) {
+              return _dom.tags.div(
+                { class: "project-sessions-empty" },
+                () => _store.t.call(void 0, "sidebar.no_sessions")
+              );
+            }
+
+            return _dom.tags.div(
+              { class: "project-sessions-list" },
+              sList.map((item) => {
+                const isCurrentSession = () =>
+                  isCurrentProj() && _store.activeSession.call(void 0, ) === item.id;
+                const isArchived = !!item.archived;
+
+                return _dom.tags.div(
                   {
-                    class: "session-act-btn",
-                    title: () => _store.t.call(void 0, "sidebar.rename"),
-                    onclick: () => {
+                    class: () =>
+                      `session-item ${isCurrentSession() ? "is-active" : ""} ${isArchived ? "is-archived" : ""}`,
+                    onclick: () =>
+                      handleSelectSession(project.root, item.id),
+                    ondblclick: (e) => {
+                      e.stopPropagation();
                       const currentTitle = item.title || item.name;
                       const next = prompt(_store.t.call(void 0, "sidebar.rename_prompt"), currentTitle);
                       if (next && next.trim()) {
@@ -3573,85 +3600,139 @@ var _icons = require('./icons');
                       }
                     },
                   },
-                  _icons.iconEdit.call(void 0, 12)
-                )
-              : null,
-            !isArchived
-              ? _dom.tags.button(
-                  {
-                    class: "session-act-btn",
-                    title: () => _store.t.call(void 0, "sidebar.fork"),
-                    onclick: () => _store.forkSession.call(void 0, item.id),
-                  },
-                  _icons.iconFork.call(void 0, 12)
-                )
-              : null,
-            !isArchived
-              ? _dom.tags.button(
-                  {
-                    class: "session-act-btn",
-                    title: () => _store.t.call(void 0, "sidebar.undo"),
-                    onclick: () => _store.undoSession.call(void 0, item.id),
-                  },
-                  _icons.iconUndo.call(void 0, 12)
-                )
-              : null,
-            !isArchived
-              ? _dom.tags.button(
-                  {
-                    class: "session-act-btn",
-                    title: () => _store.t.call(void 0, "sidebar.compact"),
-                    onclick: () => _store.compactSession.call(void 0, item.id),
-                  },
-                  _icons.iconCompact.call(void 0, 12)
-                )
-              : null,
-            isArchived
-              ? _dom.tags.button(
-                  {
-                    class: "session-act-btn",
-                    title: () => _store.t.call(void 0, "sidebar.restore"),
-                    onclick: () => _store.restoreSession.call(void 0, item.id),
-                  },
-                  _icons.iconRotateCcw.call(void 0, 12)
-                )
-              : _dom.tags.button(
-                  {
-                    class: "session-act-btn",
-                    title: () => _store.t.call(void 0, "sidebar.archive"),
-                    onclick: () => _store.archiveSession.call(void 0, item.id),
-                  },
-                  _icons.iconArchive.call(void 0, 12)
-                ),
-            _dom.tags.button(
-              {
-                class: "session-act-btn session-del-btn",
-                title: () => _store.t.call(void 0, "sidebar.delete"),
-                onclick: () => {
-                  if (confirm(_store.t.call(void 0, "sidebar.del_confirm", { title: item.title || item.name }))) {
-                    _store.deleteSession.call(void 0, item.id);
-                  }
-                },
-              },
-              _icons.iconTrash.call(void 0, 12)
-            )
-          )
+                  _dom.tags.div(
+                    { class: "session-item-body" },
+                    _dom.tags.div(
+                      { class: "session-title" },
+                      item.title || item.name
+                    ),
+                    _dom.tags.div(
+                      { class: "session-meta" },
+                      _dom.tags.span(
+                        { class: "session-badge" },
+                        `${item.messageCount} msgs`
+                      ),
+                      isArchived
+                        ? _dom.tags.span(
+                            { class: "session-badge is-archived-badge" },
+                            () => _store.t.call(void 0, "sidebar.archived_badge")
+                          )
+                        : null,
+                      _dom.tags.span(
+                        { class: "session-time" },
+                        formatRelativeTime(item.updatedAt)
+                      )
+                    )
+                  ),
+                  // 悬浮全功能会话操作条
+                  _dom.tags.div(
+                    {
+                      class: "session-actions",
+                      onclick: (e) => e.stopPropagation(),
+                    },
+                    !isArchived
+                      ? _dom.tags.button(
+                          {
+                            class: "session-act-btn",
+                            title: () => _store.t.call(void 0, "sidebar.rename"),
+                            onclick: () => {
+                              const currentTitle = item.title || item.name;
+                              const next = prompt(
+                                _store.t.call(void 0, "sidebar.rename_prompt"),
+                                currentTitle
+                              );
+                              if (next && next.trim()) {
+                                _store.renameSession.call(void 0, item.id, next.trim());
+                              }
+                            },
+                          },
+                          _icons.iconEdit.call(void 0, 12)
+                        )
+                      : null,
+                    !isArchived
+                      ? _dom.tags.button(
+                          {
+                            class: "session-act-btn",
+                            title: () => _store.t.call(void 0, "sidebar.fork"),
+                            onclick: () => _store.forkSession.call(void 0, item.id),
+                          },
+                          _icons.iconFork.call(void 0, 12)
+                        )
+                      : null,
+                    !isArchived
+                      ? _dom.tags.button(
+                          {
+                            class: "session-act-btn",
+                            title: () => _store.t.call(void 0, "sidebar.undo"),
+                            onclick: () => _store.undoSession.call(void 0, item.id),
+                          },
+                          _icons.iconUndo.call(void 0, 12)
+                        )
+                      : null,
+                    !isArchived
+                      ? _dom.tags.button(
+                          {
+                            class: "session-act-btn",
+                            title: () => _store.t.call(void 0, "sidebar.compact"),
+                            onclick: () => _store.compactSession.call(void 0, item.id),
+                          },
+                          _icons.iconCompact.call(void 0, 12)
+                        )
+                      : null,
+                    isArchived
+                      ? _dom.tags.button(
+                          {
+                            class: "session-act-btn",
+                            title: () => _store.t.call(void 0, "sidebar.restore"),
+                            onclick: () => _store.restoreSession.call(void 0, item.id),
+                          },
+                          _icons.iconRotateCcw.call(void 0, 12)
+                        )
+                      : _dom.tags.button(
+                          {
+                            class: "session-act-btn",
+                            title: () => _store.t.call(void 0, "sidebar.archive"),
+                            onclick: () => _store.archiveSession.call(void 0, item.id),
+                          },
+                          _icons.iconArchive.call(void 0, 12)
+                        ),
+                    _dom.tags.button(
+                      {
+                        class: "session-act-btn session-del-btn",
+                        title: () => _store.t.call(void 0, "sidebar.delete"),
+                        onclick: () => {
+                          if (
+                            confirm(
+                              _store.t.call(void 0, "sidebar.del_confirm", {
+                                title: item.title || item.name,
+                              })
+                            )
+                          ) {
+                            _store.deleteSession.call(void 0, item.id);
+                          }
+                        },
+                      },
+                      _icons.iconTrash.call(void 0, 12)
+                    )
+                  )
+                );
+              })
+            );
+          }
         );
-      }),
-      () => {
-        if (_store.sessions.call(void 0, ).length === 0) {
-          return _dom.tags.div({ class: "sidebar-empty" }, () => _store.t.call(void 0, "sidebar.no_sessions"));
-        }
-        return null;
-      }
+      })
     ),
 
-    // 4. 侧栏底部状态统计
+    // 4. 侧边栏底部工程统计与树形层级指示
     _dom.tags.div(
       { class: "sidebar-footer" },
-      () => _dom.tags.span({}, _store.t.call(void 0, "sidebar.sessions_count", { count: _store.sessions.call(void 0, ).length })),
+      () =>
+        _dom.tags.span(
+          {},
+          `${allProjects().length} projects · ${_store.sessions.call(void 0, ).length} sessions`
+        ),
       _dom.tags.span({ class: "sidebar-footer-dot" }, "·"),
-      _dom.tags.span({ class: "sidebar-footer-mode" }, "Local DAG")
+      _dom.tags.span({ class: "sidebar-footer-mode" }, "Tree")
     )
   );
 } exports.renderSidebar = renderSidebar;
@@ -4552,8 +4633,17 @@ var _dom = require('./dom');
 
 
 
+
+
+
+
+
+
+
 var _store = require('./store');
 var _signal = require('./signal');
+
+
 
 
 
@@ -4972,6 +5062,59 @@ var _icons = require('./icons');
         { class: "composer-bar" },
         _dom.tags.div(
           { class: "composer-bar-left" },
+          // 模型选择胶囊
+          _dom.tags.div(
+            { class: "composer-model-wrap", title: "Active LLM Model" },
+            _icons.iconSparkles.call(void 0, 12, "composer-model-icon"),
+            _dom.tags.select(
+              {
+                class: "composer-model-select",
+                title: "Switch active LLM model",
+                value: () => _store.model.call(void 0, ),
+                onchange: (e) => {
+                  const target = e.target ;
+                  if (target.value) _store.switchModel.call(void 0, target.value);
+                },
+              },
+              () => {
+                const list = _store.models.call(void 0, );
+                const cur = _store.model.call(void 0, );
+                const opts = list.map((m) =>
+                  _dom.tags.option({ value: m, selected: m === cur }, m)
+                );
+                if (cur && !list.includes(cur)) {
+                  opts.unshift(_dom.tags.option({ value: cur, selected: true }, cur));
+                }
+                return opts;
+              }
+            ),
+            _dom.tags.button(
+              {
+                class: "composer-model-refresh-btn",
+                title: () => _store.t.call(void 0, "topbar.refresh_models"),
+                onclick: _store.refreshModels,
+              },
+              _icons.iconRefresh.call(void 0, 11)
+            )
+          ),
+          // Token 上下文使用量胶囊
+          _dom.tags.button(
+            {
+              class: "composer-token-pill",
+              title: "Context Window Usage - Click for Token Ledger",
+              onclick: () => {
+                _store.loadUsage.call(void 0, );
+                _store.showSettingsModal.set(true);
+              },
+            },
+            _dom.tags.span({
+              class: () => {
+                const p = _store.pct.call(void 0, );
+                return `token-dot ${p > 90 ? "is-danger" : p > 70 ? "is-warning" : "is-healthy"}`;
+              },
+            }),
+            () => `${_store.pct.call(void 0, )}% ctx`
+          ),
           _dom.tags.button(
             {
               class: "bar-tag-btn",

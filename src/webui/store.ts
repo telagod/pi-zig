@@ -105,6 +105,8 @@ export const changesCount = signal<number>(0);
 
 export const activeSession = signal<string>(urlParams.get("session") || "default");
 export const sessions = signal<SessionItem[]>([]);
+export const projectSessions = signal<Record<string, SessionItem[]>>({});
+export const expandedProjects = signal<Record<string, boolean>>({});
 export const turns = signal<Turn[]>([]);
 export const isStreaming = signal<boolean>(false);
 export const streamingTurnId = signal<string | null>(null);
@@ -365,21 +367,26 @@ export async function switchWorkspace(root: string) {
   refreshDiffs(true);
 }
 
-export async function loadSessions() {
+export async function loadSessions(targetWs?: string) {
   try {
-    const res = await apiFetch(`/api/sessions${getQuery()}`);
+    const isCurrent = targetWs === undefined || targetWs === currentWs();
+    const q = targetWs !== undefined ? `?ws=${encodeURIComponent(targetWs)}` : getQuery();
+    const res = await apiFetch(`/api/sessions${q}`);
     const list = Array.isArray(res) ? res : Array.isArray(res?.sessions) ? res.sessions : [];
-    sessions.set(
-      list.map((s: any) => ({
-        id: s.name,
-        name: s.name,
-        title: s.title || s.name,
-        updatedAt: s.ts || s.updated_at || Date.now(),
-        messageCount: s.msgs || s.msg_count || 0,
-        isCurrent: s.name === activeSession(),
-        archived: !!s.archived,
-      }))
-    );
+    const parsed: SessionItem[] = list.map((s: any) => ({
+      id: s.name,
+      name: s.name,
+      title: s.title || s.name,
+      updatedAt: s.ts || s.updated_at || Date.now(),
+      messageCount: s.msgs || s.msg_count || 0,
+      isCurrent: isCurrent && s.name === activeSession(),
+      archived: !!s.archived,
+    }));
+    if (isCurrent) {
+      sessions.set(parsed);
+    }
+    const wsKey = (targetWs !== undefined ? targetWs : currentWs()) || "";
+    projectSessions.update((prev) => ({ ...prev, [wsKey]: parsed }));
   } catch (err) {
     console.warn("loadSessions error:", err);
   }

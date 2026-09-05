@@ -860,8 +860,215 @@ button, input, select, textarea {
 }
 
 .sidebar-hdr {
-  padding: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
   border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
+}
+
+.sidebar-hdr-title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.sidebar-hdr-title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.sidebar-hdr-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 16px;
+  padding: 0 5px;
+  border-radius: 8px;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-subtle);
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+  line-height: 1;
+}
+
+.sidebar-hdr-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.sidebar-hdr-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  box-sizing: border-box;
+}
+
+.sidebar-hdr-btn:hover {
+  background: var(--bg-elevated);
+  border-color: var(--border-active);
+  color: var(--text-primary);
+}
+
+.sidebar-hdr-btn.is-primary {
+  color: var(--accent-primary);
+  border-color: rgba(68, 147, 248, 0.3);
+}
+
+.sidebar-hdr-btn.is-primary:hover {
+  background: var(--accent-primary-subtle);
+}
+
+/* 项目工程树形列表容器 */
+.sidebar-project-tree {
+  flex: 1;
+  overflow-y: auto;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.project-group {
+  display: flex;
+  flex-direction: column;
+}
+
+.project-group-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 8px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  user-select: none;
+  transition: all 0.12s ease;
+  position: relative;
+}
+
+.project-group-header:hover {
+  background: var(--bg-subtle);
+}
+
+.project-group-header.is-active {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.project-chevron {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+  transition: transform 0.15s ease;
+}
+
+.project-folder-icon {
+  display: flex;
+  align-items: center;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.project-group-header.is-active .project-folder-icon {
+  color: var(--accent-primary);
+}
+
+.project-name-wrap {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.project-name {
+  font-size: 12px;
+  font-weight: 550;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.project-current-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent-primary);
+  flex-shrink: 0;
+}
+
+.project-branch-name {
+  font-size: 10.5px;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+}
+
+.project-session-count {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+  padding: 0 4px;
+}
+
+.project-add-session-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 3px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  opacity: 0;
+  transition: all 0.15s ease;
+  flex-shrink: 0;
+}
+
+.project-group-header:hover .project-add-session-btn {
+  opacity: 1;
+}
+
+.project-add-session-btn:hover {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+}
+
+.project-sessions-list {
+  margin-left: 14px;
+  padding-left: 6px;
+  border-left: 1px solid var(--border-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 2px;
+  margin-bottom: 4px;
+}
+
+.project-sessions-empty {
+  padding: 6px 12px;
+  font-size: 11px;
+  color: var(--text-muted);
+  font-style: italic;
 }
 
 .new-session-btn {
@@ -1634,6 +1841,116 @@ button, input, select, textarea {
   display: flex;
   align-items: center;
   gap: 6px;
+  flex-wrap: wrap;
+}
+
+/* 输入台模型选择器胶囊 */
+.composer-model-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 4px 0 6px;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  box-sizing: border-box;
+  position: relative;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.composer-model-wrap:hover {
+  border-color: var(--border-default);
+  background: var(--bg-elevated);
+}
+
+.composer-model-icon {
+  color: var(--accent-primary);
+  opacity: 0.85;
+  flex-shrink: 0;
+}
+
+.composer-model-select {
+  appearance: none;
+  -webkit-appearance: none;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  background: transparent;
+  border: none;
+  outline: none;
+  height: 22px;
+  line-height: 22px;
+  padding: 0 16px 0 2px;
+  cursor: pointer;
+  max-width: 150px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin: 0;
+}
+
+.composer-model-select:hover {
+  color: var(--text-primary);
+}
+
+.composer-model-wrap::after {
+  content: "";
+  position: absolute;
+  right: 18px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 0;
+  height: 0;
+  border-left: 2.5px solid transparent;
+  border-right: 2.5px solid transparent;
+  border-top: 3px solid var(--text-muted);
+  pointer-events: none;
+}
+
+.composer-model-refresh-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 3px;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: transform 0.25s ease, color 0.15s ease;
+  flex-shrink: 0;
+}
+
+.composer-model-refresh-btn:hover {
+  color: var(--text-primary);
+  transform: rotate(180deg);
+}
+
+/* 输入台 Token 上下文占用胶囊 */
+.composer-token-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 7px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  cursor: pointer;
+  box-sizing: border-box;
+  transition: all 0.15s ease;
+}
+
+.composer-token-pill:hover {
+  border-color: var(--border-active);
+  color: var(--text-secondary);
+  background: var(--bg-elevated);
 }
 
 .bar-tag-btn {

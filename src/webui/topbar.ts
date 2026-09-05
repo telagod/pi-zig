@@ -7,9 +7,6 @@ import {
   activeSession,
   sessions,
   mode,
-  model,
-  models,
-  pct,
   deckOpen,
   connectionStatus,
   theme,
@@ -17,7 +14,6 @@ import {
   THEMES,
   showThemeMenu,
   switchMode,
-  switchModel,
   toggleDeck,
   toggleSidebar,
   toggleTheme,
@@ -26,8 +22,6 @@ import {
   renameSession,
   activityList,
   setDeckTab,
-  refreshModels,
-  loadUsage,
   t,
 } from "./store";
 import { AppMode } from "./types";
@@ -45,8 +39,6 @@ import {
   iconShield,
   iconBranch,
   iconActivity,
-  iconRefresh,
-  iconSparkles,
   iconChevronRight,
   getThemeIcon,
 } from "./icons";
@@ -136,62 +128,6 @@ export function renderTopBar(): HTMLElement {
         },
         iconSearch(13, "tb-search-icon"),
         tags.span({ class: "search-key" }, "⌘K")
-      ),
-      // 模型与使用量复合舱 (Engine Box，舒展呼吸感)
-      tags.div(
-        { class: "tb-engine-box" },
-        tags.div(
-          { class: "model-selector-wrap" },
-          iconSparkles(12, "model-prefix-icon"),
-          tags.select(
-            {
-              class: "model-select",
-              title: "Switch active LLM model",
-              value: () => model(),
-              onchange: (e: Event) => {
-                const target = e.target as HTMLSelectElement;
-                if (target.value) switchModel(target.value);
-              },
-            },
-            () => {
-              const list = models();
-              const cur = model();
-              const opts = list.map((m) =>
-                tags.option({ value: m, selected: m === cur }, m)
-              );
-              if (cur && !list.includes(cur)) {
-                opts.unshift(tags.option({ value: cur, selected: true }, cur));
-              }
-              return opts;
-            }
-          ),
-          tags.button(
-            {
-              class: "model-refresh-btn",
-              title: () => t("topbar.refresh_models"),
-              onclick: refreshModels,
-            },
-            iconRefresh(11)
-          )
-        ),
-        // Token 使用率胶囊
-        tags.div(
-          {
-            class: "token-pill",
-            title: "Context Window Usage",
-            onclick: () => {
-              loadUsage();
-              showSettingsModal.set(true);
-            },
-          },
-          tags.span({
-            class: () => {
-              const p = pct();
-              return `token-dot ${p > 90 ? "is-danger" : p > 70 ? "is-warning" : "is-healthy"}`;
-            },
-          }),
-          () => `${pct()}% ctx`
-        )
       ),
       // 工作台 Deck 切换按钮
       tags.button(

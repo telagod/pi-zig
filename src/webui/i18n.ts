@@ -74,11 +74,14 @@ export const translations: Record<Locale, Record<string, string>> = {
 
     // 侧边栏
     "sidebar.project_ws": "项目工作区",
+    "sidebar.projects": "项目工作区",
+    "sidebar.projects_count": "{count} 个项目",
+    "sidebar.new_session_in_project": "在此项目中新建会话",
     "sidebar.switch_ws": "切换或注册外部项目工作区",
-    "sidebar.add_project": "添加新项目...",
+    "sidebar.add_project": "添加外部项目...",
     "sidebar.no_external_ws": "暂无已注册外部工作区",
     "sidebar.new_session": "新建会话",
-    "sidebar.filter_sessions": "过滤会话列表...",
+    "sidebar.filter_sessions": "搜索会话...",
     "sidebar.rename": "重命名",
     "sidebar.fork": "从此处分叉会话",
     "sidebar.undo": "撤销上一轮操作",
@@ -89,7 +92,7 @@ export const translations: Record<Locale, Record<string, string>> = {
     "sidebar.archived_badge": "已归档",
     "sidebar.del_confirm": "确定要删除会话 \"{title}\" 吗？此操作无法撤销。",
     "sidebar.rename_prompt": "重命名会话：",
-    "sidebar.no_sessions": "未找到匹配会话",
+    "sidebar.no_sessions": "暂无匹配会话",
     "sidebar.sessions_count": "{count} 个会话",
 
     // 会话聊天流与空态
@@ -237,6 +240,9 @@ export const translations: Record<Locale, Record<string, string>> = {
 
     // Sidebar
     "sidebar.project_ws": "PROJECT WORKSPACE",
+    "sidebar.projects": "PROJECTS",
+    "sidebar.projects_count": "{count} projects",
+    "sidebar.new_session_in_project": "New session in project",
     "sidebar.switch_ws": "Switch or register external project workspace",
     "sidebar.add_project": "Add Project...",
     "sidebar.no_external_ws": "No registered external workspaces",
