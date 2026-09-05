@@ -3080,12 +3080,7 @@ var _dom = require('./dom');
 
 
 
-
-
-
 var _store = require('./store');
-
-
 
 
 
@@ -3180,10 +3175,10 @@ var _icons = require('./icons');
       )
     ),
 
-    // 右侧：搜索胶囊、模型引擎舱、Deck 开关、全局工具动作组与状态
+    // 右侧：紧凑搜索胶囊、模型引擎舱、Deck 开关、主题面板与全局设置
     _dom.tags.div(
       { class: "tb-right" },
-      // 搜索/命令面板胶囊
+      // 紧凑型搜索/命令面板胶囊 (去掉冗长文本，纯净内敛)
       _dom.tags.button(
         {
           class: "tb-btn tb-search-btn",
@@ -3191,10 +3186,9 @@ var _icons = require('./icons');
           onclick: () => _store.showSearchModal.set(true),
         },
         _icons.iconSearch.call(void 0, 13, "tb-search-icon"),
-        _dom.tags.span({ class: "tb-search-placeholder" }, () => _store.t.call(void 0, "topbar.search_short")),
         _dom.tags.span({ class: "search-key" }, "⌘K")
       ),
-      // 模型与使用量复合舱 (Engine Box)
+      // 模型与使用量复合舱 (Engine Box，舒展呼吸感)
       _dom.tags.div(
         { class: "tb-engine-box" },
         _dom.tags.div(
@@ -3260,34 +3254,23 @@ var _icons = require('./icons');
         _icons.iconDeck.call(void 0, 14),
         _dom.tags.span({ class: "tb-deck-label" }, "Deck")
       ),
-      // 垂直微分割线
-      _dom.tags.span({ class: "tb-divider" }),
-      // 工具图标组
+      // 动态后台活动指示钮 (当且仅当有活动任务在跑时才浮现，空闲不占像素)
+      () => {
+        const count = _store.activityList.call(void 0, ).length;
+        if (count === 0) return null;
+        return _dom.tags.button(
+          {
+            class: "tb-btn tb-icon-btn tb-act-badge-btn has-active",
+            title: () => _store.t.call(void 0, "topbar.active_jobs"),
+            onclick: () => _store.setDeckTab.call(void 0, "jobs"),
+          },
+          _icons.iconActivity.call(void 0, 14),
+          _dom.tags.span({ class: "tb-count-badge" }, String(count))
+        );
+      },
+      // 辅助系统动作组 (Ghost Icons: 主题 + 设置)
       _dom.tags.div(
         { class: "tb-actions-group" },
-        // 后台活动指示钮
-        () => {
-          const count = _store.activityList.call(void 0, ).length;
-          return _dom.tags.button(
-            {
-              class: `tb-btn tb-icon-btn tb-act-badge-btn ${count > 0 ? "has-active" : "is-idle"}`,
-              title: () => _store.t.call(void 0, "topbar.active_jobs"),
-              onclick: () => _store.setDeckTab.call(void 0, "jobs"),
-            },
-            _icons.iconActivity.call(void 0, 14),
-            count > 0 ? _dom.tags.span({ class: "tb-count-badge" }, String(count)) : null
-          );
-        },
-        // 国际化语言切换按钮
-        _dom.tags.button(
-          {
-            class: "tb-btn tb-lang-btn",
-            title: () => _store.t.call(void 0, "topbar.toggle_lang"),
-            onclick: _store.toggleLocale,
-          },
-          _icons.iconGlobe.call(void 0, 13),
-          _dom.tags.span({ class: "tb-lang-label" }, () => (_store.locale.call(void 0, ) === "zh" ? "简" : "EN"))
-        ),
         // 特色主题切换菜单
         _dom.tags.div(
           { class: "tb-theme-wrap" },
@@ -3336,16 +3319,7 @@ var _icons = require('./icons');
                 )
               : null
         ),
-        // 快捷键帮助按钮
-        _dom.tags.button(
-          {
-            class: "tb-btn tb-icon-btn tb-shortcuts-btn",
-            title: () => _store.t.call(void 0, "topbar.shortcuts"),
-            onclick: () => _store.showShortcutsModal.set(true),
-          },
-          _icons.iconHelp.call(void 0, 14)
-        ),
-        // 设置按钮
+        // 全局设置中心按钮
         _dom.tags.button(
           {
             class: "tb-btn tb-icon-btn tb-settings-btn",
@@ -3355,7 +3329,7 @@ var _icons = require('./icons');
           _icons.iconSettings.call(void 0, 14)
         )
       ),
-      // 网络连接指示灯
+      // 网络连接状态指示灯 (严格包裹居中)
       _dom.tags.div(
         { class: "tb-status-wrap" },
         _dom.tags.span({
@@ -6077,12 +6051,26 @@ var _icons = require('./icons');
           _dom.tags.div(
             { class: "modal-hdr" },
             _dom.tags.div({ class: "modal-hdr-left" }, _icons.iconSettings.call(void 0, 18), _dom.tags.h3({ class: "modal-title" }, "Workspace Settings")),
-            _dom.tags.button(
-              {
-                class: "modal-close-btn",
-                onclick: () => _store.showSettingsModal.set(false),
-              },
-              _icons.iconClose.call(void 0, 14)
+            _dom.tags.div(
+              { class: "modal-hdr-actions" },
+              _dom.tags.button(
+                {
+                  class: "modal-help-btn tb-shortcuts-btn",
+                  title: () => _store.t.call(void 0, "topbar.shortcuts"),
+                  onclick: () => {
+                    _store.showSettingsModal.set(false);
+                    _store.showShortcutsModal.set(true);
+                  },
+                },
+                _icons.iconHelp.call(void 0, 14)
+              ),
+              _dom.tags.button(
+                {
+                  class: "modal-close-btn",
+                  onclick: () => _store.showSettingsModal.set(false),
+                },
+                _icons.iconClose.call(void 0, 14)
+              )
             )
           ),
           // 选项卡切换

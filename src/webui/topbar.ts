@@ -23,14 +23,11 @@ import {
   toggleTheme,
   showSearchModal,
   showSettingsModal,
-  showShortcutsModal,
   renameSession,
   activityList,
   setDeckTab,
   refreshModels,
   loadUsage,
-  locale,
-  toggleLocale,
   t,
 } from "./store";
 import { AppMode } from "./types";
@@ -43,14 +40,12 @@ import {
   iconPalette,
   iconCheck,
   iconSettings,
-  iconHelp,
   iconBolt,
   iconQuestion,
   iconShield,
   iconBranch,
   iconActivity,
   iconRefresh,
-  iconGlobe,
   iconSparkles,
   iconChevronRight,
   getThemeIcon,
@@ -129,10 +124,10 @@ export function renderTopBar(): HTMLElement {
       )
     ),
 
-    // 右侧：搜索胶囊、模型引擎舱、Deck 开关、全局工具动作组与状态
+    // 右侧：紧凑搜索胶囊、模型引擎舱、Deck 开关、主题面板与全局设置
     tags.div(
       { class: "tb-right" },
-      // 搜索/命令面板胶囊
+      // 紧凑型搜索/命令面板胶囊 (去掉冗长文本，纯净内敛)
       tags.button(
         {
           class: "tb-btn tb-search-btn",
@@ -140,10 +135,9 @@ export function renderTopBar(): HTMLElement {
           onclick: () => showSearchModal.set(true),
         },
         iconSearch(13, "tb-search-icon"),
-        tags.span({ class: "tb-search-placeholder" }, () => t("topbar.search_short")),
         tags.span({ class: "search-key" }, "⌘K")
       ),
-      // 模型与使用量复合舱 (Engine Box)
+      // 模型与使用量复合舱 (Engine Box，舒展呼吸感)
       tags.div(
         { class: "tb-engine-box" },
         tags.div(
@@ -209,34 +203,23 @@ export function renderTopBar(): HTMLElement {
         iconDeck(14),
         tags.span({ class: "tb-deck-label" }, "Deck")
       ),
-      // 垂直微分割线
-      tags.span({ class: "tb-divider" }),
-      // 工具图标组
+      // 动态后台活动指示钮 (当且仅当有活动任务在跑时才浮现，空闲不占像素)
+      () => {
+        const count = activityList().length;
+        if (count === 0) return null;
+        return tags.button(
+          {
+            class: "tb-btn tb-icon-btn tb-act-badge-btn has-active",
+            title: () => t("topbar.active_jobs"),
+            onclick: () => setDeckTab("jobs"),
+          },
+          iconActivity(14),
+          tags.span({ class: "tb-count-badge" }, String(count))
+        );
+      },
+      // 辅助系统动作组 (Ghost Icons: 主题 + 设置)
       tags.div(
         { class: "tb-actions-group" },
-        // 后台活动指示钮
-        () => {
-          const count = activityList().length;
-          return tags.button(
-            {
-              class: `tb-btn tb-icon-btn tb-act-badge-btn ${count > 0 ? "has-active" : "is-idle"}`,
-              title: () => t("topbar.active_jobs"),
-              onclick: () => setDeckTab("jobs"),
-            },
-            iconActivity(14),
-            count > 0 ? tags.span({ class: "tb-count-badge" }, String(count)) : null
-          );
-        },
-        // 国际化语言切换按钮
-        tags.button(
-          {
-            class: "tb-btn tb-lang-btn",
-            title: () => t("topbar.toggle_lang"),
-            onclick: toggleLocale,
-          },
-          iconGlobe(13),
-          tags.span({ class: "tb-lang-label" }, () => (locale() === "zh" ? "简" : "EN"))
-        ),
         // 特色主题切换菜单
         tags.div(
           { class: "tb-theme-wrap" },
@@ -285,16 +268,7 @@ export function renderTopBar(): HTMLElement {
                 )
               : null
         ),
-        // 快捷键帮助按钮
-        tags.button(
-          {
-            class: "tb-btn tb-icon-btn tb-shortcuts-btn",
-            title: () => t("topbar.shortcuts"),
-            onclick: () => showShortcutsModal.set(true),
-          },
-          iconHelp(14)
-        ),
-        // 设置按钮
+        // 全局设置中心按钮
         tags.button(
           {
             class: "tb-btn tb-icon-btn tb-settings-btn",
@@ -304,7 +278,7 @@ export function renderTopBar(): HTMLElement {
           iconSettings(14)
         )
       ),
-      // 网络连接指示灯
+      // 网络连接状态指示灯 (严格包裹居中)
       tags.div(
         { class: "tb-status-wrap" },
         tags.span({

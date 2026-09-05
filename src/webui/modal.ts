@@ -336,12 +336,26 @@ export function renderModals(): HTMLElement {
           tags.div(
             { class: "modal-hdr" },
             tags.div({ class: "modal-hdr-left" }, iconSettings(18), tags.h3({ class: "modal-title" }, "Workspace Settings")),
-            tags.button(
-              {
-                class: "modal-close-btn",
-                onclick: () => showSettingsModal.set(false),
-              },
-              iconClose(14)
+            tags.div(
+              { class: "modal-hdr-actions" },
+              tags.button(
+                {
+                  class: "modal-help-btn tb-shortcuts-btn",
+                  title: () => t("topbar.shortcuts"),
+                  onclick: () => {
+                    showSettingsModal.set(false);
+                    showShortcutsModal.set(true);
+                  },
+                },
+                iconHelp(14)
+              ),
+              tags.button(
+                {
+                  class: "modal-close-btn",
+                  onclick: () => showSettingsModal.set(false),
+                },
+                iconClose(14)
+              )
             )
           ),
           // 选项卡切换

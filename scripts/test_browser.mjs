@@ -120,10 +120,9 @@ await page.keyboard.press('Escape');
 await sleep(200);
 
 // 测试快捷键面板 (?)
-const helpBtn = page.locator('.tb-shortcuts-btn');
-await helpBtn.click();
+await page.keyboard.press('?');
 await page.waitForSelector('.shortcuts-modal');
-console.log('[OK] Keyboard Shortcuts Modal popped up');
+console.log('[OK] Keyboard Shortcuts Modal popped up (via ?)');
 await page.keyboard.press('Escape');
 await sleep(200);
 

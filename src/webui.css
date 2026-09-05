@@ -280,46 +280,44 @@ button, input, select, textarea {
   min-height: 0;
 }
 
-/* ================= 顶栏 TopBar 现代极简设计 ================= */
+/* ================= 顶栏 TopBar 极简呼吸感工程美学 ================= */
 .topbar {
+  position: relative;
   height: var(--topbar-height);
   background: var(--bg-surface);
   border-bottom: 1px solid var(--border-subtle);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 14px;
+  padding: 0 16px;
   z-index: 20;
   user-select: none;
-  gap: 12px;
+  box-sizing: border-box;
 }
 
+/* 左侧区域：项目上下文与面包屑 */
 .tb-left {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
+  height: 28px;
+  max-width: calc(50% - 150px);
   min-width: 0;
-  flex: 1 1 auto;
+  flex: 0 1 auto;
 }
 
-.tb-center {
-  display: flex;
+.tb-sidebar-btn {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  flex-shrink: 0;
-}
-
-.tb-right {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-shrink: 0;
-}
-
-/* 左侧品牌与微型面包屑 */
-.tb-sidebar-btn {
   color: var(--text-secondary);
   border-radius: var(--radius-sm);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  flex-shrink: 0;
   transition: all 0.15s ease;
 }
 
@@ -329,17 +327,19 @@ button, input, select, textarea {
 }
 
 .tb-brand {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
+  height: 28px;
+  padding: 0 2px 0 4px;
   color: var(--text-primary);
-  padding: 0 4px;
   cursor: default;
+  flex-shrink: 0;
 }
 
 .tb-logo {
-  width: 17px;
-  height: 13px;
+  width: 16px;
+  height: 12px;
   color: var(--accent-primary);
   flex-shrink: 0;
 }
@@ -349,39 +349,44 @@ button, input, select, textarea {
   font-weight: 700;
   font-size: 12.5px;
   letter-spacing: -0.3px;
+  line-height: 1;
 }
 
 .tb-sep {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  color: var(--border-active);
-  opacity: 0.6;
+  width: 12px;
+  height: 28px;
+  color: var(--text-muted);
+  opacity: 0.35;
   flex-shrink: 0;
 }
 
 .tb-sep-icon {
-  color: var(--text-muted);
-  opacity: 0.45;
+  width: 9px;
+  height: 9px;
 }
 
-/* 面包屑中的工作区与分支 (彻底消灭生硬黑框) */
+/* 面包屑项（工作区、会话）严格 28px 对齐 */
 .tb-crumb {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  font-size: 12px;
+  height: 28px;
   line-height: 1;
   white-space: nowrap;
+  box-sizing: border-box;
 }
 
 .tb-crumb-ws {
-  color: var(--text-secondary);
+  gap: 5px;
+  font-size: 12px;
   font-family: var(--font-mono);
-  max-width: 260px;
+  color: var(--text-secondary);
+  max-width: 240px;
   overflow: hidden;
   text-overflow: ellipsis;
-  padding: 4px 6px;
+  padding: 0 6px;
   border-radius: var(--radius-sm);
   transition: background 0.15s ease, color 0.15s ease;
 }
@@ -407,27 +412,30 @@ button, input, select, textarea {
 }
 
 .tb-crumb-delta {
-  font-size: 10px;
-  font-weight: 600;
-  line-height: 1;
-  padding: 2px 5px;
-  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 15px;
+  padding: 0 4px;
+  border-radius: 3px;
   background: rgba(245, 158, 11, 0.12);
   color: var(--accent-amber);
   border: 1px solid rgba(245, 158, 11, 0.25);
+  font-size: 9.5px;
+  font-weight: 600;
   font-family: var(--font-mono);
+  line-height: 1;
 }
 
 .tb-session-btn {
   font-size: 12px;
   font-weight: 500;
   color: var(--text-secondary);
-  padding: 4px 8px;
+  padding: 0 8px;
   border-radius: var(--radius-sm);
-  max-width: 220px;
+  max-width: 200px;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
   cursor: pointer;
   background: transparent;
   border: none;
@@ -439,7 +447,19 @@ button, input, select, textarea {
   color: var(--text-primary);
 }
 
-/* ================= 模式切换胶囊 (紧凑高级 Segmented Control) ================= */
+/* ================= 中间区域：绝对正中居中 (True Absolute Centering) ================= */
+.tb-center {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 5;
+  pointer-events: auto;
+}
+
 .mode-pill {
   display: inline-flex;
   align-items: center;
@@ -464,7 +484,7 @@ button, input, select, textarea {
   color: var(--text-muted);
   font-size: 11px;
   font-weight: 500;
-  letter-spacing: 0.3px;
+  letter-spacing: 0.2px;
   cursor: pointer;
   transition: all 0.15s cubic-bezier(0.16, 1, 0.3, 1);
   white-space: nowrap;
@@ -496,21 +516,31 @@ button, input, select, textarea {
   flex-shrink: 0;
 }
 
-/* ================= 右侧操作区组件群 ================= */
+/* ================= 右侧区域：极简高频控制群 ================= */
+.tb-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  flex-shrink: 0;
+  margin-left: auto;
+  z-index: 6;
+}
 
-/* 搜索胶囊按钮 */
+/* 紧凑搜索键 */
 .tb-search-btn {
   height: 28px;
-  padding: 0 8px;
+  padding: 0 7px;
   border-radius: 6px;
   background: var(--bg-subtle);
   border: 1px solid var(--border-subtle);
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
   cursor: pointer;
   color: var(--text-muted);
   transition: all 0.15s ease;
+  box-sizing: border-box;
 }
 
 .tb-search-btn:hover {
@@ -524,12 +554,6 @@ button, input, select, textarea {
   color: var(--text-muted);
 }
 
-.tb-search-placeholder {
-  font-size: 11.5px;
-  color: var(--text-muted);
-  margin-right: 2px;
-}
-
 .search-key {
   font-family: var(--font-mono);
   font-size: 10px;
@@ -537,11 +561,11 @@ button, input, select, textarea {
   background: var(--bg-surface);
   border: 1px solid var(--border-subtle);
   border-radius: 4px;
-  padding: 1px 5px;
-  line-height: 1.2;
+  padding: 1px 4px;
+  line-height: 1.1;
 }
 
-/* AI 引擎与上下文舱 (Engine Box) */
+/* AI 引擎与上下文舱 (Engine Box，舒展宽度) */
 .tb-engine-box {
   display: inline-flex;
   align-items: center;
@@ -549,8 +573,8 @@ button, input, select, textarea {
   border: 1px solid var(--border-subtle);
   border-radius: 6px;
   height: 28px;
-  padding: 0 3px 0 7px;
-  gap: 4px;
+  padding: 0 4px 0 7px;
+  gap: 5px;
   box-sizing: border-box;
   transition: border-color 0.15s ease;
 }
@@ -569,6 +593,7 @@ button, input, select, textarea {
   display: inline-flex;
   align-items: center;
   position: relative;
+  height: 28px;
 }
 
 .model-select {
@@ -581,14 +606,16 @@ button, input, select, textarea {
   background: transparent;
   border: none;
   outline: none;
-  padding: 0 22px 0 4px;
-  height: 24px;
-  line-height: 24px;
+  padding: 0 20px 0 4px;
+  height: 28px;
+  line-height: 28px;
   cursor: pointer;
-  max-width: 170px;
+  max-width: 220px;
   text-overflow: ellipsis;
   white-space: nowrap;
   transition: color 0.15s ease;
+  margin: 0;
+  box-sizing: border-box;
 }
 
 .model-select:hover, .model-select:focus {
@@ -630,20 +657,21 @@ button, input, select, textarea {
   transform: rotate(180deg);
 }
 
-/* Token 使用率胶囊 (微型内嵌仪表) */
+/* Token 使用率胶囊 */
 .token-pill {
   display: inline-flex;
   align-items: center;
-  gap: 4.5px;
+  gap: 4px;
   font-family: var(--font-mono);
   font-size: 10.5px;
   color: var(--text-muted);
-  padding: 2px 6px;
+  padding: 0 5px;
   border-radius: 4px;
   background: var(--bg-surface);
   border: 1px solid var(--border-subtle);
   cursor: pointer;
   height: 20px;
+  line-height: 18px;
   box-sizing: border-box;
   transition: all 0.15s ease;
 }
@@ -661,22 +689,14 @@ button, input, select, textarea {
   flex-shrink: 0;
 }
 
-.token-dot.is-healthy {
-  background: var(--accent-green);
-}
-
-.token-dot.is-warning {
-  background: var(--accent-amber);
-}
-
-.token-dot.is-danger {
-  background: var(--accent-red);
-}
+.token-dot.is-healthy { background: var(--accent-green); }
+.token-dot.is-warning { background: var(--accent-amber); }
+.token-dot.is-danger { background: var(--accent-red); }
 
 /* 工作台 Deck 按钮 */
 .tb-deck-btn {
   height: 28px;
-  padding: 0 9px;
+  padding: 0 8px;
   border-radius: 6px;
   color: var(--text-secondary);
   background: transparent;
@@ -686,6 +706,7 @@ button, input, select, textarea {
   gap: 5px;
   cursor: pointer;
   transition: all 0.15s ease;
+  box-sizing: border-box;
 }
 
 .tb-deck-btn:hover {
@@ -702,15 +723,34 @@ button, input, select, textarea {
 .tb-deck-label {
   font-size: 11.5px;
   font-weight: 500;
+  line-height: 1;
 }
 
-/* 垂直微分割线 */
-.tb-divider {
-  width: 1px;
-  height: 14px;
-  background: var(--border-subtle);
-  margin: 0 1px;
-  flex-shrink: 0;
+/* 后台活跃任务 */
+.tb-act-badge-btn {
+  position: relative;
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent-primary);
+}
+
+.tb-count-badge {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  min-width: 12px;
+  height: 12px;
+  padding: 0 2px;
+  border-radius: 10px;
+  background: var(--accent-primary);
+  color: #fff;
+  font-size: 8.5px;
+  font-weight: 700;
+  line-height: 12px;
+  text-align: center;
 }
 
 /* 辅助全局动作组 (Ghost Icons Group) */
@@ -733,6 +773,7 @@ button, input, select, textarea {
   border: none;
   cursor: pointer;
   transition: background 0.15s ease, color 0.15s ease;
+  box-sizing: border-box;
 }
 
 .tb-btn:hover {
@@ -746,55 +787,14 @@ button, input, select, textarea {
   padding: 0;
 }
 
-.tb-lang-btn {
-  gap: 4px;
-  padding: 0 6px;
-  font-weight: 600;
-  font-size: 11px;
-  color: var(--text-secondary);
-}
-
-.tb-lang-label {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  line-height: 1;
-}
-
-.tb-act-badge-btn {
-  position: relative;
-}
-
-.tb-act-badge-btn.is-idle {
-  opacity: 0.55;
-}
-
-.tb-act-badge-btn.has-active {
-  color: var(--accent-primary);
-  opacity: 1;
-}
-
-.tb-count-badge {
-  position: absolute;
-  top: 2px;
-  right: 2px;
-  min-width: 13px;
-  height: 13px;
-  padding: 0 3px;
-  border-radius: 10px;
-  background: var(--accent-primary);
-  color: #fff;
-  font-size: 9px;
-  font-weight: 700;
-  line-height: 13px;
-  text-align: center;
-}
-
-/* 网络状态指示器 */
+/* 网络状态指示器容器 */
 .tb-status-wrap {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding-left: 2px;
+  width: 16px;
+  height: 28px;
+  flex-shrink: 0;
 }
 
 .status-indicator {
@@ -2637,10 +2637,6 @@ button, input, select, textarea {
   .token-pill {
     display: none;
   }
-  .tb-search-btn .search-key,
-  .tb-search-placeholder {
-    display: none;
-  }
   .tb-crumb-ws {
     max-width: 140px;
   }
@@ -2659,16 +2655,7 @@ button, input, select, textarea {
   .tb-crumb-ws {
     display: none;
   }
-  .tb-shortcuts-btn {
-    display: none;
-  }
   .tb-theme-wrap {
-    display: none;
-  }
-  .tb-lang-btn {
-    display: none;
-  }
-  .tb-divider {
     display: none;
   }
   .model-select {
