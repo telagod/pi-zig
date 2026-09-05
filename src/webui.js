@@ -901,21 +901,11 @@ function getInitialLocale() {
     "topbar.toggle_theme": "切换主题",
     "topbar.toggle_lang": "Switch to English",
 
-    // 主题系统
+    // 主题系统 (固定黑金)
     "theme.name": "界面主题",
-    "theme.toggle": "切换主题",
-    "theme.dark": "暗夜黑曜",
-    "theme.dark_desc": "极客深黑，沉稳克制工程质感",
-    "theme.abyss": "宿命幽冥",
-    "theme.abyss_desc": "赤焰破妄，血月暗红高燃杀气",
-    "theme.matrix": "骇客矩阵",
-    "theme.matrix_desc": "复古终端，高饱和辐射荧光绿",
-    "theme.synthwave": "紫霄霓虹",
-    "theme.synthwave_desc": "赛博朋克，暗夜深紫与电光洋红",
-    "theme.amber": "复古琥珀",
-    "theme.amber_desc": "VT220 暖光 CRT，温润醇厚长跑护眼",
-    "theme.light": "极地素雪",
-    "theme.light_desc": "玄冰无瑕，高净度纯粹日光",
+    "theme.toggle": "固定黑金",
+    "theme.dark": "黑金曜石",
+    "theme.dark_desc": "固定黑金，深邃黑曜衬托帝王赤金",
     "topbar.search": "全局搜索与指令 (Ctrl+K)",
     "topbar.search_short": "搜索或指令...",
     "topbar.settings": "全局工作区设置",
@@ -1074,21 +1064,11 @@ function getInitialLocale() {
     "topbar.toggle_theme": "Switch Theme",
     "topbar.toggle_lang": "切换为中文",
 
-    // Theme System
+    // Theme System (Fixed Black & Gold)
     "theme.name": "Theme",
-    "theme.toggle": "Switch Theme",
-    "theme.dark": "Obsidian Dark",
-    "theme.dark_desc": "Deep engineered dark with muted gray scale",
-    "theme.abyss": "Crimson Abyss",
-    "theme.abyss_desc": "Blood moon dark red with fierce crimson flame",
-    "theme.matrix": "Matrix Green",
-    "theme.matrix_desc": "Retro phosphor CRT green hacker terminal",
-    "theme.synthwave": "Violet Synthwave",
-    "theme.synthwave_desc": "80s cyberpunk deep purple and electric neon",
-    "theme.amber": "Retro Amber",
-    "theme.amber_desc": "Classic VT220 warm amber glow, easy on the eyes",
-    "theme.light": "Polar Light",
-    "theme.light_desc": "Pristine arctic daylight with pure contrast",
+    "theme.toggle": "Obsidian Gold",
+    "theme.dark": "Obsidian Gold",
+    "theme.dark_desc": "Fixed black & gold, pure obsidian with imperial gold accents",
     "topbar.search": "Search & Command Palette (Ctrl+K)",
     "topbar.search_short": "Search or jump...",
     "topbar.settings": "Workspace Settings",
@@ -1286,53 +1266,15 @@ var _i18n = require('./i18n'); _createNamedExportFrom(_i18n, 'locale', 'locale')
     id: "dark",
     nameKey: "theme.dark",
     descKey: "theme.dark_desc",
-    preview: { canvas: "#090a0c", surface: "#16191e", accent: "#4493f8" },
+    preview: { canvas: "#08080a", surface: "#15161a", accent: "#d4af37" },
     isDark: true,
-  },
-  {
-    id: "abyss",
-    nameKey: "theme.abyss",
-    descKey: "theme.abyss_desc",
-    preview: { canvas: "#0b0708", surface: "#1b0f14", accent: "#f43f5e" },
-    isDark: true,
-  },
-  {
-    id: "matrix",
-    nameKey: "theme.matrix",
-    descKey: "theme.matrix_desc",
-    preview: { canvas: "#020804", surface: "#0b1c10", accent: "#22c55e" },
-    isDark: true,
-  },
-  {
-    id: "synthwave",
-    nameKey: "theme.synthwave",
-    descKey: "theme.synthwave_desc",
-    preview: { canvas: "#090513", surface: "#190f2e", accent: "#d946ef" },
-    isDark: true,
-  },
-  {
-    id: "amber",
-    nameKey: "theme.amber",
-    descKey: "theme.amber_desc",
-    preview: { canvas: "#0d0905", surface: "#1e160d", accent: "#f59e0b" },
-    isDark: true,
-  },
-  {
-    id: "light",
-    nameKey: "theme.light",
-    descKey: "theme.light_desc",
-    preview: { canvas: "#f8fafc", surface: "#ffffff", accent: "#0284c7" },
-    isDark: false,
   },
 ]; exports.THEMES = THEMES;
 
  const showThemeMenu = _signal.signal(false); exports.showThemeMenu = showThemeMenu;
 
 function resolveInitialTheme() {
-  const stored = getStored("theme", "");
-  if (exports.THEMES.some((x) => x.id === stored)) return stored ;
-  if (stored === "light") return "light";
-  return _optionalChain([window, 'access', _2 => _2.matchMedia, 'optionalCall', _3 => _3("(prefers-color-scheme: light)"), 'access', _4 => _4.matches]) ? "light" : "dark";
+  return "dark";
 }
 
 // 持久化辅助
@@ -1492,19 +1434,16 @@ const urlParams = new URLSearchParams(window.location.search);
   exports.toasts.update((prev) => prev.filter((t) => t.id !== id));
 } exports.dismissToast = dismissToast;
 
-// 主题切换与设置
- function setTheme(next) {
-  exports.theme.set(next);
-  setStored("theme", next);
-  document.documentElement.setAttribute("data-theme", next);
-  document.documentElement.setAttribute("data-color-scheme", next === "light" ? "light" : "dark");
+// 主题固定黑金 (Obsidian Gold)
+ function setTheme(_next) {
+  exports.theme.set("dark");
+  setStored("theme", "dark");
+  document.documentElement.setAttribute("data-theme", "dark");
+  document.documentElement.setAttribute("data-color-scheme", "dark");
 } exports.setTheme = setTheme;
 
  function toggleTheme() {
-  const current = exports.theme.call(void 0, );
-  const idx = exports.THEMES.findIndex((x) => x.id === current);
-  const next = exports.THEMES[(idx + 1) % exports.THEMES.length].id;
-  setTheme(next);
+  setTheme("dark");
 } exports.toggleTheme = toggleTheme;
 
 // 工作台控制
@@ -1604,7 +1543,7 @@ const urlParams = new URLSearchParams(window.location.search);
  async function loadModels() {
   try {
     const res = await _net.apiFetch.call(void 0, "/api/models");
-    const list = Array.isArray(res) ? res : Array.isArray(_optionalChain([res, 'optionalAccess', _5 => _5.models])) ? res.models : [];
+    const list = Array.isArray(res) ? res : Array.isArray(_optionalChain([res, 'optionalAccess', _2 => _2.models])) ? res.models : [];
     exports.models.set(list);
   } catch (err) {
     console.warn("loadModels error:", err);
@@ -1663,7 +1602,7 @@ const urlParams = new URLSearchParams(window.location.search);
     const isCurrent = targetWs === undefined || targetWs === exports.currentWs.call(void 0, );
     const q = targetWs !== undefined ? `?ws=${encodeURIComponent(targetWs)}` : getQuery();
     const res = await _net.apiFetch.call(void 0, `/api/sessions${q}`);
-    const list = Array.isArray(res) ? res : Array.isArray(_optionalChain([res, 'optionalAccess', _6 => _6.sessions])) ? res.sessions : [];
+    const list = Array.isArray(res) ? res : Array.isArray(_optionalChain([res, 'optionalAccess', _3 => _3.sessions])) ? res.sessions : [];
     const parsed = list.map((s) => ({
       id: s.name,
       name: s.name,
@@ -1686,7 +1625,7 @@ const urlParams = new URLSearchParams(window.location.search);
  async function loadFiles(query = "") {
   try {
     const res = await _net.apiFetch.call(void 0, `/api/files${getQuery({ q: query })}`);
-    const items = Array.isArray(_optionalChain([res, 'optionalAccess', _7 => _7.items])) ? res.items : Array.isArray(res) ? res : [];
+    const items = Array.isArray(_optionalChain([res, 'optionalAccess', _4 => _4.items])) ? res.items : Array.isArray(res) ? res : [];
     exports.files.set(items);
   } catch (err) {
     console.warn("loadFiles error:", err);
@@ -1748,9 +1687,9 @@ function parseRawHistoryMessages(rawList) {
  async function loadHistory() {
   try {
     const res = await _net.apiFetch.call(void 0, `/api/history${getQuery()}`);
-    const rawList = Array.isArray(_optionalChain([res, 'optionalAccess', _8 => _8.history]))
+    const rawList = Array.isArray(_optionalChain([res, 'optionalAccess', _5 => _5.history]))
       ? res.history
-      : Array.isArray(_optionalChain([res, 'optionalAccess', _9 => _9.messages]))
+      : Array.isArray(_optionalChain([res, 'optionalAccess', _6 => _6.messages]))
       ? res.messages
       : Array.isArray(res)
       ? res
@@ -1767,9 +1706,9 @@ function parseRawHistoryMessages(rawList) {
   const currentCount = exports.turns.call(void 0, ).length;
   try {
     const res = await _net.apiFetch.call(void 0, `/api/history${getQuery({ offset: String(currentCount), limit: "40" })}`);
-    const rawList = Array.isArray(_optionalChain([res, 'optionalAccess', _10 => _10.history]))
+    const rawList = Array.isArray(_optionalChain([res, 'optionalAccess', _7 => _7.history]))
       ? res.history
-      : Array.isArray(_optionalChain([res, 'optionalAccess', _11 => _11.messages]))
+      : Array.isArray(_optionalChain([res, 'optionalAccess', _8 => _8.messages]))
       ? res.messages
       : Array.isArray(res)
       ? res
@@ -1822,7 +1761,7 @@ function parseRawHistoryMessages(rawList) {
       await loadSessions();
       await switchSession(res.name);
     } else {
-      showToast(`Fork failed: ${_optionalChain([res, 'optionalAccess', _12 => _12.error]) || "unknown"}`, "error");
+      showToast(`Fork failed: ${_optionalChain([res, 'optionalAccess', _9 => _9.error]) || "unknown"}`, "error");
     }
   } catch (err) {
     showToast(`Fork failed: ${err}`, "error");
@@ -2155,7 +2094,7 @@ function parseRawHistoryMessages(rawList) {
  async function loadHelp() {
   try {
     const res = await _net.apiFetch.call(void 0, `/api/help${getQuery()}`);
-    const cmds = Array.isArray(_optionalChain([res, 'optionalAccess', _13 => _13.commands])) ? res.commands : [];
+    const cmds = Array.isArray(_optionalChain([res, 'optionalAccess', _10 => _10.commands])) ? res.commands : [];
     if (cmds.length > 0) {
       exports.slashCommands.set(
         cmds.map((c) => ({
@@ -2289,7 +2228,7 @@ function parseRawHistoryMessages(rawList) {
       }
       return true;
     } else {
-      showToast(`Command /${name} failed: ${_optionalChain([res, 'optionalAccess', _14 => _14.error]) || "unknown"}`, "error");
+      showToast(`Command /${name} failed: ${_optionalChain([res, 'optionalAccess', _11 => _11.error]) || "unknown"}`, "error");
       return false;
     }
   } catch (e) {
@@ -2325,7 +2264,7 @@ function parseRawHistoryMessages(rawList) {
  async function loadPlugins() {
   try {
     const res = await _net.apiFetch.call(void 0, `/api/plugins${getQuery()}`);
-    const list = Array.isArray(_optionalChain([res, 'optionalAccess', _15 => _15.plugins])) ? res.plugins : Array.isArray(res) ? res : [];
+    const list = Array.isArray(_optionalChain([res, 'optionalAccess', _12 => _12.plugins])) ? res.plugins : Array.isArray(res) ? res : [];
     for (const p of list) {
       if (p.enabled && Array.isArray(p.assets)) {
         for (const asset of p.assets) {
@@ -2727,9 +2666,8 @@ function parseRawHistoryMessages(rawList) {
 
 // 统一应用启动
  function boot() {
-  const curTheme = exports.theme.call(void 0, );
-  document.documentElement.setAttribute("data-theme", curTheme);
-  document.documentElement.setAttribute("data-color-scheme", curTheme === "light" ? "light" : "dark");
+  document.documentElement.setAttribute("data-theme", "dark");
+  document.documentElement.setAttribute("data-color-scheme", "dark");
 
   _net.connectEventStream.call(void 0, handleSseEvent, (st) => {
     exports.connectionStatus.set(st);
@@ -3150,16 +3088,7 @@ var _dom = require('./dom');
 
 
 
-
-
-
-
 var _store = require('./store');
-
-
-
-
-
 
 
 
@@ -3176,14 +3105,17 @@ var _icons = require('./icons');
     // 左侧：品牌与工程上下文面包屑
     _dom.tags.div(
       { class: "tb-left" },
-      _dom.tags.button(
-        {
-          class: "tb-btn tb-icon-btn tb-sidebar-btn",
-          title: () => _store.t.call(void 0, "topbar.toggle_sidebar"),
-          onclick: _store.toggleSidebar,
-        },
-        _icons.iconSidebar.call(void 0, 15)
-      ),
+      () =>
+        !_store.sidebarOpen.call(void 0, )
+          ? _dom.tags.button(
+              {
+                class: "tb-btn tb-icon-btn tb-sidebar-btn",
+                title: () => _store.t.call(void 0, "topbar.toggle_sidebar"),
+                onclick: _store.toggleSidebar,
+              },
+              _icons.iconSidebar.call(void 0, 15)
+            )
+          : null,
       _dom.tags.div(
         { class: "tb-brand" },
         _dom.tags.svg(
@@ -3269,66 +3201,14 @@ var _icons = require('./icons');
           _dom.tags.span({ class: "tb-count-badge" }, String(count))
         );
       },
-      // 辅助系统动作组 (Ghost Icons: 主题 + 设置)
-      _dom.tags.div(
-        { class: "tb-actions-group" },
-        // 特色主题切换菜单
-        _dom.tags.div(
-          { class: "tb-theme-wrap" },
-          _dom.tags.button(
-            {
-              class: () => `tb-btn tb-icon-btn tb-theme-btn ${_store.showThemeMenu.call(void 0, ) ? "is-active" : ""}`,
-              title: () => `${_store.t.call(void 0, "theme.name")}: ${_store.t.call(void 0, "theme." + _store.theme.call(void 0, ))}`,
-              onclick: (e) => {
-                e.stopPropagation();
-                _store.showThemeMenu.update((v) => !v);
-              },
-            },
-            _icons.iconPalette.call(void 0, 14)
-          ),
-          () =>
-            _store.showThemeMenu.call(void 0, )
-              ? _dom.tags.div(
-                  {
-                    class: "tb-theme-dropdown",
-                    onclick: (e) => e.stopPropagation(),
-                  },
-                  _dom.tags.div({ class: "tb-theme-hdr" }, () => _store.t.call(void 0, "theme.name")),
-                  _store.THEMES.map((th) =>
-                    _dom.tags.div(
-                      {
-                        class: () => `tb-theme-item ${_store.theme.call(void 0, ) === th.id ? "is-active" : ""}`,
-                        onclick: () => {
-                          _store.setTheme.call(void 0, th.id);
-                          _store.showThemeMenu.set(false);
-                        },
-                      },
-                      _dom.tags.span({ class: "tb-theme-icon" }, _icons.getThemeIcon.call(void 0, th.id, 14)),
-                      _dom.tags.span({ class: "tb-theme-title" }, () => _store.t.call(void 0, th.nameKey)),
-                      _dom.tags.div(
-                        { class: "tb-theme-dots" },
-                        _dom.tags.span({ class: "tb-theme-dot", style: `background: ${th.preview.canvas};` }),
-                        _dom.tags.span({ class: "tb-theme-dot", style: `background: ${th.preview.surface};` }),
-                        _dom.tags.span({ class: "tb-theme-dot", style: `background: ${th.preview.accent};` })
-                      ),
-                      () =>
-                        _store.theme.call(void 0, ) === th.id
-                          ? _dom.tags.span({ class: "tb-theme-check" }, _icons.iconCheck.call(void 0, 12))
-                          : null
-                    )
-                  )
-                )
-              : null
-        ),
-        // 全局设置中心按钮
-        _dom.tags.button(
-          {
-            class: "tb-btn tb-icon-btn tb-settings-btn",
-            title: () => _store.t.call(void 0, "topbar.settings"),
-            onclick: () => _store.showSettingsModal.set(true),
-          },
-          _icons.iconSettings.call(void 0, 14)
-        )
+      // 全局设置中心按钮
+      _dom.tags.button(
+        {
+          class: "tb-btn tb-icon-btn tb-settings-btn",
+          title: () => _store.t.call(void 0, "topbar.settings"),
+          onclick: () => _store.showSettingsModal.set(true),
+        },
+        _icons.iconSettings.call(void 0, 14)
       ),
       // 网络连接状态指示灯 (严格包裹居中)
       _dom.tags.div(
@@ -3346,15 +3226,6 @@ var _icons = require('./icons');
     )
   );
 } exports.renderTopBar = renderTopBar;
-
-window.addEventListener("pointerdown", (e) => {
-  if (_store.showThemeMenu.call(void 0, )) {
-    const target = e.target ;
-    if (!target || !target.closest(".tb-theme-wrap")) {
-      _store.showThemeMenu.set(false);
-    }
-  }
-});
 
 };
 __modules["sidebar"] = function(module, exports, require) {
@@ -3383,8 +3254,10 @@ var _dom = require('./dom');
 
 
 
+
 var _store = require('./store');
 var _signal = require('./signal');
+
 
 
 
@@ -3462,6 +3335,9 @@ var _icons = require('./icons');
     if (_store.activeSession.call(void 0, ) !== sessionId) {
       await _store.switchSession.call(void 0, sessionId);
     }
+    if (window.innerWidth <= 960) {
+      _store.sidebarOpen.set(false);
+    }
   }
 
   // 在特定项目下快捷新建会话
@@ -3477,7 +3353,7 @@ var _icons = require('./icons');
     {
       class: () => `sidebar ${_store.sidebarOpen.call(void 0, ) ? "is-open" : "is-collapsed"}`,
     },
-    // 1. 侧边栏顶栏操作群 (项目树标题 + 注册外部工程 + 极速新会话)
+    // 1. 侧边栏顶栏操作群 (项目树标题 + 注册外部工程 + 极速新会话 + 收起侧栏)
     _dom.tags.div(
       { class: "sidebar-hdr" },
       _dom.tags.div(
@@ -3505,6 +3381,14 @@ var _icons = require('./icons');
             onclick: _store.createSession,
           },
           _icons.iconPlus.call(void 0, 13)
+        ),
+        _dom.tags.button(
+          {
+            class: "sidebar-hdr-btn",
+            title: () => _store.t.call(void 0, "topbar.toggle_sidebar"),
+            onclick: _store.toggleSidebar,
+          },
+          _icons.iconSidebar.call(void 0, 13)
         )
       )
     ),
@@ -6019,7 +5903,6 @@ var _dom = require('./dom');
 
 
 
-
 var _store = require('./store');
 var _net = require('./net');
 var _signal = require('./signal');
@@ -6209,17 +6092,6 @@ var _icons = require('./icons');
               },
               _dom.tags.span({ class: "palette-item-icon" }, _icons.iconSettings.call(void 0, 14)),
               _dom.tags.span({}, "Open Workspace Settings")
-            ),
-            _dom.tags.div(
-              {
-                class: "palette-item",
-                onclick: () => {
-                  _store.toggleTheme.call(void 0, );
-                  _store.showSearchModal.set(false);
-                },
-              },
-              _dom.tags.span({ class: "palette-item-icon" }, _icons.iconRefresh.call(void 0, 14)),
-              _dom.tags.span({}, "Toggle Theme (Light / Dark)")
             ),
 
             // 会话列表匹配
@@ -6961,15 +6833,12 @@ var _store = require('./store');
 function createApp() {
   const root = _dom.tags.div({ class: "app-root" });
 
-  // 1. 顶栏
-  root.appendChild(_topbar.renderTopBar.call(void 0, ));
+  // 1. 左侧边栏 (顶格贯穿 100vh)
+  const sidebar = _sidebar.renderSidebar.call(void 0, );
 
-  // 2. 主体三栏工作区容器 (Sidebar + Chat Area + Splitter + Deck)
+  // 2. 主体工作区容器 (Chat Area + Splitter + Deck)
   const mainWorkspace = _dom.tags.div(
     { class: "main-layout main-workspace" },
-    // 左侧边栏
-    _sidebar.renderSidebar.call(void 0, ),
-
     // 中央会话流与输入台
     _dom.tags.main(
       { class: "chat-workspace chat-main-column" },
@@ -6991,9 +6860,17 @@ function createApp() {
     }
   });
 
-  root.appendChild(mainWorkspace);
+  // 3. 右侧主体容器 (顶栏 + 主工作区)
+  const appMain = _dom.tags.div(
+    { class: "app-main" },
+    _topbar.renderTopBar.call(void 0, ),
+    mainWorkspace
+  );
 
-  // 3. 模态层
+  root.appendChild(sidebar);
+  root.appendChild(appMain);
+
+  // 4. 模态层
   root.appendChild(_modal.renderModals.call(void 0, ));
 
   return root;

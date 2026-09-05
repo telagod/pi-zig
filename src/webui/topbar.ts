@@ -7,14 +7,10 @@ import {
   activeSession,
   sessions,
   deckOpen,
+  sidebarOpen,
   connectionStatus,
-  theme,
-  setTheme,
-  THEMES,
-  showThemeMenu,
   toggleDeck,
   toggleSidebar,
-  toggleTheme,
   showSearchModal,
   showSettingsModal,
   renameSession,
@@ -26,15 +22,10 @@ import {
   iconSidebar,
   iconDeck,
   iconSearch,
-  iconSun,
-  iconMoon,
-  iconPalette,
-  iconCheck,
   iconSettings,
   iconBranch,
   iconActivity,
   iconChevronRight,
-  getThemeIcon,
 } from "./icons";
 
 export function renderTopBar(): HTMLElement {
@@ -43,14 +34,17 @@ export function renderTopBar(): HTMLElement {
     // 左侧：品牌与工程上下文面包屑
     tags.div(
       { class: "tb-left" },
-      tags.button(
-        {
-          class: "tb-btn tb-icon-btn tb-sidebar-btn",
-          title: () => t("topbar.toggle_sidebar"),
-          onclick: toggleSidebar,
-        },
-        iconSidebar(15)
-      ),
+      () =>
+        !sidebarOpen()
+          ? tags.button(
+              {
+                class: "tb-btn tb-icon-btn tb-sidebar-btn",
+                title: () => t("topbar.toggle_sidebar"),
+                onclick: toggleSidebar,
+              },
+              iconSidebar(15)
+            )
+          : null,
       tags.div(
         { class: "tb-brand" },
         tags.svg(
@@ -136,66 +130,14 @@ export function renderTopBar(): HTMLElement {
           tags.span({ class: "tb-count-badge" }, String(count))
         );
       },
-      // 辅助系统动作组 (Ghost Icons: 主题 + 设置)
-      tags.div(
-        { class: "tb-actions-group" },
-        // 特色主题切换菜单
-        tags.div(
-          { class: "tb-theme-wrap" },
-          tags.button(
-            {
-              class: () => `tb-btn tb-icon-btn tb-theme-btn ${showThemeMenu() ? "is-active" : ""}`,
-              title: () => `${t("theme.name")}: ${t("theme." + theme())}`,
-              onclick: (e: MouseEvent) => {
-                e.stopPropagation();
-                showThemeMenu.update((v) => !v);
-              },
-            },
-            iconPalette(14)
-          ),
-          () =>
-            showThemeMenu()
-              ? tags.div(
-                  {
-                    class: "tb-theme-dropdown",
-                    onclick: (e: MouseEvent) => e.stopPropagation(),
-                  },
-                  tags.div({ class: "tb-theme-hdr" }, () => t("theme.name")),
-                  THEMES.map((th) =>
-                    tags.div(
-                      {
-                        class: () => `tb-theme-item ${theme() === th.id ? "is-active" : ""}`,
-                        onclick: () => {
-                          setTheme(th.id);
-                          showThemeMenu.set(false);
-                        },
-                      },
-                      tags.span({ class: "tb-theme-icon" }, getThemeIcon(th.id, 14)),
-                      tags.span({ class: "tb-theme-title" }, () => t(th.nameKey)),
-                      tags.div(
-                        { class: "tb-theme-dots" },
-                        tags.span({ class: "tb-theme-dot", style: `background: ${th.preview.canvas};` }),
-                        tags.span({ class: "tb-theme-dot", style: `background: ${th.preview.surface};` }),
-                        tags.span({ class: "tb-theme-dot", style: `background: ${th.preview.accent};` })
-                      ),
-                      () =>
-                        theme() === th.id
-                          ? tags.span({ class: "tb-theme-check" }, iconCheck(12))
-                          : null
-                    )
-                  )
-                )
-              : null
-        ),
-        // 全局设置中心按钮
-        tags.button(
-          {
-            class: "tb-btn tb-icon-btn tb-settings-btn",
-            title: () => t("topbar.settings"),
-            onclick: () => showSettingsModal.set(true),
-          },
-          iconSettings(14)
-        )
+      // 全局设置中心按钮
+      tags.button(
+        {
+          class: "tb-btn tb-icon-btn tb-settings-btn",
+          title: () => t("topbar.settings"),
+          onclick: () => showSettingsModal.set(true),
+        },
+        iconSettings(14)
       ),
       // 网络连接状态指示灯 (严格包裹居中)
       tags.div(
@@ -213,12 +155,3 @@ export function renderTopBar(): HTMLElement {
     )
   );
 }
-
-window.addEventListener("pointerdown", (e) => {
-  if (showThemeMenu()) {
-    const target = e.target as HTMLElement | null;
-    if (!target || !target.closest(".tb-theme-wrap")) {
-      showThemeMenu.set(false);
-    }
-  }
-});

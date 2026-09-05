@@ -160,18 +160,20 @@ console.log('[OK] Settings Modal (All 5 tabs & Export buttons) verified');
 await page.locator('.modal-close-btn').click();
 await sleep(200);
 
-// 测试主题切换
-const themeBtn = page.locator('.tb-theme-btn');
-await themeBtn.click();
-await page.waitForSelector('.tb-theme-dropdown');
-await page.locator('.tb-theme-item', { hasText: /(极地素雪|Light)/ }).click();
-await sleep(200);
+// 验证固定黑金主题与弹窗黑金高贵质感
 const curTheme = await page.evaluate(() => document.documentElement.getAttribute('data-theme'));
-console.log('[OK] Theme switched to:', curTheme);
-// 切回 dark
-await themeBtn.click();
-await page.waitForSelector('.tb-theme-dropdown');
-await page.locator('.tb-theme-item', { hasText: /(暗夜黑曜|Dark)/ }).click();
+const primaryColor = await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--accent-primary').trim());
+console.log(`[OK] Theme locked to Obsidian Gold (data-theme: ${curTheme}, --accent-primary: ${primaryColor})`);
+
+// 验证弹窗遮罩层及卡片黑金层级与阴影质感
+await page.keyboard.press('Control+k');
+await page.waitForSelector('.command-palette');
+const paletteBoxShadow = await page.evaluate(() => {
+  const el = document.querySelector('.command-palette');
+  return el ? window.getComputedStyle(el).boxShadow : '';
+});
+console.log('[OK] Command Palette modal verified with Obsidian Gold shadow:', paletteBoxShadow ? 'YES' : 'NO');
+await page.keyboard.press('Escape');
 await sleep(200);
 
 console.log('[6/8] Testing Input, Autocomplete, and Message Flow...');

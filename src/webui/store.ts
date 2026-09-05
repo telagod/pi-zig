@@ -30,53 +30,15 @@ export const THEMES: ThemeMeta[] = [
     id: "dark",
     nameKey: "theme.dark",
     descKey: "theme.dark_desc",
-    preview: { canvas: "#090a0c", surface: "#16191e", accent: "#4493f8" },
+    preview: { canvas: "#08080a", surface: "#15161a", accent: "#d4af37" },
     isDark: true,
-  },
-  {
-    id: "abyss",
-    nameKey: "theme.abyss",
-    descKey: "theme.abyss_desc",
-    preview: { canvas: "#0b0708", surface: "#1b0f14", accent: "#f43f5e" },
-    isDark: true,
-  },
-  {
-    id: "matrix",
-    nameKey: "theme.matrix",
-    descKey: "theme.matrix_desc",
-    preview: { canvas: "#020804", surface: "#0b1c10", accent: "#22c55e" },
-    isDark: true,
-  },
-  {
-    id: "synthwave",
-    nameKey: "theme.synthwave",
-    descKey: "theme.synthwave_desc",
-    preview: { canvas: "#090513", surface: "#190f2e", accent: "#d946ef" },
-    isDark: true,
-  },
-  {
-    id: "amber",
-    nameKey: "theme.amber",
-    descKey: "theme.amber_desc",
-    preview: { canvas: "#0d0905", surface: "#1e160d", accent: "#f59e0b" },
-    isDark: true,
-  },
-  {
-    id: "light",
-    nameKey: "theme.light",
-    descKey: "theme.light_desc",
-    preview: { canvas: "#f8fafc", surface: "#ffffff", accent: "#0284c7" },
-    isDark: false,
   },
 ];
 
 export const showThemeMenu = signal<boolean>(false);
 
 function resolveInitialTheme(): ThemeId {
-  const stored = getStored<string>("theme", "");
-  if (THEMES.some((x) => x.id === stored)) return stored as ThemeId;
-  if (stored === "light") return "light";
-  return window.matchMedia?.("(prefers-color-scheme: light)").matches ? "light" : "dark";
+  return "dark";
 }
 
 // 持久化辅助
@@ -236,19 +198,16 @@ export function dismissToast(id: string) {
   toasts.update((prev) => prev.filter((t) => t.id !== id));
 }
 
-// 主题切换与设置
-export function setTheme(next: ThemeId) {
-  theme.set(next);
-  setStored("theme", next);
-  document.documentElement.setAttribute("data-theme", next);
-  document.documentElement.setAttribute("data-color-scheme", next === "light" ? "light" : "dark");
+// 主题固定黑金 (Obsidian Gold)
+export function setTheme(_next?: ThemeId) {
+  theme.set("dark");
+  setStored("theme", "dark");
+  document.documentElement.setAttribute("data-theme", "dark");
+  document.documentElement.setAttribute("data-color-scheme", "dark");
 }
 
 export function toggleTheme() {
-  const current = theme();
-  const idx = THEMES.findIndex((x) => x.id === current);
-  const next = THEMES[(idx + 1) % THEMES.length].id;
-  setTheme(next);
+  setTheme("dark");
 }
 
 // 工作台控制
@@ -1471,9 +1430,8 @@ export function handleSseEvent(evt: any) {
 
 // 统一应用启动
 export function boot() {
-  const curTheme = theme();
-  document.documentElement.setAttribute("data-theme", curTheme);
-  document.documentElement.setAttribute("data-color-scheme", curTheme === "light" ? "light" : "dark");
+  document.documentElement.setAttribute("data-theme", "dark");
+  document.documentElement.setAttribute("data-color-scheme", "dark");
 
   connectEventStream(handleSseEvent, (st) => {
     connectionStatus.set(st);

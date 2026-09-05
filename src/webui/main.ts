@@ -29,15 +29,12 @@ import {
 function createApp(): HTMLElement {
   const root = tags.div({ class: "app-root" });
 
-  // 1. 顶栏
-  root.appendChild(renderTopBar());
+  // 1. 左侧边栏 (顶格贯穿 100vh)
+  const sidebar = renderSidebar();
 
-  // 2. 主体三栏工作区容器 (Sidebar + Chat Area + Splitter + Deck)
+  // 2. 主体工作区容器 (Chat Area + Splitter + Deck)
   const mainWorkspace = tags.div(
     { class: "main-layout main-workspace" },
-    // 左侧边栏
-    renderSidebar(),
-
     // 中央会话流与输入台
     tags.main(
       { class: "chat-workspace chat-main-column" },
@@ -59,9 +56,17 @@ function createApp(): HTMLElement {
     }
   });
 
-  root.appendChild(mainWorkspace);
+  // 3. 右侧主体容器 (顶栏 + 主工作区)
+  const appMain = tags.div(
+    { class: "app-main" },
+    renderTopBar(),
+    mainWorkspace
+  );
 
-  // 3. 模态层
+  root.appendChild(sidebar);
+  root.appendChild(appMain);
+
+  // 4. 模态层
   root.appendChild(renderModals());
 
   return root;

@@ -2,6 +2,7 @@
 import { tags, each } from "./dom";
 import {
   sidebarOpen,
+  toggleSidebar,
   sessions,
   projectSessions,
   expandedProjects,
@@ -42,6 +43,7 @@ import {
   iconChevronDown,
   iconChevronRight,
   iconBranch,
+  iconSidebar,
 } from "./icons";
 
 export function renderSidebar(): HTMLElement {
@@ -102,6 +104,9 @@ export function renderSidebar(): HTMLElement {
     if (activeSession() !== sessionId) {
       await switchSession(sessionId);
     }
+    if (window.innerWidth <= 960) {
+      sidebarOpen.set(false);
+    }
   }
 
   // 在特定项目下快捷新建会话
@@ -117,7 +122,7 @@ export function renderSidebar(): HTMLElement {
     {
       class: () => `sidebar ${sidebarOpen() ? "is-open" : "is-collapsed"}`,
     },
-    // 1. 侧边栏顶栏操作群 (项目树标题 + 注册外部工程 + 极速新会话)
+    // 1. 侧边栏顶栏操作群 (项目树标题 + 注册外部工程 + 极速新会话 + 收起侧栏)
     tags.div(
       { class: "sidebar-hdr" },
       tags.div(
@@ -145,6 +150,14 @@ export function renderSidebar(): HTMLElement {
             onclick: createSession,
           },
           iconPlus(13)
+        ),
+        tags.button(
+          {
+            class: "sidebar-hdr-btn",
+            title: () => t("topbar.toggle_sidebar"),
+            onclick: toggleSidebar,
+          },
+          iconSidebar(13)
         )
       )
     ),

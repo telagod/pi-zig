@@ -32,7 +32,6 @@ import {
   loadPackages,
   refreshModels,
   refreshDiffs,
-  toggleTheme,
   theme,
   setTheme,
   THEMES,
@@ -233,17 +232,6 @@ export function renderModals(): HTMLElement {
               },
               tags.span({ class: "palette-item-icon" }, iconSettings(14)),
               tags.span({}, "Open Workspace Settings")
-            ),
-            tags.div(
-              {
-                class: "palette-item",
-                onclick: () => {
-                  toggleTheme();
-                  showSearchModal.set(false);
-                },
-              },
-              tags.span({ class: "palette-item-icon" }, iconRefresh(14)),
-              tags.span({}, "Toggle Theme (Light / Dark)")
             ),
 
             // 会话列表匹配
