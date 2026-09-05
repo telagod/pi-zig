@@ -323,7 +323,12 @@ export function renderSidebar(): HTMLElement {
                           {
                             class: "session-act-btn",
                             title: () => t("sidebar.fork"),
-                            onclick: () => forkSession(item.id),
+                            onclick: () => {
+                              const sTitle = item.title || item.name;
+                              if (confirm(t("sidebar.fork_confirm", { title: sTitle }))) {
+                                forkSession(item.id);
+                              }
+                            },
                           },
                           iconFork(12)
                         )
@@ -333,7 +338,12 @@ export function renderSidebar(): HTMLElement {
                           {
                             class: "session-act-btn",
                             title: () => t("sidebar.undo"),
-                            onclick: () => undoSession(item.id),
+                            onclick: () => {
+                              const sTitle = item.title || item.name;
+                              if (confirm(t("sidebar.undo_confirm", { title: sTitle }))) {
+                                undoSession(item.id);
+                              }
+                            },
                           },
                           iconUndo(12)
                         )
@@ -343,7 +353,12 @@ export function renderSidebar(): HTMLElement {
                           {
                             class: "session-act-btn",
                             title: () => t("sidebar.compact"),
-                            onclick: () => compactSession(item.id),
+                            onclick: () => {
+                              const sTitle = item.title || item.name;
+                              if (confirm(t("sidebar.compact_confirm", { title: sTitle }))) {
+                                compactSession(item.id);
+                              }
+                            },
                           },
                           iconCompact(12)
                         )
@@ -353,7 +368,12 @@ export function renderSidebar(): HTMLElement {
                           {
                             class: "session-act-btn",
                             title: () => t("sidebar.restore"),
-                            onclick: () => restoreSession(item.id),
+                            onclick: () => {
+                              const sTitle = item.title || item.name;
+                              if (confirm(t("sidebar.restore_confirm", { title: sTitle }))) {
+                                restoreSession(item.id);
+                              }
+                            },
                           },
                           iconRotateCcw(12)
                         )
@@ -361,7 +381,12 @@ export function renderSidebar(): HTMLElement {
                           {
                             class: "session-act-btn",
                             title: () => t("sidebar.archive"),
-                            onclick: () => archiveSession(item.id),
+                            onclick: () => {
+                              const sTitle = item.title || item.name;
+                              if (confirm(t("sidebar.archive_confirm", { title: sTitle }))) {
+                                archiveSession(item.id);
+                              }
+                            },
                           },
                           iconArchive(12)
                         ),
@@ -370,10 +395,11 @@ export function renderSidebar(): HTMLElement {
                         class: "session-act-btn session-del-btn",
                         title: () => t("sidebar.delete"),
                         onclick: () => {
+                          const sTitle = item.title || item.name;
                           if (
                             confirm(
                               t("sidebar.del_confirm", {
-                                title: item.title || item.name,
+                                title: sTitle,
                               })
                             )
                           ) {

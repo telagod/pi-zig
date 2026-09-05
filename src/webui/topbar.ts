@@ -6,14 +6,12 @@ import {
   changesCount,
   activeSession,
   sessions,
-  mode,
   deckOpen,
   connectionStatus,
   theme,
   setTheme,
   THEMES,
   showThemeMenu,
-  switchMode,
   toggleDeck,
   toggleSidebar,
   toggleTheme,
@@ -24,7 +22,6 @@ import {
   setDeckTab,
   t,
 } from "./store";
-import { AppMode } from "./types";
 import {
   iconSidebar,
   iconDeck,
@@ -34,9 +31,6 @@ import {
   iconPalette,
   iconCheck,
   iconSettings,
-  iconBolt,
-  iconQuestion,
-  iconShield,
   iconBranch,
   iconActivity,
   iconChevronRight,
@@ -105,18 +99,7 @@ export function renderTopBar(): HTMLElement {
       )
     ),
 
-    // 中间：模式切换胶囊 (紧凑型 Segmented Control)
-    tags.div(
-      { class: "tb-center" },
-      tags.div(
-        { class: "mode-pill" },
-        renderModeBtn("yolo", iconBolt, "mode.yolo", "mode.yolo_desc"),
-        renderModeBtn("ask", iconQuestion, "mode.ask", "mode.ask_desc"),
-        renderModeBtn("read-only", iconShield, "mode.read_only", "mode.read_only_desc")
-      )
-    ),
-
-    // 右侧：紧凑搜索胶囊、模型引擎舱、Deck 开关、主题面板与全局设置
+    // 右侧：紧凑搜索胶囊、Deck 开关、主题面板与全局设置
     tags.div(
       { class: "tb-right" },
       // 紧凑型搜索/命令面板胶囊 (去掉冗长文本，纯净内敛)
@@ -228,29 +211,6 @@ export function renderTopBar(): HTMLElement {
         })
       )
     )
-  );
-}
-
-function renderModeBtn(
-  m: AppMode,
-  iconFn: (size: number, cls: string) => SVGElement,
-  labelKey: string,
-  titleKey: string
-): HTMLElement {
-  const isSelected = () => {
-    const cur = mode();
-    if (m === "read-only") return cur === "read-only" || cur === "plan";
-    return cur === m;
-  };
-
-  return tags.button(
-    {
-      class: () => `mode-btn mode-btn-${m} ${isSelected() ? "is-active" : ""}`,
-      title: () => t(titleKey),
-      onclick: () => switchMode(m),
-    },
-    iconFn(12, "mode-btn-icon"),
-    tags.span({ class: "mode-btn-label" }, () => t(labelKey))
   );
 }
 

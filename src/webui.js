@@ -953,6 +953,11 @@ function getInitialLocale() {
     "sidebar.restore": "恢复此会话",
     "sidebar.archived_badge": "已归档",
     "sidebar.del_confirm": "确定要删除会话 \"{title}\" 吗？此操作无法撤销。",
+    "sidebar.fork_confirm": "确定要从会话 \"{title}\" 分叉出新会话吗？",
+    "sidebar.undo_confirm": "确定要撤销会话 \"{title}\" 的上一轮操作吗？此动作将回滚最后一次交互。",
+    "sidebar.compact_confirm": "确定要对会话 \"{title}\" 进行上下文压缩并建立存档点吗？",
+    "sidebar.archive_confirm": "确定要归档会话 \"{title}\" 吗？归档后仍可随时恢复。",
+    "sidebar.restore_confirm": "确定要恢复已归档会话 \"{title}\" 吗？",
     "sidebar.rename_prompt": "重命名会话：",
     "sidebar.no_sessions": "暂无匹配会话",
     "sidebar.sessions_count": "{count} 个会话",
@@ -1119,6 +1124,11 @@ function getInitialLocale() {
     "sidebar.restore": "Restore session",
     "sidebar.archived_badge": "Archived",
     "sidebar.del_confirm": "Are you sure you want to delete session \"{title}\"? This cannot be undone.",
+    "sidebar.fork_confirm": "Are you sure you want to fork session \"{title}\"?",
+    "sidebar.undo_confirm": "Are you sure you want to undo the last turn in session \"{title}\"?",
+    "sidebar.compact_confirm": "Are you sure you want to compact context snapshot for session \"{title}\"?",
+    "sidebar.archive_confirm": "Are you sure you want to archive session \"{title}\"?",
+    "sidebar.restore_confirm": "Are you sure you want to restore archived session \"{title}\"?",
     "sidebar.rename_prompt": "Rename session:",
     "sidebar.no_sessions": "No sessions found",
     "sidebar.sessions_count": "{count} sessions",
@@ -3085,13 +3095,7 @@ var _dom = require('./dom');
 
 
 
-
-
 var _store = require('./store');
-
-
-
-
 
 
 
@@ -3169,18 +3173,7 @@ var _icons = require('./icons');
       )
     ),
 
-    // 中间：模式切换胶囊 (紧凑型 Segmented Control)
-    _dom.tags.div(
-      { class: "tb-center" },
-      _dom.tags.div(
-        { class: "mode-pill" },
-        renderModeBtn("yolo", _icons.iconBolt, "mode.yolo", "mode.yolo_desc"),
-        renderModeBtn("ask", _icons.iconQuestion, "mode.ask", "mode.ask_desc"),
-        renderModeBtn("read-only", _icons.iconShield, "mode.read_only", "mode.read_only_desc")
-      )
-    ),
-
-    // 右侧：紧凑搜索胶囊、模型引擎舱、Deck 开关、主题面板与全局设置
+    // 右侧：紧凑搜索胶囊、Deck 开关、主题面板与全局设置
     _dom.tags.div(
       { class: "tb-right" },
       // 紧凑型搜索/命令面板胶囊 (去掉冗长文本，纯净内敛)
@@ -3294,29 +3287,6 @@ var _icons = require('./icons');
     )
   );
 } exports.renderTopBar = renderTopBar;
-
-function renderModeBtn(
-  m,
-  iconFn,
-  labelKey,
-  titleKey
-) {
-  const isSelected = () => {
-    const cur = _store.mode.call(void 0, );
-    if (m === "read-only") return cur === "read-only" || cur === "plan";
-    return cur === m;
-  };
-
-  return _dom.tags.button(
-    {
-      class: () => `mode-btn mode-btn-${m} ${isSelected() ? "is-active" : ""}`,
-      title: () => _store.t.call(void 0, titleKey),
-      onclick: () => _store.switchMode.call(void 0, m),
-    },
-    iconFn(12, "mode-btn-icon"),
-    _dom.tags.span({ class: "mode-btn-label" }, () => _store.t.call(void 0, labelKey))
-  );
-}
 
 window.addEventListener("pointerdown", (e) => {
   if (_store.showThemeMenu.call(void 0, )) {
@@ -3654,7 +3624,12 @@ var _icons = require('./icons');
                           {
                             class: "session-act-btn",
                             title: () => _store.t.call(void 0, "sidebar.fork"),
-                            onclick: () => _store.forkSession.call(void 0, item.id),
+                            onclick: () => {
+                              const sTitle = item.title || item.name;
+                              if (confirm(_store.t.call(void 0, "sidebar.fork_confirm", { title: sTitle }))) {
+                                _store.forkSession.call(void 0, item.id);
+                              }
+                            },
                           },
                           _icons.iconFork.call(void 0, 12)
                         )
@@ -3664,7 +3639,12 @@ var _icons = require('./icons');
                           {
                             class: "session-act-btn",
                             title: () => _store.t.call(void 0, "sidebar.undo"),
-                            onclick: () => _store.undoSession.call(void 0, item.id),
+                            onclick: () => {
+                              const sTitle = item.title || item.name;
+                              if (confirm(_store.t.call(void 0, "sidebar.undo_confirm", { title: sTitle }))) {
+                                _store.undoSession.call(void 0, item.id);
+                              }
+                            },
                           },
                           _icons.iconUndo.call(void 0, 12)
                         )
@@ -3674,7 +3654,12 @@ var _icons = require('./icons');
                           {
                             class: "session-act-btn",
                             title: () => _store.t.call(void 0, "sidebar.compact"),
-                            onclick: () => _store.compactSession.call(void 0, item.id),
+                            onclick: () => {
+                              const sTitle = item.title || item.name;
+                              if (confirm(_store.t.call(void 0, "sidebar.compact_confirm", { title: sTitle }))) {
+                                _store.compactSession.call(void 0, item.id);
+                              }
+                            },
                           },
                           _icons.iconCompact.call(void 0, 12)
                         )
@@ -3684,7 +3669,12 @@ var _icons = require('./icons');
                           {
                             class: "session-act-btn",
                             title: () => _store.t.call(void 0, "sidebar.restore"),
-                            onclick: () => _store.restoreSession.call(void 0, item.id),
+                            onclick: () => {
+                              const sTitle = item.title || item.name;
+                              if (confirm(_store.t.call(void 0, "sidebar.restore_confirm", { title: sTitle }))) {
+                                _store.restoreSession.call(void 0, item.id);
+                              }
+                            },
                           },
                           _icons.iconRotateCcw.call(void 0, 12)
                         )
@@ -3692,7 +3682,12 @@ var _icons = require('./icons');
                           {
                             class: "session-act-btn",
                             title: () => _store.t.call(void 0, "sidebar.archive"),
-                            onclick: () => _store.archiveSession.call(void 0, item.id),
+                            onclick: () => {
+                              const sTitle = item.title || item.name;
+                              if (confirm(_store.t.call(void 0, "sidebar.archive_confirm", { title: sTitle }))) {
+                                _store.archiveSession.call(void 0, item.id);
+                              }
+                            },
                           },
                           _icons.iconArchive.call(void 0, 12)
                         ),
@@ -3701,10 +3696,11 @@ var _icons = require('./icons');
                         class: "session-act-btn session-del-btn",
                         title: () => _store.t.call(void 0, "sidebar.delete"),
                         onclick: () => {
+                          const sTitle = item.title || item.name;
                           if (
                             confirm(
                               _store.t.call(void 0, "sidebar.del_confirm", {
-                                title: item.title || item.name,
+                                title: sTitle,
                               })
                             )
                           ) {
@@ -4641,6 +4637,7 @@ var _dom = require('./dom');
 
 
 var _store = require('./store');
+
 var _signal = require('./signal');
 
 
@@ -5153,18 +5150,12 @@ var _icons = require('./icons');
             },
             _dom.tags.span({ class: "bar-tag-text" }, "@")
           ),
+          // 模式切换胶囊 (YOLO / ASK / READ-ONLY 可在输入台直接点击切换)
           _dom.tags.div(
-            { class: "mode-badge-wrap" },
-            () => {
-              const curMode = _store.mode.call(void 0, );
-              if (curMode === "yolo") {
-                return _dom.tags.span({ class: "mode-badge mode-yolo" }, _icons.iconBolt.call(void 0, 12), () => _store.t.call(void 0, "mode.yolo"));
-              }
-              if (curMode === "ask") {
-                return _dom.tags.span({ class: "mode-badge mode-ask" }, _icons.iconQuestion.call(void 0, 12), () => _store.t.call(void 0, "mode.ask"));
-              }
-              return _dom.tags.span({ class: "mode-badge mode-plan" }, _icons.iconShield.call(void 0, 12), () => _store.t.call(void 0, "mode.read_only"));
-            }
+            { class: "composer-mode-pill mode-pill" },
+            renderComposerModeBtn("yolo", _icons.iconBolt, "mode.yolo", "mode.yolo_desc"),
+            renderComposerModeBtn("ask", _icons.iconQuestion, "mode.ask", "mode.ask_desc"),
+            renderComposerModeBtn("read-only", _icons.iconShield, "mode.read_only", "mode.read_only_desc")
           ),
           // 沙箱药丸（点击轮切：off -> workspace -> strict）
           () => {
@@ -5218,6 +5209,29 @@ var _icons = require('./icons');
     )
   );
 } exports.renderComposer = renderComposer;
+
+function renderComposerModeBtn(
+  m,
+  iconFn,
+  labelKey,
+  titleKey
+) {
+  const isSelected = () => {
+    const cur = _store.mode.call(void 0, );
+    if (m === "read-only") return cur === "read-only" || cur === "plan";
+    return cur === m;
+  };
+
+  return _dom.tags.button(
+    {
+      class: () => `mode-btn mode-btn-${m} ${isSelected() ? "is-active" : ""}`,
+      title: () => _store.t.call(void 0, titleKey),
+      onclick: () => _store.switchMode.call(void 0, m),
+    },
+    iconFn(11, "mode-btn-icon"),
+    _dom.tags.span({ class: "mode-btn-label" }, () => _store.t.call(void 0, labelKey))
+  );
+}
 
 };
 __modules["deck"] = function(module, exports, require) {

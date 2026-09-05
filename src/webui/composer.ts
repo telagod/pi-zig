@@ -28,6 +28,7 @@ import {
   showSettingsModal,
   t,
 } from "./store";
+import { AppMode } from "./types";
 import { signal, effect } from "./signal";
 import {
   iconSend,
@@ -540,18 +541,12 @@ export function renderComposer(): HTMLElement {
             },
             tags.span({ class: "bar-tag-text" }, "@")
           ),
+          // 模式切换胶囊 (YOLO / ASK / READ-ONLY 可在输入台直接点击切换)
           tags.div(
-            { class: "mode-badge-wrap" },
-            () => {
-              const curMode = mode();
-              if (curMode === "yolo") {
-                return tags.span({ class: "mode-badge mode-yolo" }, iconBolt(12), () => t("mode.yolo"));
-              }
-              if (curMode === "ask") {
-                return tags.span({ class: "mode-badge mode-ask" }, iconQuestion(12), () => t("mode.ask"));
-              }
-              return tags.span({ class: "mode-badge mode-plan" }, iconShield(12), () => t("mode.read_only"));
-            }
+            { class: "composer-mode-pill mode-pill" },
+            renderComposerModeBtn("yolo", iconBolt, "mode.yolo", "mode.yolo_desc"),
+            renderComposerModeBtn("ask", iconQuestion, "mode.ask", "mode.ask_desc"),
+            renderComposerModeBtn("read-only", iconShield, "mode.read_only", "mode.read_only_desc")
           ),
           // 沙箱药丸（点击轮切：off -> workspace -> strict）
           () => {
@@ -603,5 +598,28 @@ export function renderComposer(): HTMLElement {
         )
       )
     )
+  );
+}
+
+function renderComposerModeBtn(
+  m: AppMode,
+  iconFn: (size: number, cls: string) => SVGElement,
+  labelKey: string,
+  titleKey: string
+): HTMLElement {
+  const isSelected = () => {
+    const cur = mode();
+    if (m === "read-only") return cur === "read-only" || cur === "plan";
+    return cur === m;
+  };
+
+  return tags.button(
+    {
+      class: () => `mode-btn mode-btn-${m} ${isSelected() ? "is-active" : ""}`,
+      title: () => t(titleKey),
+      onclick: () => switchMode(m),
+    },
+    iconFn(11, "mode-btn-icon"),
+    tags.span({ class: "mode-btn-label" }, () => t(labelKey))
   );
 }

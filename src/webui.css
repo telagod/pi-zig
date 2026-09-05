@@ -41,7 +41,7 @@
   --radius-lg: 10px;
   --radius-full: 9999px;
 
-  --topbar-height: 46px;
+  --topbar-height: 38px;
   --sidebar-width: 250px;
   --deck-width: 500px;
 }
@@ -289,21 +289,20 @@ button, input, select, textarea {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 16px;
+  padding: 0 12px;
   z-index: 20;
   user-select: none;
   box-sizing: border-box;
 }
 
-/* 左侧区域：项目上下文与面包屑 */
+/* 左侧区域：项目上下文与面包屑 (对齐拉直，解除旧版中间胶囊截断) */
 .tb-left {
   display: flex;
   align-items: center;
   gap: 4px;
   height: 28px;
-  max-width: calc(50% - 150px);
   min-width: 0;
-  flex: 0 1 auto;
+  flex: 1 1 auto;
 }
 
 .tb-sidebar-btn {
@@ -379,16 +378,20 @@ button, input, select, textarea {
 }
 
 .tb-crumb-ws {
+  display: inline-flex;
+  align-items: center;
   gap: 5px;
+  height: 28px;
   font-size: 12px;
   font-family: var(--font-mono);
   color: var(--text-secondary);
-  max-width: 240px;
+  max-width: 260px;
   overflow: hidden;
   text-overflow: ellipsis;
   padding: 0 6px;
   border-radius: var(--radius-sm);
   transition: background 0.15s ease, color 0.15s ease;
+  box-sizing: border-box;
 }
 
 .tb-crumb-ws:hover {
@@ -415,7 +418,7 @@ button, input, select, textarea {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  height: 15px;
+  height: 16px;
   padding: 0 4px;
   border-radius: 3px;
   background: rgba(245, 158, 11, 0.12);
@@ -425,21 +428,26 @@ button, input, select, textarea {
   font-weight: 600;
   font-family: var(--font-mono);
   line-height: 1;
+  margin-left: 2px;
 }
 
 .tb-session-btn {
+  display: inline-flex;
+  align-items: center;
+  height: 28px;
   font-size: 12px;
   font-weight: 500;
   color: var(--text-secondary);
   padding: 0 8px;
   border-radius: var(--radius-sm);
-  max-width: 200px;
+  max-width: 280px;
   overflow: hidden;
   text-overflow: ellipsis;
   cursor: pointer;
   background: transparent;
   border: none;
   transition: background 0.15s ease, color 0.15s ease;
+  box-sizing: border-box;
 }
 
 .tb-session-btn:hover {
@@ -447,42 +455,30 @@ button, input, select, textarea {
   color: var(--text-primary);
 }
 
-/* ================= 中间区域：绝对正中居中 (True Absolute Centering) ================= */
-.tb-center {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  transform: translate(-50%, -50%);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 5;
-  pointer-events: auto;
-}
-
-.mode-pill {
+/* ================= 智能输入台模式切换胶囊 (Composer Mode Segmented Pill) ================= */
+.composer-mode-pill {
   display: inline-flex;
   align-items: center;
   background: var(--bg-subtle);
   border: 1px solid var(--border-subtle);
-  border-radius: 7px;
-  padding: 2px;
-  gap: 2px;
-  height: 28px;
+  border-radius: var(--radius-sm);
+  padding: 1px;
+  gap: 1px;
+  height: 24px;
   box-sizing: border-box;
 }
 
 .mode-btn {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  height: 22px;
-  padding: 0 8px;
-  border-radius: 5px;
+  gap: 4px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 3px;
   border: none;
   background: transparent;
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: 10.5px;
   font-weight: 500;
   letter-spacing: 0.2px;
   cursor: pointer;
@@ -492,27 +488,31 @@ button, input, select, textarea {
 
 .mode-btn:hover {
   color: var(--text-secondary);
-  background: rgba(255, 255, 255, 0.03);
+  background: rgba(255, 255, 255, 0.04);
 }
 
 .mode-btn.is-active {
   background: var(--bg-elevated);
   color: var(--text-primary);
   font-weight: 600;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.22), 0 0 0 1px var(--border-subtle);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2), 0 0 0 1px var(--border-subtle);
 }
 
 .mode-btn.is-active.mode-btn-yolo {
   color: #f59e0b;
 }
 
-.mode-btn.is-active.mode-btn-read-only {
+.mode-btn.is-active.mode-btn-ask {
   color: var(--accent-primary);
 }
 
+.mode-btn.is-active.mode-btn-read-only {
+  color: var(--accent-purple);
+}
+
 .mode-btn-icon {
-  width: 12px;
-  height: 12px;
+  width: 11px;
+  height: 11px;
   flex-shrink: 0;
 }
 
@@ -863,9 +863,12 @@ button, input, select, textarea {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 12px;
+  height: 38px;
+  min-height: 38px;
+  padding: 0 10px;
   border-bottom: 1px solid var(--border-subtle);
   background: var(--bg-surface);
+  box-sizing: border-box;
 }
 
 .sidebar-hdr-title-wrap {
@@ -933,19 +936,21 @@ button, input, select, textarea {
   background: var(--accent-primary-subtle);
 }
 
-/* 项目工程树形列表容器 */
+/* 项目工程树形列表容器：左右绝对顶格 (padding: 4px 0) */
 .sidebar-project-tree {
   flex: 1;
   overflow-y: auto;
-  padding: 6px;
+  overflow-x: hidden;
+  padding: 4px 0;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 1px;
 }
 
 .project-group {
   display: flex;
   flex-direction: column;
+  width: 100%;
 }
 
 .project-group-header {
@@ -953,12 +958,15 @@ button, input, select, textarea {
   align-items: center;
   gap: 6px;
   height: 28px;
-  padding: 0 8px;
-  border-radius: var(--radius-sm);
+  min-height: 28px;
+  padding: 0 10px 0 8px;
+  border-radius: 0;
   cursor: pointer;
   user-select: none;
   transition: all 0.12s ease;
   position: relative;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .project-group-header:hover {
@@ -1000,7 +1008,7 @@ button, input, select, textarea {
 
 .project-name {
   font-size: 12px;
-  font-weight: 550;
+  font-weight: 600;
   color: var(--text-primary);
   white-space: nowrap;
   overflow: hidden;
@@ -1053,19 +1061,18 @@ button, input, select, textarea {
   color: var(--text-primary);
 }
 
+/* 项目子会话分支列表：顶格树架构 */
 .project-sessions-list {
-  margin-left: 14px;
-  padding-left: 6px;
-  border-left: 1px solid var(--border-subtle);
+  margin: 1px 0 2px 0;
+  padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  margin-top: 2px;
-  margin-bottom: 4px;
+  gap: 1px;
+  width: 100%;
 }
 
 .project-sessions-empty {
-  padding: 6px 12px;
+  padding: 6px 12px 6px 28px;
   font-size: 11px;
   color: var(--text-muted);
   font-style: italic;
@@ -1097,9 +1104,12 @@ button, input, select, textarea {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 10px;
+  height: 32px;
+  min-height: 32px;
+  padding: 0 10px;
   border-bottom: 1px solid var(--border-subtle);
   color: var(--text-muted);
+  box-sizing: border-box;
 }
 
 .sidebar-search-input {
@@ -1107,6 +1117,8 @@ button, input, select, textarea {
   font-size: 11.5px;
   color: var(--text-primary);
   outline: none;
+  background: transparent;
+  border: none;
 }
 
 .sidebar-search-input::placeholder {
@@ -1116,21 +1128,24 @@ button, input, select, textarea {
 .sidebar-list {
   flex: 1;
   overflow-y: auto;
-  padding: 6px;
+  overflow-x: hidden;
+  padding: 4px 0;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 1px;
 }
 
 .session-item {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 7px 9px;
-  border-radius: var(--radius-sm);
+  padding: 6px 10px 6px 26px;
+  border-radius: 0;
   cursor: pointer;
   position: relative;
   transition: background 0.12s ease;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .session-item:hover {
@@ -1153,11 +1168,11 @@ button, input, select, textarea {
   content: "";
   position: absolute;
   left: 0;
-  top: 6px;
-  bottom: 6px;
-  width: 2.5px;
+  top: 0;
+  bottom: 0;
+  width: 3px;
   background: var(--accent-primary);
-  border-radius: 0 2px 2px 0;
+  border-radius: 0;
 }
 
 .session-item-body {
@@ -1166,21 +1181,21 @@ button, input, select, textarea {
 }
 
 .session-title {
-  font-size: 12.5px;
+  font-size: 12px;
   color: var(--text-primary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  font-weight: 450;
+  font-weight: 500;
 }
 
 .session-meta {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 10.5px;
+  font-size: 10px;
   color: var(--text-muted);
-  margin-top: 2px;
+  margin-top: 1px;
 }
 
 .session-badge {
@@ -1191,6 +1206,8 @@ button, input, select, textarea {
   display: none;
   align-items: center;
   gap: 2px;
+  flex-shrink: 0;
+  margin-left: 6px;
 }
 
 .session-item:hover .session-actions {
@@ -1198,15 +1215,18 @@ button, input, select, textarea {
 }
 
 .session-act-btn {
-  width: 22px;
-  height: 22px;
+  width: 20px;
+  height: 20px;
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: var(--radius-sm);
+  border-radius: 3px;
   color: var(--text-muted);
   cursor: pointer;
   transition: color 0.12s ease, background 0.12s ease;
+  background: transparent;
+  border: none;
+  padding: 0;
 }
 
 .session-act-btn:hover {

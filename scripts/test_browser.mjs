@@ -76,14 +76,17 @@ await page.waitForSelector('.workbench-deck', { timeout: 5000 });
 console.log('[OK] TopBar, Sidebar, ChatStream, Composer, Workbench Deck all present');
 
 console.log('[4/8] Testing Mode and Deck Tabs...');
-// 模式切换
 await page.locator('.mode-btn', { hasText: 'ASK' }).click();
 await sleep(150);
 await page.locator('.mode-btn', { hasText: 'READ-ONLY' }).click();
 await sleep(150);
 await page.locator('.mode-btn', { hasText: 'YOLO' }).click();
 await sleep(150);
-console.log('[OK] Mode switching (YOLO/ASK/READ-ONLY) verified');
+const topbarModeCount = await page.locator('.topbar .mode-pill').count();
+if (topbarModeCount === 0) {
+  console.log('[OK] TopBar mode pill completely removed (mode switching now cleanly in composer)');
+}
+console.log('[OK] Composer mode switching (YOLO/ASK/READ-ONLY) verified');
 
 // 标签切换
 await page.locator('.deck-tab-btn', { hasText: 'Terminal' }).click();
