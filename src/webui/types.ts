@@ -76,8 +76,8 @@ export interface SessionItem {
 }
 
 export interface WorkspaceItem {
+  root: string;
   name: string;
-  path: string;
   isCurrent?: boolean;
 }
 
@@ -89,7 +89,7 @@ export interface FileTreeItem {
   link?: string;
 }
 
-export type AppMode = "yolo" | "ask" | "plan";
+export type AppMode = "yolo" | "ask" | "read-only" | "plan";
 export type DeckTab = "diffs" | "terminal" | "jobs" | "files";
 
 export interface ApprovalRequest {
@@ -104,5 +104,67 @@ export interface ServerState {
   port: number;
   model?: string;
   pct?: number;
-  history?: Array<{ role: string; content: string }>;
+  ws?: string;
+  branch?: string;
+  changes?: number;
+  mode?: string;
+  hist_start?: number;
+  hist_total?: number;
+  history?: Array<{ role: string; content: string; name?: string; args?: any; thought?: string }>;
+}
+
+export interface ActivityItem {
+  pid?: number;
+  name?: string;
+  cmd?: string;
+  duration?: number;
+  bytes?: number;
+  startedAt?: number;
+}
+
+export interface SlashCommandItem {
+  cmd: string;
+  desc: string;
+}
+
+export interface ToastItem {
+  id: string;
+  message: string;
+  type: "info" | "success" | "warning" | "error";
+  time: number;
+}
+
+export interface UsageSummary {
+  lines: number;
+  in: number;
+  out: number;
+  usd: number;
+  tail: string;
+}
+
+export interface PackageItem {
+  name: string;
+  skills?: number;
+  prompts?: number;
+  agents?: number;
+}
+
+export interface ArtifactItem {
+  name: string;
+  content: string;
+}
+
+export type ThemeId = "dark" | "abyss" | "matrix" | "synthwave" | "amber" | "light";
+
+export interface ThemeMeta {
+  id: ThemeId;
+  nameKey: string;
+  descKey: string;
+  icon: string;
+  preview: {
+    canvas: string;
+    surface: string;
+    accent: string;
+  };
+  isDark: boolean;
 }

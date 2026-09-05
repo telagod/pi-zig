@@ -16,8 +16,14 @@ import {
   setDeckTab,
   showSearchModal,
   showShortcutsModal,
+  showSettingsModal,
+  showAddWorkspaceModal,
+  showArtifactModal,
   isStreaming,
   interrupt,
+  regenerateLastTurn,
+  turns,
+  showToast,
 } from "./store";
 
 function createApp(): HTMLElement {
@@ -28,13 +34,13 @@ function createApp(): HTMLElement {
 
   // 2. 主体三栏工作区容器 (Sidebar + Chat Area + Splitter + Deck)
   const mainWorkspace = tags.div(
-    { class: "main-workspace" },
+    { class: "main-layout main-workspace" },
     // 左侧边栏
     renderSidebar(),
 
     // 中央会话流与输入台
     tags.main(
-      { class: "chat-main-column" },
+      { class: "chat-workspace chat-main-column" },
       renderChatStream(),
       renderComposer()
     ),
@@ -81,6 +87,19 @@ function setupKeybindings() {
     } else if (isMeta && e.shiftKey && (e.key === "T" || e.key === "t")) {
       e.preventDefault();
       setDeckTab("terminal");
+    } else if (isMeta && e.shiftKey && (e.key === "R" || e.key === "r")) {
+      e.preventDefault();
+      regenerateLastTurn();
+    } else if (isMeta && e.shiftKey && (e.key === "C" || e.key === "c")) {
+      e.preventDefault();
+      const list = turns();
+      for (let i = list.length - 1; i >= 0; i--) {
+        if (list[i].role === "assistant" && list[i].content) {
+          navigator.clipboard.writeText(list[i].content);
+          showToast("Copied last assistant response", "info");
+          break;
+        }
+      }
     } else if (e.key === "?" && !["INPUT", "TEXTAREA"].includes((e.target as HTMLElement)?.tagName)) {
       e.preventDefault();
       showShortcutsModal.update((v) => !v);
@@ -89,6 +108,12 @@ function setupKeybindings() {
         showSearchModal.set(false);
       } else if (showShortcutsModal()) {
         showShortcutsModal.set(false);
+      } else if (showSettingsModal()) {
+        showSettingsModal.set(false);
+      } else if (showAddWorkspaceModal()) {
+        showAddWorkspaceModal.set(false);
+      } else if (showArtifactModal()) {
+        showArtifactModal.set(false);
       } else if (isStreaming()) {
         interrupt();
       }

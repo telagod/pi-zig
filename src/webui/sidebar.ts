@@ -1,4 +1,4 @@
-// sidebar.ts —— 侧边会话抽屉与多会话管理
+// sidebar.ts —— 侧边工作区与会话抽屉管理
 import { tags, each } from "./dom";
 import {
   sidebarOpen,
@@ -8,13 +8,35 @@ import {
   createSession,
   renameSession,
   deleteSession,
+  forkSession,
+  undoSession,
+  compactSession,
+  workspaces,
+  currentWs,
+  wsName,
+  switchWorkspace,
+  showAddWorkspaceModal,
+  t,
 } from "./store";
 import { signal } from "./signal";
-import { SessionItem } from "./types";
-import { iconPlus, iconTrash, iconSearch } from "./icons";
+import { SessionItem, WorkspaceItem } from "./types";
+import {
+  iconPlus,
+  iconTrash,
+  iconSearch,
+  iconClose,
+  iconFolder,
+  iconFolderPlus,
+  iconFork,
+  iconUndo,
+  iconCompact,
+  iconEdit,
+  iconChevronDown,
+} from "./icons";
 
 export function renderSidebar(): HTMLElement {
   const searchQuery = signal<string>("");
+  const showWsDropdown = signal<boolean>(false);
 
   const filteredSessions = () => {
     const q = searchQuery().toLowerCase().trim();
@@ -27,7 +49,69 @@ export function renderSidebar(): HTMLElement {
     {
       class: () => `sidebar ${sidebarOpen() ? "is-open" : "is-collapsed"}`,
     },
-    // 侧栏顶操作
+    // 1. 顶层工作区选择卡
+    tags.div(
+      { class: "sidebar-ws-section" },
+      tags.div(
+        {
+          class: "sidebar-ws-card",
+          title: () => t("sidebar.switch_ws"),
+          onclick: () => showWsDropdown.set(!showWsDropdown()),
+        },
+        tags.div({ class: "ws-icon" }, iconFolder(15)),
+        tags.div(
+          { class: "ws-info" },
+          tags.div({ class: "ws-label" }, () => t("sidebar.project_ws")),
+          tags.div({ class: "ws-name" }, () => wsName() || "workspace")
+        ),
+        tags.span({ class: "ws-chevron" }, iconChevronDown(12))
+      ),
+      // 工作区下拉选择单
+      () => {
+        if (!showWsDropdown()) return null;
+        const list = workspaces();
+
+        return tags.div(
+          { class: "ws-dropdown" },
+          tags.div({ class: "ws-dropdown-hdr" }, () => t("sidebar.project_ws")),
+          list.length > 0
+            ? list.map((w: WorkspaceItem) =>
+                tags.div(
+                  {
+                    class: () =>
+                      `ws-dropdown-item ${currentWs() === w.root ? "is-active" : ""}`,
+                    onclick: (e: MouseEvent) => {
+                      e.stopPropagation();
+                      showWsDropdown.set(false);
+                      switchWorkspace(w.root);
+                    },
+                  },
+                  iconFolder(13),
+                  tags.div(
+                    { class: "ws-item-text" },
+                    tags.div({ class: "ws-item-name" }, w.name),
+                    tags.div({ class: "ws-item-root" }, w.root)
+                  )
+                )
+              )
+            : tags.div({ class: "ws-dropdown-empty" }, () => t("sidebar.no_external_ws")),
+          tags.div(
+            {
+              class: "ws-add-item",
+              onclick: (e: MouseEvent) => {
+                e.stopPropagation();
+                showWsDropdown.set(false);
+                showAddWorkspaceModal.set(true);
+              },
+            },
+            iconFolderPlus(13),
+            tags.span({}, () => t("sidebar.add_project"))
+          )
+        );
+      }
+    ),
+
+    // 2. 侧栏操作区（新建会话与搜索）
     tags.div(
       { class: "sidebar-hdr" },
       tags.button(
@@ -36,25 +120,35 @@ export function renderSidebar(): HTMLElement {
           onclick: createSession,
         },
         iconPlus(13, "btn-icon"),
-        tags.span({ class: "btn-text" }, "New Session")
+        tags.span({ class: "btn-text" }, () => t("sidebar.new_session"))
       )
     ),
 
-    // 搜索框
     tags.div(
       { class: "sidebar-search-box" },
       iconSearch(12, "sidebar-search-icon"),
       tags.input({
         class: "sidebar-search-input",
-        placeholder: "Filter sessions...",
+        placeholder: () => t("sidebar.filter_sessions"),
         value: () => searchQuery(),
         oninput: (e: Event) => {
           searchQuery.set((e.target as HTMLInputElement).value);
         },
-      })
+      }),
+      () =>
+        searchQuery()
+          ? tags.button(
+              {
+                class: "sidebar-search-clear",
+                onclick: () => searchQuery.set(""),
+                title: "Clear filter",
+              },
+              iconClose(10)
+            )
+          : null
     ),
 
-    // 会话列表
+    // 3. 会话列表（支持重命名、Fork、Undo、Compact、删除）
     tags.div(
       { class: "sidebar-list" },
       each(filteredSessions, (item: SessionItem) => {
@@ -74,15 +168,53 @@ export function renderSidebar(): HTMLElement {
               tags.span({ class: "session-time" }, formatRelativeTime(item.updatedAt))
             )
           ),
-          // 悬浮操作
+          // 悬浮全功能操作条
           tags.div(
             { class: "session-actions", onclick: (e: MouseEvent) => e.stopPropagation() },
             tags.button(
               {
-                class: "session-act-btn session-del-btn",
-                title: "Delete",
+                class: "session-act-btn",
+                title: () => t("sidebar.rename"),
                 onclick: () => {
-                  if (confirm(`Delete session "${item.title || item.name}"?`)) {
+                  const currentTitle = item.title || item.name;
+                  const next = prompt(t("sidebar.rename_prompt"), currentTitle);
+                  if (next && next.trim()) {
+                    renameSession(item.id, next.trim());
+                  }
+                },
+              },
+              iconEdit(12)
+            ),
+            tags.button(
+              {
+                class: "session-act-btn",
+                title: () => t("sidebar.fork"),
+                onclick: () => forkSession(item.id),
+              },
+              iconFork(12)
+            ),
+            tags.button(
+              {
+                class: "session-act-btn",
+                title: () => t("sidebar.undo"),
+                onclick: () => undoSession(item.id),
+              },
+              iconUndo(12)
+            ),
+            tags.button(
+              {
+                class: "session-act-btn",
+                title: () => t("sidebar.compact"),
+                onclick: () => compactSession(item.id),
+              },
+              iconCompact(12)
+            ),
+            tags.button(
+              {
+                class: "session-act-btn session-del-btn",
+                title: () => t("sidebar.delete"),
+                onclick: () => {
+                  if (confirm(t("sidebar.del_confirm", { title: item.title || item.name }))) {
                     deleteSession(item.id);
                   }
                 },
@@ -94,10 +226,18 @@ export function renderSidebar(): HTMLElement {
       }),
       () => {
         if (sessions().length === 0) {
-          return tags.div({ class: "sidebar-empty" }, "No sessions yet.");
+          return tags.div({ class: "sidebar-empty" }, () => t("sidebar.no_sessions"));
         }
         return null;
       }
+    ),
+
+    // 4. 侧栏底部状态统计
+    tags.div(
+      { class: "sidebar-footer" },
+      () => tags.span({}, t("sidebar.sessions_count", { count: sessions().length })),
+      tags.span({ class: "sidebar-footer-dot" }, "·"),
+      tags.span({ class: "sidebar-footer-mode" }, "Local DAG")
     )
   );
 }

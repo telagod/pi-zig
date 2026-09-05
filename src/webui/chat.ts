@@ -1,4 +1,4 @@
-// chat.ts —— 对话流视图 (Turn 境界、动态思考计时、多模态图片展示、操作动作条与 Markdown 渲染)
+// chat.ts —— 对话流视图 (Turn 境界、动态思考计时、多模态图片展示、工具行展开、Artifact 穿透与 Markdown 渲染)
 import { tags, each } from "./dom";
 import {
   turns,
@@ -6,8 +6,14 @@ import {
   appendTerminalLine,
   setDeckTab,
   regenerateLastTurn,
+  hasMoreHistory,
+  historyTotal,
+  loadMoreHistory,
+  viewArtifact,
+  t,
 } from "./store";
 import { renderMarkdown } from "./md";
+import { ansiToHtml } from "./term";
 import { Turn, StepItem } from "./types";
 import { signal, effect } from "./signal";
 import {
@@ -26,6 +32,8 @@ import {
   iconShield,
   iconRefresh,
   iconEdit,
+  iconDownload,
+  iconCompact,
 } from "./icons";
 
 export function renderChatStream(): HTMLElement {
@@ -40,14 +48,33 @@ export function renderChatStream(): HTMLElement {
         userScrolledUp = distFromBottom > 80;
       },
     },
-    // 渲染每一轮对话
+    // 1. 顶部历史分页加载条 (若总消息数多于当前载入数)
+    () => {
+      if (!hasMoreHistory()) return null;
+      const remaining = historyTotal() - turns().length;
+      return tags.div(
+        { class: "chat-history-loader" },
+        tags.button(
+          {
+            class: "history-load-btn",
+            onclick: loadMoreHistory,
+          },
+          tags.span({}, () => t("chat.load_earlier", { remaining }))
+        )
+      );
+    },
+
+    // 2. 消息流
     each(turns, (turn: Turn) => {
+      if (turn.isCheckpoint) {
+        return renderCheckpointRow(turn);
+      }
       if (turn.role === "user") {
         return renderUserTurn(turn);
-      } else {
-        return renderAssistantTurn(turn);
       }
+      return renderAssistantTurn(turn);
     }),
+
     // 空态欢迎页
     () => {
       if (turns().length === 0) {
@@ -71,6 +98,15 @@ export function renderChatStream(): HTMLElement {
   return container;
 }
 
+function renderCheckpointRow(turn: Turn): HTMLElement {
+  return tags.div(
+    { class: "checkpoint-row", id: turn.id },
+    tags.div({ class: "checkpoint-icon" }, iconCompact(14)),
+    tags.span({ class: "checkpoint-text" }, () => turn.content || t("chat.checkpoint")),
+    tags.span({ class: "checkpoint-badge" }, "CHECKPOINT")
+  );
+}
+
 function renderEmptyState(): HTMLElement {
   function fillPrompt(p: string) {
     if (typeof (window as any).__pizFillComposer === "function") {
@@ -83,8 +119,8 @@ function renderEmptyState(): HTMLElement {
     tags.div(
       { class: "empty-brand" },
       tags.div({ class: "empty-logo-wrap" }, iconBot(28, "empty-logo-icon")),
-      tags.h2({ class: "empty-title" }, "piz workspace"),
-      tags.p({ class: "empty-subtitle" }, "极速、安全的下一代自律型智能体工作台")
+      tags.h2({ class: "empty-title" }, () => t("chat.empty_title")),
+      tags.p({ class: "empty-subtitle" }, () => t("chat.empty_subtitle"))
     ),
     tags.div(
       { class: "empty-prompts" },
@@ -92,13 +128,13 @@ function renderEmptyState(): HTMLElement {
         {
           class: "prompt-card",
           title: "Click to populate prompt",
-          onclick: () => fillPrompt("分析当前项目架构与未提交修改并提出建议"),
+          onclick: () => fillPrompt(t("chat.prompt_card1_prompt")),
         },
         tags.div({ class: "prompt-card-icon" }, iconBolt(18)),
         tags.div(
           { class: "prompt-card-text" },
-          tags.div({ class: "prompt-card-title" }, "任务驱动与自动编码"),
-          tags.div({ class: "prompt-card-desc" }, "自动分解目标，阅读依赖，编写代码并运行验证")
+          tags.div({ class: "prompt-card-title" }, () => t("chat.prompt_card1_title")),
+          tags.div({ class: "prompt-card-desc" }, () => t("chat.prompt_card1_desc"))
         )
       ),
       tags.div(
@@ -112,21 +148,21 @@ function renderEmptyState(): HTMLElement {
         tags.div({ class: "prompt-card-icon" }, iconDiff(18)),
         tags.div(
           { class: "prompt-card-text" },
-          tags.div({ class: "prompt-card-title" }, "代码审查与检视台"),
-          tags.div({ class: "prompt-card-desc" }, "在右侧实时检视变更行数、Hunk 差异与终端输出")
+          tags.div({ class: "prompt-card-title" }, () => t("chat.prompt_card2_title")),
+          tags.div({ class: "prompt-card-desc" }, () => t("chat.prompt_card2_desc"))
         )
       ),
       tags.div(
         {
           class: "prompt-card",
           title: "Click to populate prompt",
-          onclick: () => fillPrompt("对当前项目进行安全审计，检查未授权操作与潜在漏洞"),
+          onclick: () => fillPrompt(t("chat.prompt_card3_prompt")),
         },
         tags.div({ class: "prompt-card-icon" }, iconShield(18)),
         tags.div(
           { class: "prompt-card-text" },
-          tags.div({ class: "prompt-card-title" }, "安全审计与授权把关"),
-          tags.div({ class: "prompt-card-desc" }, "命令防护拦截、权限确认与严格的沙箱隔离")
+          tags.div({ class: "prompt-card-title" }, () => t("chat.prompt_card3_title")),
+          tags.div({ class: "prompt-card-desc" }, () => t("chat.prompt_card3_desc"))
         )
       )
     )
@@ -320,6 +356,9 @@ function renderStepCard(step: StepItem): HTMLElement {
   const isExpanded = signal<boolean>(false);
   const stepCopied = signal<boolean>(false);
 
+  // 检查是否包含外置 Artifact 指针
+  const artMatch = (step.result || "").match(/\[Artifact stored:\s*([a-zA-Z0-9_\-\.]+)\]/);
+
   return tags.div(
     {
       class: () => `step-card status-${step.status}`,
@@ -347,8 +386,14 @@ function renderStepCard(step: StepItem): HTMLElement {
     // 展开查看详情
     () => {
       if (!isExpanded()) return null;
+
+      const resText = step.result || "";
+      const isDiff = resText.includes("diff --git") || resText.includes("@@ -");
+      const isShell = step.name === "bash" || step.name === "shell" || step.name === "exec";
+
       return tags.div(
         { class: "step-details" },
+        // 参数展示
         step.args
           ? tags.div(
               { class: "step-detail-row" },
@@ -361,13 +406,39 @@ function renderStepCard(step: StepItem): HTMLElement {
               )
             )
           : null,
+
+        // 存储 Artifact 特别穿透卡
+        artMatch
+          ? tags.div(
+              { class: "step-artifact-card" },
+              tags.span({ class: "artifact-title" }, `Large tool payload saved (${artMatch[1]})`),
+              tags.button(
+                {
+                  class: "step-artifact-btn",
+                  title: "Inspect stored artifact contents",
+                  onclick: () => viewArtifact(artMatch[1]),
+                },
+                iconDownload(12),
+                tags.span({}, "View Stored Artifact")
+              )
+            )
+          : null,
+
+        // 结果输出展示（支持 Diff 高亮与 ANSI 终端色）
         step.result
           ? tags.div(
               { class: "step-detail-row" },
               tags.div({ class: "step-detail-lbl" }, "Result:"),
-              tags.pre({ class: "step-detail-pre" }, step.result)
+              isShell
+                ? tags.div({
+                    class: "step-detail-pre step-ansi-wrap",
+                    innerHTML: ansiToHtml(step.result),
+                  })
+                : tags.pre({ class: `step-detail-pre ${isDiff ? "step-diff-pre" : ""}` }, step.result)
             )
           : null,
+
+        // 错误展示
         step.error
           ? tags.div(
               { class: "step-detail-row step-error" },
@@ -375,6 +446,8 @@ function renderStepCard(step: StepItem): HTMLElement {
               tags.pre({ class: "step-detail-pre" }, step.error)
             )
           : null,
+
+        // 快捷操作栏
         tags.div(
           { class: "step-actions" },
           tags.button(

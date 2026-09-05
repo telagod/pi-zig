@@ -102,6 +102,14 @@ export function iconMoon(size = 16, cls = ""): SVGElement {
   return createSvg("M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z", size, cls);
 }
 
+export function iconPalette(size = 16, cls = ""): SVGElement {
+  return createSvg(
+    "M13.5 6.5h.01M17.5 10.5h.01M8.5 7.5h.01M6.5 12.5h.01M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z",
+    size,
+    cls
+  );
+}
+
 export function iconPlus(size = 16, cls = ""): SVGElement {
   return createSvg("M12 5v14M5 12h14", size, cls);
 }
@@ -264,4 +272,44 @@ export function iconHelp(size = 16, cls = ""): SVGElement {
     size,
     cls
   );
+}
+
+export function iconDots(size = 16, cls = ""): SVGElement {
+  return createSvg("M12 12h.01M19 12h.01M5 12h.01", size, cls);
+}
+
+export function iconUndo(size = 16, cls = ""): SVGElement {
+  return createSvg("M3 7v6h6M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13", size, cls);
+}
+
+export function iconFork(size = 16, cls = ""): SVGElement {
+  return createSvg("M6 3a3 3 0 1 0 0 6 3 3 0 0 0 0-6zm12 0a3 3 0 1 0 0 6 3 3 0 0 0 0-6zm-6 12a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM6 9v2a4 4 0 0 0 4 4h4a4 4 0 0 0 4-4V9", size, cls);
+}
+
+export function iconArchive(size = 16, cls = ""): SVGElement {
+  return createSvg("M21 8v13H3V8M1 3h22v5H1zM10 12h4", size, cls);
+}
+
+export function iconFolderPlus(size = 16, cls = ""): SVGElement {
+  return createSvg("M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2zM12 11v6M9 14h6", size, cls);
+}
+
+export function iconCommit(size = 16, cls = ""): SVGElement {
+  return createSvg("M12 3v6M12 15v6M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z", size, cls);
+}
+
+export function iconActivity(size = 16, cls = ""): SVGElement {
+  return createSvg("M22 12h-4l-3 9L9 3l-3 9H2", size, cls);
+}
+
+export function iconCompact(size = 16, cls = ""): SVGElement {
+  return createSvg("M4 6h16M4 12h16M4 18h16M8 6v12M16 6v12", size, cls);
+}
+
+export function iconFileText(size = 16, cls = ""): SVGElement {
+  return createSvg("M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z M14 2v6h6 M16 13H8 M16 17H8 M10 9H8", size, cls);
+}
+
+export function iconGlobe(size = 16, cls = ""): SVGElement {
+  return createSvg("M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm0 0c2.5 2.7 4 6.2 4 10s-1.5 7.3-4 10c-2.5-2.7-4-6.2-4-10s1.5-7.3 4-10zM2 12h20", size, cls);
 }

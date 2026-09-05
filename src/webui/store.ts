@@ -7,13 +7,83 @@ import {
   JobItem,
   TerminalLine,
   SessionItem,
+  WorkspaceItem,
   FileTreeItem,
   AppMode,
   DeckTab,
   ApprovalRequest,
+  ActivityItem,
+  SlashCommandItem,
+  ToastItem,
+  UsageSummary,
+  PackageItem,
+  ArtifactItem,
+  ThemeId,
+  ThemeMeta,
 } from "./types";
 import { apiFetch, connectEventStream, setToken } from "./net";
 import { parseUnifiedDiff } from "./diff";
+export { locale, setLocale, toggleLocale, t } from "./i18n";
+
+export const THEMES: ThemeMeta[] = [
+  {
+    id: "dark",
+    nameKey: "theme.dark",
+    descKey: "theme.dark_desc",
+    icon: "🌌",
+    preview: { canvas: "#090a0c", surface: "#16191e", accent: "#4493f8" },
+    isDark: true,
+  },
+  {
+    id: "abyss",
+    nameKey: "theme.abyss",
+    descKey: "theme.abyss_desc",
+    icon: "🩸",
+    preview: { canvas: "#0b0708", surface: "#1b0f14", accent: "#f43f5e" },
+    isDark: true,
+  },
+  {
+    id: "matrix",
+    nameKey: "theme.matrix",
+    descKey: "theme.matrix_desc",
+    icon: "🟢",
+    preview: { canvas: "#020804", surface: "#0b1c10", accent: "#22c55e" },
+    isDark: true,
+  },
+  {
+    id: "synthwave",
+    nameKey: "theme.synthwave",
+    descKey: "theme.synthwave_desc",
+    icon: "🔮",
+    preview: { canvas: "#090513", surface: "#190f2e", accent: "#d946ef" },
+    isDark: true,
+  },
+  {
+    id: "amber",
+    nameKey: "theme.amber",
+    descKey: "theme.amber_desc",
+    icon: "🍯",
+    preview: { canvas: "#0d0905", surface: "#1e160d", accent: "#f59e0b" },
+    isDark: true,
+  },
+  {
+    id: "light",
+    nameKey: "theme.light",
+    descKey: "theme.light_desc",
+    icon: "❄️",
+    preview: { canvas: "#f8fafc", surface: "#ffffff", accent: "#0284c7" },
+    isDark: false,
+  },
+];
+
+export const showThemeMenu = signal<boolean>(false);
+
+function resolveInitialTheme(): ThemeId {
+  const stored = getStored<string>("theme", "");
+  if (THEMES.some((x) => x.id === stored)) return stored as ThemeId;
+  if (stored === "light") return "light";
+  return window.matchMedia?.("(prefers-color-scheme: light)").matches ? "light" : "dark";
+}
 
 // 持久化辅助
 function getStored<T>(key: string, fallback: T): T {
@@ -33,7 +103,9 @@ function setStored<T>(key: string, val: T) {
 
 const urlParams = new URLSearchParams(window.location.search);
 export const urlWs = urlParams.get("ws") || "";
-export const wsName = signal<string>(urlWs || "workspace");
+export const currentWs = signal<string>(urlWs);
+export const wsName = signal<string>(urlWs ? urlWs.split("/").pop() || "workspace" : "workspace");
+export const workspaces = signal<WorkspaceItem[]>([]);
 export const branch = signal<string>("");
 export const changesCount = signal<number>(0);
 
@@ -43,9 +115,11 @@ export const turns = signal<Turn[]>([]);
 export const isStreaming = signal<boolean>(false);
 export const streamingTurnId = signal<string | null>(null);
 
-export const theme = signal<"dark" | "light">(
-  getStored("theme", window.matchMedia?.("(prefers-color-scheme: light)").matches ? "light" : "dark")
-);
+export const historyTotal = signal<number>(0);
+export const historyStart = signal<number>(0);
+export const hasMoreHistory = computed(() => historyTotal() > turns().length);
+
+export const theme = signal<ThemeId>(resolveInitialTheme());
 
 export const connectionStatus = signal<"connected" | "connecting" | "disconnected">("connecting");
 
@@ -66,11 +140,24 @@ export const terminalLines = signal<TerminalLine[]>([]);
 export const jobs = signal<JobItem[]>([]);
 export const files = signal<FileTreeItem[]>([]);
 
+export const activityList = signal<ActivityItem[]>([]);
+export const slashCommands = signal<SlashCommandItem[]>([]);
+export const toasts = signal<ToastItem[]>([]);
+
+export const sandboxMode = signal<string>("off");
+export const usageSummary = signal<UsageSummary>({ lines: 0, in: 0, out: 0, usd: 0, tail: "" });
+export const packagesList = signal<{ user: any[]; project: any[] }>({ user: [], project: [] });
+
+export const activeArtifact = signal<{ name: string; content: string; isImage?: boolean } | null>(null);
 export const pendingApproval = signal<ApprovalRequest | null>(null);
 export const showSearchModal = signal<boolean>(false);
 export const showAuthModal = signal<boolean>(false);
 export const showSettingsModal = signal<boolean>(false);
 export const showShortcutsModal = signal<boolean>(false);
+export const showAddWorkspaceModal = signal<boolean>(false);
+export const showArtifactModal = signal<boolean>(false);
+
+export const promptHistory = signal<string[]>(getStored("promptHistory", []));
 
 // 统计衍生物
 export const totalDiffStats = computed(() => {
@@ -95,7 +182,8 @@ export function getQuery(extra: Record<string, string> = {}): string {
   const params = new URLSearchParams();
   const s = activeSession();
   if (s) params.set("session", s);
-  if (urlWs) params.set("ws", urlWs);
+  const curW = currentWs();
+  if (curW) params.set("ws", curW);
   for (const [k, v] of Object.entries(extra)) {
     if (v != null && v !== "") params.set(k, v);
   }
@@ -103,12 +191,34 @@ export function getQuery(extra: Record<string, string> = {}): string {
   return q ? `?${q}` : "";
 }
 
-// 主题切换
-export function toggleTheme() {
-  const next = theme() === "dark" ? "light" : "dark";
+// Toast 消息通知
+export function showToast(
+  message: string,
+  type: ToastItem["type"] = "info",
+  duration = 3200
+) {
+  const id = `toast_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+  toasts.update((prev) => [...prev, { id, message, type, time: Date.now() }]);
+  setTimeout(() => dismissToast(id), duration);
+}
+
+export function dismissToast(id: string) {
+  toasts.update((prev) => prev.filter((t) => t.id !== id));
+}
+
+// 主题切换与设置
+export function setTheme(next: ThemeId) {
   theme.set(next);
   setStored("theme", next);
-  document.documentElement.setAttribute("data-color-scheme", next);
+  document.documentElement.setAttribute("data-theme", next);
+  document.documentElement.setAttribute("data-color-scheme", next === "light" ? "light" : "dark");
+}
+
+export function toggleTheme() {
+  const current = theme();
+  const idx = THEMES.findIndex((x) => x.id === current);
+  const next = THEMES[(idx + 1) % THEMES.length].id;
+  setTheme(next);
 }
 
 // 工作台控制
@@ -145,6 +255,37 @@ export function appendTerminalLine(text: string, type: TerminalLine["type"] = "s
   terminalLines.update((prev) => [...prev.slice(-400), line]);
 }
 
+// 草稿存取
+export function getDraft(sessionId: string): string {
+  try {
+    return localStorage.getItem(`piz.draft.${sessionId}`) || "";
+  } catch (_) {
+    return "";
+  }
+}
+
+export function setDraft(sessionId: string, text: string) {
+  try {
+    if (text) {
+      localStorage.setItem(`piz.draft.${sessionId}`, text);
+    } else {
+      localStorage.removeItem(`piz.draft.${sessionId}`);
+    }
+  } catch (_) {}
+}
+
+// 历史提示词记录
+export function pushPromptHistory(prompt: string) {
+  const p = prompt.trim();
+  if (!p) return;
+  promptHistory.update((prev) => {
+    const filtered = prev.filter((x) => x !== p);
+    const next = [...filtered, p].slice(-100);
+    setStored("promptHistory", next);
+    return next;
+  });
+}
+
 // 核心网络同步
 export async function loadState() {
   try {
@@ -153,12 +294,19 @@ export async function loadState() {
       batch(() => {
         if (data.model) model.set(data.model);
         if (typeof data.pct === "number") pct.set(data.pct);
-        if (data.mode && (data.mode === "yolo" || data.mode === "ask" || data.mode === "plan")) {
-          mode.set(data.mode);
+        if (data.mode) {
+          const m = data.mode === "read_only" ? "read-only" : data.mode;
+          if (m === "yolo" || m === "ask" || m === "read-only" || m === "plan") {
+            mode.set(m);
+          }
         }
-        if (data.ws) wsName.set(data.ws);
+        if (data.ws) {
+          wsName.set(data.ws.split("/").pop() || data.ws);
+        }
         if (data.branch) branch.set(data.branch);
         if (typeof data.changes === "number") changesCount.set(data.changes);
+        if (typeof data.hist_total === "number") historyTotal.set(data.hist_total);
+        if (typeof data.hist_start === "number") historyStart.set(data.hist_start);
       });
     }
   } catch (err) {
@@ -174,6 +322,53 @@ export async function loadModels() {
   } catch (err) {
     console.warn("loadModels error:", err);
   }
+}
+
+export async function loadWorkspaces() {
+  try {
+    const res = await apiFetch("/api/workspaces");
+    const list = Array.isArray(res) ? res : [];
+    const curW = currentWs();
+    const items: WorkspaceItem[] = list.map((w: any) => ({
+      root: w.root || w.path || "",
+      name: w.name || (w.root ? w.root.split("/").pop() || "workspace" : "workspace"),
+      isCurrent: w.root === curW,
+    }));
+    workspaces.set(items);
+  } catch (err) {
+    console.warn("loadWorkspaces error:", err);
+  }
+}
+
+export async function addWorkspace(root: string) {
+  const trimmed = root.trim();
+  if (!trimmed) return;
+  try {
+    const res = await apiFetch("/api/workspaces", {
+      method: "POST",
+      body: JSON.stringify({ root: trimmed }),
+    });
+    showToast(`Workspace added: ${trimmed.split("/").pop()}`, "success");
+    await loadWorkspaces();
+    await switchWorkspace(trimmed);
+  } catch (err) {
+    showToast(`Failed to register workspace: ${err}`, "error");
+  }
+}
+
+export async function switchWorkspace(root: string) {
+  if (currentWs() === root) return;
+  currentWs.set(root);
+  const name = root.split("/").pop() || "workspace";
+  wsName.set(name);
+  const newUrl = `${window.location.pathname}?ws=${encodeURIComponent(root)}&session=default`;
+  window.history.pushState(null, "", newUrl);
+  activeSession.set("default");
+  await loadState();
+  await loadSessions();
+  await loadHistory();
+  await loadFiles();
+  refreshDiffs(true);
 }
 
 export async function loadSessions() {
@@ -205,6 +400,58 @@ export async function loadFiles(query = "") {
   }
 }
 
+function parseRawHistoryMessages(rawList: any[]): Turn[] {
+  const turnList: Turn[] = [];
+  let currentAssistantTurn: Turn | null = null;
+
+  for (const m of rawList) {
+    if (m.role === "user") {
+      currentAssistantTurn = null;
+      turnList.push({
+        id: `u_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        role: "user",
+        content: m.content || "",
+        steps: [],
+        timestamp: m.timestamp || Date.now(),
+      });
+    } else if (m.role === "assistant") {
+      currentAssistantTurn = {
+        id: `a_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        role: "assistant",
+        content: m.content || "",
+        thought: m.thought || m.reasoning || "",
+        thoughtDurationMs: m.thought_duration,
+        steps: [],
+        timestamp: m.timestamp || Date.now(),
+      };
+      turnList.push(currentAssistantTurn);
+    } else if (m.role === "tool") {
+      const step: StepItem = {
+        id: `st_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        name: m.name || "Tool",
+        desc: typeof m.args === "string" ? m.args : JSON.stringify(m.args),
+        status: "done",
+        startedAt: Date.now(),
+        result: m.content || "",
+        args: m.args,
+      };
+      if (currentAssistantTurn) {
+        currentAssistantTurn.steps.push(step);
+      } else {
+        currentAssistantTurn = {
+          id: `a_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+          role: "assistant",
+          content: "",
+          steps: [step],
+          timestamp: Date.now(),
+        };
+        turnList.push(currentAssistantTurn);
+      }
+    }
+  }
+  return turnList;
+}
+
 export async function loadHistory() {
   try {
     const res = await apiFetch(`/api/history${getQuery()}`);
@@ -216,63 +463,40 @@ export async function loadHistory() {
       ? res
       : [];
 
-    const turnList: Turn[] = [];
-    let currentAssistantTurn: Turn | null = null;
-
-    for (const m of rawList) {
-      if (m.role === "user") {
-        currentAssistantTurn = null;
-        turnList.push({
-          id: `u_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-          role: "user",
-          content: m.content || "",
-          steps: [],
-          timestamp: m.timestamp || Date.now(),
-        });
-      } else if (m.role === "assistant") {
-        currentAssistantTurn = {
-          id: `a_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-          role: "assistant",
-          content: m.content || "",
-          thought: m.thought || m.reasoning || "",
-          thoughtDurationMs: m.thought_duration,
-          steps: [],
-          timestamp: m.timestamp || Date.now(),
-        };
-        turnList.push(currentAssistantTurn);
-      } else if (m.role === "tool") {
-        const step: StepItem = {
-          id: `st_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-          name: m.name || "Tool",
-          desc: typeof m.args === "string" ? m.args : JSON.stringify(m.args),
-          status: "done",
-          startedAt: Date.now(),
-          result: m.content || "",
-          args: m.args,
-        };
-        if (currentAssistantTurn) {
-          currentAssistantTurn.steps.push(step);
-        } else {
-          currentAssistantTurn = {
-            id: `a_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-            role: "assistant",
-            content: "",
-            steps: [step],
-            timestamp: Date.now(),
-          };
-          turnList.push(currentAssistantTurn);
-        }
-      }
-    }
+    const turnList = parseRawHistoryMessages(rawList);
     turns.set(turnList);
   } catch (err) {
     console.warn("loadHistory error:", err);
   }
 }
 
+export async function loadMoreHistory() {
+  const currentCount = turns().length;
+  try {
+    const res = await apiFetch(`/api/history${getQuery({ offset: String(currentCount), limit: "40" })}`);
+    const rawList = Array.isArray(res?.history)
+      ? res.history
+      : Array.isArray(res?.messages)
+      ? res.messages
+      : Array.isArray(res)
+      ? res
+      : [];
+
+    if (rawList.length > 0) {
+      const earlierTurns = parseRawHistoryMessages(rawList);
+      turns.update((prev) => [...earlierTurns, ...prev]);
+      showToast(`Loaded ${earlierTurns.length} earlier messages`, "info");
+    }
+  } catch (err) {
+    showToast(`Failed to load more history: ${err}`, "error");
+  }
+}
+
 export async function switchSession(name: string) {
   if (activeSession() === name) return;
   activeSession.set(name);
+  const newUrl = `${window.location.pathname}?session=${encodeURIComponent(name)}${currentWs() ? `&ws=${encodeURIComponent(currentWs())}` : ""}`;
+  window.history.pushState(null, "", newUrl);
   await loadState();
   await loadHistory();
   await loadSessions();
@@ -285,10 +509,88 @@ export async function createSession() {
       body: JSON.stringify({ act: "new" }),
     });
     if (res && res.name) {
+      showToast(`Created session: ${res.name}`, "success");
       await switchSession(res.name);
     }
   } catch (err) {
-    console.warn("createSession error:", err);
+    showToast(`Failed to create session: ${err}`, "error");
+  }
+}
+
+export async function forkSession(id: string) {
+  try {
+    const q = getQuery({ session: id });
+    const res = await apiFetch(`/api/action${q}`, {
+      method: "POST",
+      body: JSON.stringify({ act: "fork" }),
+    });
+    if (res && res.ok && res.name) {
+      showToast(`Forked to session: ${res.name}`, "success");
+      await loadSessions();
+      await switchSession(res.name);
+    } else {
+      showToast(`Fork failed: ${res?.error || "unknown"}`, "error");
+    }
+  } catch (err) {
+    showToast(`Fork failed: ${err}`, "error");
+  }
+}
+
+export async function undoSession(id: string) {
+  try {
+    const q = getQuery({ session: id });
+    const res = await apiFetch(`/api/action${q}`, {
+      method: "POST",
+      body: JSON.stringify({ act: "undo" }),
+    });
+    if (res && res.ok) {
+      showToast("Undid last turn", "success");
+      await loadState();
+      await loadHistory();
+      await loadSessions();
+    } else {
+      showToast("Nothing to undo", "info");
+    }
+  } catch (err) {
+    showToast(`Undo failed: ${err}`, "error");
+  }
+}
+
+export async function compactSession(id: string) {
+  try {
+    const q = getQuery({ session: id });
+    const res = await apiFetch(`/api/action${q}`, {
+      method: "POST",
+      body: JSON.stringify({ act: "compact" }),
+    });
+    if (res && res.ok) {
+      showToast("Context snapshot compacted successfully", "success");
+      await loadState();
+      await loadHistory();
+    } else {
+      showToast("Compact failed", "error");
+    }
+  } catch (err) {
+    showToast(`Compact failed: ${err}`, "error");
+  }
+}
+
+export async function archiveSession(id: string) {
+  try {
+    const q = getQuery({ session: id });
+    const res = await apiFetch(`/api/action${q}`, {
+      method: "POST",
+      body: JSON.stringify({ act: "archive" }),
+    });
+    if (res && res.ok) {
+      showToast("Session archived", "info");
+      if (activeSession() === id) {
+        await switchSession("default");
+      }
+      await loadSessions();
+    }
+  } catch (err) {
+    showToast(`Archive failed: ${err}`, "error");
   }
 }
 
@@ -299,9 +601,10 @@ export async function renameSession(id: string, title: string) {
       method: "POST",
       body: JSON.stringify({ title }),
     });
+    showToast("Session renamed", "success");
     await loadSessions();
   } catch (err) {
-    console.warn("renameSession error:", err);
+    showToast(`Rename failed: ${err}`, "error");
   }
 }
 
@@ -312,6 +615,7 @@ export async function deleteSession(id: string) {
       method: "POST",
       body: JSON.stringify({ act: "delete" }),
     });
+    showToast("Session deleted", "info");
     if (activeSession() === id) {
       activeSession.set("default");
       await loadState();
@@ -319,18 +623,20 @@ export async function deleteSession(id: string) {
     }
     await loadSessions();
   } catch (err) {
-    console.warn("deleteSession error:", err);
+    showToast(`Delete session failed: ${err}`, "error");
   }
 }
 
 export async function switchMode(nextMode: AppMode) {
+  const backendMode = nextMode === "plan" ? "read-only" : nextMode;
   mode.set(nextMode);
   setStored("mode", nextMode);
   try {
     await apiFetch(`/api/mode${getQuery()}`, {
       method: "POST",
-      body: JSON.stringify({ mode: nextMode }),
+      body: JSON.stringify({ mode: backendMode }),
     });
+    showToast(`Mode switched to ${nextMode.toUpperCase()}`, "info");
   } catch (err) {
     console.warn("switchMode error:", err);
   }
@@ -343,14 +649,16 @@ export async function switchModel(nextModel: string) {
       method: "POST",
       body: JSON.stringify({ model: nextModel }),
     });
+    showToast(`Model set to: ${nextModel}`, "info");
   } catch (err) {
-    console.warn("switchModel error:", err);
+    showToast(`Switch model failed: ${err}`, "error");
   }
 }
 
 export async function interrupt() {
   try {
     await apiFetch(`/api/interrupt${getQuery()}`, { method: "POST" });
+    showToast("Generation interrupted", "warning");
   } catch (err) {
     console.warn("interrupt error:", err);
   } finally {
@@ -374,8 +682,9 @@ export async function approve(id: string, allow: boolean) {
       body: JSON.stringify({ id: Number(id) || 0, allow }),
     });
     pendingApproval.set(null);
+    showToast(allow ? "Action authorized" : "Action denied", allow ? "success" : "warning");
   } catch (err) {
-    console.warn("approve error:", err);
+    showToast(`Approval response failed: ${err}`, "error");
   }
 }
 
@@ -387,9 +696,341 @@ export async function switchThinkingLevel(lvl: string) {
       method: "POST",
       body: JSON.stringify({ setDefaultThinkingLevel: lvl }),
     });
+    showToast(`Thinking level set to ${lvl.toUpperCase()}`, "info");
   } catch (e) {
     console.warn("switchThinkingLevel failed:", e);
   }
+}
+
+export async function loadConfig() {
+  try {
+    const res = await apiFetch("/api/config");
+    if (res) {
+      if (res.sandboxMode) sandboxMode.set(res.sandboxMode);
+      if (res.defaultThinkingLevel) thinkingLevel.set(res.defaultThinkingLevel);
+    }
+  } catch (e) {}
+}
+
+export async function setSandboxMode(sb: string) {
+  sandboxMode.set(sb);
+  try {
+    await apiFetch("/api/config", {
+      method: "POST",
+      body: JSON.stringify({ setSandboxMode: sb }),
+    });
+    showToast(`Sandbox mode: ${sb}`, "info");
+  } catch (e) {
+    showToast(`Set sandbox failed: ${e}`, "error");
+  }
+}
+
+export async function loadUsage() {
+  try {
+    const res = await apiFetch("/api/usage");
+    if (res) {
+      usageSummary.set({
+        lines: res.lines || 0,
+        in: res.in || 0,
+        out: res.out || 0,
+        usd: res.usd || 0,
+        tail: res.tail || "",
+      });
+    }
+  } catch (e) {}
+}
+
+export async function loadPackages() {
+  try {
+    const res = await apiFetch(`/api/packages${getQuery()}`);
+    if (res) {
+      packagesList.set({
+        user: Array.isArray(res.user) ? res.user : [],
+        project: Array.isArray(res.project) ? res.project : [],
+      });
+    }
+  } catch (e) {}
+}
+
+export async function refreshModels() {
+  showToast("Refreshing models from providers...", "info");
+  try {
+    await apiFetch("/api/config", {
+      method: "POST",
+      body: JSON.stringify({ refreshModels: true }),
+    });
+    await loadModels();
+    showToast("Models refreshed", "success");
+  } catch (e) {
+    showToast(`Failed to refresh models: ${e}`, "error");
+  }
+}
+
+export async function pollActivity() {
+  try {
+    const res = await apiFetch("/api/activity");
+    const list = Array.isArray(res) ? res : [];
+    activityList.set(
+      list.map((item: any) => ({
+        pid: item.pid,
+        name: item.name || item.cmd || `Process ${item.pid}`,
+        cmd: item.cmd || item.name || "",
+        duration: item.duration || item.dur || 0,
+        bytes: item.bytes || item.out_bytes || 0,
+        startedAt: item.startedAt || Date.now(),
+      }))
+    );
+  } catch (_) {}
+}
+
+export async function killActivity(pid: number) {
+  try {
+    const res = await apiFetch("/api/activity", {
+      method: "POST",
+      body: JSON.stringify({ kill: pid }),
+    });
+    if (res && res.ok) {
+      showToast(`Terminated task pid:${pid}`, "success");
+      await pollActivity();
+    } else {
+      showToast(`Could not terminate task pid:${pid}`, "error");
+    }
+  } catch (e) {
+    showToast(`Kill task error: ${e}`, "error");
+  }
+}
+
+export async function refreshDiffs(silent = false) {
+  try {
+    const res = await apiFetch(`/api/slash${getQuery()}`, {
+      method: "POST",
+      body: JSON.stringify({ name: "diff", args: "" }),
+    });
+    if (res && res.text) {
+      const parsed = parseUnifiedDiff(res.text);
+      diffs.set(parsed);
+      if (parsed.length > 0 && !activeDiffPath()) {
+        activeDiffPath.set(parsed[0].path);
+      }
+      if (!silent) showToast(`Diff updated (${parsed.length} changed files)`, "info");
+    } else {
+      diffs.set([]);
+      if (!silent) showToast("No modified files in workspace", "info");
+    }
+  } catch (e) {
+    console.warn("refreshDiffs error:", e);
+  }
+}
+
+export async function commitChanges(msg: string) {
+  if (!msg.trim()) return;
+  try {
+    const res = await apiFetch(`/api/slash${getQuery()}`, {
+      method: "POST",
+      body: JSON.stringify({ name: "commit", args: msg.trim() }),
+    });
+    if (res && res.text) {
+      appendTerminalLine(res.text, "stdout");
+      showToast("Git commit completed", "success");
+      await refreshDiffs(true);
+      await loadState();
+    }
+  } catch (e) {
+    showToast(`Commit failed: ${e}`, "error");
+  }
+}
+
+export async function loadHelp() {
+  try {
+    const res = await apiFetch(`/api/help${getQuery()}`);
+    const cmds = Array.isArray(res?.commands) ? res.commands : [];
+    if (cmds.length > 0) {
+      slashCommands.set(
+        cmds.map((c: any) => ({
+          cmd: c.name || c.cmd,
+          desc: c.desc || "",
+        }))
+      );
+      return;
+    }
+  } catch (_) {}
+
+  // 兜底常用标准列表
+  slashCommands.set([
+    { cmd: "/diff", desc: "View git status & diffstat in deck" },
+    { cmd: "/commit", desc: "Commit staged workspace files" },
+    { cmd: "/log", desc: "Git commit history log" },
+    { cmd: "/branch", desc: "Show current and recent git branches" },
+    { cmd: "/term", desc: "Open terminal viewer in deck" },
+    { cmd: "/jobs", desc: "View subagents & active background processes" },
+    { cmd: "/files", desc: "Browse workspace repository files" },
+    { cmd: "/clear", desc: "Create a fresh clean session" },
+    { cmd: "/fork", desc: "Fork current session into a new branch" },
+    { cmd: "/undo", desc: "Undo last message turn" },
+    { cmd: "/compact", desc: "Compact session context window" },
+    { cmd: "/doctor", desc: "Run environment health check" },
+    { cmd: "/usage", desc: "View token ledger and cost summary" },
+    { cmd: "/models", desc: "Refresh available AI model list" },
+    { cmd: "/yolo", desc: "Switch mode to YOLO (auto-execute)" },
+    { cmd: "/ask", desc: "Switch mode to ASK (require approval)" },
+    { cmd: "/read-only", desc: "Switch mode to READ-ONLY (safe)" },
+    { cmd: "/theme", desc: "Switch theme (dark, abyss, matrix, synthwave, amber, light)" },
+    { cmd: "/export", desc: "Export session as Markdown or JSON" },
+    { cmd: "/help", desc: "Open keyboard shortcuts and help guide" },
+  ]);
+}
+
+export async function executeSlash(fullInput: string): Promise<boolean> {
+  const trimmed = fullInput.trim();
+  if (!trimmed.startsWith("/")) return false;
+  const parts = trimmed.slice(1).split(/\s+/);
+  const name = parts[0].toLowerCase();
+  const args = parts.slice(1).join(" ");
+
+  if (name === "diff") {
+    setDeckTab("diffs");
+    refreshDiffs();
+    return true;
+  }
+  if (name === "term" || name === "terminal") {
+    setDeckTab("terminal");
+    return true;
+  }
+  if (name === "jobs") {
+    setDeckTab("jobs");
+    pollActivity();
+    return true;
+  }
+  if (name === "files") {
+    setDeckTab("files");
+    loadFiles();
+    return true;
+  }
+  if (name === "clear" || name === "new") {
+    createSession();
+    return true;
+  }
+  if (name === "yolo") {
+    switchMode("yolo");
+    return true;
+  }
+  if (name === "ask") {
+    switchMode("ask");
+    return true;
+  }
+  if (name === "read-only" || name === "readonly" || name === "ro" || name === "plan") {
+    switchMode("read-only");
+    return true;
+  }
+  if (name === "theme") {
+    const trimmedArg = (args || "").trim().toLowerCase();
+    const match = THEMES.find((t) => t.id === trimmedArg);
+    if (match) {
+      setTheme(match.id);
+      showToast(`Theme switched to ${match.id}`);
+    } else {
+      toggleTheme();
+      showToast(`Theme switched to ${theme()}`);
+    }
+    return true;
+  }
+  if (name === "help") {
+    showShortcutsModal.set(true);
+    return true;
+  }
+  if (name === "fork") {
+    forkSession(activeSession());
+    return true;
+  }
+  if (name === "undo") {
+    undoSession(activeSession());
+    return true;
+  }
+  if (name === "compact") {
+    compactSession(activeSession());
+    return true;
+  }
+  if (name === "export") {
+    exportSession(args === "json" ? "json" : "md");
+    return true;
+  }
+  if (name === "find") {
+    showSearchModal.set(true);
+    return true;
+  }
+  if (name === "models" || name === "refresh") {
+    refreshModels();
+    return true;
+  }
+
+  // 服务端执行
+  try {
+    const res = await apiFetch(`/api/slash${getQuery()}`, {
+      method: "POST",
+      body: JSON.stringify({ name, args }),
+    });
+    if (res && res.ok) {
+      if (res.text) {
+        appendTerminalLine(`[/${name}] ${res.text}`, "stdout");
+        setDeckTab("terminal");
+        showToast(`Command /${name} finished`, "success");
+      }
+      return true;
+    } else {
+      showToast(`Command /${name} failed: ${res?.error || "unknown"}`, "error");
+      return false;
+    }
+  } catch (e) {
+    showToast(`Error running /${name}: ${e}`, "error");
+    return false;
+  }
+}
+
+export async function viewArtifact(name: string) {
+  if (!name) return;
+  if (name.startsWith("img-")) {
+    activeArtifact.set({
+      name,
+      content: `/api/image?name=${encodeURIComponent(name)}`,
+      isImage: true,
+    });
+    showArtifactModal.set(true);
+    return;
+  }
+  try {
+    const res = await apiFetch(`/api/artifact?name=${encodeURIComponent(name)}`);
+    if (res && res.text != null) {
+      activeArtifact.set({ name, content: res.text, isImage: false });
+      showArtifactModal.set(true);
+    } else {
+      showToast(`Cannot load artifact: ${name}`, "warning");
+    }
+  } catch (e) {
+    showToast(`Failed to fetch artifact: ${e}`, "error");
+  }
+}
+
+export async function loadPlugins() {
+  try {
+    const res = await apiFetch(`/api/plugins${getQuery()}`);
+    const list = Array.isArray(res?.plugins) ? res.plugins : Array.isArray(res) ? res : [];
+    for (const p of list) {
+      if (p.enabled && Array.isArray(p.assets)) {
+        for (const asset of p.assets) {
+          if (asset.endsWith(".css")) {
+            const link = document.createElement("link");
+            link.rel = "stylesheet";
+            link.href = `/api/plugins/assets/${p.id}/${asset}`;
+            document.head.appendChild(link);
+          } else if (asset.endsWith(".js")) {
+            const script = document.createElement("script");
+            script.src = `/api/plugins/assets/${p.id}/${asset}`;
+            document.head.appendChild(script);
+          }
+        }
+      }
+    }
+  } catch (_) {}
 }
 
 export async function sendMessage(
@@ -401,6 +1042,12 @@ export async function sendMessage(
 
   const currentImg = imgObj !== undefined ? imgObj : attachedImage();
   const trimmedText = text.trim();
+
+  // 记录提示词历史
+  if (trimmedText) pushPromptHistory(trimmedText);
+
+  // 清除草稿
+  setDraft(activeSession(), "");
 
   const userTurn: Turn = {
     id: `u_${Date.now()}`,
@@ -448,6 +1095,7 @@ export async function sendMessage(
     }
   } catch (err) {
     console.error("sendMessage failed:", err);
+    showToast(`Send failed: ${err instanceof Error ? err.message : String(err)}`, "error");
     batch(() => {
       turns.update((prev) =>
         prev.map((t) =>
@@ -487,7 +1135,7 @@ export async function runTerminalCommand(cmd: string) {
   }
 }
 
-export function exportSession(format: "md" | "json" = "md") {
+export function exportSession(format: "md" | "json" | "html" = "md") {
   const list = turns();
   const curName = activeSession();
   let content = "";
@@ -496,6 +1144,37 @@ export function exportSession(format: "md" | "json" = "md") {
   if (format === "json") {
     content = JSON.stringify(list, null, 2);
     filename += ".json";
+  } else if (format === "html") {
+    filename += ".html";
+    content = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>piz session - ${curName}</title>
+  <style>
+    body { font-family: -apple-system, sans-serif; max-width: 800px; margin: 40px auto; padding: 0 20px; line-height: 1.6; color: #24292f; background: #fff; }
+    h1 { border-bottom: 1px solid #d0d7de; padding-bottom: 8px; }
+    .turn { margin: 24px 0; padding: 16px; border-radius: 8px; }
+    .turn-user { background: #f6f8fa; border: 1px solid #d0d7de; }
+    .turn-assistant { background: #f0f7ff; border: 1px solid #b6e3ff; }
+    .role { font-weight: 600; font-size: 13px; text-transform: uppercase; margin-bottom: 8px; color: #57606a; }
+    pre { background: #f6f8fa; padding: 12px; border-radius: 6px; overflow-x: auto; }
+    blockquote { border-left: 3px solid #0969da; margin: 0; padding-left: 12px; color: #57606a; }
+  </style>
+</head>
+<body>
+  <h1>piz session: ${curName}</h1>
+  <p>Exported on ${new Date().toLocaleString()}</p>
+  <hr />
+`;
+    for (const t of list) {
+      content += `<div class="turn turn-${t.role}">\n<div class="role">${t.role}</div>\n`;
+      if (t.thought) {
+        content += `<blockquote><b>Thought Process:</b><br>${t.thought.replace(/\n/g, "<br>")}</blockquote>\n`;
+      }
+      content += `<div><pre>${t.content.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")}</pre></div>\n</div>\n`;
+    }
+    content += "</body>\n</html>";
   } else {
     content = `# piz Session: ${curName}\n\n*Exported on ${new Date().toLocaleString()}*\n\n---\n\n`;
     for (const t of list) {
@@ -512,20 +1191,22 @@ export function exportSession(format: "md" | "json" = "md") {
     filename += ".md";
   }
 
-  const blob = new Blob([content], { type: format === "json" ? "application/json" : "text/markdown;charset=utf-8" });
+  const mimeType = format === "json" ? "application/json" : format === "html" ? "text/html;charset=utf-8" : "text/markdown;charset=utf-8";
+  const blob = new Blob([content], { type: mimeType });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
   a.download = filename;
   a.click();
   URL.revokeObjectURL(url);
+  showToast(`Session exported to ${filename}`, "success");
 }
 
-// 核心 SSE 事件调度（精准对齐后端真实事件契约）
+// 核心 SSE 事件调度
 export function handleSseEvent(evt: any) {
   if (!evt || !evt.type) return;
 
-  // 会话隔离检查：如果事件带有 session 且不匹配当前激活会话，跳过
+  // 会话隔离检查
   if (evt.session && evt.session !== activeSession()) return;
 
   function ensureAssistantTurn(): string {
@@ -561,7 +1242,6 @@ export function handleSseEvent(evt: any) {
     }
 
     case "reasoning": {
-      // 思考流增量
       const chunk = evt.text || "";
       if (!chunk) break;
       isStreaming.set(true);
@@ -575,7 +1255,6 @@ export function handleSseEvent(evt: any) {
     }
 
     case "message": {
-      // 回答正文增量
       const chunk = evt.text || "";
       if (!chunk) break;
       isStreaming.set(true);
@@ -611,6 +1290,7 @@ export function handleSseEvent(evt: any) {
         )
       );
       appendTerminalLine(`▶ [Tool] ${evt.name}: ${typeof evt.args === "string" ? evt.args : JSON.stringify(evt.args)}`, "cmd");
+      pollActivity();
       break;
     }
 
@@ -649,6 +1329,7 @@ export function handleSseEvent(evt: any) {
       }
 
       appendTerminalLine(summary, isError ? "stderr" : "stdout");
+      pollActivity();
       break;
     }
 
@@ -706,7 +1387,6 @@ export function handleSseEvent(evt: any) {
     }
 
     case "turn_end": {
-      // 本轮彻底完成，解开流式锁定！
       batch(() => {
         isStreaming.set(false);
         turns.update((prev) =>
@@ -715,6 +1395,8 @@ export function handleSseEvent(evt: any) {
         streamingTurnId.set(null);
       });
       loadState();
+      refreshDiffs(true);
+      pollActivity();
       break;
     }
   }
@@ -722,7 +1404,9 @@ export function handleSseEvent(evt: any) {
 
 // 统一应用启动
 export function boot() {
-  document.documentElement.setAttribute("data-color-scheme", theme());
+  const curTheme = theme();
+  document.documentElement.setAttribute("data-theme", curTheme);
+  document.documentElement.setAttribute("data-color-scheme", curTheme === "light" ? "light" : "dark");
 
   connectEventStream(handleSseEvent, (st) => {
     connectionStatus.set(st);
@@ -730,9 +1414,19 @@ export function boot() {
 
   loadState();
   loadModels();
+  loadWorkspaces();
   loadSessions();
   loadHistory();
   loadFiles();
+  loadHelp();
+  loadConfig();
+  loadUsage();
+  loadPackages();
+  loadPlugins();
+  refreshDiffs(true);
+  pollActivity();
+
+  setInterval(pollActivity, 4000);
 
   window.addEventListener("piz:unauthorized", () => {
     showAuthModal.set(true);

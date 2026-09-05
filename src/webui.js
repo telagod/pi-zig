@@ -496,6 +496,68 @@ __modules["types"] = function(module, exports, require) {
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 };
 __modules["net"] = function(module, exports, require) {
 "use strict";Object.defineProperty(exports, "__esModule", {value: true}); function _optionalChain(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }// net.ts —— 高韧性网络层 (Bearer 鉴权、CSRF 防护、fetch+ReadableStream SSE 流)
@@ -797,9 +859,355 @@ __modules["diff"] = function(module, exports, require) {
 } exports.parseUnifiedDiff = parseUnifiedDiff;
 
 };
-__modules["store"] = function(module, exports, require) {
-"use strict";Object.defineProperty(exports, "__esModule", {value: true}); function _optionalChain(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }// store.ts —— 全局响应式状态机
+__modules["i18n"] = function(module, exports, require) {
+"use strict";Object.defineProperty(exports, "__esModule", {value: true});// i18n.ts —— piz 全局轻量响应式双语国际化核心 (English / 简体中文)
 var _signal = require('./signal');
+
+
+
+const STORAGE_KEY = "piz.locale";
+
+function getInitialLocale() {
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (saved === "zh" || saved === "en") return saved;
+    const nav = navigator.language || "";
+    if (nav.toLowerCase().startsWith("zh")) return "zh";
+  } catch (_) {}
+  return "zh"; // 默认中文，亦随魔尊意愿一键切换
+}
+
+ const locale = _signal.signal(getInitialLocale()); exports.locale = locale;
+
+ function setLocale(next) {
+  exports.locale.set(next);
+  try {
+    localStorage.setItem(STORAGE_KEY, next);
+  } catch (_) {}
+} exports.setLocale = setLocale;
+
+ function toggleLocale() {
+  setLocale(exports.locale.call(void 0, ) === "zh" ? "en" : "zh");
+} exports.toggleLocale = toggleLocale;
+
+ const translations = {
+  zh: {
+    // 品牌与顶栏
+    "app.title": "piz",
+    "topbar.workspace": "工作区",
+    "topbar.session_rename": "双击重命名会话",
+    "topbar.toggle_sidebar": "切换侧边栏 (Ctrl+B)",
+    "topbar.toggle_deck": "切换工作台检视 (Ctrl+J)",
+    "topbar.toggle_theme": "切换主题",
+    "topbar.toggle_lang": "Switch to English",
+
+    // 主题系统
+    "theme.name": "界面主题",
+    "theme.toggle": "切换主题",
+    "theme.dark": "暗夜黑曜",
+    "theme.dark_desc": "极客深黑，沉稳克制工程质感",
+    "theme.abyss": "宿命幽冥",
+    "theme.abyss_desc": "赤焰破妄，血月暗红高燃杀气",
+    "theme.matrix": "骇客矩阵",
+    "theme.matrix_desc": "复古终端，高饱和辐射荧光绿",
+    "theme.synthwave": "紫霄霓虹",
+    "theme.synthwave_desc": "赛博朋克，暗夜深紫与电光洋红",
+    "theme.amber": "复古琥珀",
+    "theme.amber_desc": "VT220 暖光 CRT，温润醇厚长跑护眼",
+    "theme.light": "极地素雪",
+    "theme.light_desc": "玄冰无瑕，高净度纯粹日光",
+    "topbar.search": "全局搜索与指令 (Ctrl+K)",
+    "topbar.settings": "全局工作区设置",
+    "topbar.shortcuts": "快捷键帮助 (?)",
+    "topbar.active_jobs": "后台活动进程与子代理任务",
+    "topbar.refresh_models": "刷新模型列表",
+    "topbar.connected": "已连接服务端",
+    "topbar.connecting": "连接中...",
+    "topbar.disconnected": "服务端已断开",
+
+    // 模式胶囊
+    "mode.yolo": "YOLO",
+    "mode.yolo_desc": "极速全自动执行，无需交互确认",
+    "mode.ask": "ASK",
+    "mode.ask_desc": "破坏性及关键写入前弹出确认",
+    "mode.read_only": "READ-ONLY",
+    "mode.read_only_desc": "安全只读检视，禁止写操作与命令执行",
+
+    // 侧边栏
+    "sidebar.project_ws": "项目工作区",
+    "sidebar.switch_ws": "切换或注册外部项目工作区",
+    "sidebar.add_project": "添加新项目...",
+    "sidebar.no_external_ws": "暂无已注册外部工作区",
+    "sidebar.new_session": "新建会话",
+    "sidebar.filter_sessions": "过滤会话列表...",
+    "sidebar.rename": "重命名",
+    "sidebar.fork": "从此处分叉会话",
+    "sidebar.undo": "撤销上一轮操作",
+    "sidebar.compact": "压缩上下文建立存档点",
+    "sidebar.delete": "删除会话",
+    "sidebar.del_confirm": "确定要删除会话 \"{title}\" 吗？此操作无法撤销。",
+    "sidebar.rename_prompt": "重命名会话：",
+    "sidebar.no_sessions": "未找到匹配会话",
+    "sidebar.sessions_count": "{count} 个会话",
+
+    // 会话聊天流与空态
+    "chat.empty_title": "piz workspace",
+    "chat.empty_subtitle": "极速、安全的下一代自律型智能体工作台",
+    "chat.prompt_card1_title": "任务驱动与自动编码",
+    "chat.prompt_card1_desc": "自动分解目标，阅读依赖，编写代码并运行验证",
+    "chat.prompt_card1_prompt": "分析当前项目架构与未提交修改并提出优化建议",
+    "chat.prompt_card2_title": "代码审查与检视台",
+    "chat.prompt_card2_desc": "在右侧实时检视变更行数、Hunk 差异与终端输出",
+    "chat.prompt_card3_title": "安全审计与授权把关",
+    "chat.prompt_card3_desc": "命令防护拦截、权限确认与严格的沙箱隔离",
+    "chat.prompt_card3_prompt": "对当前项目进行安全审计，检查未授权操作与潜在漏洞",
+    "chat.load_earlier": "↑ 加载更早的对话历史 ({remaining} 条未载入)",
+    "chat.checkpoint": "上下文已压缩 · 建立存档点",
+    "chat.copy": "复制",
+    "chat.copied": "已复制",
+    "chat.retry": "重试此轮",
+    "chat.thinking": "思考历程",
+    "chat.thinking_in_progress": "深度思考推演中...",
+    "chat.expand_output": "展开全部输出 ({lines} 行)",
+    "chat.collapse_output": "收起输出",
+    "chat.view_artifact": "查看产物检视",
+
+    // 智能输入台
+    "composer.placeholder": "向 piz 提问、粘贴图片 (Ctrl+V)、'/' 调用指令、'@' 选文件、'!cmd' 执行终端...",
+    "composer.attach_img": "附加图片",
+    "composer.slash_menu": "斜杠指令",
+    "composer.file_mention": "引用文件",
+    "composer.send": "发送",
+    "composer.stop": "停止生成",
+    "composer.sb_off": "sb: 关闭",
+    "composer.sb_workspace": "sb: 工作区隔离",
+    "composer.sb_strict": "sb: 严格沙箱",
+    "composer.active_task": "后台活跃任务",
+    "composer.kill_task": "强杀任务",
+    "composer.hint_local": "本地终端直接运行预览：",
+    "composer.hint_model": "执行命令并将输出导入模型流：",
+
+    // 工作台 Deck
+    "deck.tab_diffs": "Diffs",
+    "deck.tab_terminal": "Terminal",
+    "deck.tab_jobs": "Jobs",
+    "deck.tab_files": "Files",
+    "deck.diff_no_changes": "暂无未暂存的代码变更",
+    "deck.diff_scan": "重新扫描仓库 Diffs",
+    "deck.diff_commit_placeholder": "输入提交信息 (Commit message)...",
+    "deck.diff_commit_btn": "一键 Commit",
+    "deck.term_clear": "清空终端",
+    "deck.term_input_placeholder": "在此输入终端命令并回车执行...",
+    "deck.jobs_empty": "当前没有正在运行的后台子任务或子代理",
+    "deck.files_loading": "正在读取工作区文件树...",
+
+    // 弹窗与设置
+    "modal.close": "关闭",
+    "modal.auth_title": "服务端访问授权",
+    "modal.auth_desc": "请输入 piz 守护进程访问 Token：",
+    "modal.auth_connect": "验证并连接",
+    "modal.perm_title": "关键操作授权确认",
+    "modal.perm_allow": "允许执行",
+    "modal.perm_deny": "拦截阻止",
+    "modal.ws_add_title": "注册外部项目工作区",
+    "modal.ws_add_desc": "输入魔尊本地文件系统的项目绝对路径：",
+    "modal.ws_add_placeholder": "/path/to/project...",
+    "modal.ws_add_confirm": "登记并载入",
+    "modal.settings_title": "工作区设置中心",
+    "settings.tab_appearance": "外观与主题",
+    "settings.tab_agent": "模型与配置",
+    "settings.tab_security": "沙箱与安全",
+    "settings.tab_usage": "Token 台账",
+    "settings.tab_packages": "资源与插件",
+    "settings.tab_export": "导出数据",
+    "settings.theme_select": "专属界面主题",
+    "settings.theme_select_desc": "选择契合当前作战环境与视觉心境的特色主题调色盘",
+    "settings.theme_preview": "语法高亮与组件预览",
+    "settings.ui_language": "界面显示语言",
+    "settings.active_model": "活跃大语言模型",
+    "settings.active_model_desc": "驱动当前会话推理分析的主力模型",
+    "settings.thinking_budget": "思考强度等级",
+    "settings.thinking_desc": "调节推理大模型的深入思考预算限制",
+    "settings.sandbox_level": "工作区沙箱隔离级别",
+    "settings.sandbox_desc": "约束命令执行在特定目录范围或只读沙箱环境",
+    "settings.export_json": "导出为 JSON 结构化数据 (.json)",
+    "settings.export_json_desc": "包含完整对话轮次与每步工具调用的原始数据",
+    "settings.export_html": "导出为单文件独立网页 (.html)",
+    "settings.export_html_desc": "自洽排版、支持离线查看与团队分享的完整会话归档",
+    "shortcuts.title": "键盘快捷键速查",
+  },
+  en: {
+    // Brand & TopBar
+    "app.title": "piz",
+    "topbar.workspace": "Workspace",
+    "topbar.session_rename": "Double-click to rename session",
+    "topbar.toggle_sidebar": "Toggle Sidebar (Ctrl+B)",
+    "topbar.toggle_deck": "Toggle Workbench Deck (Ctrl+J)",
+    "topbar.toggle_theme": "Switch Theme",
+    "topbar.toggle_lang": "切换为中文",
+
+    // Theme System
+    "theme.name": "Theme",
+    "theme.toggle": "Switch Theme",
+    "theme.dark": "Obsidian Dark",
+    "theme.dark_desc": "Deep engineered dark with muted gray scale",
+    "theme.abyss": "Crimson Abyss",
+    "theme.abyss_desc": "Blood moon dark red with fierce crimson flame",
+    "theme.matrix": "Matrix Green",
+    "theme.matrix_desc": "Retro phosphor CRT green hacker terminal",
+    "theme.synthwave": "Violet Synthwave",
+    "theme.synthwave_desc": "80s cyberpunk deep purple and electric neon",
+    "theme.amber": "Retro Amber",
+    "theme.amber_desc": "Classic VT220 warm amber glow, easy on the eyes",
+    "theme.light": "Polar Light",
+    "theme.light_desc": "Pristine arctic daylight with pure contrast",
+    "topbar.search": "Search & Command Palette (Ctrl+K)",
+    "topbar.settings": "Workspace Settings",
+    "topbar.shortcuts": "Keyboard Shortcuts (?)",
+    "topbar.active_jobs": "Active processes & subagent jobs",
+    "topbar.refresh_models": "Refresh models",
+    "topbar.connected": "Connected to server",
+    "topbar.connecting": "Connecting...",
+    "topbar.disconnected": "Server disconnected",
+
+    // Mode Pill
+    "mode.yolo": "YOLO",
+    "mode.yolo_desc": "Full auto-execution, no confirmation dialogs",
+    "mode.ask": "ASK",
+    "mode.ask_desc": "Confirm before destructive or critical write operations",
+    "mode.read_only": "READ-ONLY",
+    "mode.read_only_desc": "Safe inspection mode, no writes or executions permitted",
+
+    // Sidebar
+    "sidebar.project_ws": "PROJECT WORKSPACE",
+    "sidebar.switch_ws": "Switch or register external project workspace",
+    "sidebar.add_project": "Add Project...",
+    "sidebar.no_external_ws": "No registered external workspaces",
+    "sidebar.new_session": "New Session",
+    "sidebar.filter_sessions": "Filter sessions...",
+    "sidebar.rename": "Rename",
+    "sidebar.fork": "Fork session from here",
+    "sidebar.undo": "Undo last turn",
+    "sidebar.compact": "Compact context and checkpoint",
+    "sidebar.delete": "Delete session",
+    "sidebar.del_confirm": "Are you sure you want to delete session \"{title}\"? This cannot be undone.",
+    "sidebar.rename_prompt": "Rename session:",
+    "sidebar.no_sessions": "No sessions found",
+    "sidebar.sessions_count": "{count} sessions",
+
+    // Chat Stream & Empty state
+    "chat.empty_title": "piz workspace",
+    "chat.empty_subtitle": "Fast, safe next-generation autonomous AI workbench",
+    "chat.prompt_card1_title": "Goal-Driven Coding",
+    "chat.prompt_card1_desc": "Deconstruct tasks, read dependencies, write & verify code",
+    "chat.prompt_card1_prompt": "Analyze project architecture and uncommitted diffs, then suggest optimizations",
+    "chat.prompt_card2_title": "Code Review & Inspection",
+    "chat.prompt_card2_desc": "Inspect changed lines, hunks, and terminal outputs on the right deck",
+    "chat.prompt_card3_title": "Security Audit & Sandboxing",
+    "chat.prompt_card3_desc": "Command interception, permission gates, and strict sandbox isolation",
+    "chat.prompt_card3_prompt": "Perform a security audit on current project, checking unverified actions and risks",
+    "chat.load_earlier": "↑ Load earlier messages ({remaining} remaining)",
+    "chat.checkpoint": "Context compressed · Checkpoint established",
+    "chat.copy": "Copy",
+    "chat.copied": "Copied",
+    "chat.retry": "Retry turn",
+    "chat.thinking": "Thinking Process",
+    "chat.thinking_in_progress": "Deep reasoning in progress...",
+    "chat.expand_output": "Expand full output ({lines} lines)",
+    "chat.collapse_output": "Collapse output",
+    "chat.view_artifact": "View Artifact",
+
+    // Composer
+    "composer.placeholder": "Ask piz, paste images (Ctrl+V), type '/' for commands, '@' for files, '!cmd' for shell...",
+    "composer.attach_img": "Attach image",
+    "composer.slash_menu": "Slash command",
+    "composer.file_mention": "Mention file",
+    "composer.send": "Send",
+    "composer.stop": "Stop",
+    "composer.sb_off": "sb: off",
+    "composer.sb_workspace": "sb: workspace",
+    "composer.sb_strict": "sb: strict",
+    "composer.active_task": "Active Task",
+    "composer.kill_task": "Kill Task",
+    "composer.hint_local": "Local shell execution (terminal preview only):",
+    "composer.hint_model": "Execute shell and stream output into model:",
+
+    // Workbench Deck
+    "deck.tab_diffs": "Diffs",
+    "deck.tab_terminal": "Terminal",
+    "deck.tab_jobs": "Jobs",
+    "deck.tab_files": "Files",
+    "deck.diff_no_changes": "No Uncommitted Changes Detected",
+    "deck.diff_scan": "Scan Workspace Diffs",
+    "deck.diff_commit_placeholder": "Enter commit message...",
+    "deck.diff_commit_btn": "Commit Changes",
+    "deck.term_clear": "Clear Terminal",
+    "deck.term_input_placeholder": "Type shell command and press Enter...",
+    "deck.jobs_empty": "No active background processes or subagents",
+    "deck.files_loading": "Loading workspace file tree...",
+
+    // Modals & Settings
+    "modal.close": "Close",
+    "modal.auth_title": "Authentication Required",
+    "modal.auth_desc": "Please enter your piz server access token:",
+    "modal.auth_connect": "Connect",
+    "modal.perm_title": "Action Authorization Required",
+    "modal.perm_allow": "Allow Execution",
+    "modal.perm_deny": "Deny",
+    "modal.ws_add_title": "Register Project Workspace",
+    "modal.ws_add_desc": "Enter absolute local filesystem path of repository or folder:",
+    "modal.ws_add_placeholder": "/path/to/project...",
+    "modal.ws_add_confirm": "Register Workspace",
+    "modal.settings_title": "Workspace Settings",
+    "settings.tab_appearance": "Appearance & Theme",
+    "settings.tab_agent": "Agent & Model",
+    "settings.tab_security": "Sandbox & Security",
+    "settings.tab_usage": "Usage & Tokens",
+    "settings.tab_packages": "Packages",
+    "settings.tab_export": "Export",
+    "settings.theme_select": "Theme Palette",
+    "settings.theme_select_desc": "Select a personalized interface theme matching your workflow and environment",
+    "settings.theme_preview": "Syntax Highlighting Preview",
+    "settings.ui_language": "UI Language",
+    "settings.active_model": "Active Model",
+    "settings.active_model_desc": "Large language model driving current session inference",
+    "settings.thinking_budget": "Thinking Level",
+    "settings.thinking_desc": "Budget limit for extended reasoning steps",
+    "settings.sandbox_level": "Sandbox Isolation Level",
+    "settings.sandbox_desc": "Restrict command execution to specific directories or read-only sandbox",
+    "settings.export_json": "Export as JSON (.json)",
+    "settings.export_json_desc": "Structured turns and step items for programmatic use",
+    "settings.export_html": "Export as Standalone HTML (.html)",
+    "settings.export_html_desc": "Self-contained webpage ready for sharing and offline reading",
+    "shortcuts.title": "Keyboard Shortcuts",
+  },
+}; exports.translations = translations;
+
+ function t(key, params) {
+  const currentLang = exports.locale.call(void 0, );
+  const dict = exports.translations[currentLang] || exports.translations.zh;
+  let text = dict[key] || exports.translations.zh[key] || key;
+  if (params) {
+    for (const [k, v] of Object.entries(params)) {
+      text = text.replace(new RegExp(`\\{${k}\\}`, "g"), String(v));
+    }
+  }
+  return text;
+} exports.t = t;
+
+};
+__modules["store"] = function(module, exports, require) {
+"use strict";Object.defineProperty(exports, "__esModule", {value: true}); function _createNamedExportFrom(obj, localName, importedName) { Object.defineProperty(exports, localName, {enumerable: true, configurable: true, get: () => obj[importedName]}); } function _optionalChain(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }// store.ts —— 全局响应式状态机
+var _signal = require('./signal');
+
+
+
+
+
+
+
+
+
 
 
 
@@ -814,6 +1222,67 @@ var _signal = require('./signal');
 
 var _net = require('./net');
 var _diff = require('./diff');
+var _i18n = require('./i18n'); _createNamedExportFrom(_i18n, 'locale', 'locale'); _createNamedExportFrom(_i18n, 'setLocale', 'setLocale'); _createNamedExportFrom(_i18n, 'toggleLocale', 'toggleLocale'); _createNamedExportFrom(_i18n, 't', 't');
+
+ const THEMES = [
+  {
+    id: "dark",
+    nameKey: "theme.dark",
+    descKey: "theme.dark_desc",
+    icon: "🌌",
+    preview: { canvas: "#090a0c", surface: "#16191e", accent: "#4493f8" },
+    isDark: true,
+  },
+  {
+    id: "abyss",
+    nameKey: "theme.abyss",
+    descKey: "theme.abyss_desc",
+    icon: "🩸",
+    preview: { canvas: "#0b0708", surface: "#1b0f14", accent: "#f43f5e" },
+    isDark: true,
+  },
+  {
+    id: "matrix",
+    nameKey: "theme.matrix",
+    descKey: "theme.matrix_desc",
+    icon: "🟢",
+    preview: { canvas: "#020804", surface: "#0b1c10", accent: "#22c55e" },
+    isDark: true,
+  },
+  {
+    id: "synthwave",
+    nameKey: "theme.synthwave",
+    descKey: "theme.synthwave_desc",
+    icon: "🔮",
+    preview: { canvas: "#090513", surface: "#190f2e", accent: "#d946ef" },
+    isDark: true,
+  },
+  {
+    id: "amber",
+    nameKey: "theme.amber",
+    descKey: "theme.amber_desc",
+    icon: "🍯",
+    preview: { canvas: "#0d0905", surface: "#1e160d", accent: "#f59e0b" },
+    isDark: true,
+  },
+  {
+    id: "light",
+    nameKey: "theme.light",
+    descKey: "theme.light_desc",
+    icon: "❄️",
+    preview: { canvas: "#f8fafc", surface: "#ffffff", accent: "#0284c7" },
+    isDark: false,
+  },
+]; exports.THEMES = THEMES;
+
+ const showThemeMenu = _signal.signal(false); exports.showThemeMenu = showThemeMenu;
+
+function resolveInitialTheme() {
+  const stored = getStored("theme", "");
+  if (exports.THEMES.some((x) => x.id === stored)) return stored ;
+  if (stored === "light") return "light";
+  return _optionalChain([window, 'access', _2 => _2.matchMedia, 'optionalCall', _3 => _3("(prefers-color-scheme: light)"), 'access', _4 => _4.matches]) ? "light" : "dark";
+}
 
 // 持久化辅助
 function getStored(key, fallback) {
@@ -833,7 +1302,9 @@ function setStored(key, val) {
 
 const urlParams = new URLSearchParams(window.location.search);
  const urlWs = urlParams.get("ws") || ""; exports.urlWs = urlWs;
- const wsName = _signal.signal(exports.urlWs || "workspace"); exports.wsName = wsName;
+ const currentWs = _signal.signal(exports.urlWs); exports.currentWs = currentWs;
+ const wsName = _signal.signal(exports.urlWs ? exports.urlWs.split("/").pop() || "workspace" : "workspace"); exports.wsName = wsName;
+ const workspaces = _signal.signal([]); exports.workspaces = workspaces;
  const branch = _signal.signal(""); exports.branch = branch;
  const changesCount = _signal.signal(0); exports.changesCount = changesCount;
 
@@ -843,9 +1314,11 @@ const urlParams = new URLSearchParams(window.location.search);
  const isStreaming = _signal.signal(false); exports.isStreaming = isStreaming;
  const streamingTurnId = _signal.signal(null); exports.streamingTurnId = streamingTurnId;
 
- const theme = _signal.signal(
-  getStored("theme", _optionalChain([window, 'access', _2 => _2.matchMedia, 'optionalCall', _3 => _3("(prefers-color-scheme: light)"), 'access', _4 => _4.matches]) ? "light" : "dark")
-); exports.theme = theme;
+ const historyTotal = _signal.signal(0); exports.historyTotal = historyTotal;
+ const historyStart = _signal.signal(0); exports.historyStart = historyStart;
+ const hasMoreHistory = _signal.computed.call(void 0, () => exports.historyTotal.call(void 0, ) > exports.turns.call(void 0, ).length); exports.hasMoreHistory = hasMoreHistory;
+
+ const theme = _signal.signal(resolveInitialTheme()); exports.theme = theme;
 
  const connectionStatus = _signal.signal("connecting"); exports.connectionStatus = connectionStatus;
 
@@ -866,11 +1339,24 @@ const urlParams = new URLSearchParams(window.location.search);
  const jobs = _signal.signal([]); exports.jobs = jobs;
  const files = _signal.signal([]); exports.files = files;
 
+ const activityList = _signal.signal([]); exports.activityList = activityList;
+ const slashCommands = _signal.signal([]); exports.slashCommands = slashCommands;
+ const toasts = _signal.signal([]); exports.toasts = toasts;
+
+ const sandboxMode = _signal.signal("off"); exports.sandboxMode = sandboxMode;
+ const usageSummary = _signal.signal({ lines: 0, in: 0, out: 0, usd: 0, tail: "" }); exports.usageSummary = usageSummary;
+ const packagesList = _signal.signal({ user: [], project: [] }); exports.packagesList = packagesList;
+
+ const activeArtifact = _signal.signal(null); exports.activeArtifact = activeArtifact;
  const pendingApproval = _signal.signal(null); exports.pendingApproval = pendingApproval;
  const showSearchModal = _signal.signal(false); exports.showSearchModal = showSearchModal;
  const showAuthModal = _signal.signal(false); exports.showAuthModal = showAuthModal;
  const showSettingsModal = _signal.signal(false); exports.showSettingsModal = showSettingsModal;
  const showShortcutsModal = _signal.signal(false); exports.showShortcutsModal = showShortcutsModal;
+ const showAddWorkspaceModal = _signal.signal(false); exports.showAddWorkspaceModal = showAddWorkspaceModal;
+ const showArtifactModal = _signal.signal(false); exports.showArtifactModal = showArtifactModal;
+
+ const promptHistory = _signal.signal(getStored("promptHistory", [])); exports.promptHistory = promptHistory;
 
 // 统计衍生物
  const totalDiffStats = _signal.computed.call(void 0, () => {
@@ -895,7 +1381,8 @@ const urlParams = new URLSearchParams(window.location.search);
   const params = new URLSearchParams();
   const s = exports.activeSession.call(void 0, );
   if (s) params.set("session", s);
-  if (exports.urlWs) params.set("ws", exports.urlWs);
+  const curW = exports.currentWs.call(void 0, );
+  if (curW) params.set("ws", curW);
   for (const [k, v] of Object.entries(extra)) {
     if (v != null && v !== "") params.set(k, v);
   }
@@ -903,12 +1390,34 @@ const urlParams = new URLSearchParams(window.location.search);
   return q ? `?${q}` : "";
 } exports.getQuery = getQuery;
 
-// 主题切换
- function toggleTheme() {
-  const next = exports.theme.call(void 0, ) === "dark" ? "light" : "dark";
+// Toast 消息通知
+ function showToast(
+  message,
+  type = "info",
+  duration = 3200
+) {
+  const id = `toast_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+  exports.toasts.update((prev) => [...prev, { id, message, type, time: Date.now() }]);
+  setTimeout(() => dismissToast(id), duration);
+} exports.showToast = showToast;
+
+ function dismissToast(id) {
+  exports.toasts.update((prev) => prev.filter((t) => t.id !== id));
+} exports.dismissToast = dismissToast;
+
+// 主题切换与设置
+ function setTheme(next) {
   exports.theme.set(next);
   setStored("theme", next);
-  document.documentElement.setAttribute("data-color-scheme", next);
+  document.documentElement.setAttribute("data-theme", next);
+  document.documentElement.setAttribute("data-color-scheme", next === "light" ? "light" : "dark");
+} exports.setTheme = setTheme;
+
+ function toggleTheme() {
+  const current = exports.theme.call(void 0, );
+  const idx = exports.THEMES.findIndex((x) => x.id === current);
+  const next = exports.THEMES[(idx + 1) % exports.THEMES.length].id;
+  setTheme(next);
 } exports.toggleTheme = toggleTheme;
 
 // 工作台控制
@@ -945,6 +1454,37 @@ const urlParams = new URLSearchParams(window.location.search);
   exports.terminalLines.update((prev) => [...prev.slice(-400), line]);
 } exports.appendTerminalLine = appendTerminalLine;
 
+// 草稿存取
+ function getDraft(sessionId) {
+  try {
+    return localStorage.getItem(`piz.draft.${sessionId}`) || "";
+  } catch (_) {
+    return "";
+  }
+} exports.getDraft = getDraft;
+
+ function setDraft(sessionId, text) {
+  try {
+    if (text) {
+      localStorage.setItem(`piz.draft.${sessionId}`, text);
+    } else {
+      localStorage.removeItem(`piz.draft.${sessionId}`);
+    }
+  } catch (_) {}
+} exports.setDraft = setDraft;
+
+// 历史提示词记录
+ function pushPromptHistory(prompt) {
+  const p = prompt.trim();
+  if (!p) return;
+  exports.promptHistory.update((prev) => {
+    const filtered = prev.filter((x) => x !== p);
+    const next = [...filtered, p].slice(-100);
+    setStored("promptHistory", next);
+    return next;
+  });
+} exports.pushPromptHistory = pushPromptHistory;
+
 // 核心网络同步
  async function loadState() {
   try {
@@ -953,12 +1493,19 @@ const urlParams = new URLSearchParams(window.location.search);
       _signal.batch.call(void 0, () => {
         if (data.model) exports.model.set(data.model);
         if (typeof data.pct === "number") exports.pct.set(data.pct);
-        if (data.mode && (data.mode === "yolo" || data.mode === "ask" || data.mode === "plan")) {
-          exports.mode.set(data.mode);
+        if (data.mode) {
+          const m = data.mode === "read_only" ? "read-only" : data.mode;
+          if (m === "yolo" || m === "ask" || m === "read-only" || m === "plan") {
+            exports.mode.set(m);
+          }
         }
-        if (data.ws) exports.wsName.set(data.ws);
+        if (data.ws) {
+          exports.wsName.set(data.ws.split("/").pop() || data.ws);
+        }
         if (data.branch) exports.branch.set(data.branch);
         if (typeof data.changes === "number") exports.changesCount.set(data.changes);
+        if (typeof data.hist_total === "number") exports.historyTotal.set(data.hist_total);
+        if (typeof data.hist_start === "number") exports.historyStart.set(data.hist_start);
       });
     }
   } catch (err) {
@@ -975,6 +1522,53 @@ const urlParams = new URLSearchParams(window.location.search);
     console.warn("loadModels error:", err);
   }
 } exports.loadModels = loadModels;
+
+ async function loadWorkspaces() {
+  try {
+    const res = await _net.apiFetch.call(void 0, "/api/workspaces");
+    const list = Array.isArray(res) ? res : [];
+    const curW = exports.currentWs.call(void 0, );
+    const items = list.map((w) => ({
+      root: w.root || w.path || "",
+      name: w.name || (w.root ? w.root.split("/").pop() || "workspace" : "workspace"),
+      isCurrent: w.root === curW,
+    }));
+    exports.workspaces.set(items);
+  } catch (err) {
+    console.warn("loadWorkspaces error:", err);
+  }
+} exports.loadWorkspaces = loadWorkspaces;
+
+ async function addWorkspace(root) {
+  const trimmed = root.trim();
+  if (!trimmed) return;
+  try {
+    const res = await _net.apiFetch.call(void 0, "/api/workspaces", {
+      method: "POST",
+      body: JSON.stringify({ root: trimmed }),
+    });
+    showToast(`Workspace added: ${trimmed.split("/").pop()}`, "success");
+    await loadWorkspaces();
+    await switchWorkspace(trimmed);
+  } catch (err) {
+    showToast(`Failed to register workspace: ${err}`, "error");
+  }
+} exports.addWorkspace = addWorkspace;
+
+ async function switchWorkspace(root) {
+  if (exports.currentWs.call(void 0, ) === root) return;
+  exports.currentWs.set(root);
+  const name = root.split("/").pop() || "workspace";
+  exports.wsName.set(name);
+  const newUrl = `${window.location.pathname}?ws=${encodeURIComponent(root)}&session=default`;
+  window.history.pushState(null, "", newUrl);
+  exports.activeSession.set("default");
+  await loadState();
+  await loadSessions();
+  await loadHistory();
+  await loadFiles();
+  refreshDiffs(true);
+} exports.switchWorkspace = switchWorkspace;
 
  async function loadSessions() {
   try {
@@ -1005,6 +1599,58 @@ const urlParams = new URLSearchParams(window.location.search);
   }
 } exports.loadFiles = loadFiles;
 
+function parseRawHistoryMessages(rawList) {
+  const turnList = [];
+  let currentAssistantTurn = null;
+
+  for (const m of rawList) {
+    if (m.role === "user") {
+      currentAssistantTurn = null;
+      turnList.push({
+        id: `u_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        role: "user",
+        content: m.content || "",
+        steps: [],
+        timestamp: m.timestamp || Date.now(),
+      });
+    } else if (m.role === "assistant") {
+      currentAssistantTurn = {
+        id: `a_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        role: "assistant",
+        content: m.content || "",
+        thought: m.thought || m.reasoning || "",
+        thoughtDurationMs: m.thought_duration,
+        steps: [],
+        timestamp: m.timestamp || Date.now(),
+      };
+      turnList.push(currentAssistantTurn);
+    } else if (m.role === "tool") {
+      const step = {
+        id: `st_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        name: m.name || "Tool",
+        desc: typeof m.args === "string" ? m.args : JSON.stringify(m.args),
+        status: "done",
+        startedAt: Date.now(),
+        result: m.content || "",
+        args: m.args,
+      };
+      if (currentAssistantTurn) {
+        currentAssistantTurn.steps.push(step);
+      } else {
+        currentAssistantTurn = {
+          id: `a_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+          role: "assistant",
+          content: "",
+          steps: [step],
+          timestamp: Date.now(),
+        };
+        turnList.push(currentAssistantTurn);
+      }
+    }
+  }
+  return turnList;
+}
+
  async function loadHistory() {
   try {
     const res = await _net.apiFetch.call(void 0, `/api/history${getQuery()}`);
@@ -1016,63 +1662,40 @@ const urlParams = new URLSearchParams(window.location.search);
       ? res
       : [];
 
-    const turnList = [];
-    let currentAssistantTurn = null;
-
-    for (const m of rawList) {
-      if (m.role === "user") {
-        currentAssistantTurn = null;
-        turnList.push({
-          id: `u_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-          role: "user",
-          content: m.content || "",
-          steps: [],
-          timestamp: m.timestamp || Date.now(),
-        });
-      } else if (m.role === "assistant") {
-        currentAssistantTurn = {
-          id: `a_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-          role: "assistant",
-          content: m.content || "",
-          thought: m.thought || m.reasoning || "",
-          thoughtDurationMs: m.thought_duration,
-          steps: [],
-          timestamp: m.timestamp || Date.now(),
-        };
-        turnList.push(currentAssistantTurn);
-      } else if (m.role === "tool") {
-        const step = {
-          id: `st_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-          name: m.name || "Tool",
-          desc: typeof m.args === "string" ? m.args : JSON.stringify(m.args),
-          status: "done",
-          startedAt: Date.now(),
-          result: m.content || "",
-          args: m.args,
-        };
-        if (currentAssistantTurn) {
-          currentAssistantTurn.steps.push(step);
-        } else {
-          currentAssistantTurn = {
-            id: `a_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-            role: "assistant",
-            content: "",
-            steps: [step],
-            timestamp: Date.now(),
-          };
-          turnList.push(currentAssistantTurn);
-        }
-      }
-    }
+    const turnList = parseRawHistoryMessages(rawList);
     exports.turns.set(turnList);
   } catch (err) {
     console.warn("loadHistory error:", err);
   }
 } exports.loadHistory = loadHistory;
 
+ async function loadMoreHistory() {
+  const currentCount = exports.turns.call(void 0, ).length;
+  try {
+    const res = await _net.apiFetch.call(void 0, `/api/history${getQuery({ offset: String(currentCount), limit: "40" })}`);
+    const rawList = Array.isArray(_optionalChain([res, 'optionalAccess', _10 => _10.history]))
+      ? res.history
+      : Array.isArray(_optionalChain([res, 'optionalAccess', _11 => _11.messages]))
+      ? res.messages
+      : Array.isArray(res)
+      ? res
+      : [];
+
+    if (rawList.length > 0) {
+      const earlierTurns = parseRawHistoryMessages(rawList);
+      exports.turns.update((prev) => [...earlierTurns, ...prev]);
+      showToast(`Loaded ${earlierTurns.length} earlier messages`, "info");
+    }
+  } catch (err) {
+    showToast(`Failed to load more history: ${err}`, "error");
+  }
+} exports.loadMoreHistory = loadMoreHistory;
+
  async function switchSession(name) {
   if (exports.activeSession.call(void 0, ) === name) return;
   exports.activeSession.set(name);
+  const newUrl = `${window.location.pathname}?session=${encodeURIComponent(name)}${exports.currentWs.call(void 0, ) ? `&ws=${encodeURIComponent(exports.currentWs.call(void 0, ))}` : ""}`;
+  window.history.pushState(null, "", newUrl);
   await loadState();
   await loadHistory();
   await loadSessions();
@@ -1085,12 +1708,90 @@ const urlParams = new URLSearchParams(window.location.search);
       body: JSON.stringify({ act: "new" }),
     });
     if (res && res.name) {
+      showToast(`Created session: ${res.name}`, "success");
       await switchSession(res.name);
     }
   } catch (err) {
-    console.warn("createSession error:", err);
+    showToast(`Failed to create session: ${err}`, "error");
   }
 } exports.createSession = createSession;
+
+ async function forkSession(id) {
+  try {
+    const q = getQuery({ session: id });
+    const res = await _net.apiFetch.call(void 0, `/api/action${q}`, {
+      method: "POST",
+      body: JSON.stringify({ act: "fork" }),
+    });
+    if (res && res.ok && res.name) {
+      showToast(`Forked to session: ${res.name}`, "success");
+      await loadSessions();
+      await switchSession(res.name);
+    } else {
+      showToast(`Fork failed: ${_optionalChain([res, 'optionalAccess', _12 => _12.error]) || "unknown"}`, "error");
+    }
+  } catch (err) {
+    showToast(`Fork failed: ${err}`, "error");
+  }
+} exports.forkSession = forkSession;
+
+ async function undoSession(id) {
+  try {
+    const q = getQuery({ session: id });
+    const res = await _net.apiFetch.call(void 0, `/api/action${q}`, {
+      method: "POST",
+      body: JSON.stringify({ act: "undo" }),
+    });
+    if (res && res.ok) {
+      showToast("Undid last turn", "success");
+      await loadState();
+      await loadHistory();
+      await loadSessions();
+    } else {
+      showToast("Nothing to undo", "info");
+    }
+  } catch (err) {
+    showToast(`Undo failed: ${err}`, "error");
+  }
+} exports.undoSession = undoSession;
+
+ async function compactSession(id) {
+  try {
+    const q = getQuery({ session: id });
+    const res = await _net.apiFetch.call(void 0, `/api/action${q}`, {
+      method: "POST",
+      body: JSON.stringify({ act: "compact" }),
+    });
+    if (res && res.ok) {
+      showToast("Context snapshot compacted successfully", "success");
+      await loadState();
+      await loadHistory();
+    } else {
+      showToast("Compact failed", "error");
+    }
+  } catch (err) {
+    showToast(`Compact failed: ${err}`, "error");
+  }
+} exports.compactSession = compactSession;
+
+ async function archiveSession(id) {
+  try {
+    const q = getQuery({ session: id });
+    const res = await _net.apiFetch.call(void 0, `/api/action${q}`, {
+      method: "POST",
+      body: JSON.stringify({ act: "archive" }),
+    });
+    if (res && res.ok) {
+      showToast("Session archived", "info");
+      if (exports.activeSession.call(void 0, ) === id) {
+        await switchSession("default");
+      }
+      await loadSessions();
+    }
+  } catch (err) {
+    showToast(`Archive failed: ${err}`, "error");
+  }
+} exports.archiveSession = archiveSession;
 
  async function renameSession(id, title) {
   try {
@@ -1099,9 +1800,10 @@ const urlParams = new URLSearchParams(window.location.search);
       method: "POST",
       body: JSON.stringify({ title }),
     });
+    showToast("Session renamed", "success");
     await loadSessions();
   } catch (err) {
-    console.warn("renameSession error:", err);
+    showToast(`Rename failed: ${err}`, "error");
   }
 } exports.renameSession = renameSession;
 
@@ -1112,6 +1814,7 @@ const urlParams = new URLSearchParams(window.location.search);
       method: "POST",
       body: JSON.stringify({ act: "delete" }),
     });
+    showToast("Session deleted", "info");
     if (exports.activeSession.call(void 0, ) === id) {
       exports.activeSession.set("default");
       await loadState();
@@ -1119,18 +1822,20 @@ const urlParams = new URLSearchParams(window.location.search);
     }
     await loadSessions();
   } catch (err) {
-    console.warn("deleteSession error:", err);
+    showToast(`Delete session failed: ${err}`, "error");
   }
 } exports.deleteSession = deleteSession;
 
  async function switchMode(nextMode) {
+  const backendMode = nextMode === "plan" ? "read-only" : nextMode;
   exports.mode.set(nextMode);
   setStored("mode", nextMode);
   try {
     await _net.apiFetch.call(void 0, `/api/mode${getQuery()}`, {
       method: "POST",
-      body: JSON.stringify({ mode: nextMode }),
+      body: JSON.stringify({ mode: backendMode }),
     });
+    showToast(`Mode switched to ${nextMode.toUpperCase()}`, "info");
   } catch (err) {
     console.warn("switchMode error:", err);
   }
@@ -1143,14 +1848,16 @@ const urlParams = new URLSearchParams(window.location.search);
       method: "POST",
       body: JSON.stringify({ model: nextModel }),
     });
+    showToast(`Model set to: ${nextModel}`, "info");
   } catch (err) {
-    console.warn("switchModel error:", err);
+    showToast(`Switch model failed: ${err}`, "error");
   }
 } exports.switchModel = switchModel;
 
  async function interrupt() {
   try {
     await _net.apiFetch.call(void 0, `/api/interrupt${getQuery()}`, { method: "POST" });
+    showToast("Generation interrupted", "warning");
   } catch (err) {
     console.warn("interrupt error:", err);
   } finally {
@@ -1174,8 +1881,9 @@ const urlParams = new URLSearchParams(window.location.search);
       body: JSON.stringify({ id: Number(id) || 0, allow }),
     });
     exports.pendingApproval.set(null);
+    showToast(allow ? "Action authorized" : "Action denied", allow ? "success" : "warning");
   } catch (err) {
-    console.warn("approve error:", err);
+    showToast(`Approval response failed: ${err}`, "error");
   }
 } exports.approve = approve;
 
@@ -1187,10 +1895,342 @@ const urlParams = new URLSearchParams(window.location.search);
       method: "POST",
       body: JSON.stringify({ setDefaultThinkingLevel: lvl }),
     });
+    showToast(`Thinking level set to ${lvl.toUpperCase()}`, "info");
   } catch (e) {
     console.warn("switchThinkingLevel failed:", e);
   }
 } exports.switchThinkingLevel = switchThinkingLevel;
+
+ async function loadConfig() {
+  try {
+    const res = await _net.apiFetch.call(void 0, "/api/config");
+    if (res) {
+      if (res.sandboxMode) exports.sandboxMode.set(res.sandboxMode);
+      if (res.defaultThinkingLevel) exports.thinkingLevel.set(res.defaultThinkingLevel);
+    }
+  } catch (e) {}
+} exports.loadConfig = loadConfig;
+
+ async function setSandboxMode(sb) {
+  exports.sandboxMode.set(sb);
+  try {
+    await _net.apiFetch.call(void 0, "/api/config", {
+      method: "POST",
+      body: JSON.stringify({ setSandboxMode: sb }),
+    });
+    showToast(`Sandbox mode: ${sb}`, "info");
+  } catch (e) {
+    showToast(`Set sandbox failed: ${e}`, "error");
+  }
+} exports.setSandboxMode = setSandboxMode;
+
+ async function loadUsage() {
+  try {
+    const res = await _net.apiFetch.call(void 0, "/api/usage");
+    if (res) {
+      exports.usageSummary.set({
+        lines: res.lines || 0,
+        in: res.in || 0,
+        out: res.out || 0,
+        usd: res.usd || 0,
+        tail: res.tail || "",
+      });
+    }
+  } catch (e) {}
+} exports.loadUsage = loadUsage;
+
+ async function loadPackages() {
+  try {
+    const res = await _net.apiFetch.call(void 0, `/api/packages${getQuery()}`);
+    if (res) {
+      exports.packagesList.set({
+        user: Array.isArray(res.user) ? res.user : [],
+        project: Array.isArray(res.project) ? res.project : [],
+      });
+    }
+  } catch (e) {}
+} exports.loadPackages = loadPackages;
+
+ async function refreshModels() {
+  showToast("Refreshing models from providers...", "info");
+  try {
+    await _net.apiFetch.call(void 0, "/api/config", {
+      method: "POST",
+      body: JSON.stringify({ refreshModels: true }),
+    });
+    await loadModels();
+    showToast("Models refreshed", "success");
+  } catch (e) {
+    showToast(`Failed to refresh models: ${e}`, "error");
+  }
+} exports.refreshModels = refreshModels;
+
+ async function pollActivity() {
+  try {
+    const res = await _net.apiFetch.call(void 0, "/api/activity");
+    const list = Array.isArray(res) ? res : [];
+    exports.activityList.set(
+      list.map((item) => ({
+        pid: item.pid,
+        name: item.name || item.cmd || `Process ${item.pid}`,
+        cmd: item.cmd || item.name || "",
+        duration: item.duration || item.dur || 0,
+        bytes: item.bytes || item.out_bytes || 0,
+        startedAt: item.startedAt || Date.now(),
+      }))
+    );
+  } catch (_) {}
+} exports.pollActivity = pollActivity;
+
+ async function killActivity(pid) {
+  try {
+    const res = await _net.apiFetch.call(void 0, "/api/activity", {
+      method: "POST",
+      body: JSON.stringify({ kill: pid }),
+    });
+    if (res && res.ok) {
+      showToast(`Terminated task pid:${pid}`, "success");
+      await pollActivity();
+    } else {
+      showToast(`Could not terminate task pid:${pid}`, "error");
+    }
+  } catch (e) {
+    showToast(`Kill task error: ${e}`, "error");
+  }
+} exports.killActivity = killActivity;
+
+ async function refreshDiffs(silent = false) {
+  try {
+    const res = await _net.apiFetch.call(void 0, `/api/slash${getQuery()}`, {
+      method: "POST",
+      body: JSON.stringify({ name: "diff", args: "" }),
+    });
+    if (res && res.text) {
+      const parsed = _diff.parseUnifiedDiff.call(void 0, res.text);
+      exports.diffs.set(parsed);
+      if (parsed.length > 0 && !exports.activeDiffPath.call(void 0, )) {
+        exports.activeDiffPath.set(parsed[0].path);
+      }
+      if (!silent) showToast(`Diff updated (${parsed.length} changed files)`, "info");
+    } else {
+      exports.diffs.set([]);
+      if (!silent) showToast("No modified files in workspace", "info");
+    }
+  } catch (e) {
+    console.warn("refreshDiffs error:", e);
+  }
+} exports.refreshDiffs = refreshDiffs;
+
+ async function commitChanges(msg) {
+  if (!msg.trim()) return;
+  try {
+    const res = await _net.apiFetch.call(void 0, `/api/slash${getQuery()}`, {
+      method: "POST",
+      body: JSON.stringify({ name: "commit", args: msg.trim() }),
+    });
+    if (res && res.text) {
+      appendTerminalLine(res.text, "stdout");
+      showToast("Git commit completed", "success");
+      await refreshDiffs(true);
+      await loadState();
+    }
+  } catch (e) {
+    showToast(`Commit failed: ${e}`, "error");
+  }
+} exports.commitChanges = commitChanges;
+
+ async function loadHelp() {
+  try {
+    const res = await _net.apiFetch.call(void 0, `/api/help${getQuery()}`);
+    const cmds = Array.isArray(_optionalChain([res, 'optionalAccess', _13 => _13.commands])) ? res.commands : [];
+    if (cmds.length > 0) {
+      exports.slashCommands.set(
+        cmds.map((c) => ({
+          cmd: c.name || c.cmd,
+          desc: c.desc || "",
+        }))
+      );
+      return;
+    }
+  } catch (_) {}
+
+  // 兜底常用标准列表
+  exports.slashCommands.set([
+    { cmd: "/diff", desc: "View git status & diffstat in deck" },
+    { cmd: "/commit", desc: "Commit staged workspace files" },
+    { cmd: "/log", desc: "Git commit history log" },
+    { cmd: "/branch", desc: "Show current and recent git branches" },
+    { cmd: "/term", desc: "Open terminal viewer in deck" },
+    { cmd: "/jobs", desc: "View subagents & active background processes" },
+    { cmd: "/files", desc: "Browse workspace repository files" },
+    { cmd: "/clear", desc: "Create a fresh clean session" },
+    { cmd: "/fork", desc: "Fork current session into a new branch" },
+    { cmd: "/undo", desc: "Undo last message turn" },
+    { cmd: "/compact", desc: "Compact session context window" },
+    { cmd: "/doctor", desc: "Run environment health check" },
+    { cmd: "/usage", desc: "View token ledger and cost summary" },
+    { cmd: "/models", desc: "Refresh available AI model list" },
+    { cmd: "/yolo", desc: "Switch mode to YOLO (auto-execute)" },
+    { cmd: "/ask", desc: "Switch mode to ASK (require approval)" },
+    { cmd: "/read-only", desc: "Switch mode to READ-ONLY (safe)" },
+    { cmd: "/theme", desc: "Switch theme (dark, abyss, matrix, synthwave, amber, light)" },
+    { cmd: "/export", desc: "Export session as Markdown or JSON" },
+    { cmd: "/help", desc: "Open keyboard shortcuts and help guide" },
+  ]);
+} exports.loadHelp = loadHelp;
+
+ async function executeSlash(fullInput) {
+  const trimmed = fullInput.trim();
+  if (!trimmed.startsWith("/")) return false;
+  const parts = trimmed.slice(1).split(/\s+/);
+  const name = parts[0].toLowerCase();
+  const args = parts.slice(1).join(" ");
+
+  if (name === "diff") {
+    setDeckTab("diffs");
+    refreshDiffs();
+    return true;
+  }
+  if (name === "term" || name === "terminal") {
+    setDeckTab("terminal");
+    return true;
+  }
+  if (name === "jobs") {
+    setDeckTab("jobs");
+    pollActivity();
+    return true;
+  }
+  if (name === "files") {
+    setDeckTab("files");
+    loadFiles();
+    return true;
+  }
+  if (name === "clear" || name === "new") {
+    createSession();
+    return true;
+  }
+  if (name === "yolo") {
+    switchMode("yolo");
+    return true;
+  }
+  if (name === "ask") {
+    switchMode("ask");
+    return true;
+  }
+  if (name === "read-only" || name === "readonly" || name === "ro" || name === "plan") {
+    switchMode("read-only");
+    return true;
+  }
+  if (name === "theme") {
+    const trimmedArg = (args || "").trim().toLowerCase();
+    const match = exports.THEMES.find((t) => t.id === trimmedArg);
+    if (match) {
+      setTheme(match.id);
+      showToast(`Theme switched to ${match.id}`);
+    } else {
+      toggleTheme();
+      showToast(`Theme switched to ${exports.theme.call(void 0, )}`);
+    }
+    return true;
+  }
+  if (name === "help") {
+    exports.showShortcutsModal.set(true);
+    return true;
+  }
+  if (name === "fork") {
+    forkSession(exports.activeSession.call(void 0, ));
+    return true;
+  }
+  if (name === "undo") {
+    undoSession(exports.activeSession.call(void 0, ));
+    return true;
+  }
+  if (name === "compact") {
+    compactSession(exports.activeSession.call(void 0, ));
+    return true;
+  }
+  if (name === "export") {
+    exportSession(args === "json" ? "json" : "md");
+    return true;
+  }
+  if (name === "find") {
+    exports.showSearchModal.set(true);
+    return true;
+  }
+  if (name === "models" || name === "refresh") {
+    refreshModels();
+    return true;
+  }
+
+  // 服务端执行
+  try {
+    const res = await _net.apiFetch.call(void 0, `/api/slash${getQuery()}`, {
+      method: "POST",
+      body: JSON.stringify({ name, args }),
+    });
+    if (res && res.ok) {
+      if (res.text) {
+        appendTerminalLine(`[/${name}] ${res.text}`, "stdout");
+        setDeckTab("terminal");
+        showToast(`Command /${name} finished`, "success");
+      }
+      return true;
+    } else {
+      showToast(`Command /${name} failed: ${_optionalChain([res, 'optionalAccess', _14 => _14.error]) || "unknown"}`, "error");
+      return false;
+    }
+  } catch (e) {
+    showToast(`Error running /${name}: ${e}`, "error");
+    return false;
+  }
+} exports.executeSlash = executeSlash;
+
+ async function viewArtifact(name) {
+  if (!name) return;
+  if (name.startsWith("img-")) {
+    exports.activeArtifact.set({
+      name,
+      content: `/api/image?name=${encodeURIComponent(name)}`,
+      isImage: true,
+    });
+    exports.showArtifactModal.set(true);
+    return;
+  }
+  try {
+    const res = await _net.apiFetch.call(void 0, `/api/artifact?name=${encodeURIComponent(name)}`);
+    if (res && res.text != null) {
+      exports.activeArtifact.set({ name, content: res.text, isImage: false });
+      exports.showArtifactModal.set(true);
+    } else {
+      showToast(`Cannot load artifact: ${name}`, "warning");
+    }
+  } catch (e) {
+    showToast(`Failed to fetch artifact: ${e}`, "error");
+  }
+} exports.viewArtifact = viewArtifact;
+
+ async function loadPlugins() {
+  try {
+    const res = await _net.apiFetch.call(void 0, `/api/plugins${getQuery()}`);
+    const list = Array.isArray(_optionalChain([res, 'optionalAccess', _15 => _15.plugins])) ? res.plugins : Array.isArray(res) ? res : [];
+    for (const p of list) {
+      if (p.enabled && Array.isArray(p.assets)) {
+        for (const asset of p.assets) {
+          if (asset.endsWith(".css")) {
+            const link = document.createElement("link");
+            link.rel = "stylesheet";
+            link.href = `/api/plugins/assets/${p.id}/${asset}`;
+            document.head.appendChild(link);
+          } else if (asset.endsWith(".js")) {
+            const script = document.createElement("script");
+            script.src = `/api/plugins/assets/${p.id}/${asset}`;
+            document.head.appendChild(script);
+          }
+        }
+      }
+    }
+  } catch (_) {}
+} exports.loadPlugins = loadPlugins;
 
  async function sendMessage(
   text,
@@ -1201,6 +2241,12 @@ const urlParams = new URLSearchParams(window.location.search);
 
   const currentImg = imgObj !== undefined ? imgObj : exports.attachedImage.call(void 0, );
   const trimmedText = text.trim();
+
+  // 记录提示词历史
+  if (trimmedText) pushPromptHistory(trimmedText);
+
+  // 清除草稿
+  setDraft(exports.activeSession.call(void 0, ), "");
 
   const userTurn = {
     id: `u_${Date.now()}`,
@@ -1248,6 +2294,7 @@ const urlParams = new URLSearchParams(window.location.search);
     }
   } catch (err) {
     console.error("sendMessage failed:", err);
+    showToast(`Send failed: ${err instanceof Error ? err.message : String(err)}`, "error");
     _signal.batch.call(void 0, () => {
       exports.turns.update((prev) =>
         prev.map((t) =>
@@ -1296,6 +2343,37 @@ const urlParams = new URLSearchParams(window.location.search);
   if (format === "json") {
     content = JSON.stringify(list, null, 2);
     filename += ".json";
+  } else if (format === "html") {
+    filename += ".html";
+    content = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>piz session - ${curName}</title>
+  <style>
+    body { font-family: -apple-system, sans-serif; max-width: 800px; margin: 40px auto; padding: 0 20px; line-height: 1.6; color: #24292f; background: #fff; }
+    h1 { border-bottom: 1px solid #d0d7de; padding-bottom: 8px; }
+    .turn { margin: 24px 0; padding: 16px; border-radius: 8px; }
+    .turn-user { background: #f6f8fa; border: 1px solid #d0d7de; }
+    .turn-assistant { background: #f0f7ff; border: 1px solid #b6e3ff; }
+    .role { font-weight: 600; font-size: 13px; text-transform: uppercase; margin-bottom: 8px; color: #57606a; }
+    pre { background: #f6f8fa; padding: 12px; border-radius: 6px; overflow-x: auto; }
+    blockquote { border-left: 3px solid #0969da; margin: 0; padding-left: 12px; color: #57606a; }
+  </style>
+</head>
+<body>
+  <h1>piz session: ${curName}</h1>
+  <p>Exported on ${new Date().toLocaleString()}</p>
+  <hr />
+`;
+    for (const t of list) {
+      content += `<div class="turn turn-${t.role}">\n<div class="role">${t.role}</div>\n`;
+      if (t.thought) {
+        content += `<blockquote><b>Thought Process:</b><br>${t.thought.replace(/\n/g, "<br>")}</blockquote>\n`;
+      }
+      content += `<div><pre>${t.content.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")}</pre></div>\n</div>\n`;
+    }
+    content += "</body>\n</html>";
   } else {
     content = `# piz Session: ${curName}\n\n*Exported on ${new Date().toLocaleString()}*\n\n---\n\n`;
     for (const t of list) {
@@ -1312,20 +2390,22 @@ const urlParams = new URLSearchParams(window.location.search);
     filename += ".md";
   }
 
-  const blob = new Blob([content], { type: format === "json" ? "application/json" : "text/markdown;charset=utf-8" });
+  const mimeType = format === "json" ? "application/json" : format === "html" ? "text/html;charset=utf-8" : "text/markdown;charset=utf-8";
+  const blob = new Blob([content], { type: mimeType });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
   a.download = filename;
   a.click();
   URL.revokeObjectURL(url);
+  showToast(`Session exported to ${filename}`, "success");
 } exports.exportSession = exportSession;
 
-// 核心 SSE 事件调度（精准对齐后端真实事件契约）
+// 核心 SSE 事件调度
  function handleSseEvent(evt) {
   if (!evt || !evt.type) return;
 
-  // 会话隔离检查：如果事件带有 session 且不匹配当前激活会话，跳过
+  // 会话隔离检查
   if (evt.session && evt.session !== exports.activeSession.call(void 0, )) return;
 
   function ensureAssistantTurn() {
@@ -1361,7 +2441,6 @@ const urlParams = new URLSearchParams(window.location.search);
     }
 
     case "reasoning": {
-      // 思考流增量
       const chunk = evt.text || "";
       if (!chunk) break;
       exports.isStreaming.set(true);
@@ -1375,7 +2454,6 @@ const urlParams = new URLSearchParams(window.location.search);
     }
 
     case "message": {
-      // 回答正文增量
       const chunk = evt.text || "";
       if (!chunk) break;
       exports.isStreaming.set(true);
@@ -1411,6 +2489,7 @@ const urlParams = new URLSearchParams(window.location.search);
         )
       );
       appendTerminalLine(`▶ [Tool] ${evt.name}: ${typeof evt.args === "string" ? evt.args : JSON.stringify(evt.args)}`, "cmd");
+      pollActivity();
       break;
     }
 
@@ -1449,6 +2528,7 @@ const urlParams = new URLSearchParams(window.location.search);
       }
 
       appendTerminalLine(summary, isError ? "stderr" : "stdout");
+      pollActivity();
       break;
     }
 
@@ -1506,7 +2586,6 @@ const urlParams = new URLSearchParams(window.location.search);
     }
 
     case "turn_end": {
-      // 本轮彻底完成，解开流式锁定！
       _signal.batch.call(void 0, () => {
         exports.isStreaming.set(false);
         exports.turns.update((prev) =>
@@ -1515,6 +2594,8 @@ const urlParams = new URLSearchParams(window.location.search);
         exports.streamingTurnId.set(null);
       });
       loadState();
+      refreshDiffs(true);
+      pollActivity();
       break;
     }
   }
@@ -1522,7 +2603,9 @@ const urlParams = new URLSearchParams(window.location.search);
 
 // 统一应用启动
  function boot() {
-  document.documentElement.setAttribute("data-color-scheme", exports.theme.call(void 0, ));
+  const curTheme = exports.theme.call(void 0, );
+  document.documentElement.setAttribute("data-theme", curTheme);
+  document.documentElement.setAttribute("data-color-scheme", curTheme === "light" ? "light" : "dark");
 
   _net.connectEventStream.call(void 0, handleSseEvent, (st) => {
     exports.connectionStatus.set(st);
@@ -1530,9 +2613,19 @@ const urlParams = new URLSearchParams(window.location.search);
 
   loadState();
   loadModels();
+  loadWorkspaces();
   loadSessions();
   loadHistory();
   loadFiles();
+  loadHelp();
+  loadConfig();
+  loadUsage();
+  loadPackages();
+  loadPlugins();
+  refreshDiffs(true);
+  pollActivity();
+
+  setInterval(pollActivity, 4000);
 
   window.addEventListener("piz:unauthorized", () => {
     exports.showAuthModal.set(true);
@@ -1644,6 +2737,14 @@ function createSvg(
  function iconMoon(size = 16, cls = "") {
   return createSvg("M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z", size, cls);
 } exports.iconMoon = iconMoon;
+
+ function iconPalette(size = 16, cls = "") {
+  return createSvg(
+    "M13.5 6.5h.01M17.5 10.5h.01M8.5 7.5h.01M6.5 12.5h.01M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z",
+    size,
+    cls
+  );
+} exports.iconPalette = iconPalette;
 
  function iconPlus(size = 16, cls = "") {
   return createSvg("M12 5v14M5 12h14", size, cls);
@@ -1809,6 +2910,46 @@ function createSvg(
   );
 } exports.iconHelp = iconHelp;
 
+ function iconDots(size = 16, cls = "") {
+  return createSvg("M12 12h.01M19 12h.01M5 12h.01", size, cls);
+} exports.iconDots = iconDots;
+
+ function iconUndo(size = 16, cls = "") {
+  return createSvg("M3 7v6h6M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13", size, cls);
+} exports.iconUndo = iconUndo;
+
+ function iconFork(size = 16, cls = "") {
+  return createSvg("M6 3a3 3 0 1 0 0 6 3 3 0 0 0 0-6zm12 0a3 3 0 1 0 0 6 3 3 0 0 0 0-6zm-6 12a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM6 9v2a4 4 0 0 0 4 4h4a4 4 0 0 0 4-4V9", size, cls);
+} exports.iconFork = iconFork;
+
+ function iconArchive(size = 16, cls = "") {
+  return createSvg("M21 8v13H3V8M1 3h22v5H1zM10 12h4", size, cls);
+} exports.iconArchive = iconArchive;
+
+ function iconFolderPlus(size = 16, cls = "") {
+  return createSvg("M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2zM12 11v6M9 14h6", size, cls);
+} exports.iconFolderPlus = iconFolderPlus;
+
+ function iconCommit(size = 16, cls = "") {
+  return createSvg("M12 3v6M12 15v6M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z", size, cls);
+} exports.iconCommit = iconCommit;
+
+ function iconActivity(size = 16, cls = "") {
+  return createSvg("M22 12h-4l-3 9L9 3l-3 9H2", size, cls);
+} exports.iconActivity = iconActivity;
+
+ function iconCompact(size = 16, cls = "") {
+  return createSvg("M4 6h16M4 12h16M4 18h16M8 6v12M16 6v12", size, cls);
+} exports.iconCompact = iconCompact;
+
+ function iconFileText(size = 16, cls = "") {
+  return createSvg("M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z M14 2v6h6 M16 13H8 M16 17H8 M10 9H8", size, cls);
+} exports.iconFileText = iconFileText;
+
+ function iconGlobe(size = 16, cls = "") {
+  return createSvg("M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm0 0c2.5 2.7 4 6.2 4 10s-1.5 7.3-4 10c-2.5-2.7-4-6.2-4-10s1.5-7.3 4-10zM2 12h20", size, cls);
+} exports.iconGlobe = iconGlobe;
+
 };
 __modules["topbar"] = function(module, exports, require) {
 "use strict";Object.defineProperty(exports, "__esModule", {value: true});// topbar.ts —— 顶栏工作台导航与全局状态指示
@@ -1835,7 +2976,21 @@ var _dom = require('./dom');
 
 
 
+
+
+
+
+
+
+
+
+
+
 var _store = require('./store');
+
+
+
+
 
 
 
@@ -1861,7 +3016,7 @@ var _icons = require('./icons');
       _dom.tags.button(
         {
           class: "tb-btn tb-icon-btn",
-          title: "Toggle Sidebar (Ctrl+B)",
+          title: () => _store.t.call(void 0, "topbar.toggle_sidebar"),
           onclick: _store.toggleSidebar,
         },
         _icons.iconSidebar.call(void 0, 15)
@@ -1885,7 +3040,7 @@ var _icons = require('./icons');
         const branchPart = b ? ` (${b})` : "";
         const chPart = ch > 0 ? ` · ${ch}Δ` : "";
         return _dom.tags.span(
-          { class: "tb-ws-badge", title: `Workspace: ${w}${branchPart}` },
+          { class: "tb-ws-badge", title: `${_store.t.call(void 0, "topbar.workspace")}: ${w}${branchPart}` },
           _icons.iconBranch.call(void 0, 12, "tb-branch-icon"),
           _dom.tags.span({}, `${w}${branchPart}${chPart}`)
         );
@@ -1894,10 +3049,12 @@ var _icons = require('./icons');
       _dom.tags.button(
         {
           class: "tb-session-btn",
-          title: "Double click to rename session",
+          title: () => _store.t.call(void 0, "topbar.session_rename"),
           ondblclick: () => {
             const cur = _store.activeSession.call(void 0, );
-            const next = prompt("Rename session:", cur);
+            const s = _store.sessions.call(void 0, ).find((x) => x.id === cur);
+            const titleNow = s ? s.title : cur;
+            const next = prompt(_store.t.call(void 0, "sidebar.rename_prompt"), titleNow);
             if (next && next.trim()) _store.renameSession.call(void 0, cur, next.trim());
           },
         },
@@ -1914,31 +3071,47 @@ var _icons = require('./icons');
       { class: "tb-center" },
       _dom.tags.div(
         { class: "mode-pill" },
-        renderModeBtn("yolo", _icons.iconBolt, "YOLO", "Full auto-execution"),
-        renderModeBtn("ask", _icons.iconQuestion, "ASK", "Ask before destructive operations"),
-        renderModeBtn("plan", _icons.iconCompass, "PLAN", "Analysis & plan only, no write")
+        renderModeBtn("yolo", _icons.iconBolt, "mode.yolo", "mode.yolo_desc"),
+        renderModeBtn("ask", _icons.iconQuestion, "mode.ask", "mode.ask_desc"),
+        renderModeBtn("read-only", _icons.iconShield, "mode.read_only", "mode.read_only_desc")
       )
     ),
 
-    // 右侧：模型、Token、Deck 开关、主题
+    // 右侧：活动指示、模型、Token、Deck 开关、语言、主题、设置
     _dom.tags.div(
       { class: "tb-right" },
+      // 后台活动指示钮（带活跃数字 badge）
+      _dom.tags.button(
+        {
+          class: () =>
+            `tb-btn tb-act-badge-btn ${_store.activityList.call(void 0, ).length > 0 ? "has-active" : ""}`,
+          title: () => _store.t.call(void 0, "topbar.active_jobs"),
+          onclick: () => _store.setDeckTab.call(void 0, "jobs"),
+        },
+        _icons.iconActivity.call(void 0, 14),
+        () => {
+          const count = _store.activityList.call(void 0, ).length;
+          if (count === 0) return null;
+          return _dom.tags.span({ class: "tb-count-badge" }, String(count));
+        }
+      ),
       // 搜索/命令面板
       _dom.tags.button(
         {
           class: "tb-btn tb-search-btn",
-          title: "Search / Command Palette (Ctrl+K)",
+          title: () => _store.t.call(void 0, "topbar.search"),
           onclick: () => _store.showSearchModal.set(true),
         },
         _icons.iconSearch.call(void 0, 13),
         _dom.tags.span({ class: "search-key" }, "⌘K")
       ),
-      // 模型下拉
+      // 模型下拉与刷新
       _dom.tags.div(
         { class: "model-selector-wrap" },
         _dom.tags.select(
           {
             class: "model-select",
+            title: "Switch active LLM model",
             value: () => _store.model.call(void 0, ),
             onchange: (e) => {
               const target = e.target ;
@@ -1956,13 +3129,25 @@ var _icons = require('./icons');
             }
             return opts;
           }
+        ),
+        _dom.tags.button(
+          {
+            class: "model-refresh-btn",
+            title: () => _store.t.call(void 0, "topbar.refresh_models"),
+            onclick: _store.refreshModels,
+          },
+          _icons.iconRefresh.call(void 0, 11)
         )
       ),
-      // Token 使用率胶囊
+      // Token 使用率胶囊（点击可查看台账明细）
       _dom.tags.div(
         {
           class: "token-pill",
           title: "Context Window Usage",
+          onclick: () => {
+            _store.loadUsage.call(void 0, );
+            _store.showSettingsModal.set(true);
+          },
         },
         _dom.tags.span({ class: "token-dot" }),
         () => `${_store.pct.call(void 0, )}% ctx`
@@ -1971,26 +3156,75 @@ var _icons = require('./icons');
       _dom.tags.button(
         {
           class: () => `tb-btn tb-deck-btn ${_store.deckOpen.call(void 0, ) ? "is-active" : ""}`,
-          title: "Toggle Workspace Deck (Diffs/Terminal/Jobs)",
+          title: () => _store.t.call(void 0, "topbar.toggle_deck"),
           onclick: _store.toggleDeck,
         },
         _icons.iconDeck.call(void 0, 14),
         _dom.tags.span({ class: "tb-deck-label" }, "Deck")
       ),
-      // 主题切换
+      // 国际化语言切换按钮
       _dom.tags.button(
         {
-          class: "tb-btn tb-icon-btn",
-          title: "Toggle Theme",
-          onclick: _store.toggleTheme,
+          class: "tb-btn tb-lang-btn",
+          title: () => _store.t.call(void 0, "topbar.toggle_lang"),
+          onclick: _store.toggleLocale,
         },
-        () => (_store.theme.call(void 0, ) === "dark" ? _icons.iconSun.call(void 0, 15) : _icons.iconMoon.call(void 0, 15))
+        _icons.iconGlobe.call(void 0, 13),
+        _dom.tags.span({ class: "tb-lang-label" }, () => (_store.locale.call(void 0, ) === "zh" ? "简" : "EN"))
+      ),
+      // 特色主题切换菜单
+      _dom.tags.div(
+        { class: "tb-theme-wrap" },
+        _dom.tags.button(
+          {
+            class: () => `tb-btn tb-icon-btn tb-theme-btn ${_store.showThemeMenu.call(void 0, ) ? "is-active" : ""}`,
+            title: () => `${_store.t.call(void 0, "theme.name")}: ${_store.t.call(void 0, "theme." + _store.theme.call(void 0, ))}`,
+            onclick: (e) => {
+              e.stopPropagation();
+              _store.showThemeMenu.update((v) => !v);
+            },
+          },
+          _icons.iconPalette.call(void 0, 15)
+        ),
+        () =>
+          _store.showThemeMenu.call(void 0, )
+            ? _dom.tags.div(
+                {
+                  class: "tb-theme-dropdown",
+                  onclick: (e) => e.stopPropagation(),
+                },
+                _dom.tags.div({ class: "tb-theme-hdr" }, () => _store.t.call(void 0, "theme.name")),
+                _store.THEMES.map((th) =>
+                  _dom.tags.div(
+                    {
+                      class: () => `tb-theme-item ${_store.theme.call(void 0, ) === th.id ? "is-active" : ""}`,
+                      onclick: () => {
+                        _store.setTheme.call(void 0, th.id);
+                        _store.showThemeMenu.set(false);
+                      },
+                    },
+                    _dom.tags.span({ class: "tb-theme-emoji" }, th.icon),
+                    _dom.tags.span({ class: "tb-theme-title" }, () => _store.t.call(void 0, th.nameKey)),
+                    _dom.tags.div(
+                      { class: "tb-theme-dots" },
+                      _dom.tags.span({ class: "tb-theme-dot", style: `background: ${th.preview.canvas};` }),
+                      _dom.tags.span({ class: "tb-theme-dot", style: `background: ${th.preview.surface};` }),
+                      _dom.tags.span({ class: "tb-theme-dot", style: `background: ${th.preview.accent};` })
+                    ),
+                    () =>
+                      _store.theme.call(void 0, ) === th.id
+                        ? _dom.tags.span({ class: "tb-theme-check" }, _icons.iconCheck.call(void 0, 12))
+                        : null
+                  )
+                )
+              )
+            : null
       ),
       // 设置按钮
       _dom.tags.button(
         {
-          class: "tb-btn tb-icon-btn",
-          title: "Settings",
+          class: "tb-btn tb-icon-btn tb-settings-btn",
+          title: () => _store.t.call(void 0, "topbar.settings"),
           onclick: () => _store.showSettingsModal.set(true),
         },
         _icons.iconSettings.call(void 0, 15)
@@ -1998,8 +3232,8 @@ var _icons = require('./icons');
       // 快捷键帮助按钮
       _dom.tags.button(
         {
-          class: "tb-btn tb-icon-btn",
-          title: "Keyboard Shortcuts (?)",
+          class: "tb-btn tb-icon-btn tb-shortcuts-btn",
+          title: () => _store.t.call(void 0, "topbar.shortcuts"),
           onclick: () => _store.showShortcutsModal.set(true),
         },
         _icons.iconHelp.call(void 0, 14)
@@ -2007,7 +3241,12 @@ var _icons = require('./icons');
       // 网络状态指示灯
       _dom.tags.span({
         class: () => `status-indicator ${_store.connectionStatus.call(void 0, )}`,
-        title: () => `Connection: ${_store.connectionStatus.call(void 0, )}`,
+        title: () =>
+          _store.connectionStatus.call(void 0, ) === "connected"
+            ? _store.t.call(void 0, "topbar.connected")
+            : _store.connectionStatus.call(void 0, ) === "connecting"
+            ? _store.t.call(void 0, "topbar.connecting")
+            : _store.t.call(void 0, "topbar.disconnected"),
       })
     )
   );
@@ -2016,24 +3255,48 @@ var _icons = require('./icons');
 function renderModeBtn(
   m,
   iconFn,
-  label,
-  title
+  labelKey,
+  titleKey
 ) {
+  const isSelected = () => {
+    const cur = _store.mode.call(void 0, );
+    if (m === "read-only") return cur === "read-only" || cur === "plan";
+    return cur === m;
+  };
+
   return _dom.tags.button(
     {
-      class: () => `mode-btn ${_store.mode.call(void 0, ) === m ? "is-active" : ""}`,
-      title,
+      class: () => `mode-btn ${isSelected() ? "is-active" : ""}`,
+      title: () => _store.t.call(void 0, titleKey),
       onclick: () => _store.switchMode.call(void 0, m),
     },
     iconFn(12, "mode-btn-icon"),
-    _dom.tags.span({ class: "mode-btn-label" }, label)
+    _dom.tags.span({ class: "mode-btn-label" }, () => _store.t.call(void 0, labelKey))
   );
 }
 
+window.addEventListener("pointerdown", (e) => {
+  if (_store.showThemeMenu.call(void 0, )) {
+    const target = e.target ;
+    if (!target || !target.closest(".tb-theme-wrap")) {
+      _store.showThemeMenu.set(false);
+    }
+  }
+});
+
 };
 __modules["sidebar"] = function(module, exports, require) {
-"use strict";Object.defineProperty(exports, "__esModule", {value: true});// sidebar.ts —— 侧边会话抽屉与多会话管理
+"use strict";Object.defineProperty(exports, "__esModule", {value: true});// sidebar.ts —— 侧边工作区与会话抽屉管理
 var _dom = require('./dom');
+
+
+
+
+
+
+
+
+
 
 
 
@@ -2045,10 +3308,23 @@ var _dom = require('./dom');
 var _store = require('./store');
 var _signal = require('./signal');
 
+
+
+
+
+
+
+
+
+
+
+
+
 var _icons = require('./icons');
 
  function renderSidebar() {
   const searchQuery = _signal.signal("");
+  const showWsDropdown = _signal.signal(false);
 
   const filteredSessions = () => {
     const q = searchQuery().toLowerCase().trim();
@@ -2061,7 +3337,69 @@ var _icons = require('./icons');
     {
       class: () => `sidebar ${_store.sidebarOpen.call(void 0, ) ? "is-open" : "is-collapsed"}`,
     },
-    // 侧栏顶操作
+    // 1. 顶层工作区选择卡
+    _dom.tags.div(
+      { class: "sidebar-ws-section" },
+      _dom.tags.div(
+        {
+          class: "sidebar-ws-card",
+          title: () => _store.t.call(void 0, "sidebar.switch_ws"),
+          onclick: () => showWsDropdown.set(!showWsDropdown()),
+        },
+        _dom.tags.div({ class: "ws-icon" }, _icons.iconFolder.call(void 0, 15)),
+        _dom.tags.div(
+          { class: "ws-info" },
+          _dom.tags.div({ class: "ws-label" }, () => _store.t.call(void 0, "sidebar.project_ws")),
+          _dom.tags.div({ class: "ws-name" }, () => _store.wsName.call(void 0, ) || "workspace")
+        ),
+        _dom.tags.span({ class: "ws-chevron" }, _icons.iconChevronDown.call(void 0, 12))
+      ),
+      // 工作区下拉选择单
+      () => {
+        if (!showWsDropdown()) return null;
+        const list = _store.workspaces.call(void 0, );
+
+        return _dom.tags.div(
+          { class: "ws-dropdown" },
+          _dom.tags.div({ class: "ws-dropdown-hdr" }, () => _store.t.call(void 0, "sidebar.project_ws")),
+          list.length > 0
+            ? list.map((w) =>
+                _dom.tags.div(
+                  {
+                    class: () =>
+                      `ws-dropdown-item ${_store.currentWs.call(void 0, ) === w.root ? "is-active" : ""}`,
+                    onclick: (e) => {
+                      e.stopPropagation();
+                      showWsDropdown.set(false);
+                      _store.switchWorkspace.call(void 0, w.root);
+                    },
+                  },
+                  _icons.iconFolder.call(void 0, 13),
+                  _dom.tags.div(
+                    { class: "ws-item-text" },
+                    _dom.tags.div({ class: "ws-item-name" }, w.name),
+                    _dom.tags.div({ class: "ws-item-root" }, w.root)
+                  )
+                )
+              )
+            : _dom.tags.div({ class: "ws-dropdown-empty" }, () => _store.t.call(void 0, "sidebar.no_external_ws")),
+          _dom.tags.div(
+            {
+              class: "ws-add-item",
+              onclick: (e) => {
+                e.stopPropagation();
+                showWsDropdown.set(false);
+                _store.showAddWorkspaceModal.set(true);
+              },
+            },
+            _icons.iconFolderPlus.call(void 0, 13),
+            _dom.tags.span({}, () => _store.t.call(void 0, "sidebar.add_project"))
+          )
+        );
+      }
+    ),
+
+    // 2. 侧栏操作区（新建会话与搜索）
     _dom.tags.div(
       { class: "sidebar-hdr" },
       _dom.tags.button(
@@ -2070,25 +3408,35 @@ var _icons = require('./icons');
           onclick: _store.createSession,
         },
         _icons.iconPlus.call(void 0, 13, "btn-icon"),
-        _dom.tags.span({ class: "btn-text" }, "New Session")
+        _dom.tags.span({ class: "btn-text" }, () => _store.t.call(void 0, "sidebar.new_session"))
       )
     ),
 
-    // 搜索框
     _dom.tags.div(
       { class: "sidebar-search-box" },
       _icons.iconSearch.call(void 0, 12, "sidebar-search-icon"),
       _dom.tags.input({
         class: "sidebar-search-input",
-        placeholder: "Filter sessions...",
+        placeholder: () => _store.t.call(void 0, "sidebar.filter_sessions"),
         value: () => searchQuery(),
         oninput: (e) => {
           searchQuery.set((e.target ).value);
         },
-      })
+      }),
+      () =>
+        searchQuery()
+          ? _dom.tags.button(
+              {
+                class: "sidebar-search-clear",
+                onclick: () => searchQuery.set(""),
+                title: "Clear filter",
+              },
+              _icons.iconClose.call(void 0, 10)
+            )
+          : null
     ),
 
-    // 会话列表
+    // 3. 会话列表（支持重命名、Fork、Undo、Compact、删除）
     _dom.tags.div(
       { class: "sidebar-list" },
       _dom.each.call(void 0, filteredSessions, (item) => {
@@ -2108,15 +3456,53 @@ var _icons = require('./icons');
               _dom.tags.span({ class: "session-time" }, formatRelativeTime(item.updatedAt))
             )
           ),
-          // 悬浮操作
+          // 悬浮全功能操作条
           _dom.tags.div(
             { class: "session-actions", onclick: (e) => e.stopPropagation() },
             _dom.tags.button(
               {
-                class: "session-act-btn session-del-btn",
-                title: "Delete",
+                class: "session-act-btn",
+                title: () => _store.t.call(void 0, "sidebar.rename"),
                 onclick: () => {
-                  if (confirm(`Delete session "${item.title || item.name}"?`)) {
+                  const currentTitle = item.title || item.name;
+                  const next = prompt(_store.t.call(void 0, "sidebar.rename_prompt"), currentTitle);
+                  if (next && next.trim()) {
+                    _store.renameSession.call(void 0, item.id, next.trim());
+                  }
+                },
+              },
+              _icons.iconEdit.call(void 0, 12)
+            ),
+            _dom.tags.button(
+              {
+                class: "session-act-btn",
+                title: () => _store.t.call(void 0, "sidebar.fork"),
+                onclick: () => _store.forkSession.call(void 0, item.id),
+              },
+              _icons.iconFork.call(void 0, 12)
+            ),
+            _dom.tags.button(
+              {
+                class: "session-act-btn",
+                title: () => _store.t.call(void 0, "sidebar.undo"),
+                onclick: () => _store.undoSession.call(void 0, item.id),
+              },
+              _icons.iconUndo.call(void 0, 12)
+            ),
+            _dom.tags.button(
+              {
+                class: "session-act-btn",
+                title: () => _store.t.call(void 0, "sidebar.compact"),
+                onclick: () => _store.compactSession.call(void 0, item.id),
+              },
+              _icons.iconCompact.call(void 0, 12)
+            ),
+            _dom.tags.button(
+              {
+                class: "session-act-btn session-del-btn",
+                title: () => _store.t.call(void 0, "sidebar.delete"),
+                onclick: () => {
+                  if (confirm(_store.t.call(void 0, "sidebar.del_confirm", { title: item.title || item.name }))) {
                     _store.deleteSession.call(void 0, item.id);
                   }
                 },
@@ -2128,10 +3514,18 @@ var _icons = require('./icons');
       }),
       () => {
         if (_store.sessions.call(void 0, ).length === 0) {
-          return _dom.tags.div({ class: "sidebar-empty" }, "No sessions yet.");
+          return _dom.tags.div({ class: "sidebar-empty" }, () => _store.t.call(void 0, "sidebar.no_sessions"));
         }
         return null;
       }
+    ),
+
+    // 4. 侧栏底部状态统计
+    _dom.tags.div(
+      { class: "sidebar-footer" },
+      () => _dom.tags.span({}, _store.t.call(void 0, "sidebar.sessions_count", { count: _store.sessions.call(void 0, ).length })),
+      _dom.tags.span({ class: "sidebar-footer-dot" }, "·"),
+      _dom.tags.span({ class: "sidebar-footer-mode" }, "Local DAG")
     )
   );
 } exports.renderSidebar = renderSidebar;
@@ -2420,9 +3814,116 @@ function renderInline(text) {
 } exports.renderMarkdown = renderMarkdown;
 
 };
+__modules["term"] = function(module, exports, require) {
+"use strict";Object.defineProperty(exports, "__esModule", {value: true});// term.ts —— 高保真 ANSI 颜色与控制序列转译器
+
+const ANSI_COLORS = {
+  30: "ansi-black",
+  31: "ansi-red",
+  32: "ansi-green",
+  33: "ansi-yellow",
+  34: "ansi-blue",
+  35: "ansi-magenta",
+  36: "ansi-cyan",
+  37: "ansi-white",
+  90: "ansi-bright-black",
+  91: "ansi-bright-red",
+  92: "ansi-bright-green",
+  93: "ansi-bright-yellow",
+  94: "ansi-bright-blue",
+  95: "ansi-bright-magenta",
+  96: "ansi-bright-cyan",
+  97: "ansi-bright-white",
+};
+
+const ANSI_BG_COLORS = {
+  40: "ansi-bg-black",
+  41: "ansi-bg-red",
+  42: "ansi-bg-green",
+  43: "ansi-bg-yellow",
+  44: "ansi-bg-blue",
+  45: "ansi-bg-magenta",
+  46: "ansi-bg-cyan",
+  47: "ansi-bg-white",
+};
+
+ function ansiToHtml(input) {
+  if (!input) return "";
+
+  // 1. 转义基础 HTML 实体
+  let s = input
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+
+  // 2. 状态机解析 ANSI 转义码 \x1b[...m
+  const re = /\x1b\[([0-9;]*)m/g;
+  let out = "";
+  let lastIdx = 0;
+  const activeClasses = new Set();
+
+  let match;
+  while ((match = re.exec(s)) !== null) {
+    const textChunk = s.slice(lastIdx, match.index);
+    if (textChunk) {
+      if (activeClasses.size > 0) {
+        out += `<span class="${Array.from(activeClasses).join(" ")}">${textChunk}</span>`;
+      } else {
+        out += textChunk;
+      }
+    }
+    lastIdx = re.lastIndex;
+
+    const codes = match[1] ? match[1].split(";").map(Number) : [0];
+    for (const code of codes) {
+      if (code === 0) {
+        activeClasses.clear();
+      } else if (code === 1) {
+        activeClasses.add("ansi-bold");
+      } else if (code === 2) {
+        activeClasses.add("ansi-dim");
+      } else if (code === 3) {
+        activeClasses.add("ansi-italic");
+      } else if (code === 4) {
+        activeClasses.add("ansi-underline");
+      } else if (ANSI_COLORS[code]) {
+        // 清理旧前景色
+        for (const cls of activeClasses) {
+          if (cls.startsWith("ansi-") && !cls.startsWith("ansi-bg-") && !cls.startsWith("ansi-bold") && !cls.startsWith("ansi-dim") && !cls.startsWith("ansi-italic") && !cls.startsWith("ansi-underline")) {
+            activeClasses.delete(cls);
+          }
+        }
+        activeClasses.add(ANSI_COLORS[code]);
+      } else if (ANSI_BG_COLORS[code]) {
+        for (const cls of activeClasses) {
+          if (cls.startsWith("ansi-bg-")) activeClasses.delete(cls);
+        }
+        activeClasses.add(ANSI_BG_COLORS[code]);
+      }
+    }
+  }
+
+  const remaining = s.slice(lastIdx);
+  if (remaining) {
+    if (activeClasses.size > 0) {
+      out += `<span class="${Array.from(activeClasses).join(" ")}">${remaining}</span>`;
+    } else {
+      out += remaining;
+    }
+  }
+
+  return out;
+} exports.ansiToHtml = ansiToHtml;
+
+};
 __modules["chat"] = function(module, exports, require) {
-"use strict";Object.defineProperty(exports, "__esModule", {value: true});// chat.ts —— 对话流视图 (Turn 境界、动态思考计时、多模态图片展示、操作动作条与 Markdown 渲染)
+"use strict";Object.defineProperty(exports, "__esModule", {value: true});// chat.ts —— 对话流视图 (Turn 境界、动态思考计时、多模态图片展示、工具行展开、Artifact 穿透与 Markdown 渲染)
 var _dom = require('./dom');
+
+
+
+
+
 
 
 
@@ -2431,8 +3932,11 @@ var _dom = require('./dom');
 
 var _store = require('./store');
 var _md = require('./md');
+var _term = require('./term');
 
 var _signal = require('./signal');
+
+
 
 
 
@@ -2463,14 +3967,33 @@ var _icons = require('./icons');
         userScrolledUp = distFromBottom > 80;
       },
     },
-    // 渲染每一轮对话
+    // 1. 顶部历史分页加载条 (若总消息数多于当前载入数)
+    () => {
+      if (!_store.hasMoreHistory.call(void 0, )) return null;
+      const remaining = _store.historyTotal.call(void 0, ) - _store.turns.call(void 0, ).length;
+      return _dom.tags.div(
+        { class: "chat-history-loader" },
+        _dom.tags.button(
+          {
+            class: "history-load-btn",
+            onclick: _store.loadMoreHistory,
+          },
+          _dom.tags.span({}, () => _store.t.call(void 0, "chat.load_earlier", { remaining }))
+        )
+      );
+    },
+
+    // 2. 消息流
     _dom.each.call(void 0, _store.turns, (turn) => {
+      if (turn.isCheckpoint) {
+        return renderCheckpointRow(turn);
+      }
       if (turn.role === "user") {
         return renderUserTurn(turn);
-      } else {
-        return renderAssistantTurn(turn);
       }
+      return renderAssistantTurn(turn);
     }),
+
     // 空态欢迎页
     () => {
       if (_store.turns.call(void 0, ).length === 0) {
@@ -2494,6 +4017,15 @@ var _icons = require('./icons');
   return container;
 } exports.renderChatStream = renderChatStream;
 
+function renderCheckpointRow(turn) {
+  return _dom.tags.div(
+    { class: "checkpoint-row", id: turn.id },
+    _dom.tags.div({ class: "checkpoint-icon" }, _icons.iconCompact.call(void 0, 14)),
+    _dom.tags.span({ class: "checkpoint-text" }, () => turn.content || _store.t.call(void 0, "chat.checkpoint")),
+    _dom.tags.span({ class: "checkpoint-badge" }, "CHECKPOINT")
+  );
+}
+
 function renderEmptyState() {
   function fillPrompt(p) {
     if (typeof (window ).__pizFillComposer === "function") {
@@ -2506,8 +4038,8 @@ function renderEmptyState() {
     _dom.tags.div(
       { class: "empty-brand" },
       _dom.tags.div({ class: "empty-logo-wrap" }, _icons.iconBot.call(void 0, 28, "empty-logo-icon")),
-      _dom.tags.h2({ class: "empty-title" }, "piz workspace"),
-      _dom.tags.p({ class: "empty-subtitle" }, "极速、安全的下一代自律型智能体工作台")
+      _dom.tags.h2({ class: "empty-title" }, () => _store.t.call(void 0, "chat.empty_title")),
+      _dom.tags.p({ class: "empty-subtitle" }, () => _store.t.call(void 0, "chat.empty_subtitle"))
     ),
     _dom.tags.div(
       { class: "empty-prompts" },
@@ -2515,13 +4047,13 @@ function renderEmptyState() {
         {
           class: "prompt-card",
           title: "Click to populate prompt",
-          onclick: () => fillPrompt("分析当前项目架构与未提交修改并提出建议"),
+          onclick: () => fillPrompt(_store.t.call(void 0, "chat.prompt_card1_prompt")),
         },
         _dom.tags.div({ class: "prompt-card-icon" }, _icons.iconBolt.call(void 0, 18)),
         _dom.tags.div(
           { class: "prompt-card-text" },
-          _dom.tags.div({ class: "prompt-card-title" }, "任务驱动与自动编码"),
-          _dom.tags.div({ class: "prompt-card-desc" }, "自动分解目标，阅读依赖，编写代码并运行验证")
+          _dom.tags.div({ class: "prompt-card-title" }, () => _store.t.call(void 0, "chat.prompt_card1_title")),
+          _dom.tags.div({ class: "prompt-card-desc" }, () => _store.t.call(void 0, "chat.prompt_card1_desc"))
         )
       ),
       _dom.tags.div(
@@ -2535,21 +4067,21 @@ function renderEmptyState() {
         _dom.tags.div({ class: "prompt-card-icon" }, _icons.iconDiff.call(void 0, 18)),
         _dom.tags.div(
           { class: "prompt-card-text" },
-          _dom.tags.div({ class: "prompt-card-title" }, "代码审查与检视台"),
-          _dom.tags.div({ class: "prompt-card-desc" }, "在右侧实时检视变更行数、Hunk 差异与终端输出")
+          _dom.tags.div({ class: "prompt-card-title" }, () => _store.t.call(void 0, "chat.prompt_card2_title")),
+          _dom.tags.div({ class: "prompt-card-desc" }, () => _store.t.call(void 0, "chat.prompt_card2_desc"))
         )
       ),
       _dom.tags.div(
         {
           class: "prompt-card",
           title: "Click to populate prompt",
-          onclick: () => fillPrompt("对当前项目进行安全审计，检查未授权操作与潜在漏洞"),
+          onclick: () => fillPrompt(_store.t.call(void 0, "chat.prompt_card3_prompt")),
         },
         _dom.tags.div({ class: "prompt-card-icon" }, _icons.iconShield.call(void 0, 18)),
         _dom.tags.div(
           { class: "prompt-card-text" },
-          _dom.tags.div({ class: "prompt-card-title" }, "安全审计与授权把关"),
-          _dom.tags.div({ class: "prompt-card-desc" }, "命令防护拦截、权限确认与严格的沙箱隔离")
+          _dom.tags.div({ class: "prompt-card-title" }, () => _store.t.call(void 0, "chat.prompt_card3_title")),
+          _dom.tags.div({ class: "prompt-card-desc" }, () => _store.t.call(void 0, "chat.prompt_card3_desc"))
         )
       )
     )
@@ -2743,6 +4275,9 @@ function renderStepCard(step) {
   const isExpanded = _signal.signal(false);
   const stepCopied = _signal.signal(false);
 
+  // 检查是否包含外置 Artifact 指针
+  const artMatch = (step.result || "").match(/\[Artifact stored:\s*([a-zA-Z0-9_\-\.]+)\]/);
+
   return _dom.tags.div(
     {
       class: () => `step-card status-${step.status}`,
@@ -2770,8 +4305,14 @@ function renderStepCard(step) {
     // 展开查看详情
     () => {
       if (!isExpanded()) return null;
+
+      const resText = step.result || "";
+      const isDiff = resText.includes("diff --git") || resText.includes("@@ -");
+      const isShell = step.name === "bash" || step.name === "shell" || step.name === "exec";
+
       return _dom.tags.div(
         { class: "step-details" },
+        // 参数展示
         step.args
           ? _dom.tags.div(
               { class: "step-detail-row" },
@@ -2784,13 +4325,39 @@ function renderStepCard(step) {
               )
             )
           : null,
+
+        // 存储 Artifact 特别穿透卡
+        artMatch
+          ? _dom.tags.div(
+              { class: "step-artifact-card" },
+              _dom.tags.span({ class: "artifact-title" }, `Large tool payload saved (${artMatch[1]})`),
+              _dom.tags.button(
+                {
+                  class: "step-artifact-btn",
+                  title: "Inspect stored artifact contents",
+                  onclick: () => _store.viewArtifact.call(void 0, artMatch[1]),
+                },
+                _icons.iconDownload.call(void 0, 12),
+                _dom.tags.span({}, "View Stored Artifact")
+              )
+            )
+          : null,
+
+        // 结果输出展示（支持 Diff 高亮与 ANSI 终端色）
         step.result
           ? _dom.tags.div(
               { class: "step-detail-row" },
               _dom.tags.div({ class: "step-detail-lbl" }, "Result:"),
-              _dom.tags.pre({ class: "step-detail-pre" }, step.result)
+              isShell
+                ? _dom.tags.div({
+                    class: "step-detail-pre step-ansi-wrap",
+                    innerHTML: _term.ansiToHtml.call(void 0, step.result),
+                  })
+                : _dom.tags.pre({ class: `step-detail-pre ${isDiff ? "step-diff-pre" : ""}` }, step.result)
             )
           : null,
+
+        // 错误展示
         step.error
           ? _dom.tags.div(
               { class: "step-detail-row step-error" },
@@ -2798,6 +4365,8 @@ function renderStepCard(step) {
               _dom.tags.pre({ class: "step-detail-pre" }, step.error)
             )
           : null,
+
+        // 快捷操作栏
         _dom.tags.div(
           { class: "step-actions" },
           _dom.tags.button(
@@ -2847,12 +4416,18 @@ var _dom = require('./dom');
 
 
 
+
+
+
+
+
+
+
+
+
+
 var _store = require('./store');
 var _signal = require('./signal');
-
-
-
-
 
 
 
@@ -2870,11 +4445,12 @@ var _icons = require('./icons');
   const showSlashMenu = _signal.signal(false);
   const showFileMenu = _signal.signal(false);
   const menuIndex = _signal.signal(0);
+  const historyIndex = _signal.signal(-1);
 
   let textareaEl = null;
   let fileInputEl = null;
 
-  // 全局暴露给空状态卡片点击直接填入 prompt
+  // 全局暴露给外部快速填入 prompt
   (window ).__pizFillComposer = (val) => {
     text.set(val);
     if (textareaEl) {
@@ -2882,6 +4458,7 @@ var _icons = require('./icons');
       autoResize(textareaEl);
       textareaEl.focus();
     }
+    _store.setDraft.call(void 0, _store.activeSession.call(void 0, ), val);
   };
 
   (window ).__pizAppendComposer = (val) => {
@@ -2893,25 +4470,27 @@ var _icons = require('./icons');
       autoResize(textareaEl);
       textareaEl.focus();
     }
+    _store.setDraft.call(void 0, _store.activeSession.call(void 0, ), next);
   };
 
-  const SLASH_COMMANDS = [
-    { cmd: "/diff", desc: "Open right deck to inspect code changes", icon: _icons.iconDiff },
-    { cmd: "/term", desc: "Open terminal viewer in deck", icon: _icons.iconTerminal },
-    { cmd: "/jobs", desc: "View subagent hierarchy and jobs", icon: _icons.iconCpu },
-    { cmd: "/files", desc: "Browse workspace files", icon: _icons.iconFile },
-    { cmd: "/clear", desc: "Create a fresh new session", icon: _icons.iconTrash },
-    { cmd: "/yolo", desc: "Switch mode to YOLO (auto-execute)", icon: _icons.iconBolt },
-    { cmd: "/ask", desc: "Switch mode to Ask (require approval)", icon: _icons.iconQuestion },
-    { cmd: "/plan", desc: "Switch mode to Plan (write plan first)", icon: _icons.iconCompass },
-  ];
+  // 监听会话变更，恢复相应草稿
+  _signal.effect.call(void 0, () => {
+    const s = _store.activeSession.call(void 0, );
+    const saved = _store.getDraft.call(void 0, s);
+    text.set(saved);
+    if (textareaEl) {
+      textareaEl.value = saved;
+      autoResize(textareaEl);
+    }
+  });
 
   function handleInput(e) {
     const el = e.target ;
-    text.set(el.value);
-    autoResize(el);
-
     const val = el.value;
+    text.set(val);
+    autoResize(el);
+    _store.setDraft.call(void 0, _store.activeSession.call(void 0, ), val);
+
     if (val.startsWith("/")) {
       showSlashMenu.set(true);
       showFileMenu.set(false);
@@ -2954,7 +4533,6 @@ var _icons = require('./icons');
     reader.onload = (ev) => {
       const result = _optionalChain([ev, 'access', _3 => _3.target, 'optionalAccess', _4 => _4.result]) ;
       if (!result) return;
-      // 提取 base64 数据与 mime
       const match = result.match(/^data:([^;]+);base64,(.+)$/);
       if (match) {
         _store.attachedImage.set({
@@ -2967,51 +4545,18 @@ var _icons = require('./icons');
     reader.readAsDataURL(file);
   }
 
-  function doSend() {
+  async function doSend() {
     const msg = text().trim();
     const hasImg = Boolean(_store.attachedImage.call(void 0, ));
     if ((!msg && !hasImg) || _store.isStreaming.call(void 0, )) return;
 
-    // 本地拦截部分斜杠命令
-    if (msg === "/diff") {
-      _store.setDeckTab.call(void 0, "diffs");
-      clearInput();
-      return;
-    }
-    if (msg === "/term") {
-      _store.setDeckTab.call(void 0, "terminal");
-      clearInput();
-      return;
-    }
-    if (msg === "/jobs") {
-      _store.setDeckTab.call(void 0, "jobs");
-      clearInput();
-      return;
-    }
-    if (msg === "/files") {
-      _store.setDeckTab.call(void 0, "files");
-      clearInput();
-      return;
-    }
-    if (msg === "/clear") {
-      _store.createSession.call(void 0, );
-      clearInput();
-      return;
-    }
-    if (msg === "/yolo") {
-      _store.switchMode.call(void 0, "yolo");
-      clearInput();
-      return;
-    }
-    if (msg === "/ask") {
-      _store.switchMode.call(void 0, "ask");
-      clearInput();
-      return;
-    }
-    if (msg === "/plan") {
-      _store.switchMode.call(void 0, "plan");
-      clearInput();
-      return;
+    // 斜杠命令拦截执行
+    if (msg.startsWith("/")) {
+      const handled = await _store.executeSlash.call(void 0, msg);
+      if (handled) {
+        clearInput();
+        return;
+      }
     }
 
     _store.sendMessage.call(void 0, msg);
@@ -3020,10 +4565,12 @@ var _icons = require('./icons');
 
   function clearInput() {
     text.set("");
+    historyIndex.set(-1);
     if (textareaEl) {
       textareaEl.value = "";
       autoResize(textareaEl);
     }
+    _store.setDraft.call(void 0, _store.activeSession.call(void 0, ), "");
     showSlashMenu.set(false);
     showFileMenu.set(false);
   }
@@ -3033,10 +4580,13 @@ var _icons = require('./icons');
       e.preventDefault();
       if (showSlashMenu()) {
         const q = text().toLowerCase();
-        const filtered = SLASH_COMMANDS.filter((c) => c.cmd.toLowerCase().startsWith(q));
+        const filtered = _store.slashCommands.call(void 0, ).filter((c) =>
+          c.cmd.toLowerCase().startsWith(q) || c.desc.toLowerCase().includes(q.slice(1))
+        );
         if (filtered[menuIndex()]) {
-          text.set(filtered[menuIndex()].cmd + " ");
-          if (textareaEl) textareaEl.value = filtered[menuIndex()].cmd + " ";
+          const chosen = filtered[menuIndex()].cmd;
+          text.set(chosen + " ");
+          if (textareaEl) textareaEl.value = chosen + " ";
           showSlashMenu.set(false);
           return;
         }
@@ -3061,11 +4611,49 @@ var _icons = require('./icons');
       if (showSlashMenu() || showFileMenu()) {
         e.preventDefault();
         menuIndex.update((i) => i + 1);
+      } else if (!text() || (textareaEl && textareaEl.selectionStart === text().length)) {
+        // 提示词历史向下
+        const hist = _store.promptHistory.call(void 0, );
+        if (historyIndex() !== -1) {
+          e.preventDefault();
+          const nextIdx = historyIndex() + 1;
+          if (nextIdx >= hist.length) {
+            historyIndex.set(-1);
+            text.set("");
+            if (textareaEl) {
+              textareaEl.value = "";
+              autoResize(textareaEl);
+            }
+          } else {
+            historyIndex.set(nextIdx);
+            const val = hist[nextIdx];
+            text.set(val);
+            if (textareaEl) {
+              textareaEl.value = val;
+              autoResize(textareaEl);
+            }
+          }
+        }
       }
     } else if (e.key === "ArrowUp") {
       if (showSlashMenu() || showFileMenu()) {
         e.preventDefault();
         menuIndex.update((i) => Math.max(0, i - 1));
+      } else if (!text() || (textareaEl && textareaEl.selectionStart === 0)) {
+        // 提示词历史向上
+        const hist = _store.promptHistory.call(void 0, );
+        if (hist.length > 0) {
+          e.preventDefault();
+          const nextIdx =
+            historyIndex() === -1 ? hist.length - 1 : Math.max(0, historyIndex() - 1);
+          historyIndex.set(nextIdx);
+          const val = hist[nextIdx];
+          text.set(val);
+          if (textareaEl) {
+            textareaEl.value = val;
+            autoResize(textareaEl);
+          }
+        }
       }
     } else if (e.key === "Escape") {
       if (showSlashMenu() || showFileMenu()) {
@@ -3081,7 +4669,52 @@ var _icons = require('./icons');
 
   return _dom.tags.div(
     { class: "composer-wrap" },
-    // 图片附加预览条
+    // 1. 后台活动流动态指示条
+    () => {
+      const active = _store.activityList.call(void 0, );
+      if (active.length === 0) return null;
+      const first = active[0];
+
+      return _dom.tags.div(
+        { class: "composer-live-activity-bar" },
+        _dom.tags.span({ class: "activity-live-dot" }),
+        _dom.tags.span(
+          { class: "activity-live-text" },
+          () =>
+            `${_store.t.call(void 0, "composer.active_task")}: ${first.cmd || first.name} (pid:${first.pid || "bg"}) · ${first.duration ? first.duration + "s" : "running"}`
+        ),
+        _dom.tags.button(
+          {
+            class: "activity-kill-btn",
+            title: () => _store.t.call(void 0, "composer.kill_task"),
+            onclick: () => first.pid && _store.killActivity.call(void 0, first.pid),
+          },
+          () => _store.t.call(void 0, "composer.kill_task")
+        )
+      );
+    },
+
+    // 2. 行内命令预览 Banner (!cmd 与 !!cmd)
+    () => {
+      const val = text();
+      if (val.startsWith("!!") && val.length > 2) {
+        return _dom.tags.div(
+          { class: "composer-inline-hint hint-local" },
+          _dom.tags.span({ class: "hint-icon" }, "🖥️"),
+          _dom.tags.span({}, `${_store.t.call(void 0, "composer.hint_local")} ${val.slice(2)}`)
+        );
+      }
+      if (val.startsWith("!") && !val.startsWith("!!") && val.length > 1) {
+        return _dom.tags.div(
+          { class: "composer-inline-hint hint-model" },
+          _dom.tags.span({ class: "hint-icon" }, "⚡"),
+          _dom.tags.span({}, `${_store.t.call(void 0, "composer.hint_model")} ${val.slice(1)}`)
+        );
+      }
+      return null;
+    },
+
+    // 3. 图片附加预览条
     () => {
       const img = _store.attachedImage.call(void 0, );
       if (!img) return null;
@@ -3106,16 +4739,18 @@ var _icons = require('./icons');
       );
     },
 
-    // 斜杠菜单浮层
+    // 4. 斜杠菜单浮层（全量命令实时补全）
     () => {
       if (!showSlashMenu()) return null;
       const q = text().toLowerCase();
-      const filtered = SLASH_COMMANDS.filter((c) => c.cmd.toLowerCase().startsWith(q));
+      const filtered = _store.slashCommands.call(void 0, ).filter((c) =>
+        c.cmd.toLowerCase().startsWith(q) || c.desc.toLowerCase().includes(q.slice(1))
+      );
       if (!filtered.length) return null;
 
       return _dom.tags.div(
         { class: "popup-menu slash-menu" },
-        filtered.map((item, idx) =>
+        filtered.slice(0, 10).map((item, idx) =>
           _dom.tags.div(
             {
               class: () => `menu-item ${menuIndex() === idx ? "is-selected" : ""}`,
@@ -3128,7 +4763,7 @@ var _icons = require('./icons');
                 showSlashMenu.set(false);
               },
             },
-            _dom.tags.span({ class: "menu-icon" }, item.icon ? item.icon(14) : _icons.iconSparkle.call(void 0, 14)),
+            _dom.tags.span({ class: "menu-icon" }, _icons.iconSparkle.call(void 0, 14)),
             _dom.tags.span({ class: "menu-cmd" }, item.cmd),
             _dom.tags.span({ class: "menu-desc" }, item.desc)
           )
@@ -3136,7 +4771,7 @@ var _icons = require('./icons');
       );
     },
 
-    // @文件菜单浮层
+    // 5. @文件菜单浮层
     () => {
       if (!showFileMenu()) return null;
       const atIdx = text().lastIndexOf("@");
@@ -3154,17 +4789,18 @@ var _icons = require('./icons');
               class: () => `menu-item ${menuIndex() === idx ? "is-selected" : ""}`,
               onclick: () => {
                 const before = text().slice(0, atIdx);
-                const nextVal = `${before}@${f.path} `;
-                text.set(nextVal);
+                const next = `${before}@${f.path} `;
+                text.set(next);
                 if (textareaEl) {
-                  textareaEl.value = nextVal;
+                  textareaEl.value = next;
                   textareaEl.focus();
                 }
                 showFileMenu.set(false);
               },
             },
-            _dom.tags.span({ class: "file-icon" }, _icons.iconFile.call(void 0, 13)),
-            _dom.tags.span({ class: "file-path" }, f.path)
+            _dom.tags.span({ class: "file-icon" }, _icons.iconFile.call(void 0, 14)),
+            _dom.tags.span({ class: "file-cmd" }, `@${f.name}`),
+            _dom.tags.span({ class: "file-desc" }, f.path)
           )
         )
       );
@@ -3191,8 +4827,9 @@ var _icons = require('./icons');
     _dom.tags.div(
       { class: "composer-box" },
       _dom.tags.textarea({
+        id: "inp",
         class: "composer-input",
-        placeholder: "Ask piz, paste screenshots (Ctrl+V), or type '/' for commands...",
+        placeholder: () => _store.t.call(void 0, "composer.placeholder"),
         rows: "1",
         value: () => text(),
         oninput: handleInput,
@@ -3211,7 +4848,7 @@ var _icons = require('./icons');
           _dom.tags.button(
             {
               class: "bar-tag-btn",
-              title: "Attach image (or Ctrl+V to paste)",
+              title: () => _store.t.call(void 0, "composer.attach_img"),
               onclick: () => fileInputEl && fileInputEl.click(),
             },
             _icons.iconImage.call(void 0, 13)
@@ -3219,7 +4856,7 @@ var _icons = require('./icons');
           _dom.tags.button(
             {
               class: "bar-tag-btn",
-              title: "Trigger Slash Commands",
+              title: () => _store.t.call(void 0, "composer.slash_menu"),
               onclick: () => {
                 text.set("/");
                 if (textareaEl) {
@@ -3234,7 +4871,7 @@ var _icons = require('./icons');
           _dom.tags.button(
             {
               class: "bar-tag-btn",
-              title: "Reference File",
+              title: () => _store.t.call(void 0, "composer.file_mention"),
               onclick: () => {
                 text.update((v) => v + "@");
                 if (textareaEl) {
@@ -3251,14 +4888,36 @@ var _icons = require('./icons');
             () => {
               const curMode = _store.mode.call(void 0, );
               if (curMode === "yolo") {
-                return _dom.tags.span({ class: "mode-badge mode-yolo" }, _icons.iconBolt.call(void 0, 12), "YOLO");
+                return _dom.tags.span({ class: "mode-badge mode-yolo" }, _icons.iconBolt.call(void 0, 12), () => _store.t.call(void 0, "mode.yolo"));
               }
               if (curMode === "ask") {
-                return _dom.tags.span({ class: "mode-badge mode-ask" }, _icons.iconQuestion.call(void 0, 12), "ASK");
+                return _dom.tags.span({ class: "mode-badge mode-ask" }, _icons.iconQuestion.call(void 0, 12), () => _store.t.call(void 0, "mode.ask"));
               }
-              return _dom.tags.span({ class: "mode-badge mode-plan" }, _icons.iconCompass.call(void 0, 12), "PLAN");
+              return _dom.tags.span({ class: "mode-badge mode-plan" }, _icons.iconShield.call(void 0, 12), () => _store.t.call(void 0, "mode.read_only"));
             }
-          )
+          ),
+          // 沙箱药丸（点击轮切：off -> workspace -> strict）
+          () => {
+            const cur = _store.sandboxMode.call(void 0, );
+            return _dom.tags.button(
+              {
+                class: `sandbox-pill sb-${cur}`,
+                title: `Sandbox Mode: ${cur}. Click to toggle.`,
+                onclick: () => {
+                  const next = cur === "off" ? "workspace" : cur === "workspace" ? "strict" : "off";
+                  _store.setSandboxMode.call(void 0, next);
+                },
+              },
+              _dom.tags.span({ class: "sb-dot" }),
+              _dom.tags.span({}, () =>
+                cur === "strict"
+                  ? _store.t.call(void 0, "composer.sb_strict")
+                  : cur === "workspace"
+                  ? _store.t.call(void 0, "composer.sb_workspace")
+                  : _store.t.call(void 0, "composer.sb_off")
+              )
+            );
+          }
         ),
         _dom.tags.div(
           { class: "composer-bar-right" },
@@ -3271,7 +4930,7 @@ var _icons = require('./icons');
                   onclick: _store.interrupt,
                 },
                 _icons.iconStop.call(void 0, 12),
-                _dom.tags.span({}, "Stop")
+                _dom.tags.span({}, () => _store.t.call(void 0, "composer.stop"))
               );
             }
             return _dom.tags.button(
@@ -3281,7 +4940,7 @@ var _icons = require('./icons');
                 onclick: doSend,
               },
               _icons.iconSend.call(void 0, 13),
-              _dom.tags.span({}, "Send")
+              _dom.tags.span({}, () => _store.t.call(void 0, "composer.send"))
             );
           }
         )
@@ -3291,111 +4950,15 @@ var _icons = require('./icons');
 } exports.renderComposer = renderComposer;
 
 };
-__modules["term"] = function(module, exports, require) {
-"use strict";Object.defineProperty(exports, "__esModule", {value: true});// term.ts —— 高保真 ANSI 颜色与控制序列转译器
-
-const ANSI_COLORS = {
-  30: "ansi-black",
-  31: "ansi-red",
-  32: "ansi-green",
-  33: "ansi-yellow",
-  34: "ansi-blue",
-  35: "ansi-magenta",
-  36: "ansi-cyan",
-  37: "ansi-white",
-  90: "ansi-bright-black",
-  91: "ansi-bright-red",
-  92: "ansi-bright-green",
-  93: "ansi-bright-yellow",
-  94: "ansi-bright-blue",
-  95: "ansi-bright-magenta",
-  96: "ansi-bright-cyan",
-  97: "ansi-bright-white",
-};
-
-const ANSI_BG_COLORS = {
-  40: "ansi-bg-black",
-  41: "ansi-bg-red",
-  42: "ansi-bg-green",
-  43: "ansi-bg-yellow",
-  44: "ansi-bg-blue",
-  45: "ansi-bg-magenta",
-  46: "ansi-bg-cyan",
-  47: "ansi-bg-white",
-};
-
- function ansiToHtml(input) {
-  if (!input) return "";
-
-  // 1. 转义基础 HTML 实体
-  let s = input
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
-
-  // 2. 状态机解析 ANSI 转义码 \x1b[...m
-  const re = /\x1b\[([0-9;]*)m/g;
-  let out = "";
-  let lastIdx = 0;
-  const activeClasses = new Set();
-
-  let match;
-  while ((match = re.exec(s)) !== null) {
-    const textChunk = s.slice(lastIdx, match.index);
-    if (textChunk) {
-      if (activeClasses.size > 0) {
-        out += `<span class="${Array.from(activeClasses).join(" ")}">${textChunk}</span>`;
-      } else {
-        out += textChunk;
-      }
-    }
-    lastIdx = re.lastIndex;
-
-    const codes = match[1] ? match[1].split(";").map(Number) : [0];
-    for (const code of codes) {
-      if (code === 0) {
-        activeClasses.clear();
-      } else if (code === 1) {
-        activeClasses.add("ansi-bold");
-      } else if (code === 2) {
-        activeClasses.add("ansi-dim");
-      } else if (code === 3) {
-        activeClasses.add("ansi-italic");
-      } else if (code === 4) {
-        activeClasses.add("ansi-underline");
-      } else if (ANSI_COLORS[code]) {
-        // 清理旧前景色
-        for (const cls of activeClasses) {
-          if (cls.startsWith("ansi-") && !cls.startsWith("ansi-bg-") && !cls.startsWith("ansi-bold") && !cls.startsWith("ansi-dim") && !cls.startsWith("ansi-italic") && !cls.startsWith("ansi-underline")) {
-            activeClasses.delete(cls);
-          }
-        }
-        activeClasses.add(ANSI_COLORS[code]);
-      } else if (ANSI_BG_COLORS[code]) {
-        for (const cls of activeClasses) {
-          if (cls.startsWith("ansi-bg-")) activeClasses.delete(cls);
-        }
-        activeClasses.add(ANSI_BG_COLORS[code]);
-      }
-    }
-  }
-
-  const remaining = s.slice(lastIdx);
-  if (remaining) {
-    if (activeClasses.size > 0) {
-      out += `<span class="${Array.from(activeClasses).join(" ")}">${remaining}</span>`;
-    } else {
-      out += remaining;
-    }
-  }
-
-  return out;
-} exports.ansiToHtml = ansiToHtml;
-
-};
 __modules["deck"] = function(module, exports, require) {
 "use strict";Object.defineProperty(exports, "__esModule", {value: true});// deck.ts —— 右侧工作台检视 Deck (Diffs/Terminal/Jobs/Files)
 var _dom = require('./dom');
+
+
+
+
+
+
 
 
 
@@ -3425,6 +4988,9 @@ var _net = require('./net');
 
 
 
+
+
+
 var _icons = require('./icons');
 
  function renderDeck() {
@@ -3437,19 +5003,19 @@ var _icons = require('./icons');
       { class: "deck-header" },
       _dom.tags.div(
         { class: "deck-tabs" },
-        renderDeckTabBtn("diffs", _icons.iconDiff, "Diffs", () => {
+        renderDeckTabBtn("diffs", _icons.iconDiff, "deck.tab_diffs", () => {
           const st = _store.totalDiffStats.call(void 0, );
           return st.files > 0 ? `${st.files}` : "";
         }),
-        renderDeckTabBtn("terminal", _icons.iconTerminal, "Terminal", () => {
+        renderDeckTabBtn("terminal", _icons.iconTerminal, "deck.tab_terminal", () => {
           const len = _store.terminalLines.call(void 0, ).length;
           return len > 0 ? `${len}` : "";
         }),
-        renderDeckTabBtn("jobs", _icons.iconCpu, "Jobs", () => {
-          const runCount = _store.jobs.call(void 0, ).filter((j) => j.status === "running").length;
+        renderDeckTabBtn("jobs", _icons.iconCpu, "deck.tab_jobs", () => {
+          const runCount = _store.activityList.call(void 0, ).length + _store.jobs.call(void 0, ).filter((j) => j.status === "running").length;
           return runCount > 0 ? `${runCount}` : "";
         }),
-        renderDeckTabBtn("files", _icons.iconFolder, "Files")
+        renderDeckTabBtn("files", _icons.iconFolder, "deck.tab_files")
       ),
       _dom.tags.div(
         { class: "deck-header-actions" },
@@ -3487,7 +5053,7 @@ var _icons = require('./icons');
 function renderDeckTabBtn(
   tab,
   iconFn,
-  title,
+  titleKey,
   badgeFn
 ) {
   return _dom.tags.button(
@@ -3496,7 +5062,7 @@ function renderDeckTabBtn(
       onclick: () => _store.setDeckTab.call(void 0, tab),
     },
     iconFn(13, "deck-tab-icon"),
-    _dom.tags.span({}, title),
+    _dom.tags.span({}, () => _store.t.call(void 0, titleKey)),
     () => {
       const badge = badgeFn ? badgeFn() : "";
       if (!badge) return null;
@@ -3516,8 +5082,16 @@ function renderDiffsPanel() {
     return _dom.tags.div(
       { class: "deck-empty" },
       _dom.tags.div({ class: "deck-empty-icon" }, _icons.iconDiff.call(void 0, 28)),
-      _dom.tags.div({ class: "deck-empty-title" }, "No Changeset Detected"),
-      _dom.tags.div({ class: "deck-empty-desc" }, "File modifications generated by agent will stream here in real time.")
+      _dom.tags.div({ class: "deck-empty-title" }, () => _store.t.call(void 0, "deck.diff_no_changes")),
+      _dom.tags.div({ class: "deck-empty-desc" }, "Uncommitted modifications in workspace or agent diffs appear here."),
+      _dom.tags.button(
+        {
+          class: "diff-refresh-btn-large",
+          onclick: () => _store.refreshDiffs.call(void 0, false),
+        },
+        _icons.iconRefresh.call(void 0, 13),
+        _dom.tags.span({}, () => _store.t.call(void 0, "deck.diff_scan"))
+      )
     );
   }
 
@@ -3531,6 +5105,27 @@ function renderDiffsPanel() {
         _dom.tags.span({ class: "diff-stat-add" }, `+${stats.additions}`),
         _dom.tags.span({ class: "diff-stat-del" }, `-${stats.deletions}`),
         _dom.tags.span({ class: "diff-stat-files" }, `${stats.files} files`),
+        _dom.tags.button(
+          {
+            class: "diff-act-btn",
+            title: "Refresh diff from repository",
+            onclick: () => _store.refreshDiffs.call(void 0, false),
+          },
+          _icons.iconRefresh.call(void 0, 12),
+          _dom.tags.span({}, "Refresh")
+        ),
+        _dom.tags.button(
+          {
+            class: "diff-act-btn",
+            title: "Commit staged modifications",
+            onclick: () => {
+              const msg = prompt("Git commit message for staged changes:");
+              if (msg && msg.trim()) _store.commitChanges.call(void 0, msg.trim());
+            },
+          },
+          _icons.iconCommit.call(void 0, 12),
+          _dom.tags.span({}, "Commit")
+        ),
         _dom.tags.button(
           {
             class: "diff-act-btn",
@@ -3693,7 +5288,7 @@ function renderTerminalPanel() {
       _dom.tags.span({ class: "terminal-prompt-prefix" }, "$"),
       _dom.tags.input({
         class: "terminal-cmd-input",
-        placeholder: "Run shell command in workspace (or !!cmd)...",
+        placeholder: "Run shell command in workspace (e.g. git status, ls -la)...",
         onkeydown: (e) => {
           if (e.key === "Enter") {
             const input = e.target ;
@@ -3710,34 +5305,78 @@ function renderTerminalPanel() {
 
 // 3. Jobs 面板
 function renderJobsPanel() {
-  const list = _store.jobs.call(void 0, );
+  const activeProcessList = _store.activityList.call(void 0, );
+  const subagentList = _store.jobs.call(void 0, );
 
-  if (list.length === 0) {
+  const totalCount = activeProcessList.length + subagentList.length;
+
+  if (totalCount === 0) {
     return _dom.tags.div(
       { class: "deck-empty" },
       _dom.tags.div({ class: "deck-empty-icon" }, _icons.iconCpu.call(void 0, 28)),
-      _dom.tags.div({ class: "deck-empty-title" }, "No Active Subagent Jobs"),
-      _dom.tags.div({ class: "deck-empty-desc" }, "Concurrent tasks, background workers, and subagent trees appear here.")
+      _dom.tags.div({ class: "deck-empty-title" }, "No Active Jobs or Subagents"),
+      _dom.tags.div({ class: "deck-empty-desc" }, "Background processes, tool executions, and delegated subagents appear here.")
     );
   }
 
   return _dom.tags.div(
     { class: "jobs-panel" },
-    _dom.each.call(void 0, _store.jobs, (job) =>
-      _dom.tags.div(
-        { class: `job-card status-${job.status}` },
-        _dom.tags.div(
-          { class: "job-card-hdr" },
-          _dom.tags.span({ class: "job-status-dot" }),
-          _dom.tags.span({ class: "job-name" }, job.name),
-          job.role ? _dom.tags.span({ class: "job-role" }, job.role) : null,
-          _dom.tags.span({ class: "job-status-pill" }, job.status.toUpperCase())
-        ),
-        job.summary
-          ? _dom.tags.div({ class: "job-summary" }, job.summary)
-          : null
-      )
-    )
+    // 1. 活动后台进程表
+    activeProcessList.length > 0
+      ? _dom.tags.div(
+          { class: "jobs-section" },
+          _dom.tags.div({ class: "jobs-section-title" }, "Active Background Tasks"),
+          activeProcessList.map((proc) =>
+            _dom.tags.div(
+              { class: "job-card status-running" },
+              _dom.tags.div(
+                { class: "job-card-hdr" },
+                _dom.tags.span({ class: "job-status-dot" }),
+                _dom.tags.span({ class: "job-name" }, proc.cmd || proc.name || `PID ${proc.pid}`),
+                proc.pid ? _dom.tags.span({ class: "job-role" }, `pid:${proc.pid}`) : null,
+                _dom.tags.span({ class: "job-status-pill" }, "RUNNING"),
+                proc.pid
+                  ? _dom.tags.button(
+                      {
+                        class: "job-kill-btn",
+                        title: "Kill process",
+                        onclick: () => proc.pid && _store.killActivity.call(void 0, proc.pid),
+                      },
+                      _icons.iconTrash.call(void 0, 11),
+                      _dom.tags.span({}, "Kill")
+                    )
+                  : null
+              ),
+              _dom.tags.div(
+                { class: "job-meta-row" },
+                _dom.tags.span({}, `Duration: ${proc.duration ? proc.duration + "s" : "active"}`),
+                proc.bytes ? _dom.tags.span({}, ` · Output: ${proc.bytes} bytes`) : null
+              )
+            )
+          )
+        )
+      : null,
+
+    // 2. 子智能体任务列表
+    subagentList.length > 0
+      ? _dom.tags.div(
+          { class: "jobs-section" },
+          _dom.tags.div({ class: "jobs-section-title" }, "Delegated Subagents"),
+          subagentList.map((job) =>
+            _dom.tags.div(
+              { class: `job-card status-${job.status}` },
+              _dom.tags.div(
+                { class: "job-card-hdr" },
+                _dom.tags.span({ class: "job-status-dot" }),
+                _dom.tags.span({ class: "job-name" }, job.name),
+                job.role ? _dom.tags.span({ class: "job-role" }, job.role) : null,
+                _dom.tags.span({ class: "job-status-pill" }, job.status.toUpperCase())
+              ),
+              job.summary ? _dom.tags.div({ class: "job-summary" }, job.summary) : null
+            )
+          )
+        )
+      : null
   );
 }
 
@@ -3770,7 +5409,7 @@ function renderFilesPanel() {
           title: "Refresh files",
           onclick: () => _store.loadFiles.call(void 0, ),
         },
-        _icons.iconFolder.call(void 0, 13)
+        _icons.iconRefresh.call(void 0, 13)
       )
     ),
 
@@ -3787,7 +5426,7 @@ function renderFilesPanel() {
               onclick: async () => {
                 if (item.dir) return;
                 try {
-                  const res = await _net.apiFetch.call(void 0, `/api/file?path=${encodeURIComponent(item.path)}`);
+                  const res = await _net.apiFetch.call(void 0, `/api/file${_store.getQuery.call(void 0, { path: item.path })}`);
                   if (res && res.text != null) {
                     selectedFile.set({ path: item.path, text: res.text });
                   }
@@ -3907,8 +5546,34 @@ const initialWidth = (() => {
 
 };
 __modules["modal"] = function(module, exports, require) {
-"use strict";Object.defineProperty(exports, "__esModule", {value: true});// modal.ts —— 权限审批弹窗、命令面板与设置弹窗
+"use strict";Object.defineProperty(exports, "__esModule", {value: true});// modal.ts —— 权限审批弹窗、命令面板、设置中心与 Artifact 检视层
 var _dom = require('./dom');
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -3930,6 +5595,15 @@ var _dom = require('./dom');
 var _store = require('./store');
 var _net = require('./net');
 var _signal = require('./signal');
+
+
+
+
+
+
+
+
+
 
 
 
@@ -3966,7 +5640,10 @@ var _icons = require('./icons');
           ),
           _dom.tags.div(
             { class: "modal-body" },
-            _dom.tags.p({ class: "perm-desc" }, req.desc || "The agent is requesting authorization for the following action:"),
+            _dom.tags.p(
+              { class: "perm-desc" },
+              req.desc || "The agent is requesting authorization for the following action:"
+            ),
             req.command
               ? _dom.tags.pre({ class: "perm-command" }, req.command)
               : null,
@@ -4024,7 +5701,7 @@ var _icons = require('./icons');
             _icons.iconSearch.call(void 0, 15, "palette-icon"),
             _dom.tags.input({
               class: "palette-input",
-              placeholder: "Type a command or search sessions...",
+              placeholder: "Search actions or sessions...",
               autofocus: true,
               value: () => cmdQuery(),
               oninput: (e) => cmdQuery.set((e.target ).value),
@@ -4035,7 +5712,7 @@ var _icons = require('./icons');
           ),
           _dom.tags.div(
             { class: "palette-list" },
-            // 动作
+            // 常用快速指令
             _dom.tags.div({ class: "palette-group-hdr" }, "Actions"),
             _dom.tags.div(
               {
@@ -4052,12 +5729,13 @@ var _icons = require('./icons');
               {
                 class: "palette-item",
                 onclick: () => {
+                  _store.refreshDiffs.call(void 0, );
                   _store.setDeckTab.call(void 0, "diffs");
                   _store.showSearchModal.set(false);
                 },
               },
               _dom.tags.span({ class: "palette-item-icon" }, _icons.iconDiff.call(void 0, 14)),
-              _dom.tags.span({}, "View Code Diffs")
+              _dom.tags.span({}, "Scan & View Code Diffs")
             ),
             _dom.tags.div(
               {
@@ -4070,6 +5748,51 @@ var _icons = require('./icons');
               _dom.tags.span({ class: "palette-item-icon" }, _icons.iconTerminal.call(void 0, 14)),
               _dom.tags.span({}, "Open Terminal Viewer")
             ),
+            _dom.tags.div(
+              {
+                class: "palette-item",
+                onclick: () => {
+                  _store.setDeckTab.call(void 0, "jobs");
+                  _store.showSearchModal.set(false);
+                },
+              },
+              _dom.tags.span({ class: "palette-item-icon" }, _icons.iconCpu.call(void 0, 14)),
+              _dom.tags.span({}, "View Background Jobs & Subagents")
+            ),
+            _dom.tags.div(
+              {
+                class: "palette-item",
+                onclick: () => {
+                  _store.refreshModels.call(void 0, );
+                  _store.showSearchModal.set(false);
+                },
+              },
+              _dom.tags.span({ class: "palette-item-icon" }, _icons.iconRefresh.call(void 0, 14)),
+              _dom.tags.span({}, "Refresh Model List from Providers")
+            ),
+            _dom.tags.div(
+              {
+                class: "palette-item",
+                onclick: () => {
+                  _store.showSettingsModal.set(true);
+                  _store.showSearchModal.set(false);
+                },
+              },
+              _dom.tags.span({ class: "palette-item-icon" }, _icons.iconSettings.call(void 0, 14)),
+              _dom.tags.span({}, "Open Workspace Settings")
+            ),
+            _dom.tags.div(
+              {
+                class: "palette-item",
+                onclick: () => {
+                  _store.toggleTheme.call(void 0, );
+                  _store.showSearchModal.set(false);
+                },
+              },
+              _dom.tags.span({ class: "palette-item-icon" }, _icons.iconRefresh.call(void 0, 14)),
+              _dom.tags.span({}, "Toggle Theme (Light / Dark)")
+            ),
+
             // 会话列表匹配
             sessionMatches.length > 0
               ? _dom.tags.div({ class: "palette-group-hdr" }, "Sessions")
@@ -4142,6 +5865,7 @@ var _icons = require('./icons');
   );
 
   // 4. Settings Modal
+  const activeSettingsTab = _signal.signal("appearance");
   container.appendChild(
     _dom.tags.div(
       {
@@ -4155,10 +5879,10 @@ var _icons = require('./icons');
         if (!_store.showSettingsModal.call(void 0, )) return null;
 
         return _dom.tags.div(
-          { class: "modal-card settings-modal" },
+          { class: "modal-card settings-modal-card" },
           _dom.tags.div(
             { class: "modal-hdr" },
-            _dom.tags.h3({ class: "modal-title" }, "Workspace Settings"),
+            _dom.tags.div({ class: "modal-hdr-left" }, _icons.iconSettings.call(void 0, 18), _dom.tags.h3({ class: "modal-title" }, "Workspace Settings")),
             _dom.tags.button(
               {
                 class: "modal-close-btn",
@@ -4167,68 +5891,442 @@ var _icons = require('./icons');
               _icons.iconClose.call(void 0, 14)
             )
           ),
+          // 选项卡切换
           _dom.tags.div(
-            { class: "modal-body" },
-            _dom.tags.div(
-              { class: "settings-row" },
-              _dom.tags.label({}, "Active Model"),
-              _dom.tags.select(
-                {
-                  class: "settings-select",
-                  value: () => _store.model.call(void 0, ),
-                  onchange: (e) => _store.switchModel.call(void 0, (e.target ).value),
+            { class: "settings-nav" },
+            _dom.tags.button(
+              {
+                class: () => `settings-nav-btn ${activeSettingsTab() === "appearance" ? "is-active" : ""}`,
+                onclick: () => activeSettingsTab.set("appearance"),
+              },
+              _dom.tags.span({}, () => _store.t.call(void 0, "settings.tab_appearance"))
+            ),
+            _dom.tags.button(
+              {
+                class: () => `settings-nav-btn ${activeSettingsTab() === "agent" ? "is-active" : ""}`,
+                onclick: () => activeSettingsTab.set("agent"),
+              },
+              _dom.tags.span({}, () => _store.t.call(void 0, "settings.tab_agent"))
+            ),
+            _dom.tags.button(
+              {
+                class: () => `settings-nav-btn ${activeSettingsTab() === "security" ? "is-active" : ""}`,
+                onclick: () => activeSettingsTab.set("security"),
+              },
+              _dom.tags.span({}, () => _store.t.call(void 0, "settings.tab_security"))
+            ),
+            _dom.tags.button(
+              {
+                class: () => `settings-nav-btn ${activeSettingsTab() === "usage" ? "is-active" : ""}`,
+                onclick: () => {
+                  _store.loadUsage.call(void 0, );
+                  activeSettingsTab.set("usage");
                 },
-                _store.models.call(void 0, ).map((m) => _dom.tags.option({ value: m, selected: m === _store.model.call(void 0, ) }, m))
-              )
+              },
+              _dom.tags.span({}, () => _store.t.call(void 0, "settings.tab_usage"))
             ),
-            _dom.tags.div(
-              { class: "settings-row" },
-              _dom.tags.label({}, "Default Thinking Level"),
-              _dom.tags.select(
-                {
-                  class: "settings-select",
-                  value: () => _store.thinkingLevel.call(void 0, ),
-                  onchange: (e) => _store.switchThinkingLevel.call(void 0, (e.target ).value),
+            _dom.tags.button(
+              {
+                class: () => `settings-nav-btn ${activeSettingsTab() === "packages" ? "is-active" : ""}`,
+                onclick: () => {
+                  _store.loadPackages.call(void 0, );
+                  activeSettingsTab.set("packages");
                 },
-                ["off", "low", "med", "high", "max"].map((lvl) =>
-                  _dom.tags.option({ value: lvl, selected: lvl === _store.thinkingLevel.call(void 0, ) }, lvl.toUpperCase())
-                )
-              )
+              },
+              _dom.tags.span({}, () => _store.t.call(void 0, "settings.tab_packages"))
             ),
-            _dom.tags.div(
-              { class: "settings-row" },
-              _dom.tags.label({}, "Context Window Usage"),
-              _dom.tags.div({ class: "settings-stat" }, `${_store.pct.call(void 0, )}% utilized`)
+            _dom.tags.button(
+              {
+                class: () => `settings-nav-btn ${activeSettingsTab() === "export" ? "is-active" : ""}`,
+                onclick: () => activeSettingsTab.set("export"),
+              },
+              _dom.tags.span({}, () => _store.t.call(void 0, "settings.tab_export"))
+            )
+          ),
+
+          _dom.tags.div(
+            { class: "modal-body settings-tab-body" },
+            () => {
+              const curTab = activeSettingsTab();
+              switch (curTab) {
+                case "appearance":
+                  return _dom.tags.div(
+                    { class: "settings-pane" },
+                    _dom.tags.div(
+                      { class: "settings-row" },
+                      _dom.tags.div(
+                        { class: "settings-row-info" },
+                        _dom.tags.label({}, () => _store.t.call(void 0, "settings.ui_language")),
+                        _dom.tags.div({ class: "settings-row-desc" }, "Language / 界面语言")
+                      ),
+                      _dom.tags.select(
+                        {
+                          class: "settings-select",
+                          value: () => _store.locale.call(void 0, ),
+                          onchange: (e) => _store.setLocale.call(void 0, (e.target ).value ),
+                        },
+                        _dom.tags.option({ value: "zh", selected: _store.locale.call(void 0, ) === "zh" }, "简体中文 (Chinese)"),
+                        _dom.tags.option({ value: "en", selected: _store.locale.call(void 0, ) === "en" }, "English")
+                      )
+                    ),
+                    _dom.tags.div(
+                      { class: "settings-row-hdr-standalone" },
+                      _dom.tags.label({}, () => _store.t.call(void 0, "settings.theme_select")),
+                      _dom.tags.div({ class: "settings-row-desc" }, () => _store.t.call(void 0, "settings.theme_select_desc"))
+                    ),
+                    _dom.tags.div(
+                      { class: "theme-grid" },
+                      _store.THEMES.map((th) =>
+                        _dom.tags.div(
+                          {
+                            class: () => `theme-card ${_store.theme.call(void 0, ) === th.id ? "is-active" : ""}`,
+                            onclick: () => _store.setTheme.call(void 0, th.id),
+                          },
+                          _dom.tags.div(
+                            { class: "theme-card-hdr" },
+                            _dom.tags.div(
+                              { class: "theme-card-title" },
+                              _dom.tags.span({ class: "theme-card-emoji" }, th.icon),
+                              _dom.tags.span({}, () => _store.t.call(void 0, th.nameKey))
+                            ),
+                            () =>
+                              _store.theme.call(void 0, ) === th.id
+                                ? _dom.tags.span({ class: "theme-card-badge" }, _icons.iconCheck.call(void 0, 12))
+                                : null
+                          ),
+                          _dom.tags.div(
+                            { class: "theme-card-palette" },
+                            _dom.tags.span({ class: "theme-card-color", style: `background: ${th.preview.canvas};` }),
+                            _dom.tags.span({ class: "theme-card-color", style: `background: ${th.preview.surface};` }),
+                            _dom.tags.span({ class: "theme-card-color", style: `background: ${th.preview.accent};` })
+                          ),
+                          _dom.tags.div({ class: "theme-card-desc" }, () => _store.t.call(void 0, th.descKey))
+                        )
+                      )
+                    ),
+                    _dom.tags.div(
+                      { class: "theme-preview-box" },
+                      _dom.tags.div({ class: "theme-preview-title" }, () => _store.t.call(void 0, "settings.theme_preview")),
+                      _dom.tags.pre(
+                        { class: "theme-preview-code" },
+                        _dom.tags.span({ class: "hl-comment" }, "// piz Theme Live Demo\n"),
+                        _dom.tags.span({ class: "hl-keyword" }, "const "),
+                        _dom.tags.span({ class: "hl-type" }, "std "),
+                        "= ",
+                        _dom.tags.span({ class: "hl-func" }, "@import"),
+                        "(",
+                        _dom.tags.span({ class: "hl-string" }, "\"std\""),
+                        ");\n",
+                        _dom.tags.span({ class: "hl-keyword" }, "pub fn "),
+                        _dom.tags.span({ class: "hl-func" }, "main"),
+                        "() !void {\n",
+                        "    ",
+                        _dom.tags.span({ class: "hl-type" }, "std.debug"),
+                        ".",
+                        _dom.tags.span({ class: "hl-func" }, "print"),
+                        "(",
+                        _dom.tags.span({ class: "hl-string" }, "\"Active Theme: {s}\\n\""),
+                        ", .{",
+                        _dom.tags.span({ class: "hl-string" }, `"${_store.theme.call(void 0, )}"`),
+                        "});\n}"
+                      )
+                    )
+                  );
+
+                case "agent":
+                  return _dom.tags.div(
+                    { class: "settings-pane" },
+                    _dom.tags.div(
+                      { class: "settings-row" },
+                      _dom.tags.div(
+                        { class: "settings-row-info" },
+                        _dom.tags.label({}, () => _store.t.call(void 0, "settings.ui_language")),
+                        _dom.tags.div({ class: "settings-row-desc" }, "Language / 界面语言")
+                      ),
+                      _dom.tags.select(
+                        {
+                          class: "settings-select",
+                          value: () => _store.locale.call(void 0, ),
+                          onchange: (e) => _store.setLocale.call(void 0, (e.target ).value ),
+                        },
+                        _dom.tags.option({ value: "zh", selected: _store.locale.call(void 0, ) === "zh" }, "简体中文 (Chinese)"),
+                        _dom.tags.option({ value: "en", selected: _store.locale.call(void 0, ) === "en" }, "English")
+                      )
+                    ),
+                    _dom.tags.div(
+                      { class: "settings-row" },
+                      _dom.tags.div(
+                        { class: "settings-row-info" },
+                        _dom.tags.label({}, () => _store.t.call(void 0, "settings.active_model")),
+                        _dom.tags.div({ class: "settings-row-desc" }, () => _store.t.call(void 0, "settings.active_model_desc"))
+                      ),
+                      _dom.tags.div(
+                        { class: "settings-select-group" },
+                        _dom.tags.select(
+                          {
+                            class: "settings-select",
+                            value: () => _store.model.call(void 0, ),
+                            onchange: (e) => _store.switchModel.call(void 0, (e.target ).value),
+                          },
+                          _store.models.call(void 0, ).map((m) => _dom.tags.option({ value: m, selected: m === _store.model.call(void 0, ) }, m))
+                        ),
+                        _dom.tags.button(
+                          {
+                            class: "settings-act-btn",
+                            title: "Refresh model list",
+                            onclick: _store.refreshModels,
+                          },
+                          _icons.iconRefresh.call(void 0, 12)
+                        )
+                      )
+                    ),
+                    _dom.tags.div(
+                      { class: "settings-row" },
+                      _dom.tags.div(
+                        { class: "settings-row-info" },
+                        _dom.tags.label({}, "Default Thinking Level"),
+                        _dom.tags.div({ class: "settings-row-desc" }, "Allocate reasoning effort budget for chain-of-thought")
+                      ),
+                      _dom.tags.select(
+                        {
+                          class: "settings-select",
+                          value: () => _store.thinkingLevel.call(void 0, ),
+                          onchange: (e) => _store.switchThinkingLevel.call(void 0, (e.target ).value),
+                        },
+                        ["off", "low", "med", "high", "max"].map((lvl) =>
+                          _dom.tags.option({ value: lvl, selected: lvl === _store.thinkingLevel.call(void 0, ) }, lvl.toUpperCase())
+                        )
+                      )
+                    ),
+                    _dom.tags.div(
+                      { class: "settings-row" },
+                      _dom.tags.div(
+                        { class: "settings-row-info" },
+                        _dom.tags.label({}, "Approval Mode"),
+                        _dom.tags.div({ class: "settings-row-desc" }, "YOLO executes freely; ASK prompts; READ-ONLY restricts write tools")
+                      ),
+                      _dom.tags.select(
+                        {
+                          class: "settings-select",
+                          value: () => _store.mode.call(void 0, ),
+                          onchange: (e) => _store.switchMode.call(void 0, (e.target ).value),
+                        },
+                        _dom.tags.option({ value: "yolo", selected: _store.mode.call(void 0, ) === "yolo" }, "YOLO (Full Execution)"),
+                        _dom.tags.option({ value: "ask", selected: _store.mode.call(void 0, ) === "ask" }, "ASK (Approval Required)"),
+                        _dom.tags.option({ value: "read-only", selected: _store.mode.call(void 0, ) === "read-only" }, "READ-ONLY (Safe Inspection)")
+                      )
+                    ),
+                    _dom.tags.div(
+                      { class: "settings-row" },
+                      _dom.tags.div(
+                        { class: "settings-row-info" },
+                        _dom.tags.label({}, "Context Window Utilization"),
+                        _dom.tags.div({ class: "settings-row-desc" }, "Proportion of active context tokens occupied")
+                      ),
+                      _dom.tags.div({ class: "settings-stat" }, `${_store.pct.call(void 0, )}% utilized`)
+                    )
+                  );
+
+                case "security":
+                  return _dom.tags.div(
+                    { class: "settings-pane" },
+                    _dom.tags.div(
+                      { class: "settings-row" },
+                      _dom.tags.div(
+                        { class: "settings-row-info" },
+                        _dom.tags.label({}, "OS Sandbox Mode"),
+                        _dom.tags.div({ class: "settings-row-desc" }, "Isolates bash subprocess execution via bubblewrap or landlock")
+                      ),
+                      _dom.tags.select(
+                        {
+                          class: "settings-select",
+                          value: () => _store.sandboxMode.call(void 0, ),
+                          onchange: (e) => _store.setSandboxMode.call(void 0, (e.target ).value),
+                        },
+                        _dom.tags.option({ value: "off", selected: _store.sandboxMode.call(void 0, ) === "off" }, "off (Direct Host Access)"),
+                        _dom.tags.option({ value: "workspace", selected: _store.sandboxMode.call(void 0, ) === "workspace" }, "workspace (Isolate to Workspace)"),
+                        _dom.tags.option({ value: "strict", selected: _store.sandboxMode.call(void 0, ) === "strict" }, "strict (Read-only + Temp write)")
+                      )
+                    ),
+                    _dom.tags.div(
+                      { class: "settings-info-box" },
+                      _dom.tags.div({ class: "info-box-title" }, "Security Boundaries"),
+                      _dom.tags.p(
+                        {},
+                        "Service binds strictly to loopback (127.0.0.1) with Bearer token authentication and strict Cross-Origin verification. In workspace sandbox mode, destructive file deletions outside the project tree are blocked."
+                      )
+                    )
+                  );
+
+                case "usage":
+                  const us = _store.usageSummary.call(void 0, );
+                  return _dom.tags.div(
+                    { class: "settings-pane" },
+                    _dom.tags.div(
+                      { class: "usage-grid" },
+                      _dom.tags.div(
+                        { class: "usage-metric-card" },
+                        _dom.tags.div({ class: "metric-title" }, "Input Tokens"),
+                        _dom.tags.div({ class: "metric-val" }, us.in.toLocaleString())
+                      ),
+                      _dom.tags.div(
+                        { class: "usage-metric-card" },
+                        _dom.tags.div({ class: "metric-title" }, "Output Tokens"),
+                        _dom.tags.div({ class: "metric-val" }, us.out.toLocaleString())
+                      ),
+                      _dom.tags.div(
+                        { class: "usage-metric-card" },
+                        _dom.tags.div({ class: "metric-title" }, "Estimated Cost"),
+                        _dom.tags.div({ class: "metric-val" }, `$${us.usd.toFixed(4)}`)
+                      ),
+                      _dom.tags.div(
+                        { class: "usage-metric-card" },
+                        _dom.tags.div({ class: "metric-title" }, "Total Ledger Entries"),
+                        _dom.tags.div({ class: "metric-val" }, String(us.lines))
+                      )
+                    ),
+                    us.tail
+                      ? _dom.tags.div(
+                          { class: "usage-tail-box" },
+                          _dom.tags.div({ class: "tail-title" }, "Recent Activity Tail"),
+                          _dom.tags.pre({ class: "tail-pre" }, us.tail)
+                        )
+                      : null
+                  );
+
+                case "packages":
+                  const pkgs = _store.packagesList.call(void 0, );
+                  return _dom.tags.div(
+                    { class: "settings-pane" },
+                    _dom.tags.div({ class: "pkg-section-title" }, `Project Packages (${pkgs.project.length})`),
+                    pkgs.project.length > 0
+                      ? pkgs.project.map((p) =>
+                          _dom.tags.div(
+                            { class: "pkg-item" },
+                            _dom.tags.span({ class: "pkg-name" }, p.name),
+                            _dom.tags.span({ class: "pkg-meta" }, `${p.skills || 0} skills · ${p.prompts || 0} prompts`)
+                          )
+                        )
+                      : _dom.tags.div({ class: "settings-empty" }, "No local project packages installed"),
+                    _dom.tags.div({ class: "pkg-section-title", style: "margin-top:16px;" }, `User Global Packages (${pkgs.user.length})`),
+                    pkgs.user.length > 0
+                      ? pkgs.user.map((p) =>
+                          _dom.tags.div(
+                            { class: "pkg-item" },
+                            _dom.tags.span({ class: "pkg-name" }, p.name),
+                            _dom.tags.span({ class: "pkg-meta" }, `${p.skills || 0} skills · ${p.prompts || 0} prompts`)
+                          )
+                        )
+                      : _dom.tags.div({ class: "settings-empty" }, "No global packages installed")
+                  );
+
+                case "export":
+                  return _dom.tags.div(
+                    { class: "settings-pane" },
+                    _dom.tags.p({ class: "settings-desc" }, "Export current session transcript, thought processes, and tool summaries into standard formats:"),
+                    _dom.tags.div(
+                      { class: "export-card-group" },
+                      _dom.tags.button(
+                        {
+                          class: "export-action-card",
+                          onclick: () => _store.exportSession.call(void 0, "md"),
+                        },
+                        _icons.iconDownload.call(void 0, 16),
+                        _dom.tags.div(
+                          { class: "export-card-text" },
+                          _dom.tags.div({ class: "card-title" }, "Export as Markdown (.md)"),
+                          _dom.tags.div({ class: "card-desc" }, "Clean formatted GFM with code blocks and quotes")
+                        )
+                      ),
+                      _dom.tags.button(
+                        {
+                          class: "export-action-card",
+                          onclick: () => _store.exportSession.call(void 0, "json"),
+                        },
+                        _icons.iconDownload.call(void 0, 16),
+                        _dom.tags.div(
+                          { class: "export-card-text" },
+                          _dom.tags.div({ class: "card-title" }, "Export as JSON (.json)"),
+                          _dom.tags.div({ class: "card-desc" }, "Structured turns and step items for programmatic use")
+                        )
+                      ),
+                      _dom.tags.button(
+                        {
+                          class: "export-action-card",
+                          onclick: () => _store.exportSession.call(void 0, "html"),
+                        },
+                        _icons.iconDownload.call(void 0, 16),
+                        _dom.tags.div(
+                          { class: "export-card-text" },
+                          _dom.tags.div({ class: "card-title" }, "Export as Standalone HTML (.html)"),
+                          _dom.tags.div({ class: "card-desc" }, "Self-contained webpage ready for sharing and offline reading")
+                        )
+                      )
+                    )
+                  );
+              }
+            }
+          )
+        );
+      }
+    )
+  );
+
+  // 5. Add Workspace Modal
+  const inputWsPath = _signal.signal("");
+  container.appendChild(
+    _dom.tags.div(
+      {
+        class: () =>
+          `modal-backdrop ${_store.showAddWorkspaceModal.call(void 0, ) ? "is-visible" : "is-hidden"}`,
+        onclick: (e) => {
+          if (e.target === e.currentTarget) _store.showAddWorkspaceModal.set(false);
+        },
+      },
+      () => {
+        if (!_store.showAddWorkspaceModal.call(void 0, )) return null;
+
+        return _dom.tags.div(
+          { class: "modal-card ws-add-modal" },
+          _dom.tags.div(
+            { class: "modal-hdr" },
+            _icons.iconFolderPlus.call(void 0, 18),
+            _dom.tags.h3({ class: "modal-title" }, "Register Project Workspace")
+          ),
+          _dom.tags.p(
+            { class: "auth-desc" },
+            "Enter absolute local filesystem path of the repository or folder:"
+          ),
+          _dom.tags.input({
+            class: "auth-token-input",
+            placeholder: "/path/to/project...",
+            value: () => inputWsPath(),
+            oninput: (e) => inputWsPath.set((e.target ).value),
+            onkeydown: (e) => {
+              if (e.key === "Enter") {
+                _store.addWorkspace.call(void 0, inputWsPath());
+                _store.showAddWorkspaceModal.set(false);
+              }
+            },
+          }),
+          _dom.tags.div(
+            { class: "modal-actions" },
+            _dom.tags.button(
+              {
+                class: "btn btn-secondary",
+                onclick: () => _store.showAddWorkspaceModal.set(false),
+              },
+              "Cancel"
             ),
-            _dom.tags.div(
-              { class: "settings-row" },
-              _dom.tags.label({}, "Export Session"),
-              _dom.tags.div(
-                { class: "export-btn-group" },
-                _dom.tags.button(
-                  {
-                    class: "export-btn",
-                    title: "Export session as Markdown (.md)",
-                    onclick: () => _store.exportSession.call(void 0, "md"),
-                  },
-                  _icons.iconDownload.call(void 0, 12),
-                  _dom.tags.span({}, "Markdown")
-                ),
-                _dom.tags.button(
-                  {
-                    class: "export-btn",
-                    title: "Export session as JSON (.json)",
-                    onclick: () => _store.exportSession.call(void 0, "json"),
-                  },
-                  _icons.iconDownload.call(void 0, 12),
-                  _dom.tags.span({}, "JSON")
-                )
-              )
-            ),
-            _dom.tags.div(
-              { class: "settings-row" },
-              _dom.tags.label({}, "Interface Architecture"),
-              _dom.tags.div({ class: "settings-stat" }, "WebUI Next v2.0 (Signals Reactive)")
+            _dom.tags.button(
+              {
+                class: "btn btn-primary",
+                onclick: () => {
+                  _store.addWorkspace.call(void 0, inputWsPath());
+                  _store.showAddWorkspaceModal.set(false);
+                },
+              },
+              "Register & Switch"
             )
           )
         );
@@ -4236,7 +6334,73 @@ var _icons = require('./icons');
     )
   );
 
-  // 5. Shortcuts Modal
+  // 6. Artifact Inspection Modal
+  container.appendChild(
+    _dom.tags.div(
+      {
+        class: () =>
+          `modal-backdrop ${_store.showArtifactModal.call(void 0, ) ? "is-visible" : "is-hidden"}`,
+        onclick: (e) => {
+          if (e.target === e.currentTarget) _store.showArtifactModal.set(false);
+        },
+      },
+      () => {
+        if (!_store.showArtifactModal.call(void 0, )) return null;
+        const art = _store.activeArtifact.call(void 0, );
+        if (!art) return null;
+
+        return _dom.tags.div(
+          { class: "modal-card artifact-modal" },
+          _dom.tags.div(
+            { class: "modal-hdr" },
+            _dom.tags.div(
+              { class: "modal-hdr-left" },
+              _icons.iconDownload.call(void 0, 16),
+              _dom.tags.h3({ class: "modal-title" }, `Artifact: ${art.name}`)
+            ),
+            _dom.tags.button(
+              {
+                class: "modal-close-btn",
+                onclick: () => _store.showArtifactModal.set(false),
+              },
+              _icons.iconClose.call(void 0, 14)
+            )
+          ),
+          _dom.tags.div(
+            { class: "modal-body" },
+            art.isImage
+              ? _dom.tags.div(
+                  { class: "artifact-img-wrap" },
+                  _dom.tags.img({ class: "artifact-img", src: art.content })
+                )
+              : _dom.tags.pre({ class: "artifact-pre" }, art.content)
+          ),
+          _dom.tags.div(
+            { class: "modal-actions" },
+            _dom.tags.button(
+              {
+                class: "btn btn-secondary",
+                onclick: () => {
+                  if (!art.isImage) navigator.clipboard.writeText(art.content);
+                },
+              },
+              _icons.iconCopy.call(void 0, 12),
+              _dom.tags.span({}, "Copy Text")
+            ),
+            _dom.tags.button(
+              {
+                class: "btn btn-primary",
+                onclick: () => _store.showArtifactModal.set(false),
+              },
+              "Close"
+            )
+          )
+        );
+      }
+    )
+  );
+
+  // 7. Shortcuts Modal
   container.appendChild(
     _dom.tags.div(
       {
@@ -4250,18 +6414,22 @@ var _icons = require('./icons');
         if (!_store.showShortcutsModal.call(void 0, )) return null;
 
         const SHORTCUTS = [
-          { key: "Ctrl + K / ⌘K", desc: "Open command palette and quick switcher" },
-          { key: "Ctrl + B / ⌘B", desc: "Toggle session sidebar drawer" },
-          { key: "Ctrl + J / ⌘J", desc: "Toggle inspection deck (Diffs/Terminal/Files)" },
-          { key: "Ctrl + Shift + D", desc: "Jump to code diffs panel" },
-          { key: "Ctrl + Shift + T", desc: "Jump to terminal panel" },
+          { key: "Ctrl + K / ⌘K", desc: "Open command palette and session switcher" },
+          { key: "Ctrl + B / ⌘B", desc: "Toggle workspace session drawer" },
+          { key: "Ctrl + J / ⌘J", desc: "Toggle inspection deck (Diffs/Terminal/Jobs/Files)" },
+          { key: "Ctrl + Shift + D", desc: "Jump directly to code diffs panel" },
+          { key: "Ctrl + Shift + T", desc: "Jump directly to terminal panel" },
+          { key: "Ctrl + Shift + R", desc: "Regenerate last assistant answer" },
           { key: "Enter", desc: "Send message / Submit prompt" },
-          { key: "Shift + Enter", desc: "Insert new line in composer" },
+          { key: "Shift + Enter", desc: "Insert new line in input composer" },
+          { key: "↑ / ↓", desc: "Navigate prompt history when input is empty" },
           { key: "Esc", desc: "Interrupt generation / Close open dialogs" },
           { key: "Ctrl + V / ⌘V", desc: "Paste image from clipboard into composer" },
-          { key: "/", desc: "Trigger slash command menu in composer" },
-          { key: "@", desc: "Trigger file mention menu in composer" },
-          { key: "?", desc: "Open this keyboard shortcuts cheat sheet" },
+          { key: "!cmd", desc: "Execute shell command and feed output to model" },
+          { key: "!!cmd", desc: "Execute shell command locally (preview only)" },
+          { key: "/", desc: "Trigger slash command popup menu" },
+          { key: "@", desc: "Trigger workspace file mention menu" },
+          { key: "?", desc: "Open this keyboard shortcuts reference" },
         ];
 
         return _dom.tags.div(
@@ -4271,7 +6439,7 @@ var _icons = require('./icons');
             _dom.tags.div(
               { class: "modal-hdr-left" },
               _icons.iconHelp.call(void 0, 16),
-              _dom.tags.h3({ class: "modal-title" }, "Keyboard Shortcuts")
+              _dom.tags.h3({ class: "modal-title" }, "Keyboard Shortcuts & Command Guide")
             ),
             _dom.tags.button(
               {
@@ -4296,6 +6464,24 @@ var _icons = require('./icons');
           )
         );
       }
+    )
+  );
+
+  // 8. 全局 Toast 浮层容器
+  container.appendChild(
+    _dom.tags.div(
+      { class: "toast-container" },
+      _dom.each.call(void 0, _store.toasts, (t) =>
+        _dom.tags.div(
+          {
+            class: `toast-card toast-${t.type}`,
+            onclick: () => _store.dismissToast.call(void 0, t.id),
+          },
+          _dom.tags.span({ class: "toast-dot" }),
+          _dom.tags.span({ class: "toast-msg" }, t.message),
+          _dom.tags.button({ class: "toast-close" }, _icons.iconClose.call(void 0, 11))
+        )
+      )
     )
   );
 
@@ -4324,6 +6510,12 @@ var _modal = require('./modal');
 
 
 
+
+
+
+
+
+
 var _store = require('./store');
 
 function createApp() {
@@ -4334,13 +6526,13 @@ function createApp() {
 
   // 2. 主体三栏工作区容器 (Sidebar + Chat Area + Splitter + Deck)
   const mainWorkspace = _dom.tags.div(
-    { class: "main-workspace" },
+    { class: "main-layout main-workspace" },
     // 左侧边栏
     _sidebar.renderSidebar.call(void 0, ),
 
     // 中央会话流与输入台
     _dom.tags.main(
-      { class: "chat-main-column" },
+      { class: "chat-workspace chat-main-column" },
       _chat.renderChatStream.call(void 0, ),
       _composer.renderComposer.call(void 0, )
     ),
@@ -4387,6 +6579,19 @@ function setupKeybindings() {
     } else if (isMeta && e.shiftKey && (e.key === "T" || e.key === "t")) {
       e.preventDefault();
       _store.setDeckTab.call(void 0, "terminal");
+    } else if (isMeta && e.shiftKey && (e.key === "R" || e.key === "r")) {
+      e.preventDefault();
+      _store.regenerateLastTurn.call(void 0, );
+    } else if (isMeta && e.shiftKey && (e.key === "C" || e.key === "c")) {
+      e.preventDefault();
+      const list = _store.turns.call(void 0, );
+      for (let i = list.length - 1; i >= 0; i--) {
+        if (list[i].role === "assistant" && list[i].content) {
+          navigator.clipboard.writeText(list[i].content);
+          _store.showToast.call(void 0, "Copied last assistant response", "info");
+          break;
+        }
+      }
     } else if (e.key === "?" && !["INPUT", "TEXTAREA"].includes(_optionalChain([(e.target ), 'optionalAccess', _ => _.tagName]))) {
       e.preventDefault();
       _store.showShortcutsModal.update((v) => !v);
@@ -4395,6 +6600,12 @@ function setupKeybindings() {
         _store.showSearchModal.set(false);
       } else if (_store.showShortcutsModal.call(void 0, )) {
         _store.showShortcutsModal.set(false);
+      } else if (_store.showSettingsModal.call(void 0, )) {
+        _store.showSettingsModal.set(false);
+      } else if (_store.showAddWorkspaceModal.call(void 0, )) {
+        _store.showAddWorkspaceModal.set(false);
+      } else if (_store.showArtifactModal.call(void 0, )) {
+        _store.showArtifactModal.set(false);
       } else if (_store.isStreaming.call(void 0, )) {
         _store.interrupt.call(void 0, );
       }

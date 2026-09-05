@@ -7,22 +7,28 @@ import {
   files,
   mode,
   switchMode,
-  createSession,
   setDeckTab,
   attachedImage,
+  slashCommands,
+  executeSlash,
+  activityList,
+  killActivity,
+  sandboxMode,
+  setSandboxMode,
+  activeSession,
+  getDraft,
+  setDraft,
+  promptHistory,
+  t,
 } from "./store";
-import { signal } from "./signal";
+import { signal, effect } from "./signal";
 import {
   iconSend,
   iconStop,
   iconFile,
   iconBolt,
   iconQuestion,
-  iconCompass,
-  iconDiff,
-  iconTerminal,
-  iconCpu,
-  iconTrash,
+  iconShield,
   iconSparkle,
   iconImage,
   iconClose,
@@ -33,11 +39,12 @@ export function renderComposer(): HTMLElement {
   const showSlashMenu = signal<boolean>(false);
   const showFileMenu = signal<boolean>(false);
   const menuIndex = signal<number>(0);
+  const historyIndex = signal<number>(-1);
 
   let textareaEl: HTMLTextAreaElement | null = null;
   let fileInputEl: HTMLInputElement | null = null;
 
-  // 全局暴露给空状态卡片点击直接填入 prompt
+  // 全局暴露给外部快速填入 prompt
   (window as any).__pizFillComposer = (val: string) => {
     text.set(val);
     if (textareaEl) {
@@ -45,6 +52,7 @@ export function renderComposer(): HTMLElement {
       autoResize(textareaEl);
       textareaEl.focus();
     }
+    setDraft(activeSession(), val);
   };
 
   (window as any).__pizAppendComposer = (val: string) => {
@@ -56,25 +64,27 @@ export function renderComposer(): HTMLElement {
       autoResize(textareaEl);
       textareaEl.focus();
     }
+    setDraft(activeSession(), next);
   };
 
-  const SLASH_COMMANDS = [
-    { cmd: "/diff", desc: "Open right deck to inspect code changes", icon: iconDiff },
-    { cmd: "/term", desc: "Open terminal viewer in deck", icon: iconTerminal },
-    { cmd: "/jobs", desc: "View subagent hierarchy and jobs", icon: iconCpu },
-    { cmd: "/files", desc: "Browse workspace files", icon: iconFile },
-    { cmd: "/clear", desc: "Create a fresh new session", icon: iconTrash },
-    { cmd: "/yolo", desc: "Switch mode to YOLO (auto-execute)", icon: iconBolt },
-    { cmd: "/ask", desc: "Switch mode to Ask (require approval)", icon: iconQuestion },
-    { cmd: "/plan", desc: "Switch mode to Plan (write plan first)", icon: iconCompass },
-  ];
+  // 监听会话变更，恢复相应草稿
+  effect(() => {
+    const s = activeSession();
+    const saved = getDraft(s);
+    text.set(saved);
+    if (textareaEl) {
+      textareaEl.value = saved;
+      autoResize(textareaEl);
+    }
+  });
 
   function handleInput(e: Event) {
     const el = e.target as HTMLTextAreaElement;
-    text.set(el.value);
-    autoResize(el);
-
     const val = el.value;
+    text.set(val);
+    autoResize(el);
+    setDraft(activeSession(), val);
+
     if (val.startsWith("/")) {
       showSlashMenu.set(true);
       showFileMenu.set(false);
@@ -117,7 +127,6 @@ export function renderComposer(): HTMLElement {
     reader.onload = (ev) => {
       const result = ev.target?.result as string;
       if (!result) return;
-      // 提取 base64 数据与 mime
       const match = result.match(/^data:([^;]+);base64,(.+)$/);
       if (match) {
         attachedImage.set({
@@ -130,51 +139,18 @@ export function renderComposer(): HTMLElement {
     reader.readAsDataURL(file);
   }
 
-  function doSend() {
+  async function doSend() {
     const msg = text().trim();
     const hasImg = Boolean(attachedImage());
     if ((!msg && !hasImg) || isStreaming()) return;
 
-    // 本地拦截部分斜杠命令
-    if (msg === "/diff") {
-      setDeckTab("diffs");
-      clearInput();
-      return;
-    }
-    if (msg === "/term") {
-      setDeckTab("terminal");
-      clearInput();
-      return;
-    }
-    if (msg === "/jobs") {
-      setDeckTab("jobs");
-      clearInput();
-      return;
-    }
-    if (msg === "/files") {
-      setDeckTab("files");
-      clearInput();
-      return;
-    }
-    if (msg === "/clear") {
-      createSession();
-      clearInput();
-      return;
-    }
-    if (msg === "/yolo") {
-      switchMode("yolo");
-      clearInput();
-      return;
-    }
-    if (msg === "/ask") {
-      switchMode("ask");
-      clearInput();
-      return;
-    }
-    if (msg === "/plan") {
-      switchMode("plan");
-      clearInput();
-      return;
+    // 斜杠命令拦截执行
+    if (msg.startsWith("/")) {
+      const handled = await executeSlash(msg);
+      if (handled) {
+        clearInput();
+        return;
+      }
     }
 
     sendMessage(msg);
@@ -183,10 +159,12 @@ export function renderComposer(): HTMLElement {
 
   function clearInput() {
     text.set("");
+    historyIndex.set(-1);
     if (textareaEl) {
       textareaEl.value = "";
       autoResize(textareaEl);
     }
+    setDraft(activeSession(), "");
     showSlashMenu.set(false);
     showFileMenu.set(false);
   }
@@ -196,10 +174,13 @@ export function renderComposer(): HTMLElement {
       e.preventDefault();
       if (showSlashMenu()) {
         const q = text().toLowerCase();
-        const filtered = SLASH_COMMANDS.filter((c) => c.cmd.toLowerCase().startsWith(q));
+        const filtered = slashCommands().filter((c) =>
+          c.cmd.toLowerCase().startsWith(q) || c.desc.toLowerCase().includes(q.slice(1))
+        );
         if (filtered[menuIndex()]) {
-          text.set(filtered[menuIndex()].cmd + " ");
-          if (textareaEl) textareaEl.value = filtered[menuIndex()].cmd + " ";
+          const chosen = filtered[menuIndex()].cmd;
+          text.set(chosen + " ");
+          if (textareaEl) textareaEl.value = chosen + " ";
           showSlashMenu.set(false);
           return;
         }
@@ -224,11 +205,49 @@ export function renderComposer(): HTMLElement {
       if (showSlashMenu() || showFileMenu()) {
         e.preventDefault();
         menuIndex.update((i) => i + 1);
+      } else if (!text() || (textareaEl && textareaEl.selectionStart === text().length)) {
+        // 提示词历史向下
+        const hist = promptHistory();
+        if (historyIndex() !== -1) {
+          e.preventDefault();
+          const nextIdx = historyIndex() + 1;
+          if (nextIdx >= hist.length) {
+            historyIndex.set(-1);
+            text.set("");
+            if (textareaEl) {
+              textareaEl.value = "";
+              autoResize(textareaEl);
+            }
+          } else {
+            historyIndex.set(nextIdx);
+            const val = hist[nextIdx];
+            text.set(val);
+            if (textareaEl) {
+              textareaEl.value = val;
+              autoResize(textareaEl);
+            }
+          }
+        }
       }
     } else if (e.key === "ArrowUp") {
       if (showSlashMenu() || showFileMenu()) {
         e.preventDefault();
         menuIndex.update((i) => Math.max(0, i - 1));
+      } else if (!text() || (textareaEl && textareaEl.selectionStart === 0)) {
+        // 提示词历史向上
+        const hist = promptHistory();
+        if (hist.length > 0) {
+          e.preventDefault();
+          const nextIdx =
+            historyIndex() === -1 ? hist.length - 1 : Math.max(0, historyIndex() - 1);
+          historyIndex.set(nextIdx);
+          const val = hist[nextIdx];
+          text.set(val);
+          if (textareaEl) {
+            textareaEl.value = val;
+            autoResize(textareaEl);
+          }
+        }
       }
     } else if (e.key === "Escape") {
       if (showSlashMenu() || showFileMenu()) {
@@ -244,7 +263,52 @@ export function renderComposer(): HTMLElement {
 
   return tags.div(
     { class: "composer-wrap" },
-    // 图片附加预览条
+    // 1. 后台活动流动态指示条
+    () => {
+      const active = activityList();
+      if (active.length === 0) return null;
+      const first = active[0];
+
+      return tags.div(
+        { class: "composer-live-activity-bar" },
+        tags.span({ class: "activity-live-dot" }),
+        tags.span(
+          { class: "activity-live-text" },
+          () =>
+            `${t("composer.active_task")}: ${first.cmd || first.name} (pid:${first.pid || "bg"}) · ${first.duration ? first.duration + "s" : "running"}`
+        ),
+        tags.button(
+          {
+            class: "activity-kill-btn",
+            title: () => t("composer.kill_task"),
+            onclick: () => first.pid && killActivity(first.pid),
+          },
+          () => t("composer.kill_task")
+        )
+      );
+    },
+
+    // 2. 行内命令预览 Banner (!cmd 与 !!cmd)
+    () => {
+      const val = text();
+      if (val.startsWith("!!") && val.length > 2) {
+        return tags.div(
+          { class: "composer-inline-hint hint-local" },
+          tags.span({ class: "hint-icon" }, "🖥️"),
+          tags.span({}, `${t("composer.hint_local")} ${val.slice(2)}`)
+        );
+      }
+      if (val.startsWith("!") && !val.startsWith("!!") && val.length > 1) {
+        return tags.div(
+          { class: "composer-inline-hint hint-model" },
+          tags.span({ class: "hint-icon" }, "⚡"),
+          tags.span({}, `${t("composer.hint_model")} ${val.slice(1)}`)
+        );
+      }
+      return null;
+    },
+
+    // 3. 图片附加预览条
     () => {
       const img = attachedImage();
       if (!img) return null;
@@ -269,16 +333,18 @@ export function renderComposer(): HTMLElement {
       );
     },
 
-    // 斜杠菜单浮层
+    // 4. 斜杠菜单浮层（全量命令实时补全）
     () => {
       if (!showSlashMenu()) return null;
       const q = text().toLowerCase();
-      const filtered = SLASH_COMMANDS.filter((c) => c.cmd.toLowerCase().startsWith(q));
+      const filtered = slashCommands().filter((c) =>
+        c.cmd.toLowerCase().startsWith(q) || c.desc.toLowerCase().includes(q.slice(1))
+      );
       if (!filtered.length) return null;
 
       return tags.div(
         { class: "popup-menu slash-menu" },
-        filtered.map((item, idx) =>
+        filtered.slice(0, 10).map((item, idx) =>
           tags.div(
             {
               class: () => `menu-item ${menuIndex() === idx ? "is-selected" : ""}`,
@@ -291,7 +357,7 @@ export function renderComposer(): HTMLElement {
                 showSlashMenu.set(false);
               },
             },
-            tags.span({ class: "menu-icon" }, item.icon ? item.icon(14) : iconSparkle(14)),
+            tags.span({ class: "menu-icon" }, iconSparkle(14)),
             tags.span({ class: "menu-cmd" }, item.cmd),
             tags.span({ class: "menu-desc" }, item.desc)
           )
@@ -299,7 +365,7 @@ export function renderComposer(): HTMLElement {
       );
     },
 
-    // @文件菜单浮层
+    // 5. @文件菜单浮层
     () => {
       if (!showFileMenu()) return null;
       const atIdx = text().lastIndexOf("@");
@@ -317,17 +383,18 @@ export function renderComposer(): HTMLElement {
               class: () => `menu-item ${menuIndex() === idx ? "is-selected" : ""}`,
               onclick: () => {
                 const before = text().slice(0, atIdx);
-                const nextVal = `${before}@${f.path} `;
-                text.set(nextVal);
+                const next = `${before}@${f.path} `;
+                text.set(next);
                 if (textareaEl) {
-                  textareaEl.value = nextVal;
+                  textareaEl.value = next;
                   textareaEl.focus();
                 }
                 showFileMenu.set(false);
               },
             },
-            tags.span({ class: "file-icon" }, iconFile(13)),
-            tags.span({ class: "file-path" }, f.path)
+            tags.span({ class: "file-icon" }, iconFile(14)),
+            tags.span({ class: "file-cmd" }, `@${f.name}`),
+            tags.span({ class: "file-desc" }, f.path)
           )
         )
       );
@@ -354,8 +421,9 @@ export function renderComposer(): HTMLElement {
     tags.div(
       { class: "composer-box" },
       tags.textarea({
+        id: "inp",
         class: "composer-input",
-        placeholder: "Ask piz, paste screenshots (Ctrl+V), or type '/' for commands...",
+        placeholder: () => t("composer.placeholder"),
         rows: "1",
         value: () => text(),
         oninput: handleInput,
@@ -374,7 +442,7 @@ export function renderComposer(): HTMLElement {
           tags.button(
             {
               class: "bar-tag-btn",
-              title: "Attach image (or Ctrl+V to paste)",
+              title: () => t("composer.attach_img"),
               onclick: () => fileInputEl && fileInputEl.click(),
             },
             iconImage(13)
@@ -382,7 +450,7 @@ export function renderComposer(): HTMLElement {
           tags.button(
             {
               class: "bar-tag-btn",
-              title: "Trigger Slash Commands",
+              title: () => t("composer.slash_menu"),
               onclick: () => {
                 text.set("/");
                 if (textareaEl) {
@@ -397,7 +465,7 @@ export function renderComposer(): HTMLElement {
           tags.button(
             {
               class: "bar-tag-btn",
-              title: "Reference File",
+              title: () => t("composer.file_mention"),
               onclick: () => {
                 text.update((v) => v + "@");
                 if (textareaEl) {
@@ -414,14 +482,36 @@ export function renderComposer(): HTMLElement {
             () => {
               const curMode = mode();
               if (curMode === "yolo") {
-                return tags.span({ class: "mode-badge mode-yolo" }, iconBolt(12), "YOLO");
+                return tags.span({ class: "mode-badge mode-yolo" }, iconBolt(12), () => t("mode.yolo"));
               }
               if (curMode === "ask") {
-                return tags.span({ class: "mode-badge mode-ask" }, iconQuestion(12), "ASK");
+                return tags.span({ class: "mode-badge mode-ask" }, iconQuestion(12), () => t("mode.ask"));
               }
-              return tags.span({ class: "mode-badge mode-plan" }, iconCompass(12), "PLAN");
+              return tags.span({ class: "mode-badge mode-plan" }, iconShield(12), () => t("mode.read_only"));
             }
-          )
+          ),
+          // 沙箱药丸（点击轮切：off -> workspace -> strict）
+          () => {
+            const cur = sandboxMode();
+            return tags.button(
+              {
+                class: `sandbox-pill sb-${cur}`,
+                title: `Sandbox Mode: ${cur}. Click to toggle.`,
+                onclick: () => {
+                  const next = cur === "off" ? "workspace" : cur === "workspace" ? "strict" : "off";
+                  setSandboxMode(next);
+                },
+              },
+              tags.span({ class: "sb-dot" }),
+              tags.span({}, () =>
+                cur === "strict"
+                  ? t("composer.sb_strict")
+                  : cur === "workspace"
+                  ? t("composer.sb_workspace")
+                  : t("composer.sb_off")
+              )
+            );
+          }
         ),
         tags.div(
           { class: "composer-bar-right" },
@@ -434,7 +524,7 @@ export function renderComposer(): HTMLElement {
                   onclick: interrupt,
                 },
                 iconStop(12),
-                tags.span({}, "Stop")
+                tags.span({}, () => t("composer.stop"))
               );
             }
             return tags.button(
@@ -444,7 +534,7 @@ export function renderComposer(): HTMLElement {
                 onclick: doSend,
               },
               iconSend(13),
-              tags.span({}, "Send")
+              tags.span({}, () => t("composer.send"))
             );
           }
         )
