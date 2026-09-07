@@ -10,12 +10,12 @@
 <p align="center">
   <img src="docs/images/tui.png" width="720" alt="piz 交互模式：会话卡、对话、boxed composer">
 </p>
-<p align="center"><sub>交互模式。开场是欢迎卡，用户消息亮竖线 <code>▎</code>、工具 <code>▸</code> 折叠行，输入在底栏框。空框按 <code>?</code> 看快捷键。</sub></p>
+<p align="center"><sub>交互模式。开场是欢迎卡，用户消息亮竖线 <code>▎</code>、工具可展开成盒，输入在底栏框。空框按 <code>?</code> 看快捷键。</sub></p>
 
 <p align="center">
-  <img src="docs/images/web.png" width="720" alt="piz Web UI：项目侧栏、对话、工具卡、斜杠命令">
+  <img src="docs/images/web.png" width="720" alt="piz Web UI：项目树侧栏、对话、输入栏模型与模式">
 </p>
-<p align="center"><sub><code>piz web</code> 本地界面。侧栏按项目列会话，<code>/</code> 出命令；审批、缓存命中、上下文环在输入栏。</sub></p>
+<p align="center"><sub><code>piz web</code> 本地界面。侧栏按项目树列会话，输入栏切模型、YOLO 档和沙箱；<code>/</code> 出命令，右侧可开工作台看 diff / 终端 / 文件。</sub></p>
 
 ## 占用（同机实测，可复跑）
 
@@ -69,7 +69,7 @@ piz web                   # 本地 Web UI
 piz doctor                # 体检:配置、沙箱、联网、git
 ```
 
-权限三档:`-r` 只读(一个工具都不发)、默认逐项问、`-x` 全权。`--sandbox workspace` 把 bash 关进 bwrap。`--plugin lsp` 本次开启可选插件;持久写 `~/.piz/settings.json` 的 `plugins` 数组。
+权限三档:默认全权(`-x`)、`--ask` 逐项问、`-r` 只读。`--sandbox workspace` 把 bash 关进 bwrap。`--plugin lsp` 本次开启可选插件;持久写 `~/.piz/settings.json` 的 `plugins` 数组。
 
 ## 生态与扩展
 
