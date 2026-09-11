@@ -974,6 +974,17 @@ function getInitialLocale() {
     "chat.expand_output": "展开全部输出 ({lines} 行)",
     "chat.collapse_output": "收起输出",
     "chat.view_artifact": "查看产物检视",
+    "chat.checkpoint_badge": "存档点",
+    "chat.thinking_title": "思考历程 ({sec}s)",
+    "chat.step_error": "错误：",
+    "chat.edit_resend": "编辑并重新填入输入框",
+    "chat.edit": "编辑",
+    "chat.regenerate_short": "重新生成",
+    "chat.copy_text": "复制文本",
+    "chat.copy_reply": "复制回答",
+    "chat.regenerate": "重新生成回答",
+    "chat.artifact_inspect": "检视产物内容",
+    "chat.send_terminal": "发送到终端",
 
     "composer.placeholder": "向 piz 提问、粘贴附件 (Ctrl+V)、'/' 指令、'@' 选文件、'!cmd' 执行终端...",
     "composer.attach_file": "添加附件",
@@ -1198,6 +1209,17 @@ function getInitialLocale() {
     "chat.expand_output": "Expand full output ({lines} lines)",
     "chat.collapse_output": "Collapse output",
     "chat.view_artifact": "View Artifact",
+    "chat.checkpoint_badge": "CHECKPOINT",
+    "chat.thinking_title": "Thinking Process ({sec}s)",
+    "chat.step_error": "Error:",
+    "chat.edit_resend": "Edit and repopulate to input",
+    "chat.edit": "Edit",
+    "chat.regenerate_short": "Regenerate",
+    "chat.copy_text": "Copy text",
+    "chat.copy_reply": "Copy reply",
+    "chat.regenerate": "Regenerate answer",
+    "chat.artifact_inspect": "Inspect stored artifact contents",
+    "chat.send_terminal": "Send to Terminal",
 
     // Composer
     "composer.placeholder": "Ask piz, paste attachments (Ctrl+V), type '/' for commands, '@' for files, '!cmd' for shell...",
@@ -4293,7 +4315,7 @@ function renderCheckpointRow(turn) {
     { class: "checkpoint-row", id: turn.id },
     _dom.tags.div({ class: "checkpoint-icon" }, _icons.iconCompact.call(void 0, 14)),
     _dom.tags.span({ class: "checkpoint-text" }, () => turn.content || _store.t.call(void 0, "chat.checkpoint")),
-    _dom.tags.span({ class: "checkpoint-badge" }, "CHECKPOINT")
+    _dom.tags.span({ class: "checkpoint-badge" }, () => _store.t.call(void 0, "chat.checkpoint_badge"))
   );
 }
 
@@ -4383,7 +4405,7 @@ function renderUserTurn(turn) {
           _dom.tags.button(
             {
               class: "turn-action-btn",
-              title: "Edit and repopulate to input",
+              title: () => _store.t.call(void 0, "chat.edit_resend"),
               onclick: () => {
                 if (typeof (window ).__pizFillComposer === "function") {
                   (window ).__pizFillComposer(turn.content);
@@ -4391,12 +4413,12 @@ function renderUserTurn(turn) {
               },
             },
             _icons.iconEdit.call(void 0, 12),
-            _dom.tags.span({}, "Edit")
+            _dom.tags.span({}, () => _store.t.call(void 0, "chat.edit"))
           ),
           _dom.tags.button(
             {
               class: "turn-action-btn",
-              title: "Copy text",
+              title: () => _store.t.call(void 0, "chat.copy_text"),
               onclick: () => {
                 navigator.clipboard.writeText(turn.content);
                 copied.set(true);
@@ -4404,7 +4426,7 @@ function renderUserTurn(turn) {
               },
             },
             () => (copied() ? _icons.iconCheck.call(void 0, 12) : _icons.iconCopy.call(void 0, 12)),
-            _dom.tags.span({}, () => (copied() ? "Copied" : "Copy"))
+            _dom.tags.span({}, () => (copied() ? _store.t.call(void 0, "chat.copied") : _store.t.call(void 0, "chat.copy")))
           )
         )
       )
@@ -4466,7 +4488,7 @@ function renderAssistantTurn(turn) {
               _dom.tags.span({ class: "thought-chevron" }, () =>
                 thoughtCollapsed() ? _icons.iconChevronRight.call(void 0, 12) : _icons.iconChevronDown.call(void 0, 12)
               ),
-              _dom.tags.span({ class: "thought-title" }, `Thinking Process (${durationSec}s)`),
+              _dom.tags.span({ class: "thought-title" }, () => _store.t.call(void 0, "chat.thinking_title", { sec: durationSec })),
               turn.isStreaming
                 ? _dom.tags.span({ class: "thought-live-badge" }, "LIVE")
                 : null
@@ -4516,7 +4538,7 @@ function renderAssistantTurn(turn) {
             _dom.tags.button(
               {
                 class: "turn-action-btn",
-                title: "Copy reply",
+                title: () => _store.t.call(void 0, "chat.copy_reply"),
                 onclick: () => {
                   navigator.clipboard.writeText(turn.content || "");
                   copied.set(true);
@@ -4524,16 +4546,16 @@ function renderAssistantTurn(turn) {
                 },
               },
               () => (copied() ? _icons.iconCheck.call(void 0, 12) : _icons.iconCopy.call(void 0, 12)),
-              _dom.tags.span({}, () => (copied() ? "Copied" : "Copy"))
+              _dom.tags.span({}, () => (copied() ? _store.t.call(void 0, "chat.copied") : _store.t.call(void 0, "chat.copy")))
             ),
             _dom.tags.button(
               {
                 class: "turn-action-btn",
-                title: "Regenerate answer",
+                title: () => _store.t.call(void 0, "chat.regenerate"),
                 onclick: () => _store.regenerateLastTurn.call(void 0, ),
               },
               _icons.iconRefresh.call(void 0, 12),
-              _dom.tags.span({}, "Regenerate")
+              _dom.tags.span({}, () => _store.t.call(void 0, "chat.regenerate_short"))
             )
           );
         }
@@ -4605,11 +4627,11 @@ function renderStepCard(step) {
               _dom.tags.button(
                 {
                   class: "step-artifact-btn",
-                  title: "Inspect stored artifact contents",
+                  title: () => _store.t.call(void 0, "chat.artifact_inspect"),
                   onclick: () => _store.viewArtifact.call(void 0, artMatch[1]),
                 },
                 _icons.iconDownload.call(void 0, 12),
-                _dom.tags.span({}, "View Stored Artifact")
+                _dom.tags.span({}, () => _store.t.call(void 0, "chat.view_artifact"))
               )
             )
           : null,
@@ -4632,7 +4654,7 @@ function renderStepCard(step) {
         step.error
           ? _dom.tags.div(
               { class: "step-detail-row step-error" },
-              _dom.tags.div({ class: "step-detail-lbl" }, "Error:"),
+              _dom.tags.div({ class: "step-detail-lbl" }, () => _store.t.call(void 0, "chat.step_error")),
               _dom.tags.pre({ class: "step-detail-pre" }, step.error)
             )
           : null,
@@ -4651,7 +4673,7 @@ function renderStepCard(step) {
               },
             },
             () => (stepCopied() ? _icons.iconCheck.call(void 0, 12) : _icons.iconCopy.call(void 0, 12)),
-            _dom.tags.span({}, () => (stepCopied() ? "Copied" : "Copy"))
+            _dom.tags.span({}, () => (stepCopied() ? _store.t.call(void 0, "chat.copied") : _store.t.call(void 0, "chat.copy")))
           ),
           _dom.tags.button(
             {
@@ -4665,7 +4687,7 @@ function renderStepCard(step) {
               },
             },
             _icons.iconTerminal.call(void 0, 12),
-            _dom.tags.span({}, "Send to Terminal")
+            _dom.tags.span({}, () => _store.t.call(void 0, "chat.send_terminal"))
           )
         )
       );

@@ -103,7 +103,7 @@ function renderCheckpointRow(turn: Turn): HTMLElement {
     { class: "checkpoint-row", id: turn.id },
     tags.div({ class: "checkpoint-icon" }, iconCompact(14)),
     tags.span({ class: "checkpoint-text" }, () => turn.content || t("chat.checkpoint")),
-    tags.span({ class: "checkpoint-badge" }, "CHECKPOINT")
+    tags.span({ class: "checkpoint-badge" }, () => t("chat.checkpoint_badge"))
   );
 }
 
@@ -193,7 +193,7 @@ function renderUserTurn(turn: Turn): HTMLElement {
           tags.button(
             {
               class: "turn-action-btn",
-              title: "Edit and repopulate to input",
+              title: () => t("chat.edit_resend"),
               onclick: () => {
                 if (typeof (window as any).__pizFillComposer === "function") {
                   (window as any).__pizFillComposer(turn.content);
@@ -201,12 +201,12 @@ function renderUserTurn(turn: Turn): HTMLElement {
               },
             },
             iconEdit(12),
-            tags.span({}, "Edit")
+            tags.span({}, () => t("chat.edit"))
           ),
           tags.button(
             {
               class: "turn-action-btn",
-              title: "Copy text",
+              title: () => t("chat.copy_text"),
               onclick: () => {
                 navigator.clipboard.writeText(turn.content);
                 copied.set(true);
@@ -214,7 +214,7 @@ function renderUserTurn(turn: Turn): HTMLElement {
               },
             },
             () => (copied() ? iconCheck(12) : iconCopy(12)),
-            tags.span({}, () => (copied() ? "Copied" : "Copy"))
+            tags.span({}, () => (copied() ? t("chat.copied") : t("chat.copy")))
           )
         )
       )
@@ -276,7 +276,7 @@ function renderAssistantTurn(turn: Turn): HTMLElement {
               tags.span({ class: "thought-chevron" }, () =>
                 thoughtCollapsed() ? iconChevronRight(12) : iconChevronDown(12)
               ),
-              tags.span({ class: "thought-title" }, `Thinking Process (${durationSec}s)`),
+              tags.span({ class: "thought-title" }, () => t("chat.thinking_title", { sec: durationSec })),
               turn.isStreaming
                 ? tags.span({ class: "thought-live-badge" }, "LIVE")
                 : null
@@ -326,7 +326,7 @@ function renderAssistantTurn(turn: Turn): HTMLElement {
             tags.button(
               {
                 class: "turn-action-btn",
-                title: "Copy reply",
+                title: () => t("chat.copy_reply"),
                 onclick: () => {
                   navigator.clipboard.writeText(turn.content || "");
                   copied.set(true);
@@ -334,16 +334,16 @@ function renderAssistantTurn(turn: Turn): HTMLElement {
                 },
               },
               () => (copied() ? iconCheck(12) : iconCopy(12)),
-              tags.span({}, () => (copied() ? "Copied" : "Copy"))
+              tags.span({}, () => (copied() ? t("chat.copied") : t("chat.copy")))
             ),
             tags.button(
               {
                 class: "turn-action-btn",
-                title: "Regenerate answer",
+                title: () => t("chat.regenerate"),
                 onclick: () => regenerateLastTurn(),
               },
               iconRefresh(12),
-              tags.span({}, "Regenerate")
+              tags.span({}, () => t("chat.regenerate_short"))
             )
           );
         }
@@ -415,11 +415,11 @@ function renderStepCard(step: StepItem): HTMLElement {
               tags.button(
                 {
                   class: "step-artifact-btn",
-                  title: "Inspect stored artifact contents",
+                  title: () => t("chat.artifact_inspect"),
                   onclick: () => viewArtifact(artMatch[1]),
                 },
                 iconDownload(12),
-                tags.span({}, "View Stored Artifact")
+                tags.span({}, () => t("chat.view_artifact"))
               )
             )
           : null,
@@ -442,7 +442,7 @@ function renderStepCard(step: StepItem): HTMLElement {
         step.error
           ? tags.div(
               { class: "step-detail-row step-error" },
-              tags.div({ class: "step-detail-lbl" }, "Error:"),
+              tags.div({ class: "step-detail-lbl" }, () => t("chat.step_error")),
               tags.pre({ class: "step-detail-pre" }, step.error)
             )
           : null,
@@ -461,7 +461,7 @@ function renderStepCard(step: StepItem): HTMLElement {
               },
             },
             () => (stepCopied() ? iconCheck(12) : iconCopy(12)),
-            tags.span({}, () => (stepCopied() ? "Copied" : "Copy"))
+            tags.span({}, () => (stepCopied() ? t("chat.copied") : t("chat.copy")))
           ),
           tags.button(
             {
@@ -475,7 +475,7 @@ function renderStepCard(step: StepItem): HTMLElement {
               },
             },
             iconTerminal(12),
-            tags.span({}, "Send to Terminal")
+            tags.span({}, () => t("chat.send_terminal"))
           )
         )
       );
