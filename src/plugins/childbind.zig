@@ -2,7 +2,8 @@
 const std = @import("std");
 
 pub const ChildSetFn = *const fn (u16, ?[]const []const u8) anyerror!u16;
-pub const ToolAllowFn = *const fn (std.mem.Allocator, u16, []const []const u8) anyerror![]const []const u8;
+/// (arena, parent_set, parent_allow, requested_names)
+pub const ToolAllowFn = *const fn (std.mem.Allocator, u16, []const []const u8, []const []const u8) anyerror![]const []const u8;
 
 pub var child_set: ?ChildSetFn = null;
 pub var tool_allow: ?ToolAllowFn = null;
@@ -13,7 +14,24 @@ pub fn resolveSet(parent: u16, want: ?[]const []const u8) !u16 {
     return parent & ~@as(u16, 1 << 12);
 }
 
-pub fn resolveTools(arena: std.mem.Allocator, parent: u16, names: []const []const u8) ![]const []const u8 {
-    if (tool_allow) |f| return f(arena, parent, names);
+pub fn resolveTools(
+    arena: std.mem.Allocator,
+    parent: u16,
+    parent_allow: []const []const u8,
+    names: []const []const u8,
+) ![]const []const u8 {
+    if (tool_allow) |f| return f(arena, parent, parent_allow, names);
+    if (parent_allow.len > 0) {
+        for (names) |n| {
+            var held = false;
+            for (parent_allow) |a| {
+                if (std.mem.eql(u8, a, n)) {
+                    held = true;
+                    break;
+                }
+            }
+            if (!held) return error.ToolNotHeld;
+        }
+    }
     return names;
 }

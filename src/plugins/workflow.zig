@@ -128,10 +128,10 @@ fn acyclic(nodes: []const Node) bool {
     return seen == nodes.len;
 }
 
-fn heldTools(arena: std.mem.Allocator, parent_plugins: u16, names: []const []const u8) []const []const u8 {
+fn heldTools(arena: std.mem.Allocator, parent_plugins: u16, parent_allow: []const []const u8, names: []const []const u8) []const []const u8 {
     var out = std.array_list.Managed([]const u8).init(arena);
     for (names) |n| {
-        _ = childbind.resolveTools(arena, parent_plugins, &.{n}) catch continue;
+        _ = childbind.resolveTools(arena, parent_plugins, parent_allow, &.{n}) catch continue;
         out.append(n) catch continue;
     }
     return out.toOwnedSlice() catch &.{};
@@ -374,7 +374,7 @@ pub fn toolWorkflow(ctx: ?*anyopaque, arena: std.mem.Allocator, args: []const u8
             if (tools == null) {
                 const pref = nodes[i].role.preferredTools();
                 if (pref.len > 0) {
-                    const held = heldTools(arena, self.plugins, pref);
+                    const held = heldTools(arena, self.plugins, self.tool_allow, pref);
                     if (held.len > 0) tools = held;
                 }
             }

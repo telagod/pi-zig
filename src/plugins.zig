@@ -234,7 +234,7 @@ fn ensureDefault() void {
     default_enabled = factorySet();
     default_inited = true;
     childbind.child_set = childSet;
-    childbind.tool_allow = childToolAllow;
+    childbind.tool_allow = childToolAllowEx;
 }
 
 comptime {
@@ -417,15 +417,25 @@ pub fn exposesTool(set: EnabledSet, allow: []const []const u8, name: []const u8)
     return findToolIn(set, name) != null;
 }
 
-/// 校验 `tools` 白名单:每项已知,且父集能用。返回 arena 上的拷贝。
-pub fn childToolAllow(arena: std.mem.Allocator, parent: EnabledSet, names: []const []const u8) ![]const []const u8 {
+/// 校验 `tools` 白名单:每项已知,且父当前能用(启用集 ∩ 父白名单)。返回 arena 上的拷贝。
+pub fn childToolAllowEx(
+    arena: std.mem.Allocator,
+    parent: EnabledSet,
+    parent_allow: []const []const u8,
+    names: []const []const u8,
+) ![]const []const u8 {
     for (names) |n| {
         if (!knownToolName(n)) return error.UnknownTool;
-        if (!parentHoldsTool(parent, n)) return error.ToolNotHeld;
+        if (!exposesTool(parent, parent_allow, n)) return error.ToolNotHeld;
     }
     const out = try arena.alloc([]const u8, names.len);
     for (names, out) |n, *d| d.* = try arena.dupe(u8, n);
     return out;
+}
+
+/// 无父白名单时的校验(测试与未收紧的顶层委派)。
+pub fn childToolAllow(arena: std.mem.Allocator, parent: EnabledSet, names: []const []const u8) ![]const []const u8 {
+    return childToolAllowEx(arena, parent, &.{}, names);
 }
 
 /// 该插件在给定启用集下是否可用。
@@ -829,6 +839,11 @@ test "optional plugins are gated per agent, not process-wide" {
     try t.expect(!exposesTool(child_default, allow, "write"));
     try t.expectError(error.UnknownTool, childToolAllow(a, parent_full, &.{"nope"}));
     try t.expectError(error.ToolNotHeld, childToolAllow(a, bare, &.{"lsp"}));
+    // 父已有 tools[] 白名单时,孩子不能凭 EnabledSet 再要回 write/bash
+    const nested_allow = try childToolAllowEx(a, parent_full, &.{ "read", "task" }, &.{ "read", "task" });
+    try t.expectEqual(@as(usize, 2), nested_allow.len);
+    try t.expectError(error.ToolNotHeld, childToolAllowEx(a, parent_full, &.{ "read", "task" }, &.{"write"}));
+    try t.expectError(error.ToolNotHeld, childToolAllowEx(a, parent_full, &.{ "read", "task" }, &.{"bash"}));
 
     var defs_allow = std.array_list.Managed(aimod.ToolDef).init(a);
     try appendToolDefsFiltered(child_default, allow, &defs_allow);

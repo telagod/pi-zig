@@ -464,14 +464,14 @@ pub fn toolTask(ctx: ?*anyopaque, arena: std.mem.Allocator, args: []const u8) an
                 },
                 .is_error = true,
             };
-            const raw_tools = if (spec.tools) |names| childbind.resolveTools(sa.allocator(), self.plugins, names) catch |e| return .{
+            const raw_tools = if (spec.tools) |names| childbind.resolveTools(sa.allocator(), self.plugins, self.tool_allow, names) catch |e| return .{
                 .content = switch (e) {
                     error.UnknownTool => "error: unknown tool name in tools[]",
                     error.ToolNotHeld => "error: tools[] can only keep tools you already have",
                     else => "error: cannot resolve child tools",
                 },
                 .is_error = true,
-            } else &.{};
+            } else self.tool_allow;
             slot.* = .{
                 .desc = spec.desc,
                 .arena = sa,
@@ -518,13 +518,26 @@ pub fn toolTask(ctx: ?*anyopaque, arena: std.mem.Allocator, args: []const u8) an
         }
     }
 
-    try runTasks(slots, arena);
+    try runTasks(slots, arena, depth > 0);
     return formatTaskResults(arena, slots);
 }
 
-fn runTasks(slots: []TaskSlot, arena: std.mem.Allocator) !void {
+fn runTasks(slots: []TaskSlot, arena: std.mem.Allocator, nested: bool) !void {
     if (slots.len == 1) {
         runTaskSlot(&slots[0]);
+        return;
+    }
+    // 嵌套任务若再入全局 8-worker 池,占着 worker 等孩子会饿死。
+    if (nested) {
+        const threads = try arena.alloc(?std.Thread, slots.len);
+        @memset(threads, null);
+        for (slots, threads) |*slot, *th| {
+            th.* = std.Thread.spawn(.{}, runTaskSlot, .{slot}) catch {
+                runTaskSlot(slot);
+                continue;
+            };
+        }
+        for (threads) |th| if (th) |t| t.join();
         return;
     }
     const TaskJob = struct {
@@ -591,13 +604,13 @@ pub fn runSpecs(self: *agentmod.Agent, arena: std.mem.Allocator, specs: []const 
                 else => "error: cannot resolve child plugins",
             },
         };
-        const raw_tools = if (spec.tools) |names| childbind.resolveTools(sa.allocator(), self.plugins, names) catch |e| return .{
+        const raw_tools = if (spec.tools) |names| childbind.resolveTools(sa.allocator(), self.plugins, self.tool_allow, names) catch |e| return .{
             .fail = switch (e) {
                 error.UnknownTool => "error: unknown tool name in tools[]",
                 error.ToolNotHeld => "error: tools[] can only keep tools you already have",
                 else => "error: cannot resolve child tools",
             },
-        } else &.{};
+        } else self.tool_allow;
         slot.* = .{
             .desc = spec.desc,
             .arena = sa,
@@ -612,7 +625,7 @@ pub fn runSpecs(self: *agentmod.Agent, arena: std.mem.Allocator, specs: []const 
             .parent = self,
         };
     }
-    try runTasks(slots, arena);
+    try runTasks(slots, arena, self.depth > 0);
     const out = try arena.alloc(RunOut, slots.len);
     for (slots, out) |s, *o| {
         o.* = .{

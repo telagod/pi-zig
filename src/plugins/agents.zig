@@ -198,14 +198,14 @@ pub fn toolSpawnAgent(ctx: ?*anyopaque, arena: std.mem.Allocator, args: []const 
         },
         .is_error = true,
     };
-    const child_tools = if (want_tools) |names| childbind.resolveTools(arena, self.plugins, names) catch |e| return .{
+    const child_tools = if (want_tools) |names| childbind.resolveTools(arena, self.plugins, self.tool_allow, names) catch |e| return .{
         .content = switch (e) {
             error.UnknownTool => "error: unknown tool name in tools[]",
             error.ToolNotHeld => "error: tools[] can only keep tools you already have",
             else => "error: cannot resolve child tools",
         },
         .is_error = true,
-    } else &.{};
+    } else self.tool_allow;
 
     const reg = registry();
     const gpa = std.heap.page_allocator;
