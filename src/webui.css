@@ -3,6 +3,9 @@
 :root,
 [data-theme],
 [data-color-scheme] {
+  /* 让尚未自绘的原生控件(设置项下拉、滚动条、日期选择等)跟随深色,
+     否则点开会跳出系统白底弹层。 */
+  color-scheme: dark;
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Inter", "Helvetica Neue", sans-serif;
   --font-mono: "JetBrains Mono", "Fira Code", Menlo, Monaco, Consolas, monospace;
 

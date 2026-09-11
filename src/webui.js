@@ -1059,6 +1059,23 @@ function getInitialLocale() {
     "settings.export_json_desc": "包含完整对话轮次与每步工具调用的原始数据",
     "settings.export_html": "导出为单文件独立网页 (.html)",
     "settings.export_html_desc": "自洽排版、支持离线查看与团队分享的完整会话归档",
+    "settings.export_md": "导出为 Markdown (.md)",
+    "settings.export_md_desc": "带代码块与引用的规范 GFM 排版",
+    "settings.export_desc": "把当前会话的对话、思考过程与工具摘要导出为标准格式：",
+    "settings.usage_in": "输入 Token",
+    "settings.usage_out": "输出 Token",
+    "settings.usage_cost": "预估花费",
+    "settings.usage_lines": "账本条目总数",
+    "settings.usage_tail": "最近活动流水",
+    "settings.ctx_used": "{n}% 已占用",
+    "settings.pkg_project": "项目包 ({n})",
+    "settings.pkg_user": "用户全局包 ({n})",
+    "settings.pkg_meta": "{skills} 技能 · {prompts} 提示",
+    "settings.pkg_empty_project": "未安装本地项目包",
+    "settings.pkg_empty_user": "未安装全局包",
+    "modal.perm_desc": "智能体正在请求执行以下操作的授权：",
+    "modal.perm_target": "目标：{path}",
+    "modal.auth_placeholder": "输入 Token...",
     "shortcuts.title": "键盘快捷键速查",
     "shortcuts.palette": "打开命令面板与会话切换器",
     "shortcuts.sidebar": "展开或收起工作区会话栏",
@@ -1267,6 +1284,23 @@ function getInitialLocale() {
     "settings.export_json_desc": "Structured turns and step items for programmatic use",
     "settings.export_html": "Export as Standalone HTML (.html)",
     "settings.export_html_desc": "Self-contained webpage ready for sharing and offline reading",
+    "settings.export_md": "Export as Markdown (.md)",
+    "settings.export_md_desc": "Clean formatted GFM with code blocks and quotes",
+    "settings.export_desc": "Export current session transcript, thought processes, and tool summaries into standard formats:",
+    "settings.usage_in": "Input Tokens",
+    "settings.usage_out": "Output Tokens",
+    "settings.usage_cost": "Estimated Cost",
+    "settings.usage_lines": "Total Ledger Entries",
+    "settings.usage_tail": "Recent Activity Tail",
+    "settings.ctx_used": "{n}% utilized",
+    "settings.pkg_project": "Project Packages ({n})",
+    "settings.pkg_user": "User Global Packages ({n})",
+    "settings.pkg_meta": "{skills} skills · {prompts} prompts",
+    "settings.pkg_empty_project": "No local project packages installed",
+    "settings.pkg_empty_user": "No global packages installed",
+    "modal.perm_desc": "The agent is requesting authorization for the following action:",
+    "modal.perm_target": "Target: {path}",
+    "modal.auth_placeholder": "Enter token...",
     "shortcuts.title": "Keyboard Shortcuts",
     "shortcuts.palette": "Open command palette and session switcher",
     "shortcuts.sidebar": "Toggle workspace session drawer",
@@ -6115,19 +6149,19 @@ var _icons = require('./icons');
           _dom.tags.div(
             { class: "modal-hdr" },
             _dom.tags.span({ class: "perm-icon" }, _icons.iconShield.call(void 0, 18)),
-            _dom.tags.h3({ class: "modal-title" }, "Permission Approval Required")
+            _dom.tags.h3({ class: "modal-title" }, () => _store.t.call(void 0, "modal.perm_title"))
           ),
           _dom.tags.div(
             { class: "modal-body" },
             _dom.tags.p(
               { class: "perm-desc" },
-              req.desc || "The agent is requesting authorization for the following action:"
+              req.desc || _store.t.call(void 0, "modal.perm_desc")
             ),
             req.command
               ? _dom.tags.pre({ class: "perm-command" }, req.command)
               : null,
             req.path
-              ? _dom.tags.div({ class: "perm-path" }, `Target: ${req.path}`)
+              ? _dom.tags.div({ class: "perm-path" }, () => _store.t.call(void 0, "modal.perm_target", { path: req.path }))
               : null
           ),
           _dom.tags.div(
@@ -6138,7 +6172,7 @@ var _icons = require('./icons');
                 onclick: () => _store.approve.call(void 0, req.id, false),
               },
               _icons.iconClose.call(void 0, 13),
-              _dom.tags.span({}, "Deny")
+              _dom.tags.span({}, () => _store.t.call(void 0, "modal.perm_deny"))
             ),
             _dom.tags.button(
               {
@@ -6146,7 +6180,7 @@ var _icons = require('./icons');
                 onclick: () => _store.approve.call(void 0, req.id, true),
               },
               _icons.iconCheck.call(void 0, 13),
-              _dom.tags.span({}, "Allow Execution")
+              _dom.tags.span({}, () => _store.t.call(void 0, "modal.perm_allow"))
             )
           )
         );
@@ -6300,13 +6334,13 @@ var _icons = require('./icons');
           _dom.tags.div(
             { class: "modal-hdr" },
             _icons.iconKey.call(void 0, 18, "auth-icon"),
-            _dom.tags.h3({ class: "modal-title" }, "Authentication Required")
+            _dom.tags.h3({ class: "modal-title" }, () => _store.t.call(void 0, "modal.auth_title"))
           ),
-          _dom.tags.p({ class: "auth-desc" }, "Please enter your server token to access piz."),
+          _dom.tags.p({ class: "auth-desc" }, () => _store.t.call(void 0, "modal.auth_desc")),
           _dom.tags.input({
             type: "password",
             class: "auth-token-input",
-            placeholder: "Enter token...",
+            placeholder: () => _store.t.call(void 0, "modal.auth_placeholder"),
             value: () => inputTok(),
             oninput: (e) => inputTok.set((e.target ).value),
           }),
@@ -6324,7 +6358,7 @@ var _icons = require('./icons');
                   }
                 },
               },
-              "Connect"
+              () => _store.t.call(void 0, "modal.auth_connect")
             )
           )
         );
@@ -6605,7 +6639,7 @@ var _icons = require('./icons');
                         _dom.tags.label({}, () => _store.t.call(void 0, "settings.ctx_window")),
                         _dom.tags.div({ class: "settings-row-desc" }, () => _store.t.call(void 0, "settings.ctx_window_desc"))
                       ),
-                      _dom.tags.div({ class: "settings-stat" }, `${_store.pct.call(void 0, )}% utilized`)
+                      _dom.tags.div({ class: "settings-stat" }, () => _store.t.call(void 0, "settings.ctx_used", { n: _store.pct.call(void 0, ) }))
                     )
                   );
 
@@ -6645,29 +6679,29 @@ var _icons = require('./icons');
                       { class: "usage-grid" },
                       _dom.tags.div(
                         { class: "usage-metric-card" },
-                        _dom.tags.div({ class: "metric-title" }, "Input Tokens"),
+                        _dom.tags.div({ class: "metric-title" }, () => _store.t.call(void 0, "settings.usage_in")),
                         _dom.tags.div({ class: "metric-val" }, us.in.toLocaleString())
                       ),
                       _dom.tags.div(
                         { class: "usage-metric-card" },
-                        _dom.tags.div({ class: "metric-title" }, "Output Tokens"),
+                        _dom.tags.div({ class: "metric-title" }, () => _store.t.call(void 0, "settings.usage_out")),
                         _dom.tags.div({ class: "metric-val" }, us.out.toLocaleString())
                       ),
                       _dom.tags.div(
                         { class: "usage-metric-card" },
-                        _dom.tags.div({ class: "metric-title" }, "Estimated Cost"),
+                        _dom.tags.div({ class: "metric-title" }, () => _store.t.call(void 0, "settings.usage_cost")),
                         _dom.tags.div({ class: "metric-val" }, `$${us.usd.toFixed(4)}`)
                       ),
                       _dom.tags.div(
                         { class: "usage-metric-card" },
-                        _dom.tags.div({ class: "metric-title" }, "Total Ledger Entries"),
+                        _dom.tags.div({ class: "metric-title" }, () => _store.t.call(void 0, "settings.usage_lines")),
                         _dom.tags.div({ class: "metric-val" }, String(us.lines))
                       )
                     ),
                     us.tail
                       ? _dom.tags.div(
                           { class: "usage-tail-box" },
-                          _dom.tags.div({ class: "tail-title" }, "Recent Activity Tail"),
+                          _dom.tags.div({ class: "tail-title" }, () => _store.t.call(void 0, "settings.usage_tail")),
                           _dom.tags.pre({ class: "tail-pre" }, us.tail)
                         )
                       : null
@@ -6677,32 +6711,32 @@ var _icons = require('./icons');
                   const pkgs = _store.packagesList.call(void 0, );
                   return _dom.tags.div(
                     { class: "settings-pane" },
-                    _dom.tags.div({ class: "pkg-section-title" }, `Project Packages (${pkgs.project.length})`),
+                    _dom.tags.div({ class: "pkg-section-title" }, () => _store.t.call(void 0, "settings.pkg_project", { n: pkgs.project.length })),
                     pkgs.project.length > 0
                       ? pkgs.project.map((p) =>
                           _dom.tags.div(
                             { class: "pkg-item" },
                             _dom.tags.span({ class: "pkg-name" }, p.name),
-                            _dom.tags.span({ class: "pkg-meta" }, `${p.skills || 0} skills · ${p.prompts || 0} prompts`)
+                            _dom.tags.span({ class: "pkg-meta" }, () => _store.t.call(void 0, "settings.pkg_meta", { skills: p.skills || 0, prompts: p.prompts || 0 }))
                           )
                         )
-                      : _dom.tags.div({ class: "settings-empty" }, "No local project packages installed"),
-                    _dom.tags.div({ class: "pkg-section-title", style: "margin-top:16px;" }, `User Global Packages (${pkgs.user.length})`),
+                      : _dom.tags.div({ class: "settings-empty" }, () => _store.t.call(void 0, "settings.pkg_empty_project")),
+                    _dom.tags.div({ class: "pkg-section-title", style: "margin-top:16px;" }, () => _store.t.call(void 0, "settings.pkg_user", { n: pkgs.user.length })),
                     pkgs.user.length > 0
                       ? pkgs.user.map((p) =>
                           _dom.tags.div(
                             { class: "pkg-item" },
                             _dom.tags.span({ class: "pkg-name" }, p.name),
-                            _dom.tags.span({ class: "pkg-meta" }, `${p.skills || 0} skills · ${p.prompts || 0} prompts`)
+                            _dom.tags.span({ class: "pkg-meta" }, () => _store.t.call(void 0, "settings.pkg_meta", { skills: p.skills || 0, prompts: p.prompts || 0 }))
                           )
                         )
-                      : _dom.tags.div({ class: "settings-empty" }, "No global packages installed")
+                      : _dom.tags.div({ class: "settings-empty" }, () => _store.t.call(void 0, "settings.pkg_empty_user"))
                   );
 
                 case "export":
                   return _dom.tags.div(
                     { class: "settings-pane" },
-                    _dom.tags.p({ class: "settings-desc" }, "Export current session transcript, thought processes, and tool summaries into standard formats:"),
+                    _dom.tags.p({ class: "settings-desc" }, () => _store.t.call(void 0, "settings.export_desc")),
                     _dom.tags.div(
                       { class: "export-card-group" },
                       _dom.tags.button(
@@ -6713,8 +6747,8 @@ var _icons = require('./icons');
                         _icons.iconDownload.call(void 0, 16),
                         _dom.tags.div(
                           { class: "export-card-text" },
-                          _dom.tags.div({ class: "card-title" }, "Export as Markdown (.md)"),
-                          _dom.tags.div({ class: "card-desc" }, "Clean formatted GFM with code blocks and quotes")
+                          _dom.tags.div({ class: "card-title" }, () => _store.t.call(void 0, "settings.export_md")),
+                          _dom.tags.div({ class: "card-desc" }, () => _store.t.call(void 0, "settings.export_md_desc"))
                         )
                       ),
                       _dom.tags.button(
@@ -6725,8 +6759,8 @@ var _icons = require('./icons');
                         _icons.iconDownload.call(void 0, 16),
                         _dom.tags.div(
                           { class: "export-card-text" },
-                          _dom.tags.div({ class: "card-title" }, "Export as JSON (.json)"),
-                          _dom.tags.div({ class: "card-desc" }, "Structured turns and step items for programmatic use")
+                          _dom.tags.div({ class: "card-title" }, () => _store.t.call(void 0, "settings.export_json")),
+                          _dom.tags.div({ class: "card-desc" }, () => _store.t.call(void 0, "settings.export_json_desc"))
                         )
                       ),
                       _dom.tags.button(
@@ -6737,8 +6771,8 @@ var _icons = require('./icons');
                         _icons.iconDownload.call(void 0, 16),
                         _dom.tags.div(
                           { class: "export-card-text" },
-                          _dom.tags.div({ class: "card-title" }, "Export as Standalone HTML (.html)"),
-                          _dom.tags.div({ class: "card-desc" }, "Self-contained webpage ready for sharing and offline reading")
+                          _dom.tags.div({ class: "card-title" }, () => _store.t.call(void 0, "settings.export_html")),
+                          _dom.tags.div({ class: "card-desc" }, () => _store.t.call(void 0, "settings.export_html_desc"))
                         )
                       )
                     )
@@ -6770,12 +6804,9 @@ var _icons = require('./icons');
           _dom.tags.div(
             { class: "modal-hdr" },
             _icons.iconFolderPlus.call(void 0, 18),
-            _dom.tags.h3({ class: "modal-title" }, "Register Project Workspace")
+            _dom.tags.h3({ class: "modal-title" }, () => _store.t.call(void 0, "modal.ws_add_title"))
           ),
-          _dom.tags.p(
-            { class: "auth-desc" },
-            "Enter absolute local filesystem path of the repository or folder:"
-          ),
+          _dom.tags.p({ class: "auth-desc" }, () => _store.t.call(void 0, "modal.ws_add_desc")),
           _dom.tags.input({
             class: "auth-token-input",
             placeholder: "/path/to/project...",

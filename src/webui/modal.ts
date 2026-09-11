@@ -88,19 +88,19 @@ export function renderModals(): HTMLElement {
           tags.div(
             { class: "modal-hdr" },
             tags.span({ class: "perm-icon" }, iconShield(18)),
-            tags.h3({ class: "modal-title" }, "Permission Approval Required")
+            tags.h3({ class: "modal-title" }, () => t("modal.perm_title"))
           ),
           tags.div(
             { class: "modal-body" },
             tags.p(
               { class: "perm-desc" },
-              req.desc || "The agent is requesting authorization for the following action:"
+              req.desc || t("modal.perm_desc")
             ),
             req.command
               ? tags.pre({ class: "perm-command" }, req.command)
               : null,
             req.path
-              ? tags.div({ class: "perm-path" }, `Target: ${req.path}`)
+              ? tags.div({ class: "perm-path" }, () => t("modal.perm_target", { path: req.path }))
               : null
           ),
           tags.div(
@@ -111,7 +111,7 @@ export function renderModals(): HTMLElement {
                 onclick: () => approve(req.id, false),
               },
               iconClose(13),
-              tags.span({}, "Deny")
+              tags.span({}, () => t("modal.perm_deny"))
             ),
             tags.button(
               {
@@ -119,7 +119,7 @@ export function renderModals(): HTMLElement {
                 onclick: () => approve(req.id, true),
               },
               iconCheck(13),
-              tags.span({}, "Allow Execution")
+              tags.span({}, () => t("modal.perm_allow"))
             )
           )
         );
@@ -273,13 +273,13 @@ export function renderModals(): HTMLElement {
           tags.div(
             { class: "modal-hdr" },
             iconKey(18, "auth-icon"),
-            tags.h3({ class: "modal-title" }, "Authentication Required")
+            tags.h3({ class: "modal-title" }, () => t("modal.auth_title"))
           ),
-          tags.p({ class: "auth-desc" }, "Please enter your server token to access piz."),
+          tags.p({ class: "auth-desc" }, () => t("modal.auth_desc")),
           tags.input({
             type: "password",
             class: "auth-token-input",
-            placeholder: "Enter token...",
+            placeholder: () => t("modal.auth_placeholder"),
             value: () => inputTok(),
             oninput: (e: Event) => inputTok.set((e.target as HTMLInputElement).value),
           }),
@@ -297,7 +297,7 @@ export function renderModals(): HTMLElement {
                   }
                 },
               },
-              "Connect"
+              () => t("modal.auth_connect")
             )
           )
         );
@@ -578,7 +578,7 @@ export function renderModals(): HTMLElement {
                         tags.label({}, () => t("settings.ctx_window")),
                         tags.div({ class: "settings-row-desc" }, () => t("settings.ctx_window_desc"))
                       ),
-                      tags.div({ class: "settings-stat" }, `${pct()}% utilized`)
+                      tags.div({ class: "settings-stat" }, () => t("settings.ctx_used", { n: pct() }))
                     )
                   );
 
@@ -618,29 +618,29 @@ export function renderModals(): HTMLElement {
                       { class: "usage-grid" },
                       tags.div(
                         { class: "usage-metric-card" },
-                        tags.div({ class: "metric-title" }, "Input Tokens"),
+                        tags.div({ class: "metric-title" }, () => t("settings.usage_in")),
                         tags.div({ class: "metric-val" }, us.in.toLocaleString())
                       ),
                       tags.div(
                         { class: "usage-metric-card" },
-                        tags.div({ class: "metric-title" }, "Output Tokens"),
+                        tags.div({ class: "metric-title" }, () => t("settings.usage_out")),
                         tags.div({ class: "metric-val" }, us.out.toLocaleString())
                       ),
                       tags.div(
                         { class: "usage-metric-card" },
-                        tags.div({ class: "metric-title" }, "Estimated Cost"),
+                        tags.div({ class: "metric-title" }, () => t("settings.usage_cost")),
                         tags.div({ class: "metric-val" }, `$${us.usd.toFixed(4)}`)
                       ),
                       tags.div(
                         { class: "usage-metric-card" },
-                        tags.div({ class: "metric-title" }, "Total Ledger Entries"),
+                        tags.div({ class: "metric-title" }, () => t("settings.usage_lines")),
                         tags.div({ class: "metric-val" }, String(us.lines))
                       )
                     ),
                     us.tail
                       ? tags.div(
                           { class: "usage-tail-box" },
-                          tags.div({ class: "tail-title" }, "Recent Activity Tail"),
+                          tags.div({ class: "tail-title" }, () => t("settings.usage_tail")),
                           tags.pre({ class: "tail-pre" }, us.tail)
                         )
                       : null
@@ -650,32 +650,32 @@ export function renderModals(): HTMLElement {
                   const pkgs = packagesList();
                   return tags.div(
                     { class: "settings-pane" },
-                    tags.div({ class: "pkg-section-title" }, `Project Packages (${pkgs.project.length})`),
+                    tags.div({ class: "pkg-section-title" }, () => t("settings.pkg_project", { n: pkgs.project.length })),
                     pkgs.project.length > 0
                       ? pkgs.project.map((p: any) =>
                           tags.div(
                             { class: "pkg-item" },
                             tags.span({ class: "pkg-name" }, p.name),
-                            tags.span({ class: "pkg-meta" }, `${p.skills || 0} skills · ${p.prompts || 0} prompts`)
+                            tags.span({ class: "pkg-meta" }, () => t("settings.pkg_meta", { skills: p.skills || 0, prompts: p.prompts || 0 }))
                           )
                         )
-                      : tags.div({ class: "settings-empty" }, "No local project packages installed"),
-                    tags.div({ class: "pkg-section-title", style: "margin-top:16px;" }, `User Global Packages (${pkgs.user.length})`),
+                      : tags.div({ class: "settings-empty" }, () => t("settings.pkg_empty_project")),
+                    tags.div({ class: "pkg-section-title", style: "margin-top:16px;" }, () => t("settings.pkg_user", { n: pkgs.user.length })),
                     pkgs.user.length > 0
                       ? pkgs.user.map((p: any) =>
                           tags.div(
                             { class: "pkg-item" },
                             tags.span({ class: "pkg-name" }, p.name),
-                            tags.span({ class: "pkg-meta" }, `${p.skills || 0} skills · ${p.prompts || 0} prompts`)
+                            tags.span({ class: "pkg-meta" }, () => t("settings.pkg_meta", { skills: p.skills || 0, prompts: p.prompts || 0 }))
                           )
                         )
-                      : tags.div({ class: "settings-empty" }, "No global packages installed")
+                      : tags.div({ class: "settings-empty" }, () => t("settings.pkg_empty_user"))
                   );
 
                 case "export":
                   return tags.div(
                     { class: "settings-pane" },
-                    tags.p({ class: "settings-desc" }, "Export current session transcript, thought processes, and tool summaries into standard formats:"),
+                    tags.p({ class: "settings-desc" }, () => t("settings.export_desc")),
                     tags.div(
                       { class: "export-card-group" },
                       tags.button(
@@ -686,8 +686,8 @@ export function renderModals(): HTMLElement {
                         iconDownload(16),
                         tags.div(
                           { class: "export-card-text" },
-                          tags.div({ class: "card-title" }, "Export as Markdown (.md)"),
-                          tags.div({ class: "card-desc" }, "Clean formatted GFM with code blocks and quotes")
+                          tags.div({ class: "card-title" }, () => t("settings.export_md")),
+                          tags.div({ class: "card-desc" }, () => t("settings.export_md_desc"))
                         )
                       ),
                       tags.button(
@@ -698,8 +698,8 @@ export function renderModals(): HTMLElement {
                         iconDownload(16),
                         tags.div(
                           { class: "export-card-text" },
-                          tags.div({ class: "card-title" }, "Export as JSON (.json)"),
-                          tags.div({ class: "card-desc" }, "Structured turns and step items for programmatic use")
+                          tags.div({ class: "card-title" }, () => t("settings.export_json")),
+                          tags.div({ class: "card-desc" }, () => t("settings.export_json_desc"))
                         )
                       ),
                       tags.button(
@@ -710,8 +710,8 @@ export function renderModals(): HTMLElement {
                         iconDownload(16),
                         tags.div(
                           { class: "export-card-text" },
-                          tags.div({ class: "card-title" }, "Export as Standalone HTML (.html)"),
-                          tags.div({ class: "card-desc" }, "Self-contained webpage ready for sharing and offline reading")
+                          tags.div({ class: "card-title" }, () => t("settings.export_html")),
+                          tags.div({ class: "card-desc" }, () => t("settings.export_html_desc"))
                         )
                       )
                     )
@@ -743,12 +743,9 @@ export function renderModals(): HTMLElement {
           tags.div(
             { class: "modal-hdr" },
             iconFolderPlus(18),
-            tags.h3({ class: "modal-title" }, "Register Project Workspace")
+            tags.h3({ class: "modal-title" }, () => t("modal.ws_add_title"))
           ),
-          tags.p(
-            { class: "auth-desc" },
-            "Enter absolute local filesystem path of the repository or folder:"
-          ),
+          tags.p({ class: "auth-desc" }, () => t("modal.ws_add_desc")),
           tags.input({
             class: "auth-token-input",
             placeholder: "/path/to/project...",
