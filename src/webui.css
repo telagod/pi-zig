@@ -1791,6 +1791,87 @@ button, input, select, textarea {
   pointer-events: none;
 }
 
+/* 自绘下拉:原生 <select> 的弹层由系统渲染,深色主题下会跳出白底列表,
+   因此模型与模式选择改用 popup-menu 自绘。 */
+.composer-dd-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  min-width: 0;
+  padding: 0 2px;
+  background: transparent;
+  border: none;
+  outline: none;
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  transition: color 0.15s ease;
+}
+
+.composer-dd-trigger:hover {
+  color: var(--text-primary);
+}
+
+.composer-dd-label {
+  min-width: 0;
+  max-width: 152px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-dd-caret {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+}
+
+.popup-menu.composer-dd-menu {
+  left: 0;
+  right: auto;
+  bottom: calc(100% + 8px);
+  min-width: 300px;
+  max-width: min(440px, calc(100vw - 24px));
+  max-height: 300px;
+}
+
+/* 模式胶囊在输入栏右侧,菜单向左展开免得顶出视口 */
+.popup-menu.composer-mode-menu {
+  left: auto;
+  right: 0;
+}
+
+/* 标签与描述都是 flex item,默认会被压缩换行,这里钉住各自的空间 */
+.popup-menu.composer-dd-menu .menu-cmd {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.popup-menu.composer-dd-menu .menu-desc {
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: right;
+}
+
+.popup-menu.composer-dd-menu .menu-item.is-selected {
+  background: var(--accent-primary-subtle);
+}
+
+.popup-menu.composer-dd-menu .menu-item.is-selected .menu-cmd {
+  color: var(--accent-primary);
+}
+
+.composer-dd-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .composer-model-refresh-btn {
   display: inline-flex;
   align-items: center;

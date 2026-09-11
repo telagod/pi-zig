@@ -46,7 +46,32 @@ import {
   iconClose,
   iconSparkles,
   iconRefresh,
+  iconChevronDown,
+  iconCheck,
 } from "./icons";
+
+// 自绘下拉的开合状态。原生 <select> 的弹层由系统渲染,深色主题下会跳出
+// 白底下拉,因此模型/模式选择都改用 popup-menu 自绘。
+const modelMenuOpen = signal<boolean>(false);
+const modeMenuOpen = signal<boolean>(false);
+
+function closeComposerMenus(): boolean {
+  if (!modelMenuOpen() && !modeMenuOpen()) return false;
+  modelMenuOpen.set(false);
+  modeMenuOpen.set(false);
+  return true;
+}
+
+// 点击空白处收起(面板与触发按钮自身 stopPropagation,不会误关)
+document.addEventListener("click", () => {
+  closeComposerMenus();
+});
+
+// Esc 收起:输入框失焦时也要管用,所以挂全局而不是 textarea 的 keydown。
+// 菜单确实开着时截断传播,免得同一次 Esc 又去关弹窗或中断生成。
+document.addEventListener("keydown", (e: KeyboardEvent) => {
+  if (e.key === "Escape" && closeComposerMenus()) e.stopPropagation();
+});
 
 export function renderComposer(): HTMLElement {
   const text = signal<string>("");
@@ -229,6 +254,11 @@ export function renderComposer(): HTMLElement {
   }
 
   function handleKeyDown(e: KeyboardEvent) {
+    if (e.key === "Escape" && (modelMenuOpen() || modeMenuOpen())) {
+      modelMenuOpen.set(false);
+      modeMenuOpen.set(false);
+      return;
+    }
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       if (showSlashMenu()) {
@@ -390,7 +420,7 @@ export function renderComposer(): HTMLElement {
           tags.button(
             {
               class: "attached-img-remove",
-              title: "Remove attachment",
+              title: () => t("composer.remove_attachment"),
               onclick: () => {
                 attachedAttachment.set(null);
                 attachedImage.set(null);
@@ -511,32 +541,53 @@ export function renderComposer(): HTMLElement {
         { class: "composer-bar" },
         tags.div(
           { class: "composer-bar-left" },
-          // 模型选择胶囊
+          // 模型选择胶囊(自绘下拉)
           tags.div(
-            { class: "composer-model-wrap", title: "Active LLM Model" },
-            iconSparkles(12, "composer-model-icon"),
-            tags.select(
+            { class: "composer-model-wrap" },
+            tags.button(
               {
-                class: "composer-model-select",
-                title: "Switch active LLM model",
-                value: () => model(),
-                onchange: (e: Event) => {
-                  const target = e.target as HTMLSelectElement;
-                  if (target.value) switchModel(target.value);
+                class: "composer-dd-trigger",
+                title: () => t("composer.model_select_title"),
+                onclick: (e: MouseEvent) => {
+                  e.stopPropagation();
+                  modeMenuOpen.set(false);
+                  modelMenuOpen.set(!modelMenuOpen());
                 },
               },
-              () => {
-                const list = models();
-                const cur = model();
-                const opts = list.map((m) =>
-                  tags.option({ value: m, selected: m === cur }, m)
-                );
-                if (cur && !list.includes(cur)) {
-                  opts.unshift(tags.option({ value: cur, selected: true }, cur));
-                }
-                return opts;
-              }
+              iconSparkles(12, "composer-model-icon"),
+              tags.span({ class: "composer-dd-label" }, () => model()),
+              iconChevronDown(10, "composer-dd-caret")
             ),
+            () => {
+              if (!modelMenuOpen()) return null;
+              const list = models();
+              const cur = model();
+              // 当前模型可能不在 provider 返回的列表里(手填或实验模型),补在首位
+              const items = cur && !list.includes(cur) ? [cur, ...list] : list;
+              return tags.div(
+                {
+                  class: "popup-menu composer-dd-menu",
+                  onclick: (e: MouseEvent) => e.stopPropagation(),
+                },
+                items.map((m) =>
+                  tags.div(
+                    {
+                      class: () => `menu-item ${m === model() ? "is-selected" : ""}`,
+                      title: m,
+                      onclick: () => {
+                        switchModel(m);
+                        modelMenuOpen.set(false);
+                      },
+                    },
+                    tags.span(
+                      { class: "menu-icon" },
+                      m === model() ? iconCheck(12) : iconSparkle(12)
+                    ),
+                    tags.span({ class: "menu-cmd composer-dd-name" }, m)
+                  )
+                )
+              );
+            },
             tags.button(
               {
                 class: "composer-model-refresh-btn",
@@ -550,7 +601,7 @@ export function renderComposer(): HTMLElement {
           tags.button(
             {
               class: "composer-token-pill",
-              title: "Context Window Usage - Click for Token Ledger",
+              title: () => t("composer.ctx_usage_title"),
               onclick: () => {
                 loadUsage();
                 showSettingsModal.set(true);
@@ -605,7 +656,7 @@ export function renderComposer(): HTMLElement {
               return tags.button(
                 {
                   class: "composer-send-btn is-stop",
-                  title: "Interrupt Generation (Esc)",
+                  title: () => t("composer.interrupt_hint"),
                   onclick: interrupt,
                 },
                 iconStop(12),
@@ -615,7 +666,7 @@ export function renderComposer(): HTMLElement {
             return tags.button(
               {
                 class: "composer-send-btn",
-                title: "Send message (Enter)",
+                title: () => t("composer.send_hint"),
                 onclick: doSend,
               },
               iconSend(13),
@@ -628,43 +679,68 @@ export function renderComposer(): HTMLElement {
   );
 }
 
+const MODE_OPTIONS: { id: AppMode; label: string; desc: string }[] = [
+  { id: "yolo", label: "mode.yolo", desc: "mode.yolo_desc" },
+  { id: "ask", label: "mode.ask", desc: "mode.ask_desc" },
+  { id: "read-only", label: "mode.read_only", desc: "mode.read_only_desc" },
+];
+
+/** plan 是 read-only 的别名,统一折叠到 read-only 展示 */
+function effectiveMode(): AppMode {
+  return mode() === "plan" ? "read-only" : mode();
+}
+
+function modeIcon(id: AppMode, extra = ""): SVGElement {
+  const cls = extra ? `${extra} mode-icon-${id}` : `mode-icon-${id}`;
+  if (id === "yolo") return iconBolt(12, cls);
+  if (id === "ask") return iconQuestion(12, cls);
+  return iconShield(12, cls);
+}
+
 function renderComposerModeDropdown(): HTMLElement {
   return tags.div(
-    {
-      class: "composer-mode-wrap",
-      title: () => t("composer.mode_select_title"),
-    },
-    () => {
-      const cur = mode();
-      if (cur === "yolo") {
-        return iconBolt(12, "composer-mode-icon mode-icon-yolo");
-      }
-      if (cur === "ask") {
-        return iconQuestion(12, "composer-mode-icon mode-icon-ask");
-      }
-      return iconShield(12, "composer-mode-icon mode-icon-readonly");
-    },
-    tags.select(
+    { class: "composer-mode-wrap" },
+    tags.button(
       {
-        class: "composer-mode-select",
+        class: "composer-dd-trigger",
         title: () => t("composer.mode_select_title"),
-        value: () => (mode() === "plan" ? "read-only" : mode()),
-        onchange: (e: Event) => {
-          const target = e.target as HTMLSelectElement;
-          if (target.value) {
-            switchMode(target.value as AppMode);
-          }
+        onclick: (e: MouseEvent) => {
+          e.stopPropagation();
+          modelMenuOpen.set(false);
+          modeMenuOpen.set(!modeMenuOpen());
         },
       },
-      tags.option({ value: "yolo", selected: () => mode() === "yolo" }, () => t("mode.yolo")),
-      tags.option({ value: "ask", selected: () => mode() === "ask" }, () => t("mode.ask")),
-      tags.option(
+      () => modeIcon(effectiveMode(), "composer-mode-icon"),
+      tags.span({ class: "composer-dd-label" }, () => {
+        const cur = effectiveMode();
+        if (cur === "yolo") return t("mode.yolo");
+        if (cur === "ask") return t("mode.ask");
+        return t("mode.read_only");
+      }),
+      iconChevronDown(10, "composer-dd-caret")
+    ),
+    () => {
+      if (!modeMenuOpen()) return null;
+      return tags.div(
         {
-          value: "read-only",
-          selected: () => mode() === "read-only" || mode() === "plan",
+          class: "popup-menu composer-dd-menu composer-mode-menu",
+          onclick: (e: MouseEvent) => e.stopPropagation(),
         },
-        () => t("mode.read_only")
-      )
-    )
+        MODE_OPTIONS.map((m) =>
+          tags.div(
+            {
+              class: () => `menu-item ${effectiveMode() === m.id ? "is-selected" : ""}`,
+              onclick: () => {
+                switchMode(m.id);
+                modeMenuOpen.set(false);
+              },
+            },
+            tags.span({ class: "menu-icon" }, modeIcon(m.id)),
+            tags.span({ class: "menu-cmd" }, () => t(m.label)),
+            tags.span({ class: "menu-desc" }, () => t(m.desc))
+          )
+        )
+      );
+    }
   );
 }

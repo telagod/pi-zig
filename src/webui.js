@@ -979,6 +979,11 @@ function getInitialLocale() {
     "composer.attach_file": "添加附件",
     "composer.attach_no_vision": "当前模型未声明视觉多模态能力，仅支持添加文本与代码附件",
     "composer.mode_select_title": "切换执行模式",
+    "composer.model_select_title": "切换当前模型",
+    "composer.remove_attachment": "移除附件",
+    "composer.ctx_usage_title": "上下文窗口占用 — 点击查看 Token 账本",
+    "composer.interrupt_hint": "中断生成 (Esc)",
+    "composer.send_hint": "发送消息 (Enter)",
     "composer.attach_img": "附加图片",
     "composer.slash_menu": "斜杠指令",
     "composer.file_mention": "引用文件",
@@ -1182,6 +1187,11 @@ function getInitialLocale() {
     "composer.attach_file": "Attach file",
     "composer.attach_no_vision": "Current model does not declare vision capability; restricted to text and code attachments.",
     "composer.mode_select_title": "Switch execution mode",
+    "composer.model_select_title": "Switch active LLM model",
+    "composer.remove_attachment": "Remove attachment",
+    "composer.ctx_usage_title": "Context Window Usage - Click for Token Ledger",
+    "composer.interrupt_hint": "Interrupt Generation (Esc)",
+    "composer.send_hint": "Send message (Enter)",
     "composer.attach_img": "Attach image",
     "composer.slash_menu": "Slash command",
     "composer.file_mention": "Mention file",
@@ -4679,7 +4689,32 @@ var _signal = require('./signal');
 
 
 
+
+
 var _icons = require('./icons');
+
+// 自绘下拉的开合状态。原生 <select> 的弹层由系统渲染,深色主题下会跳出
+// 白底下拉,因此模型/模式选择都改用 popup-menu 自绘。
+const modelMenuOpen = _signal.signal(false);
+const modeMenuOpen = _signal.signal(false);
+
+function closeComposerMenus() {
+  if (!modelMenuOpen() && !modeMenuOpen()) return false;
+  modelMenuOpen.set(false);
+  modeMenuOpen.set(false);
+  return true;
+}
+
+// 点击空白处收起(面板与触发按钮自身 stopPropagation,不会误关)
+document.addEventListener("click", () => {
+  closeComposerMenus();
+});
+
+// Esc 收起:输入框失焦时也要管用,所以挂全局而不是 textarea 的 keydown。
+// 菜单确实开着时截断传播,免得同一次 Esc 又去关弹窗或中断生成。
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && closeComposerMenus()) e.stopPropagation();
+});
 
  function renderComposer() {
   const text = _signal.signal("");
@@ -4862,6 +4897,11 @@ var _icons = require('./icons');
   }
 
   function handleKeyDown(e) {
+    if (e.key === "Escape" && (modelMenuOpen() || modeMenuOpen())) {
+      modelMenuOpen.set(false);
+      modeMenuOpen.set(false);
+      return;
+    }
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       if (showSlashMenu()) {
@@ -5023,7 +5063,7 @@ var _icons = require('./icons');
           _dom.tags.button(
             {
               class: "attached-img-remove",
-              title: "Remove attachment",
+              title: () => _store.t.call(void 0, "composer.remove_attachment"),
               onclick: () => {
                 _store.attachedAttachment.set(null);
                 _store.attachedImage.set(null);
@@ -5144,32 +5184,53 @@ var _icons = require('./icons');
         { class: "composer-bar" },
         _dom.tags.div(
           { class: "composer-bar-left" },
-          // 模型选择胶囊
+          // 模型选择胶囊(自绘下拉)
           _dom.tags.div(
-            { class: "composer-model-wrap", title: "Active LLM Model" },
-            _icons.iconSparkles.call(void 0, 12, "composer-model-icon"),
-            _dom.tags.select(
+            { class: "composer-model-wrap" },
+            _dom.tags.button(
               {
-                class: "composer-model-select",
-                title: "Switch active LLM model",
-                value: () => _store.model.call(void 0, ),
-                onchange: (e) => {
-                  const target = e.target ;
-                  if (target.value) _store.switchModel.call(void 0, target.value);
+                class: "composer-dd-trigger",
+                title: () => _store.t.call(void 0, "composer.model_select_title"),
+                onclick: (e) => {
+                  e.stopPropagation();
+                  modeMenuOpen.set(false);
+                  modelMenuOpen.set(!modelMenuOpen());
                 },
               },
-              () => {
-                const list = _store.models.call(void 0, );
-                const cur = _store.model.call(void 0, );
-                const opts = list.map((m) =>
-                  _dom.tags.option({ value: m, selected: m === cur }, m)
-                );
-                if (cur && !list.includes(cur)) {
-                  opts.unshift(_dom.tags.option({ value: cur, selected: true }, cur));
-                }
-                return opts;
-              }
+              _icons.iconSparkles.call(void 0, 12, "composer-model-icon"),
+              _dom.tags.span({ class: "composer-dd-label" }, () => _store.model.call(void 0, )),
+              _icons.iconChevronDown.call(void 0, 10, "composer-dd-caret")
             ),
+            () => {
+              if (!modelMenuOpen()) return null;
+              const list = _store.models.call(void 0, );
+              const cur = _store.model.call(void 0, );
+              // 当前模型可能不在 provider 返回的列表里(手填或实验模型),补在首位
+              const items = cur && !list.includes(cur) ? [cur, ...list] : list;
+              return _dom.tags.div(
+                {
+                  class: "popup-menu composer-dd-menu",
+                  onclick: (e) => e.stopPropagation(),
+                },
+                items.map((m) =>
+                  _dom.tags.div(
+                    {
+                      class: () => `menu-item ${m === _store.model.call(void 0, ) ? "is-selected" : ""}`,
+                      title: m,
+                      onclick: () => {
+                        _store.switchModel.call(void 0, m);
+                        modelMenuOpen.set(false);
+                      },
+                    },
+                    _dom.tags.span(
+                      { class: "menu-icon" },
+                      m === _store.model.call(void 0, ) ? _icons.iconCheck.call(void 0, 12) : _icons.iconSparkle.call(void 0, 12)
+                    ),
+                    _dom.tags.span({ class: "menu-cmd composer-dd-name" }, m)
+                  )
+                )
+              );
+            },
             _dom.tags.button(
               {
                 class: "composer-model-refresh-btn",
@@ -5183,7 +5244,7 @@ var _icons = require('./icons');
           _dom.tags.button(
             {
               class: "composer-token-pill",
-              title: "Context Window Usage - Click for Token Ledger",
+              title: () => _store.t.call(void 0, "composer.ctx_usage_title"),
               onclick: () => {
                 _store.loadUsage.call(void 0, );
                 _store.showSettingsModal.set(true);
@@ -5238,7 +5299,7 @@ var _icons = require('./icons');
               return _dom.tags.button(
                 {
                   class: "composer-send-btn is-stop",
-                  title: "Interrupt Generation (Esc)",
+                  title: () => _store.t.call(void 0, "composer.interrupt_hint"),
                   onclick: _store.interrupt,
                 },
                 _icons.iconStop.call(void 0, 12),
@@ -5248,7 +5309,7 @@ var _icons = require('./icons');
             return _dom.tags.button(
               {
                 class: "composer-send-btn",
-                title: "Send message (Enter)",
+                title: () => _store.t.call(void 0, "composer.send_hint"),
                 onclick: doSend,
               },
               _icons.iconSend.call(void 0, 13),
@@ -5261,44 +5322,69 @@ var _icons = require('./icons');
   );
 } exports.renderComposer = renderComposer;
 
+const MODE_OPTIONS = [
+  { id: "yolo", label: "mode.yolo", desc: "mode.yolo_desc" },
+  { id: "ask", label: "mode.ask", desc: "mode.ask_desc" },
+  { id: "read-only", label: "mode.read_only", desc: "mode.read_only_desc" },
+];
+
+/** plan 是 read-only 的别名,统一折叠到 read-only 展示 */
+function effectiveMode() {
+  return _store.mode.call(void 0, ) === "plan" ? "read-only" : _store.mode.call(void 0, );
+}
+
+function modeIcon(id, extra = "") {
+  const cls = extra ? `${extra} mode-icon-${id}` : `mode-icon-${id}`;
+  if (id === "yolo") return _icons.iconBolt.call(void 0, 12, cls);
+  if (id === "ask") return _icons.iconQuestion.call(void 0, 12, cls);
+  return _icons.iconShield.call(void 0, 12, cls);
+}
+
 function renderComposerModeDropdown() {
   return _dom.tags.div(
-    {
-      class: "composer-mode-wrap",
-      title: () => _store.t.call(void 0, "composer.mode_select_title"),
-    },
-    () => {
-      const cur = _store.mode.call(void 0, );
-      if (cur === "yolo") {
-        return _icons.iconBolt.call(void 0, 12, "composer-mode-icon mode-icon-yolo");
-      }
-      if (cur === "ask") {
-        return _icons.iconQuestion.call(void 0, 12, "composer-mode-icon mode-icon-ask");
-      }
-      return _icons.iconShield.call(void 0, 12, "composer-mode-icon mode-icon-readonly");
-    },
-    _dom.tags.select(
+    { class: "composer-mode-wrap" },
+    _dom.tags.button(
       {
-        class: "composer-mode-select",
+        class: "composer-dd-trigger",
         title: () => _store.t.call(void 0, "composer.mode_select_title"),
-        value: () => (_store.mode.call(void 0, ) === "plan" ? "read-only" : _store.mode.call(void 0, )),
-        onchange: (e) => {
-          const target = e.target ;
-          if (target.value) {
-            _store.switchMode.call(void 0, target.value );
-          }
+        onclick: (e) => {
+          e.stopPropagation();
+          modelMenuOpen.set(false);
+          modeMenuOpen.set(!modeMenuOpen());
         },
       },
-      _dom.tags.option({ value: "yolo", selected: () => _store.mode.call(void 0, ) === "yolo" }, () => _store.t.call(void 0, "mode.yolo")),
-      _dom.tags.option({ value: "ask", selected: () => _store.mode.call(void 0, ) === "ask" }, () => _store.t.call(void 0, "mode.ask")),
-      _dom.tags.option(
+      () => modeIcon(effectiveMode(), "composer-mode-icon"),
+      _dom.tags.span({ class: "composer-dd-label" }, () => {
+        const cur = effectiveMode();
+        if (cur === "yolo") return _store.t.call(void 0, "mode.yolo");
+        if (cur === "ask") return _store.t.call(void 0, "mode.ask");
+        return _store.t.call(void 0, "mode.read_only");
+      }),
+      _icons.iconChevronDown.call(void 0, 10, "composer-dd-caret")
+    ),
+    () => {
+      if (!modeMenuOpen()) return null;
+      return _dom.tags.div(
         {
-          value: "read-only",
-          selected: () => _store.mode.call(void 0, ) === "read-only" || _store.mode.call(void 0, ) === "plan",
+          class: "popup-menu composer-dd-menu composer-mode-menu",
+          onclick: (e) => e.stopPropagation(),
         },
-        () => _store.t.call(void 0, "mode.read_only")
-      )
-    )
+        MODE_OPTIONS.map((m) =>
+          _dom.tags.div(
+            {
+              class: () => `menu-item ${effectiveMode() === m.id ? "is-selected" : ""}`,
+              onclick: () => {
+                _store.switchMode.call(void 0, m.id);
+                modeMenuOpen.set(false);
+              },
+            },
+            _dom.tags.span({ class: "menu-icon" }, modeIcon(m.id)),
+            _dom.tags.span({ class: "menu-cmd" }, () => _store.t.call(void 0, m.label)),
+            _dom.tags.span({ class: "menu-desc" }, () => _store.t.call(void 0, m.desc))
+          )
+        )
+      );
+    }
   );
 }
 
