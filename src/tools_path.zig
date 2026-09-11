@@ -146,10 +146,25 @@ pub fn diskWrite(path: []const u8, data: []const u8) !void {
     if (path.len + 16 < tmp_buf.len) {
         const tmp = std.fmt.bufPrint(&tmp_buf, "{s}.piz.tmp", .{path}) catch null;
         if (tmp) |tpath| {
-            if (f.writeFile(f.ctx, tpath, data)) {
-                if (std.Io.Dir.rename(std.Io.Dir.cwd(), tpath, std.Io.Dir.cwd(), path, util.io)) {
-                    return;
-                } else |_| {
+            // 先摘掉同名项(含指向工作区外的 symlink),再 exclusive 创建:
+            // writeFile 会跟随链接,固定 `{path}.piz.tmp` 否则可绕过 realInsideRoot。
+            std.Io.Dir.cwd().deleteFile(util.io, tpath) catch {};
+            if (std.Io.Dir.cwd().createFile(util.io, tpath, .{ .exclusive = true, .truncate = true })) |file| {
+                defer file.close(util.io);
+                var wbuf: [8192]u8 = undefined;
+                var w = file.writer(util.io, &wbuf);
+                const wrote = blk: {
+                    w.interface.writeAll(data) catch break :blk false;
+                    w.interface.flush() catch break :blk false;
+                    break :blk true;
+                };
+                if (wrote) {
+                    if (std.Io.Dir.rename(std.Io.Dir.cwd(), tpath, std.Io.Dir.cwd(), path, util.io)) {
+                        return;
+                    } else |_| {
+                        std.Io.Dir.cwd().deleteFile(util.io, tpath) catch |err| util.debugCatch("diskWrite.tmp", err);
+                    }
+                } else {
                     std.Io.Dir.cwd().deleteFile(util.io, tpath) catch |err| util.debugCatch("diskWrite.tmp", err);
                 }
             } else |_| {}
@@ -184,4 +199,30 @@ test "realInsideRoot rejects symlink escape" {
     try t.expect(!realInsideRoot(a, "escape"));
     try t.expect(!realInsideRoot(a, "/etc/hosts"));
     try t.expect(!realInsideRoot(a, "../secret"));
+}
+
+test "diskWrite does not follow tmp symlink" {
+    const t = std.testing;
+    try util.testInit();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = util.Arena.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cwd_abs = try std.process.currentPathAlloc(util.io, a);
+    const root = try std.fmt.allocPrint(a, "{s}/.zig-cache/tmp/{s}", .{ cwd_abs, tmp.sub_path });
+    try tmp.dir.writeFile(util.io, .{ .sub_path = "outside.txt", .data = "SECRET" });
+    const outside = try util.joinPath(a, root, "outside.txt");
+    const dest = try util.joinPath(a, root, "notes.md");
+    const tpath = try std.fmt.allocPrint(a, "{s}.piz.tmp", .{dest});
+    tmp.dir.symLink(util.io, "outside.txt", "notes.md.piz.tmp", .{}) catch return error.SkipZigTest;
+    try diskWrite(dest, "safe-content");
+    const leaked = try std.Io.Dir.cwd().readFileAlloc(util.io, outside, a, .limited(64));
+    try t.expectEqualStrings("SECRET", leaked);
+    const got = try std.Io.Dir.cwd().readFileAlloc(util.io, dest, a, .limited(64));
+    try t.expectEqualStrings("safe-content", got);
+    // leftover tmp must not remain as a symlink to outside
+    if (std.Io.Dir.cwd().statFile(util.io, tpath, .{ .follow_symlinks = false })) |st| {
+        try t.expect(st.kind != .sym_link);
+    } else |_| {}
 }

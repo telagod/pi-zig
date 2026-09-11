@@ -135,6 +135,12 @@ fn webEnabled(alloc: std.mem.Allocator, pkg_dir: []const u8, id: []const u8) !bo
     return (try readDescriptor(alloc, pkg_dir, id)) != null;
 }
 
+fn pathUnder(path: []const u8, root: []const u8) bool {
+    if (std.mem.eql(u8, path, root)) return true;
+    if (path.len > root.len and std.mem.startsWith(u8, path, root) and path[root.len] == '/') return true;
+    return false;
+}
+
 fn readFromRoot(out_alloc: std.mem.Allocator, alloc: std.mem.Allocator, root: []const u8, id: []const u8, rel: []const u8) !?Asset {
     const pkg_dir = try util.joinPath(alloc, root, id);
     if (!try webEnabled(alloc, pkg_dir, id)) return null;
@@ -142,6 +148,19 @@ fn readFromRoot(out_alloc: std.mem.Allocator, alloc: std.mem.Allocator, root: []
     // 不跟随符号链接。字符串层已经拦掉 `..`/`%`/绝对路径,但包目录里的一个
     // 指向 ~/.piz/models.json 的符号链接照样能把 apiKey 读出来 ——
     // 实测复现过。ws 白名单封住了「任意包根」,这里封住「已注册项目内的恶意包」。
+    // follow_symlinks=false 只拒绝最后一级;中间目录 symlink 仍会跟过去,
+    // 所以还要用 realpath 确认落在 pkg/web 之下。
+    const web_dir = try util.joinPath(alloc, pkg_dir, "web");
+    var pkg_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var web_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var dest_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const pkg_n = std.Io.Dir.cwd().realPathFile(util.io, pkg_dir, &pkg_buf) catch return null;
+    const web_n = std.Io.Dir.cwd().realPathFile(util.io, web_dir, &web_buf) catch return null;
+    const dest_n = std.Io.Dir.cwd().realPathFile(util.io, full, &dest_buf) catch return null;
+    const pkg_real = pkg_buf[0..pkg_n];
+    const web_real = web_buf[0..web_n];
+    const dest_real = dest_buf[0..dest_n];
+    if (!pathUnder(web_real, pkg_real) or !pathUnder(dest_real, web_real)) return null;
     var f = std.Io.Dir.cwd().openFile(util.io, full, .{ .follow_symlinks = false }) catch return null;
     defer f.close(util.io);
     var rbuf: [8192]u8 = undefined;
@@ -208,4 +227,13 @@ test "web plugin manifest and confined assets" {
     try std.Io.Dir.cwd().symLink(util.io, secret, link, .{});
     defer std.Io.Dir.cwd().deleteFile(util.io, link) catch {};
     try t.expect((try readAsset(t.allocator, project, "/api/plugins/assets/demo/web/leak")) == null);
+
+    // 中间目录 symlink: follow_symlinks=false 拦不住最后一级普通文件。
+    const outside = try std.fmt.allocPrint(a, "{s}/outside", .{project});
+    try std.Io.Dir.cwd().createDirPath(util.io, outside);
+    try std.Io.Dir.cwd().writeFile(util.io, .{ .sub_path = try util.joinPath(a, outside, "secret.txt"), .data = "sk-DIR-LEAK" });
+    const linkdir = try util.joinPath(a, pkg, "web/linkdir");
+    std.Io.Dir.cwd().symLink(util.io, outside, linkdir, .{}) catch return error.SkipZigTest;
+    defer std.Io.Dir.cwd().deleteFile(util.io, linkdir) catch {};
+    try t.expect((try readAsset(t.allocator, project, "/api/plugins/assets/demo/web/linkdir/secret.txt")) == null);
 }
