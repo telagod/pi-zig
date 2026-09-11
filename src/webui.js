@@ -951,6 +951,7 @@ function getInitialLocale() {
     "sidebar.rename_prompt": "重命名会话：",
     "sidebar.no_sessions": "暂无匹配会话",
     "sidebar.sessions_count": "{count} 个会话",
+    "sidebar.view_tree": "树形",
 
     // 会话聊天流与空态
     "chat.empty_title": "piz workspace",
@@ -997,6 +998,7 @@ function getInitialLocale() {
     "deck.tab_jobs": "Jobs",
     "deck.tab_files": "Files",
     "deck.diff_no_changes": "暂无未暂存的代码变更",
+    "deck.diff_empty_desc": "工作区中未提交的改动，或智能体产生的代码变更，会在此处集中展示",
     "deck.diff_scan": "重新扫描仓库 Diffs",
     "deck.diff_commit_placeholder": "输入提交信息 (Commit message)...",
     "deck.diff_commit_btn": "一键 Commit",
@@ -1053,6 +1055,43 @@ function getInitialLocale() {
     "settings.export_html": "导出为单文件独立网页 (.html)",
     "settings.export_html_desc": "自洽排版、支持离线查看与团队分享的完整会话归档",
     "shortcuts.title": "键盘快捷键速查",
+    "shortcuts.palette": "打开命令面板与会话切换器",
+    "shortcuts.sidebar": "展开或收起工作区会话栏",
+    "shortcuts.deck": "展开或收起检视工作台 (Diffs / 终端 / 任务 / 文件)",
+    "shortcuts.diffs": "直接跳到代码 Diffs 面板",
+    "shortcuts.terminal": "直接跳到终端面板",
+    "shortcuts.regenerate": "重新生成上一条回答",
+    "shortcuts.send": "发送消息 / 提交输入",
+    "shortcuts.newline": "在输入框中换行",
+    "shortcuts.history": "输入框为空时翻阅历史提问",
+    "shortcuts.interrupt": "中断生成 / 关闭弹窗",
+    "shortcuts.paste": "从剪贴板粘贴图片到输入框",
+    "shortcuts.bang_cmd": "执行 shell 命令并把输出交给模型",
+    "shortcuts.bang_bang_cmd": "仅在本地执行 shell 命令(预览，不交给模型)",
+    "shortcuts.slash": "呼出斜杠命令菜单",
+    "shortcuts.at": "呼出工作区文件引用菜单",
+    "shortcuts.help": "打开本快捷键速查",
+
+    // 相对时间
+    "time.just_now": "刚刚",
+    "time.min_ago": "{n} 分钟前",
+    "time.hour_ago": "{n} 小时前",
+    "time.day_ago": "{n} 天前",
+
+    // 命令面板 (Ctrl+K)
+    "palette.search_placeholder": "搜索指令或会话...",
+    "palette.group_actions": "快捷指令",
+    "palette.group_sessions": "会话",
+    "palette.new_session": "新建会话",
+    "palette.scan_diffs": "扫描并查看代码 Diffs",
+    "palette.open_terminal": "打开终端检视器",
+    "palette.view_jobs": "查看后台任务与子代理",
+    "palette.refresh_models": "从服务商刷新模型列表",
+    "palette.open_settings": "打开工作区设置",
+
+    // 计数单位后缀
+    "unit.msgs": "{n} 条消息",
+    "unit.files": "{n} 个文件",
   },
   en: {
     // Brand & TopBar
@@ -1114,6 +1153,7 @@ function getInitialLocale() {
     "sidebar.rename_prompt": "Rename session:",
     "sidebar.no_sessions": "No sessions found",
     "sidebar.sessions_count": "{count} sessions",
+    "sidebar.view_tree": "Tree",
 
     // Chat Stream & Empty state
     "chat.empty_title": "piz workspace",
@@ -1161,6 +1201,7 @@ function getInitialLocale() {
     "deck.tab_jobs": "Jobs",
     "deck.tab_files": "Files",
     "deck.diff_no_changes": "No Uncommitted Changes Detected",
+    "deck.diff_empty_desc": "Uncommitted modifications in workspace, or agent-generated diffs, appear here.",
     "deck.diff_scan": "Scan Workspace Diffs",
     "deck.diff_commit_placeholder": "Enter commit message...",
     "deck.diff_commit_btn": "Commit Changes",
@@ -1217,6 +1258,43 @@ function getInitialLocale() {
     "settings.export_html": "Export as Standalone HTML (.html)",
     "settings.export_html_desc": "Self-contained webpage ready for sharing and offline reading",
     "shortcuts.title": "Keyboard Shortcuts",
+    "shortcuts.palette": "Open command palette and session switcher",
+    "shortcuts.sidebar": "Toggle workspace session drawer",
+    "shortcuts.deck": "Toggle inspection deck (Diffs/Terminal/Jobs/Files)",
+    "shortcuts.diffs": "Jump directly to code diffs panel",
+    "shortcuts.terminal": "Jump directly to terminal panel",
+    "shortcuts.regenerate": "Regenerate last assistant answer",
+    "shortcuts.send": "Send message / Submit prompt",
+    "shortcuts.newline": "Insert new line in input composer",
+    "shortcuts.history": "Navigate prompt history when input is empty",
+    "shortcuts.interrupt": "Interrupt generation / Close open dialogs",
+    "shortcuts.paste": "Paste image from clipboard into composer",
+    "shortcuts.bang_cmd": "Execute shell command and feed output to model",
+    "shortcuts.bang_bang_cmd": "Execute shell command locally (preview only)",
+    "shortcuts.slash": "Trigger slash command popup menu",
+    "shortcuts.at": "Trigger workspace file mention menu",
+    "shortcuts.help": "Open this keyboard shortcuts reference",
+
+    // Relative time
+    "time.just_now": "just now",
+    "time.min_ago": "{n}m ago",
+    "time.hour_ago": "{n}h ago",
+    "time.day_ago": "{n}d ago",
+
+    // Command palette (Ctrl+K)
+    "palette.search_placeholder": "Search actions or sessions...",
+    "palette.group_actions": "Actions",
+    "palette.group_sessions": "Sessions",
+    "palette.new_session": "Create New Session",
+    "palette.scan_diffs": "Scan & View Code Diffs",
+    "palette.open_terminal": "Open Terminal Viewer",
+    "palette.view_jobs": "View Background Jobs & Subagents",
+    "palette.refresh_models": "Refresh Model List from Providers",
+    "palette.open_settings": "Open Workspace Settings",
+
+    // Count unit suffixes
+    "unit.msgs": "{n} msgs",
+    "unit.files": "{n} files",
   },
 }; exports.translations = translations;
 
@@ -3526,7 +3604,7 @@ var _icons = require('./icons');
                       { class: "session-meta" },
                       _dom.tags.span(
                         { class: "session-badge" },
-                        `${item.messageCount} msgs`
+                        () => _store.t.call(void 0, "unit.msgs", { n: item.messageCount })
                       ),
                       isArchived
                         ? _dom.tags.span(
@@ -3671,10 +3749,10 @@ var _icons = require('./icons');
       () =>
         _dom.tags.span(
           {},
-          `${allProjects().length} projects · ${_store.sessions.call(void 0, ).length} sessions`
+          `${_store.t.call(void 0, "sidebar.projects_count", { count: allProjects().length })} · ${_store.t.call(void 0, "sidebar.sessions_count", { count: _store.sessions.call(void 0, ).length })}`
         ),
       _dom.tags.span({ class: "sidebar-footer-dot" }, "·"),
-      _dom.tags.span({ class: "sidebar-footer-mode" }, "Tree")
+      _dom.tags.span({ class: "sidebar-footer-mode" }, () => _store.t.call(void 0, "sidebar.view_tree"))
     )
   );
 } exports.renderSidebar = renderSidebar;
@@ -3682,10 +3760,10 @@ var _icons = require('./icons');
 function formatRelativeTime(ts) {
   if (!ts) return "";
   const diff = Date.now() - ts;
-  if (diff < 60000) return "just now";
-  if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
-  if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
-  return `${Math.floor(diff / 86400000)}d ago`;
+  if (diff < 60000) return _store.t.call(void 0, "time.just_now");
+  if (diff < 3600000) return _store.t.call(void 0, "time.min_ago", { n: Math.floor(diff / 60000) });
+  if (diff < 86400000) return _store.t.call(void 0, "time.hour_ago", { n: Math.floor(diff / 3600000) });
+  return _store.t.call(void 0, "time.day_ago", { n: Math.floor(diff / 86400000) });
 }
 
 };
@@ -5359,7 +5437,7 @@ function renderDiffsPanel() {
       { class: "deck-empty" },
       _dom.tags.div({ class: "deck-empty-icon" }, _icons.iconDiff.call(void 0, 28)),
       _dom.tags.div({ class: "deck-empty-title" }, () => _store.t.call(void 0, "deck.diff_no_changes")),
-      _dom.tags.div({ class: "deck-empty-desc" }, "Uncommitted modifications in workspace or agent diffs appear here."),
+      _dom.tags.div({ class: "deck-empty-desc" }, () => _store.t.call(void 0, "deck.diff_empty_desc")),
       _dom.tags.button(
         {
           class: "diff-refresh-btn-large",
@@ -5380,7 +5458,7 @@ function renderDiffsPanel() {
         { class: "diff-stats" },
         _dom.tags.span({ class: "diff-stat-add" }, `+${stats.additions}`),
         _dom.tags.span({ class: "diff-stat-del" }, `-${stats.deletions}`),
-        _dom.tags.span({ class: "diff-stat-files" }, `${stats.files} files`),
+        _dom.tags.span({ class: "diff-stat-files" }, () => _store.t.call(void 0, "unit.files", { n: stats.files })),
         _dom.tags.button(
           {
             class: "diff-act-btn",
@@ -6016,7 +6094,7 @@ var _icons = require('./icons');
             _icons.iconSearch.call(void 0, 15, "palette-icon"),
             _dom.tags.input({
               class: "palette-input",
-              placeholder: "Search actions or sessions...",
+              placeholder: () => _store.t.call(void 0, "palette.search_placeholder"),
               autofocus: true,
               value: () => cmdQuery(),
               oninput: (e) => cmdQuery.set((e.target ).value),
@@ -6028,7 +6106,7 @@ var _icons = require('./icons');
           _dom.tags.div(
             { class: "palette-list" },
             // 常用快速指令
-            _dom.tags.div({ class: "palette-group-hdr" }, "Actions"),
+            _dom.tags.div({ class: "palette-group-hdr" }, () => _store.t.call(void 0, "palette.group_actions")),
             _dom.tags.div(
               {
                 class: "palette-item",
@@ -6038,7 +6116,7 @@ var _icons = require('./icons');
                 },
               },
               _dom.tags.span({ class: "palette-item-icon" }, _icons.iconPlus.call(void 0, 14)),
-              _dom.tags.span({}, "Create New Session")
+              _dom.tags.span({}, () => _store.t.call(void 0, "palette.new_session"))
             ),
             _dom.tags.div(
               {
@@ -6050,7 +6128,7 @@ var _icons = require('./icons');
                 },
               },
               _dom.tags.span({ class: "palette-item-icon" }, _icons.iconDiff.call(void 0, 14)),
-              _dom.tags.span({}, "Scan & View Code Diffs")
+              _dom.tags.span({}, () => _store.t.call(void 0, "palette.scan_diffs"))
             ),
             _dom.tags.div(
               {
@@ -6061,7 +6139,7 @@ var _icons = require('./icons');
                 },
               },
               _dom.tags.span({ class: "palette-item-icon" }, _icons.iconTerminal.call(void 0, 14)),
-              _dom.tags.span({}, "Open Terminal Viewer")
+              _dom.tags.span({}, () => _store.t.call(void 0, "palette.open_terminal"))
             ),
             _dom.tags.div(
               {
@@ -6072,7 +6150,7 @@ var _icons = require('./icons');
                 },
               },
               _dom.tags.span({ class: "palette-item-icon" }, _icons.iconCpu.call(void 0, 14)),
-              _dom.tags.span({}, "View Background Jobs & Subagents")
+              _dom.tags.span({}, () => _store.t.call(void 0, "palette.view_jobs"))
             ),
             _dom.tags.div(
               {
@@ -6083,7 +6161,7 @@ var _icons = require('./icons');
                 },
               },
               _dom.tags.span({ class: "palette-item-icon" }, _icons.iconRefresh.call(void 0, 14)),
-              _dom.tags.span({}, "Refresh Model List from Providers")
+              _dom.tags.span({}, () => _store.t.call(void 0, "palette.refresh_models"))
             ),
             _dom.tags.div(
               {
@@ -6094,12 +6172,12 @@ var _icons = require('./icons');
                 },
               },
               _dom.tags.span({ class: "palette-item-icon" }, _icons.iconSettings.call(void 0, 14)),
-              _dom.tags.span({}, "Open Workspace Settings")
+              _dom.tags.span({}, () => _store.t.call(void 0, "palette.open_settings"))
             ),
 
             // 会话列表匹配
             sessionMatches.length > 0
-              ? _dom.tags.div({ class: "palette-group-hdr" }, "Sessions")
+              ? _dom.tags.div({ class: "palette-group-hdr" }, () => _store.t.call(void 0, "palette.group_sessions"))
               : null,
             sessionMatches.slice(0, 8).map((s) =>
               _dom.tags.div(
@@ -6111,7 +6189,7 @@ var _icons = require('./icons');
                   },
                 },
                 _dom.tags.span({ class: "palette-item-title" }, s.title || s.name),
-                _dom.tags.span({ class: "palette-item-badge" }, `${s.messageCount} msgs`)
+                _dom.tags.span({ class: "palette-item-badge" }, () => _store.t.call(void 0, "unit.msgs", { n: s.messageCount }))
               )
             )
           )
@@ -6186,7 +6264,7 @@ var _icons = require('./icons');
           { class: "modal-card settings-modal-card" },
           _dom.tags.div(
             { class: "modal-hdr" },
-            _dom.tags.div({ class: "modal-hdr-left" }, _icons.iconSettings.call(void 0, 18), _dom.tags.h3({ class: "modal-title" }, "Workspace Settings")),
+            _dom.tags.div({ class: "modal-hdr-left" }, _icons.iconSettings.call(void 0, 18), _dom.tags.h3({ class: "modal-title" }, () => _store.t.call(void 0, "modal.settings_title"))),
             _dom.tags.div(
               { class: "modal-hdr-actions" },
               _dom.tags.button(
@@ -6728,23 +6806,24 @@ var _icons = require('./icons');
       () => {
         if (!_store.showShortcutsModal.call(void 0, )) return null;
 
+        // desc 存 i18n 键,渲染时经 t() 求值,跟随语言切换。
         const SHORTCUTS = [
-          { key: "Ctrl + K / ⌘K", desc: "Open command palette and session switcher" },
-          { key: "Ctrl + B / ⌘B", desc: "Toggle workspace session drawer" },
-          { key: "Ctrl + J / ⌘J", desc: "Toggle inspection deck (Diffs/Terminal/Jobs/Files)" },
-          { key: "Ctrl + Shift + D", desc: "Jump directly to code diffs panel" },
-          { key: "Ctrl + Shift + T", desc: "Jump directly to terminal panel" },
-          { key: "Ctrl + Shift + R", desc: "Regenerate last assistant answer" },
-          { key: "Enter", desc: "Send message / Submit prompt" },
-          { key: "Shift + Enter", desc: "Insert new line in input composer" },
-          { key: "↑ / ↓", desc: "Navigate prompt history when input is empty" },
-          { key: "Esc", desc: "Interrupt generation / Close open dialogs" },
-          { key: "Ctrl + V / ⌘V", desc: "Paste image from clipboard into composer" },
-          { key: "!cmd", desc: "Execute shell command and feed output to model" },
-          { key: "!!cmd", desc: "Execute shell command locally (preview only)" },
-          { key: "/", desc: "Trigger slash command popup menu" },
-          { key: "@", desc: "Trigger workspace file mention menu" },
-          { key: "?", desc: "Open this keyboard shortcuts reference" },
+          { key: "Ctrl + K / ⌘K", desc: "shortcuts.palette" },
+          { key: "Ctrl + B / ⌘B", desc: "shortcuts.sidebar" },
+          { key: "Ctrl + J / ⌘J", desc: "shortcuts.deck" },
+          { key: "Ctrl + Shift + D", desc: "shortcuts.diffs" },
+          { key: "Ctrl + Shift + T", desc: "shortcuts.terminal" },
+          { key: "Ctrl + Shift + R", desc: "shortcuts.regenerate" },
+          { key: "Enter", desc: "shortcuts.send" },
+          { key: "Shift + Enter", desc: "shortcuts.newline" },
+          { key: "↑ / ↓", desc: "shortcuts.history" },
+          { key: "Esc", desc: "shortcuts.interrupt" },
+          { key: "Ctrl + V / ⌘V", desc: "shortcuts.paste" },
+          { key: "!cmd", desc: "shortcuts.bang_cmd" },
+          { key: "!!cmd", desc: "shortcuts.bang_bang_cmd" },
+          { key: "/", desc: "shortcuts.slash" },
+          { key: "@", desc: "shortcuts.at" },
+          { key: "?", desc: "shortcuts.help" },
         ];
 
         return _dom.tags.div(
@@ -6754,7 +6833,7 @@ var _icons = require('./icons');
             _dom.tags.div(
               { class: "modal-hdr-left" },
               _icons.iconHelp.call(void 0, 16),
-              _dom.tags.h3({ class: "modal-title" }, "Keyboard Shortcuts & Command Guide")
+              _dom.tags.h3({ class: "modal-title" }, () => _store.t.call(void 0, "shortcuts.title"))
             ),
             _dom.tags.button(
               {
@@ -6772,7 +6851,7 @@ var _icons = require('./icons');
                 _dom.tags.div(
                   { class: "shortcut-row" },
                   _dom.tags.kbd({ class: "shortcut-key" }, item.key),
-                  _dom.tags.span({ class: "shortcut-desc" }, item.desc)
+                  _dom.tags.span({ class: "shortcut-desc" }, () => _store.t.call(void 0, item.desc))
                 )
               )
             )

@@ -153,7 +153,7 @@ export function renderModals(): HTMLElement {
             iconSearch(15, "palette-icon"),
             tags.input({
               class: "palette-input",
-              placeholder: "Search actions or sessions...",
+              placeholder: () => t("palette.search_placeholder"),
               autofocus: true,
               value: () => cmdQuery(),
               oninput: (e: Event) => cmdQuery.set((e.target as HTMLInputElement).value),
@@ -165,7 +165,7 @@ export function renderModals(): HTMLElement {
           tags.div(
             { class: "palette-list" },
             // 常用快速指令
-            tags.div({ class: "palette-group-hdr" }, "Actions"),
+            tags.div({ class: "palette-group-hdr" }, () => t("palette.group_actions")),
             tags.div(
               {
                 class: "palette-item",
@@ -175,7 +175,7 @@ export function renderModals(): HTMLElement {
                 },
               },
               tags.span({ class: "palette-item-icon" }, iconPlus(14)),
-              tags.span({}, "Create New Session")
+              tags.span({}, () => t("palette.new_session"))
             ),
             tags.div(
               {
@@ -187,7 +187,7 @@ export function renderModals(): HTMLElement {
                 },
               },
               tags.span({ class: "palette-item-icon" }, iconDiff(14)),
-              tags.span({}, "Scan & View Code Diffs")
+              tags.span({}, () => t("palette.scan_diffs"))
             ),
             tags.div(
               {
@@ -198,7 +198,7 @@ export function renderModals(): HTMLElement {
                 },
               },
               tags.span({ class: "palette-item-icon" }, iconTerminal(14)),
-              tags.span({}, "Open Terminal Viewer")
+              tags.span({}, () => t("palette.open_terminal"))
             ),
             tags.div(
               {
@@ -209,7 +209,7 @@ export function renderModals(): HTMLElement {
                 },
               },
               tags.span({ class: "palette-item-icon" }, iconCpu(14)),
-              tags.span({}, "View Background Jobs & Subagents")
+              tags.span({}, () => t("palette.view_jobs"))
             ),
             tags.div(
               {
@@ -220,7 +220,7 @@ export function renderModals(): HTMLElement {
                 },
               },
               tags.span({ class: "palette-item-icon" }, iconRefresh(14)),
-              tags.span({}, "Refresh Model List from Providers")
+              tags.span({}, () => t("palette.refresh_models"))
             ),
             tags.div(
               {
@@ -231,12 +231,12 @@ export function renderModals(): HTMLElement {
                 },
               },
               tags.span({ class: "palette-item-icon" }, iconSettings(14)),
-              tags.span({}, "Open Workspace Settings")
+              tags.span({}, () => t("palette.open_settings"))
             ),
 
             // 会话列表匹配
             sessionMatches.length > 0
-              ? tags.div({ class: "palette-group-hdr" }, "Sessions")
+              ? tags.div({ class: "palette-group-hdr" }, () => t("palette.group_sessions"))
               : null,
             sessionMatches.slice(0, 8).map((s) =>
               tags.div(
@@ -248,7 +248,7 @@ export function renderModals(): HTMLElement {
                   },
                 },
                 tags.span({ class: "palette-item-title" }, s.title || s.name),
-                tags.span({ class: "palette-item-badge" }, `${s.messageCount} msgs`)
+                tags.span({ class: "palette-item-badge" }, () => t("unit.msgs", { n: s.messageCount }))
               )
             )
           )
@@ -323,7 +323,7 @@ export function renderModals(): HTMLElement {
           { class: "modal-card settings-modal-card" },
           tags.div(
             { class: "modal-hdr" },
-            tags.div({ class: "modal-hdr-left" }, iconSettings(18), tags.h3({ class: "modal-title" }, "Workspace Settings")),
+            tags.div({ class: "modal-hdr-left" }, iconSettings(18), tags.h3({ class: "modal-title" }, () => t("modal.settings_title"))),
             tags.div(
               { class: "modal-hdr-actions" },
               tags.button(
@@ -865,23 +865,24 @@ export function renderModals(): HTMLElement {
       () => {
         if (!showShortcutsModal()) return null;
 
+        // desc 存 i18n 键,渲染时经 t() 求值,跟随语言切换。
         const SHORTCUTS = [
-          { key: "Ctrl + K / ⌘K", desc: "Open command palette and session switcher" },
-          { key: "Ctrl + B / ⌘B", desc: "Toggle workspace session drawer" },
-          { key: "Ctrl + J / ⌘J", desc: "Toggle inspection deck (Diffs/Terminal/Jobs/Files)" },
-          { key: "Ctrl + Shift + D", desc: "Jump directly to code diffs panel" },
-          { key: "Ctrl + Shift + T", desc: "Jump directly to terminal panel" },
-          { key: "Ctrl + Shift + R", desc: "Regenerate last assistant answer" },
-          { key: "Enter", desc: "Send message / Submit prompt" },
-          { key: "Shift + Enter", desc: "Insert new line in input composer" },
-          { key: "↑ / ↓", desc: "Navigate prompt history when input is empty" },
-          { key: "Esc", desc: "Interrupt generation / Close open dialogs" },
-          { key: "Ctrl + V / ⌘V", desc: "Paste image from clipboard into composer" },
-          { key: "!cmd", desc: "Execute shell command and feed output to model" },
-          { key: "!!cmd", desc: "Execute shell command locally (preview only)" },
-          { key: "/", desc: "Trigger slash command popup menu" },
-          { key: "@", desc: "Trigger workspace file mention menu" },
-          { key: "?", desc: "Open this keyboard shortcuts reference" },
+          { key: "Ctrl + K / ⌘K", desc: "shortcuts.palette" },
+          { key: "Ctrl + B / ⌘B", desc: "shortcuts.sidebar" },
+          { key: "Ctrl + J / ⌘J", desc: "shortcuts.deck" },
+          { key: "Ctrl + Shift + D", desc: "shortcuts.diffs" },
+          { key: "Ctrl + Shift + T", desc: "shortcuts.terminal" },
+          { key: "Ctrl + Shift + R", desc: "shortcuts.regenerate" },
+          { key: "Enter", desc: "shortcuts.send" },
+          { key: "Shift + Enter", desc: "shortcuts.newline" },
+          { key: "↑ / ↓", desc: "shortcuts.history" },
+          { key: "Esc", desc: "shortcuts.interrupt" },
+          { key: "Ctrl + V / ⌘V", desc: "shortcuts.paste" },
+          { key: "!cmd", desc: "shortcuts.bang_cmd" },
+          { key: "!!cmd", desc: "shortcuts.bang_bang_cmd" },
+          { key: "/", desc: "shortcuts.slash" },
+          { key: "@", desc: "shortcuts.at" },
+          { key: "?", desc: "shortcuts.help" },
         ];
 
         return tags.div(
@@ -891,7 +892,7 @@ export function renderModals(): HTMLElement {
             tags.div(
               { class: "modal-hdr-left" },
               iconHelp(16),
-              tags.h3({ class: "modal-title" }, "Keyboard Shortcuts & Command Guide")
+              tags.h3({ class: "modal-title" }, () => t("shortcuts.title"))
             ),
             tags.button(
               {
@@ -909,7 +910,7 @@ export function renderModals(): HTMLElement {
                 tags.div(
                   { class: "shortcut-row" },
                   tags.kbd({ class: "shortcut-key" }, item.key),
-                  tags.span({ class: "shortcut-desc" }, item.desc)
+                  tags.span({ class: "shortcut-desc" }, () => t(item.desc))
                 )
               )
             )

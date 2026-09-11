@@ -89,6 +89,7 @@ export const translations: Record<Locale, Record<string, string>> = {
     "sidebar.rename_prompt": "重命名会话：",
     "sidebar.no_sessions": "暂无匹配会话",
     "sidebar.sessions_count": "{count} 个会话",
+    "sidebar.view_tree": "树形",
 
     // 会话聊天流与空态
     "chat.empty_title": "piz workspace",
@@ -135,6 +136,7 @@ export const translations: Record<Locale, Record<string, string>> = {
     "deck.tab_jobs": "Jobs",
     "deck.tab_files": "Files",
     "deck.diff_no_changes": "暂无未暂存的代码变更",
+    "deck.diff_empty_desc": "工作区中未提交的改动，或智能体产生的代码变更，会在此处集中展示",
     "deck.diff_scan": "重新扫描仓库 Diffs",
     "deck.diff_commit_placeholder": "输入提交信息 (Commit message)...",
     "deck.diff_commit_btn": "一键 Commit",
@@ -191,6 +193,43 @@ export const translations: Record<Locale, Record<string, string>> = {
     "settings.export_html": "导出为单文件独立网页 (.html)",
     "settings.export_html_desc": "自洽排版、支持离线查看与团队分享的完整会话归档",
     "shortcuts.title": "键盘快捷键速查",
+    "shortcuts.palette": "打开命令面板与会话切换器",
+    "shortcuts.sidebar": "展开或收起工作区会话栏",
+    "shortcuts.deck": "展开或收起检视工作台 (Diffs / 终端 / 任务 / 文件)",
+    "shortcuts.diffs": "直接跳到代码 Diffs 面板",
+    "shortcuts.terminal": "直接跳到终端面板",
+    "shortcuts.regenerate": "重新生成上一条回答",
+    "shortcuts.send": "发送消息 / 提交输入",
+    "shortcuts.newline": "在输入框中换行",
+    "shortcuts.history": "输入框为空时翻阅历史提问",
+    "shortcuts.interrupt": "中断生成 / 关闭弹窗",
+    "shortcuts.paste": "从剪贴板粘贴图片到输入框",
+    "shortcuts.bang_cmd": "执行 shell 命令并把输出交给模型",
+    "shortcuts.bang_bang_cmd": "仅在本地执行 shell 命令(预览，不交给模型)",
+    "shortcuts.slash": "呼出斜杠命令菜单",
+    "shortcuts.at": "呼出工作区文件引用菜单",
+    "shortcuts.help": "打开本快捷键速查",
+
+    // 相对时间
+    "time.just_now": "刚刚",
+    "time.min_ago": "{n} 分钟前",
+    "time.hour_ago": "{n} 小时前",
+    "time.day_ago": "{n} 天前",
+
+    // 命令面板 (Ctrl+K)
+    "palette.search_placeholder": "搜索指令或会话...",
+    "palette.group_actions": "快捷指令",
+    "palette.group_sessions": "会话",
+    "palette.new_session": "新建会话",
+    "palette.scan_diffs": "扫描并查看代码 Diffs",
+    "palette.open_terminal": "打开终端检视器",
+    "palette.view_jobs": "查看后台任务与子代理",
+    "palette.refresh_models": "从服务商刷新模型列表",
+    "palette.open_settings": "打开工作区设置",
+
+    // 计数单位后缀
+    "unit.msgs": "{n} 条消息",
+    "unit.files": "{n} 个文件",
   },
   en: {
     // Brand & TopBar
@@ -252,6 +291,7 @@ export const translations: Record<Locale, Record<string, string>> = {
     "sidebar.rename_prompt": "Rename session:",
     "sidebar.no_sessions": "No sessions found",
     "sidebar.sessions_count": "{count} sessions",
+    "sidebar.view_tree": "Tree",
 
     // Chat Stream & Empty state
     "chat.empty_title": "piz workspace",
@@ -299,6 +339,7 @@ export const translations: Record<Locale, Record<string, string>> = {
     "deck.tab_jobs": "Jobs",
     "deck.tab_files": "Files",
     "deck.diff_no_changes": "No Uncommitted Changes Detected",
+    "deck.diff_empty_desc": "Uncommitted modifications in workspace, or agent-generated diffs, appear here.",
     "deck.diff_scan": "Scan Workspace Diffs",
     "deck.diff_commit_placeholder": "Enter commit message...",
     "deck.diff_commit_btn": "Commit Changes",
@@ -355,6 +396,43 @@ export const translations: Record<Locale, Record<string, string>> = {
     "settings.export_html": "Export as Standalone HTML (.html)",
     "settings.export_html_desc": "Self-contained webpage ready for sharing and offline reading",
     "shortcuts.title": "Keyboard Shortcuts",
+    "shortcuts.palette": "Open command palette and session switcher",
+    "shortcuts.sidebar": "Toggle workspace session drawer",
+    "shortcuts.deck": "Toggle inspection deck (Diffs/Terminal/Jobs/Files)",
+    "shortcuts.diffs": "Jump directly to code diffs panel",
+    "shortcuts.terminal": "Jump directly to terminal panel",
+    "shortcuts.regenerate": "Regenerate last assistant answer",
+    "shortcuts.send": "Send message / Submit prompt",
+    "shortcuts.newline": "Insert new line in input composer",
+    "shortcuts.history": "Navigate prompt history when input is empty",
+    "shortcuts.interrupt": "Interrupt generation / Close open dialogs",
+    "shortcuts.paste": "Paste image from clipboard into composer",
+    "shortcuts.bang_cmd": "Execute shell command and feed output to model",
+    "shortcuts.bang_bang_cmd": "Execute shell command locally (preview only)",
+    "shortcuts.slash": "Trigger slash command popup menu",
+    "shortcuts.at": "Trigger workspace file mention menu",
+    "shortcuts.help": "Open this keyboard shortcuts reference",
+
+    // Relative time
+    "time.just_now": "just now",
+    "time.min_ago": "{n}m ago",
+    "time.hour_ago": "{n}h ago",
+    "time.day_ago": "{n}d ago",
+
+    // Command palette (Ctrl+K)
+    "palette.search_placeholder": "Search actions or sessions...",
+    "palette.group_actions": "Actions",
+    "palette.group_sessions": "Sessions",
+    "palette.new_session": "Create New Session",
+    "palette.scan_diffs": "Scan & View Code Diffs",
+    "palette.open_terminal": "Open Terminal Viewer",
+    "palette.view_jobs": "View Background Jobs & Subagents",
+    "palette.refresh_models": "Refresh Model List from Providers",
+    "palette.open_settings": "Open Workspace Settings",
+
+    // Count unit suffixes
+    "unit.msgs": "{n} msgs",
+    "unit.files": "{n} files",
   },
 };
 

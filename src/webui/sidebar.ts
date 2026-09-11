@@ -292,7 +292,7 @@ export function renderSidebar(): HTMLElement {
                       { class: "session-meta" },
                       tags.span(
                         { class: "session-badge" },
-                        `${item.messageCount} msgs`
+                        () => t("unit.msgs", { n: item.messageCount })
                       ),
                       isArchived
                         ? tags.span(
@@ -437,10 +437,10 @@ export function renderSidebar(): HTMLElement {
       () =>
         tags.span(
           {},
-          `${allProjects().length} projects · ${sessions().length} sessions`
+          `${t("sidebar.projects_count", { count: allProjects().length })} · ${t("sidebar.sessions_count", { count: sessions().length })}`
         ),
       tags.span({ class: "sidebar-footer-dot" }, "·"),
-      tags.span({ class: "sidebar-footer-mode" }, "Tree")
+      tags.span({ class: "sidebar-footer-mode" }, () => t("sidebar.view_tree"))
     )
   );
 }
@@ -448,8 +448,8 @@ export function renderSidebar(): HTMLElement {
 function formatRelativeTime(ts: number): string {
   if (!ts) return "";
   const diff = Date.now() - ts;
-  if (diff < 60000) return "just now";
-  if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
-  if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
-  return `${Math.floor(diff / 86400000)}d ago`;
+  if (diff < 60000) return t("time.just_now");
+  if (diff < 3600000) return t("time.min_ago", { n: Math.floor(diff / 60000) });
+  if (diff < 86400000) return t("time.hour_ago", { n: Math.floor(diff / 3600000) });
+  return t("time.day_ago", { n: Math.floor(diff / 86400000) });
 }

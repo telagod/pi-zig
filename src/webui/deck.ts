@@ -131,7 +131,7 @@ function renderDiffsPanel(): HTMLElement {
       { class: "deck-empty" },
       tags.div({ class: "deck-empty-icon" }, iconDiff(28)),
       tags.div({ class: "deck-empty-title" }, () => t("deck.diff_no_changes")),
-      tags.div({ class: "deck-empty-desc" }, "Uncommitted modifications in workspace or agent diffs appear here."),
+      tags.div({ class: "deck-empty-desc" }, () => t("deck.diff_empty_desc")),
       tags.button(
         {
           class: "diff-refresh-btn-large",
@@ -152,7 +152,7 @@ function renderDiffsPanel(): HTMLElement {
         { class: "diff-stats" },
         tags.span({ class: "diff-stat-add" }, `+${stats.additions}`),
         tags.span({ class: "diff-stat-del" }, `-${stats.deletions}`),
-        tags.span({ class: "diff-stat-files" }, `${stats.files} files`),
+        tags.span({ class: "diff-stat-files" }, () => t("unit.files", { n: stats.files })),
         tags.button(
           {
             class: "diff-act-btn",
