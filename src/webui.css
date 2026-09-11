@@ -2731,6 +2731,48 @@ button, input, select, textarea {
   padding: 18px;
 }
 
+/* 兜底:未单独设定的原生控件不该出现系统白底。类选择器优先级更高,
+   已经styled的输入框不受影响。 */
+input:not([type="checkbox"]):not([type="radio"]):not([type="file"]),
+textarea,
+select {
+  background-color: var(--bg-subtle);
+  color: var(--text-primary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+}
+
+/* 认证弹窗 / 注册工作区 / 通用对话框的输入框。
+   此前 CSS 里完全没有这个类,浏览器把它渲染成白底黑字,与黑金主题断裂。 */
+.auth-token-input {
+  display: block;
+  width: calc(100% - 36px);
+  margin: 16px 18px 4px;
+  padding: 9px 12px;
+  box-sizing: border-box;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.auth-token-input::placeholder {
+  color: var(--text-muted);
+}
+
+.auth-token-input:focus {
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 2px var(--accent-primary-subtle);
+}
+
+.ask-modal {
+  max-width: 440px;
+}
+
 .modal-actions {
   display: flex;
   align-items: center;

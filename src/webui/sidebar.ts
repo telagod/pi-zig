@@ -24,6 +24,8 @@ import {
   showAddWorkspaceModal,
   loadSessions,
   t,
+  askConfirm,
+  askPrompt,
 } from "./store";
 import { signal, computed } from "./signal";
 import { SessionItem, WorkspaceItem } from "./types";
@@ -273,10 +275,10 @@ export function renderSidebar(): HTMLElement {
                       `session-item ${isCurrentSession() ? "is-active" : ""} ${isArchived ? "is-archived" : ""}`,
                     onclick: () =>
                       handleSelectSession(project.root, item.id),
-                    ondblclick: (e: MouseEvent) => {
+                    ondblclick: async (e: MouseEvent) => {
                       e.stopPropagation();
                       const currentTitle = item.title || item.name;
-                      const next = prompt(t("sidebar.rename_prompt"), currentTitle);
+                      const next = await askPrompt(t("sidebar.rename_prompt"), { value: currentTitle });
                       if (next && next.trim()) {
                         renameSession(item.id, next.trim());
                       }
@@ -317,12 +319,11 @@ export function renderSidebar(): HTMLElement {
                           {
                             class: "session-act-btn",
                             title: () => t("sidebar.rename"),
-                            onclick: () => {
+                            onclick: async () => {
                               const currentTitle = item.title || item.name;
-                              const next = prompt(
-                                t("sidebar.rename_prompt"),
-                                currentTitle
-                              );
+                              const next = await askPrompt(t("sidebar.rename_prompt"), {
+                                value: currentTitle,
+                              });
                               if (next && next.trim()) {
                                 renameSession(item.id, next.trim());
                               }
@@ -336,9 +337,9 @@ export function renderSidebar(): HTMLElement {
                           {
                             class: "session-act-btn",
                             title: () => t("sidebar.fork"),
-                            onclick: () => {
+                            onclick: async () => {
                               const sTitle = item.title || item.name;
-                              if (confirm(t("sidebar.fork_confirm", { title: sTitle }))) {
+                              if (await askConfirm(t("sidebar.fork_confirm", { title: sTitle }))) {
                                 forkSession(item.id);
                               }
                             },
@@ -351,9 +352,9 @@ export function renderSidebar(): HTMLElement {
                           {
                             class: "session-act-btn",
                             title: () => t("sidebar.undo"),
-                            onclick: () => {
+                            onclick: async () => {
                               const sTitle = item.title || item.name;
-                              if (confirm(t("sidebar.undo_confirm", { title: sTitle }))) {
+                              if (await askConfirm(t("sidebar.undo_confirm", { title: sTitle }))) {
                                 undoSession(item.id);
                               }
                             },
@@ -366,9 +367,9 @@ export function renderSidebar(): HTMLElement {
                           {
                             class: "session-act-btn",
                             title: () => t("sidebar.compact"),
-                            onclick: () => {
+                            onclick: async () => {
                               const sTitle = item.title || item.name;
-                              if (confirm(t("sidebar.compact_confirm", { title: sTitle }))) {
+                              if (await askConfirm(t("sidebar.compact_confirm", { title: sTitle }))) {
                                 compactSession(item.id);
                               }
                             },
@@ -381,9 +382,9 @@ export function renderSidebar(): HTMLElement {
                           {
                             class: "session-act-btn",
                             title: () => t("sidebar.restore"),
-                            onclick: () => {
+                            onclick: async () => {
                               const sTitle = item.title || item.name;
-                              if (confirm(t("sidebar.restore_confirm", { title: sTitle }))) {
+                              if (await askConfirm(t("sidebar.restore_confirm", { title: sTitle }))) {
                                 restoreSession(item.id);
                               }
                             },
@@ -394,9 +395,9 @@ export function renderSidebar(): HTMLElement {
                           {
                             class: "session-act-btn",
                             title: () => t("sidebar.archive"),
-                            onclick: () => {
+                            onclick: async () => {
                               const sTitle = item.title || item.name;
-                              if (confirm(t("sidebar.archive_confirm", { title: sTitle }))) {
+                              if (await askConfirm(t("sidebar.archive_confirm", { title: sTitle }))) {
                                 archiveSession(item.id);
                               }
                             },
@@ -407,15 +408,9 @@ export function renderSidebar(): HTMLElement {
                       {
                         class: "session-act-btn session-del-btn",
                         title: () => t("sidebar.delete"),
-                        onclick: () => {
+                        onclick: async () => {
                           const sTitle = item.title || item.name;
-                          if (
-                            confirm(
-                              t("sidebar.del_confirm", {
-                                title: sTitle,
-                              })
-                            )
-                          ) {
+                          if (await askConfirm(t("sidebar.del_confirm", { title: sTitle }))) {
                             deleteSession(item.id);
                           }
                         },

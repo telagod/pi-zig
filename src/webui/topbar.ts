@@ -17,6 +17,7 @@ import {
   activityList,
   setDeckTab,
   t,
+  askPrompt,
 } from "./store";
 import {
   iconSidebar,
@@ -77,11 +78,11 @@ export function renderTopBar(): HTMLElement {
         {
           class: "tb-crumb tb-session-btn",
           title: () => t("topbar.session_rename"),
-          ondblclick: () => {
+          ondblclick: async () => {
             const cur = activeSession();
             const s = sessions().find((x) => x.id === cur);
             const titleNow = s ? s.title : cur;
-            const next = prompt(t("sidebar.rename_prompt"), titleNow);
+            const next = await askPrompt(t("sidebar.rename_prompt"), { value: titleNow });
             if (next && next.trim()) renameSession(cur, next.trim());
           },
         },

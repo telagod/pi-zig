@@ -21,6 +21,7 @@ import {
   killActivity,
   getQuery,
   t,
+  askPrompt,
 } from "./store";
 import { ansiToHtml } from "./term";
 import { DeckTab, JobItem, TerminalLine, FileTreeItem, ActivityItem } from "./types";
@@ -166,8 +167,8 @@ function renderDiffsPanel(): HTMLElement {
           {
             class: "diff-act-btn",
             title: "Commit staged modifications",
-            onclick: () => {
-              const msg = prompt("Git commit message for staged changes:");
+            onclick: async () => {
+              const msg = await askPrompt(t("deck.diff_commit_placeholder"));
               if (msg && msg.trim()) commitChanges(msg.trim());
             },
           },

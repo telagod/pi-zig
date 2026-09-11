@@ -1087,6 +1087,8 @@ function getInitialLocale() {
     "modal.perm_desc": "智能体正在请求执行以下操作的授权：",
     "modal.perm_target": "目标：{path}",
     "modal.auth_placeholder": "输入 Token...",
+    "modal.cancel": "取消",
+    "modal.confirm": "确定",
     "shortcuts.title": "键盘快捷键速查",
     "shortcuts.palette": "打开命令面板与会话切换器",
     "shortcuts.sidebar": "展开或收起工作区会话栏",
@@ -1323,6 +1325,8 @@ function getInitialLocale() {
     "modal.perm_desc": "The agent is requesting authorization for the following action:",
     "modal.perm_target": "Target: {path}",
     "modal.auth_placeholder": "Enter token...",
+    "modal.cancel": "Cancel",
+    "modal.confirm": "Confirm",
     "shortcuts.title": "Keyboard Shortcuts",
     "shortcuts.palette": "Open command palette and session switcher",
     "shortcuts.sidebar": "Toggle workspace session drawer",
@@ -1378,7 +1382,7 @@ function getInitialLocale() {
 
 };
 __modules["store"] = function(module, exports, require) {
-"use strict";Object.defineProperty(exports, "__esModule", {value: true}); function _createNamedExportFrom(obj, localName, importedName) { Object.defineProperty(exports, localName, {enumerable: true, configurable: true, get: () => obj[importedName]}); } function _optionalChain(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }// store.ts —— 全局响应式状态机
+"use strict";Object.defineProperty(exports, "__esModule", {value: true}); function _createNamedExportFrom(obj, localName, importedName) { Object.defineProperty(exports, localName, {enumerable: true, configurable: true, get: () => obj[importedName]}); } function _nullishCoalesce(lhs, rhsFn) { if (lhs != null) { return lhs; } else { return rhsFn(); } } function _optionalChain(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }// store.ts —— 全局响应式状态机
 var _signal = require('./signal');
 
 
@@ -1574,6 +1578,57 @@ const urlParams = new URLSearchParams(window.location.search);
   setTimeout(() => dismissToast(id), duration);
 } exports.showToast = showToast;
 
+// ---- 通用输入 / 确认对话框 ----
+//
+// 浏览器原生 prompt()/confirm() 由系统渲染,深色主题下必然是白底,color-scheme
+// 也管不到它们。所以在这里存状态,由 modal 层自绘一套。
+
+
+
+
+
+
+
+
+
+
+ const askDialog = _signal.signal(null); exports.askDialog = askDialog;
+/// prompt 的输入内容
+ const askInput = _signal.signal(""); exports.askInput = askInput;
+
+ function askPrompt(
+  title,
+  opts
+) {
+  return new Promise((resolve) => {
+    exports.askInput.set(_nullishCoalesce(_optionalChain([opts, 'optionalAccess', _2 => _2.value]), () => ( "")));
+    exports.askDialog.set({
+      kind: "prompt",
+      title,
+      placeholder: _nullishCoalesce(_optionalChain([opts, 'optionalAccess', _3 => _3.placeholder]), () => ( "")),
+      resolve,
+    });
+  });
+} exports.askPrompt = askPrompt;
+
+ function askConfirm(title, _desc = "") {
+  return new Promise((resolve) => {
+    exports.askDialog.set({ kind: "confirm", title, resolve });
+  });
+} exports.askConfirm = askConfirm;
+
+/** 结算当前对话框:字符串为 prompt 的输入,null 表示取消。 */
+ function settleAsk(result) {
+  const cur = exports.askDialog.call(void 0, );
+  exports.askDialog.set(null);
+  if (!cur) return;
+  if (cur.kind === "prompt") {
+    cur.resolve(typeof result === "string" ? result : null);
+  } else {
+    cur.resolve(result === true);
+  }
+} exports.settleAsk = settleAsk;
+
  function dismissToast(id) {
   exports.toasts.update((prev) => prev.filter((t) => t.id !== id));
 } exports.dismissToast = dismissToast;
@@ -1687,7 +1742,7 @@ const urlParams = new URLSearchParams(window.location.search);
  async function loadModels() {
   try {
     const res = await _net.apiFetch.call(void 0, "/api/models");
-    const list = Array.isArray(res) ? res : Array.isArray(_optionalChain([res, 'optionalAccess', _2 => _2.models])) ? res.models : [];
+    const list = Array.isArray(res) ? res : Array.isArray(_optionalChain([res, 'optionalAccess', _4 => _4.models])) ? res.models : [];
     exports.models.set(list);
   } catch (err) {
     console.warn("loadModels error:", err);
@@ -1746,7 +1801,7 @@ const urlParams = new URLSearchParams(window.location.search);
     const isCurrent = targetWs === undefined || targetWs === exports.currentWs.call(void 0, );
     const q = targetWs !== undefined ? `?ws=${encodeURIComponent(targetWs)}` : getQuery();
     const res = await _net.apiFetch.call(void 0, `/api/sessions${q}`);
-    const list = Array.isArray(res) ? res : Array.isArray(_optionalChain([res, 'optionalAccess', _3 => _3.sessions])) ? res.sessions : [];
+    const list = Array.isArray(res) ? res : Array.isArray(_optionalChain([res, 'optionalAccess', _5 => _5.sessions])) ? res.sessions : [];
     const parsed = list.map((s) => ({
       id: s.name,
       name: s.name,
@@ -1769,7 +1824,7 @@ const urlParams = new URLSearchParams(window.location.search);
  async function loadFiles(query = "") {
   try {
     const res = await _net.apiFetch.call(void 0, `/api/files${getQuery({ q: query })}`);
-    const items = Array.isArray(_optionalChain([res, 'optionalAccess', _4 => _4.items])) ? res.items : Array.isArray(res) ? res : [];
+    const items = Array.isArray(_optionalChain([res, 'optionalAccess', _6 => _6.items])) ? res.items : Array.isArray(res) ? res : [];
     exports.files.set(items);
   } catch (err) {
     console.warn("loadFiles error:", err);
@@ -1831,9 +1886,9 @@ function parseRawHistoryMessages(rawList) {
  async function loadHistory() {
   try {
     const res = await _net.apiFetch.call(void 0, `/api/history${getQuery()}`);
-    const rawList = Array.isArray(_optionalChain([res, 'optionalAccess', _5 => _5.history]))
+    const rawList = Array.isArray(_optionalChain([res, 'optionalAccess', _7 => _7.history]))
       ? res.history
-      : Array.isArray(_optionalChain([res, 'optionalAccess', _6 => _6.messages]))
+      : Array.isArray(_optionalChain([res, 'optionalAccess', _8 => _8.messages]))
       ? res.messages
       : Array.isArray(res)
       ? res
@@ -1850,9 +1905,9 @@ function parseRawHistoryMessages(rawList) {
   const currentCount = exports.turns.call(void 0, ).length;
   try {
     const res = await _net.apiFetch.call(void 0, `/api/history${getQuery({ offset: String(currentCount), limit: "40" })}`);
-    const rawList = Array.isArray(_optionalChain([res, 'optionalAccess', _7 => _7.history]))
+    const rawList = Array.isArray(_optionalChain([res, 'optionalAccess', _9 => _9.history]))
       ? res.history
-      : Array.isArray(_optionalChain([res, 'optionalAccess', _8 => _8.messages]))
+      : Array.isArray(_optionalChain([res, 'optionalAccess', _10 => _10.messages]))
       ? res.messages
       : Array.isArray(res)
       ? res
@@ -1907,7 +1962,7 @@ function parseRawHistoryMessages(rawList) {
       await loadSessions();
       await switchSession(res.name);
     } else {
-      showToast(`Fork failed: ${_optionalChain([res, 'optionalAccess', _9 => _9.error]) || "unknown"}`, "error");
+      showToast(`Fork failed: ${_optionalChain([res, 'optionalAccess', _11 => _11.error]) || "unknown"}`, "error");
     }
   } catch (err) {
     showToast(`Fork failed: ${err}`, "error");
@@ -2240,7 +2295,7 @@ function parseRawHistoryMessages(rawList) {
  async function loadHelp() {
   try {
     const res = await _net.apiFetch.call(void 0, `/api/help${getQuery()}`);
-    const cmds = Array.isArray(_optionalChain([res, 'optionalAccess', _10 => _10.commands])) ? res.commands : [];
+    const cmds = Array.isArray(_optionalChain([res, 'optionalAccess', _12 => _12.commands])) ? res.commands : [];
     if (cmds.length > 0) {
       exports.slashCommands.set(
         cmds.map((c) => ({
@@ -2374,7 +2429,7 @@ function parseRawHistoryMessages(rawList) {
       }
       return true;
     } else {
-      showToast(`Command /${name} failed: ${_optionalChain([res, 'optionalAccess', _11 => _11.error]) || "unknown"}`, "error");
+      showToast(`Command /${name} failed: ${_optionalChain([res, 'optionalAccess', _13 => _13.error]) || "unknown"}`, "error");
       return false;
     }
   } catch (e) {
@@ -2410,7 +2465,7 @@ function parseRawHistoryMessages(rawList) {
  async function loadPlugins() {
   try {
     const res = await _net.apiFetch.call(void 0, `/api/plugins${getQuery()}`);
-    const list = Array.isArray(_optionalChain([res, 'optionalAccess', _12 => _12.plugins])) ? res.plugins : Array.isArray(res) ? res : [];
+    const list = Array.isArray(_optionalChain([res, 'optionalAccess', _14 => _14.plugins])) ? res.plugins : Array.isArray(res) ? res : [];
     for (const p of list) {
       if (p.enabled && Array.isArray(p.assets)) {
         for (const asset of p.assets) {
@@ -3235,6 +3290,7 @@ var _dom = require('./dom');
 
 
 
+
 var _store = require('./store');
 
 
@@ -3295,11 +3351,11 @@ var _icons = require('./icons');
         {
           class: "tb-crumb tb-session-btn",
           title: () => _store.t.call(void 0, "topbar.session_rename"),
-          ondblclick: () => {
+          ondblclick: async () => {
             const cur = _store.activeSession.call(void 0, );
             const s = _store.sessions.call(void 0, ).find((x) => x.id === cur);
             const titleNow = s ? s.title : cur;
-            const next = prompt(_store.t.call(void 0, "sidebar.rename_prompt"), titleNow);
+            const next = await _store.askPrompt.call(void 0, _store.t.call(void 0, "sidebar.rename_prompt"), { value: titleNow });
             if (next && next.trim()) _store.renameSession.call(void 0, cur, next.trim());
           },
         },
@@ -3378,6 +3434,8 @@ var _icons = require('./icons');
 __modules["sidebar"] = function(module, exports, require) {
 "use strict";Object.defineProperty(exports, "__esModule", {value: true});// sidebar.ts —— 现代化项目工作区与会话展开树管理 (Project Session Tree)
 var _dom = require('./dom');
+
+
 
 
 
@@ -3651,10 +3709,10 @@ var _icons = require('./icons');
                       `session-item ${isCurrentSession() ? "is-active" : ""} ${isArchived ? "is-archived" : ""}`,
                     onclick: () =>
                       handleSelectSession(project.root, item.id),
-                    ondblclick: (e) => {
+                    ondblclick: async (e) => {
                       e.stopPropagation();
                       const currentTitle = item.title || item.name;
-                      const next = prompt(_store.t.call(void 0, "sidebar.rename_prompt"), currentTitle);
+                      const next = await _store.askPrompt.call(void 0, _store.t.call(void 0, "sidebar.rename_prompt"), { value: currentTitle });
                       if (next && next.trim()) {
                         _store.renameSession.call(void 0, item.id, next.trim());
                       }
@@ -3695,12 +3753,11 @@ var _icons = require('./icons');
                           {
                             class: "session-act-btn",
                             title: () => _store.t.call(void 0, "sidebar.rename"),
-                            onclick: () => {
+                            onclick: async () => {
                               const currentTitle = item.title || item.name;
-                              const next = prompt(
-                                _store.t.call(void 0, "sidebar.rename_prompt"),
-                                currentTitle
-                              );
+                              const next = await _store.askPrompt.call(void 0, _store.t.call(void 0, "sidebar.rename_prompt"), {
+                                value: currentTitle,
+                              });
                               if (next && next.trim()) {
                                 _store.renameSession.call(void 0, item.id, next.trim());
                               }
@@ -3714,9 +3771,9 @@ var _icons = require('./icons');
                           {
                             class: "session-act-btn",
                             title: () => _store.t.call(void 0, "sidebar.fork"),
-                            onclick: () => {
+                            onclick: async () => {
                               const sTitle = item.title || item.name;
-                              if (confirm(_store.t.call(void 0, "sidebar.fork_confirm", { title: sTitle }))) {
+                              if (await _store.askConfirm.call(void 0, _store.t.call(void 0, "sidebar.fork_confirm", { title: sTitle }))) {
                                 _store.forkSession.call(void 0, item.id);
                               }
                             },
@@ -3729,9 +3786,9 @@ var _icons = require('./icons');
                           {
                             class: "session-act-btn",
                             title: () => _store.t.call(void 0, "sidebar.undo"),
-                            onclick: () => {
+                            onclick: async () => {
                               const sTitle = item.title || item.name;
-                              if (confirm(_store.t.call(void 0, "sidebar.undo_confirm", { title: sTitle }))) {
+                              if (await _store.askConfirm.call(void 0, _store.t.call(void 0, "sidebar.undo_confirm", { title: sTitle }))) {
                                 _store.undoSession.call(void 0, item.id);
                               }
                             },
@@ -3744,9 +3801,9 @@ var _icons = require('./icons');
                           {
                             class: "session-act-btn",
                             title: () => _store.t.call(void 0, "sidebar.compact"),
-                            onclick: () => {
+                            onclick: async () => {
                               const sTitle = item.title || item.name;
-                              if (confirm(_store.t.call(void 0, "sidebar.compact_confirm", { title: sTitle }))) {
+                              if (await _store.askConfirm.call(void 0, _store.t.call(void 0, "sidebar.compact_confirm", { title: sTitle }))) {
                                 _store.compactSession.call(void 0, item.id);
                               }
                             },
@@ -3759,9 +3816,9 @@ var _icons = require('./icons');
                           {
                             class: "session-act-btn",
                             title: () => _store.t.call(void 0, "sidebar.restore"),
-                            onclick: () => {
+                            onclick: async () => {
                               const sTitle = item.title || item.name;
-                              if (confirm(_store.t.call(void 0, "sidebar.restore_confirm", { title: sTitle }))) {
+                              if (await _store.askConfirm.call(void 0, _store.t.call(void 0, "sidebar.restore_confirm", { title: sTitle }))) {
                                 _store.restoreSession.call(void 0, item.id);
                               }
                             },
@@ -3772,9 +3829,9 @@ var _icons = require('./icons');
                           {
                             class: "session-act-btn",
                             title: () => _store.t.call(void 0, "sidebar.archive"),
-                            onclick: () => {
+                            onclick: async () => {
                               const sTitle = item.title || item.name;
-                              if (confirm(_store.t.call(void 0, "sidebar.archive_confirm", { title: sTitle }))) {
+                              if (await _store.askConfirm.call(void 0, _store.t.call(void 0, "sidebar.archive_confirm", { title: sTitle }))) {
                                 _store.archiveSession.call(void 0, item.id);
                               }
                             },
@@ -3785,15 +3842,9 @@ var _icons = require('./icons');
                       {
                         class: "session-act-btn session-del-btn",
                         title: () => _store.t.call(void 0, "sidebar.delete"),
-                        onclick: () => {
+                        onclick: async () => {
                           const sTitle = item.title || item.name;
-                          if (
-                            confirm(
-                              _store.t.call(void 0, "sidebar.del_confirm", {
-                                title: sTitle,
-                              })
-                            )
-                          ) {
+                          if (await _store.askConfirm.call(void 0, _store.t.call(void 0, "sidebar.del_confirm", { title: sTitle }))) {
                             _store.deleteSession.call(void 0, item.id);
                           }
                         },
@@ -5469,6 +5520,7 @@ var _dom = require('./dom');
 
 
 
+
 var _store = require('./store');
 var _term = require('./term');
 
@@ -5614,8 +5666,8 @@ function renderDiffsPanel() {
           {
             class: "diff-act-btn",
             title: "Commit staged modifications",
-            onclick: () => {
-              const msg = prompt("Git commit message for staged changes:");
+            onclick: async () => {
+              const msg = await _store.askPrompt.call(void 0, _store.t.call(void 0, "deck.diff_commit_placeholder"));
               if (msg && msg.trim()) _store.commitChanges.call(void 0, msg.trim());
             },
           },
@@ -6083,6 +6135,9 @@ const initialWidth = (() => {
 __modules["modal"] = function(module, exports, require) {
 "use strict";Object.defineProperty(exports, "__esModule", {value: true});// modal.ts —— 权限审批弹窗、命令面板、设置中心与 Artifact 检视层
 var _dom = require('./dom');
+
+
+
 
 
 
@@ -6993,6 +7048,51 @@ var _icons = require('./icons');
                   _dom.tags.span({ class: "shortcut-desc" }, () => _store.t.call(void 0, item.desc))
                 )
               )
+            )
+          )
+        );
+      }
+    )
+  );
+
+  // 9. 通用输入 / 确认对话框(替代原生 prompt/confirm 的白底弹窗)
+  container.appendChild(
+    _dom.tags.div(
+      {
+        class: () => `modal-backdrop ${_store.askDialog.call(void 0, ) ? "is-visible" : "is-hidden"}`,
+        onclick: (e) => {
+          if (e.target === e.currentTarget) _store.settleAsk.call(void 0, null);
+        },
+      },
+      () => {
+        const d = _store.askDialog.call(void 0, );
+        if (!d) return null;
+        const isPrompt = d.kind === "prompt";
+        return _dom.tags.div(
+          { class: "modal-card ask-modal" },
+          _dom.tags.div({ class: "modal-hdr" }, _dom.tags.h3({ class: "modal-title" }, d.title)),
+          isPrompt
+            ? _dom.tags.input({
+                class: "auth-token-input ask-input",
+                value: () => _store.askInput.call(void 0, ),
+                placeholder: d.placeholder,
+                autofocus: true,
+                oninput: (e) => _store.askInput.set((e.target ).value),
+                onkeydown: (e) => {
+                  if (e.key === "Enter") _store.settleAsk.call(void 0, _store.askInput.call(void 0, ));
+                  else if (e.key === "Escape") _store.settleAsk.call(void 0, null);
+                },
+              })
+            : null,
+          _dom.tags.div(
+            { class: "modal-actions" },
+            _dom.tags.button(
+              { class: "btn btn-deny", onclick: () => _store.settleAsk.call(void 0, isPrompt ? null : false) },
+              _dom.tags.span({}, () => _store.t.call(void 0, "modal.cancel"))
+            ),
+            _dom.tags.button(
+              { class: "btn btn-allow", onclick: () => _store.settleAsk.call(void 0, isPrompt ? _store.askInput.call(void 0, ) : true) },
+              _dom.tags.span({}, () => _store.t.call(void 0, "modal.confirm"))
             )
           )
         );

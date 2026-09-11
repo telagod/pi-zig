@@ -42,6 +42,9 @@ import {
   switchMode,
   locale,
   setLocale,
+  askDialog,
+  askInput,
+  settleAsk,
   t,
 } from "./store";
 import { setToken, getToken } from "./net";
@@ -910,6 +913,51 @@ export function renderModals(): HTMLElement {
                   tags.span({ class: "shortcut-desc" }, () => t(item.desc))
                 )
               )
+            )
+          )
+        );
+      }
+    )
+  );
+
+  // 9. 通用输入 / 确认对话框(替代原生 prompt/confirm 的白底弹窗)
+  container.appendChild(
+    tags.div(
+      {
+        class: () => `modal-backdrop ${askDialog() ? "is-visible" : "is-hidden"}`,
+        onclick: (e: MouseEvent) => {
+          if (e.target === e.currentTarget) settleAsk(null);
+        },
+      },
+      () => {
+        const d = askDialog();
+        if (!d) return null;
+        const isPrompt = d.kind === "prompt";
+        return tags.div(
+          { class: "modal-card ask-modal" },
+          tags.div({ class: "modal-hdr" }, tags.h3({ class: "modal-title" }, d.title)),
+          isPrompt
+            ? tags.input({
+                class: "auth-token-input ask-input",
+                value: () => askInput(),
+                placeholder: d.placeholder,
+                autofocus: true,
+                oninput: (e: Event) => askInput.set((e.target as HTMLInputElement).value),
+                onkeydown: (e: KeyboardEvent) => {
+                  if (e.key === "Enter") settleAsk(askInput());
+                  else if (e.key === "Escape") settleAsk(null);
+                },
+              })
+            : null,
+          tags.div(
+            { class: "modal-actions" },
+            tags.button(
+              { class: "btn btn-deny", onclick: () => settleAsk(isPrompt ? null : false) },
+              tags.span({}, () => t("modal.cancel"))
+            ),
+            tags.button(
+              { class: "btn btn-allow", onclick: () => settleAsk(isPrompt ? askInput() : true) },
+              tags.span({}, () => t("modal.confirm"))
             )
           )
         );

@@ -194,6 +194,57 @@ export function showToast(
   setTimeout(() => dismissToast(id), duration);
 }
 
+// ---- 通用输入 / 确认对话框 ----
+//
+// 浏览器原生 prompt()/confirm() 由系统渲染,深色主题下必然是白底,color-scheme
+// 也管不到它们。所以在这里存状态,由 modal 层自绘一套。
+
+export type AskDialog =
+  | {
+      kind: "prompt";
+      title: string;
+      placeholder: string;
+      resolve: (value: string | null) => void;
+    }
+  | { kind: "confirm"; title: string; resolve: (value: boolean) => void };
+
+export const askDialog = signal<AskDialog | null>(null);
+/// prompt 的输入内容
+export const askInput = signal<string>("");
+
+export function askPrompt(
+  title: string,
+  opts?: { value?: string; placeholder?: string }
+): Promise<string | null> {
+  return new Promise((resolve) => {
+    askInput.set(opts?.value ?? "");
+    askDialog.set({
+      kind: "prompt",
+      title,
+      placeholder: opts?.placeholder ?? "",
+      resolve,
+    });
+  });
+}
+
+export function askConfirm(title: string, _desc = ""): Promise<boolean> {
+  return new Promise((resolve) => {
+    askDialog.set({ kind: "confirm", title, resolve });
+  });
+}
+
+/** 结算当前对话框:字符串为 prompt 的输入,null 表示取消。 */
+export function settleAsk(result: string | null | boolean): void {
+  const cur = askDialog();
+  askDialog.set(null);
+  if (!cur) return;
+  if (cur.kind === "prompt") {
+    cur.resolve(typeof result === "string" ? result : null);
+  } else {
+    cur.resolve(result === true);
+  }
+}
+
 export function dismissToast(id: string) {
   toasts.update((prev) => prev.filter((t) => t.id !== id));
 }
