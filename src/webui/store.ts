@@ -490,6 +490,8 @@ export async function loadMoreHistory() {
 
 export async function switchSession(name: string) {
   if (activeSession() === name) return;
+  isStreaming.set(false);
+  streamingTurnId.set(null);
   activeSession.set(name);
   const newUrl = `${window.location.pathname}?session=${encodeURIComponent(name)}${currentWs() ? `&ws=${encodeURIComponent(currentWs())}` : ""}`;
   window.history.pushState(null, "", newUrl);
@@ -1232,8 +1234,9 @@ export function exportSession(format: "md" | "json" | "html" = "md") {
 export function handleSseEvent(evt: any) {
   if (!evt || !evt.type) return;
 
-  // 会话隔离检查
+  // 会话隔离检查(同名会话可跨工作区,再比 ws)
   if (evt.session && evt.session !== activeSession()) return;
+  if (evt.ws && evt.ws !== currentWs()) return;
 
   function ensureAssistantTurn(): string {
     const cur = streamingTurnId();

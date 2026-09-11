@@ -206,13 +206,31 @@ pub fn migrateLegacyWeb(alloc: std.mem.Allocator, default_cwd: []const u8) void 
 
 /// 全量重写 web 会话文件:meta 行 + 消息 JSONL。
 pub fn saveWeb(alloc: std.mem.Allocator, cwd: []const u8, name: []const u8, model: []const u8, auto: bool, title: ?[]const u8, messages: []const ai.Message) !void {
-    saveWebTs(alloc, cwd, name, model, auto, title, messages, std.Io.Clock.now(.real, util.io).nanoseconds) catch |e| return e;
+    saveWebTs(alloc, cwd, name, model, auto, title, messages, std.Io.Clock.now(.real, util.io).nanoseconds, .{}) catch |e| return e;
+}
+
+/// loadWeb 在超大文件上插入的折叠提示。saveWebTs 见到它就禁止当 undo 整文件重写。
+pub const WEB_FOLD_NOTICE = "[会话历史折叠] 当前上下文仅含本会话近尾内容(前文未载入,完整历史在会话文件中)。如需完整历史重新载入,请直接引用旧会话。";
+
+/// 折叠窗口下的保存参数:in-memory 只是尾窗,不能按 messages.len < count0 当 undo。
+pub const SaveWebWindow = struct {
+    folded: bool = false,
+    /// 磁盘上的消息条数(镜像 count)
+    file_count: usize = 0,
+    /// 载入时(或上次保存后)内存条数,含折叠提示
+    loaded_count: usize = 0,
+};
+
+fn looksFolded(messages: []const ai.Message) bool {
+    if (messages.len == 0) return false;
+    const m = messages[0];
+    return std.mem.eql(u8, m.role, "system") and std.mem.startsWith(u8, m.content, "[会话历史折叠]");
 }
 
 /// saveWeb 带显式更新时间(毫秒粒度)。v2:常规路径追加(只写新消息),
 /// 消息变短(undo/compact)才整体重写 —— 超长会话不再轮轮 O(size)。
 /// 镜像 <name>.meta.json 记 model/auto/title/updated/count。
-pub fn saveWebTs(alloc: std.mem.Allocator, cwd: []const u8, name: []const u8, model: []const u8, auto: bool, title: ?[]const u8, messages: []const ai.Message, updated_ns: i128) !void {
+pub fn saveWebTs(alloc: std.mem.Allocator, cwd: []const u8, name: []const u8, model: []const u8, auto: bool, title: ?[]const u8, messages: []const ai.Message, updated_ns: i128, window: SaveWebWindow) !void {
     if (!webNameOk(name)) return error.InvalidName;
     const dir = try webDir(alloc, cwd);
     defer alloc.free(dir);
@@ -256,11 +274,40 @@ pub fn saveWebTs(alloc: std.mem.Allocator, cwd: []const u8, name: []const u8, mo
     }
 
     const st0 = std.Io.Dir.cwd().statFile(util.io, path, .{}) catch null;
+    const folded_list = window.folded or looksFolded(messages);
+    // 尾窗载入:内存条数与磁盘 count 不可比。绝不能当 undo 整文件覆盖,否则历史永久截断。
+    // 即便窗口条数碰巧等于镜像 count,也只能按 loaded_count 追加新消息。
+    if (folded_list and st0 != null) {
+        const loaded = window.loaded_count;
+        if (loaded > 0 and messages.len > loaded) {
+            {
+                var f = try std.Io.Dir.cwd().openFile(util.io, path, .{ .mode = .write_only });
+                defer f.close(util.io);
+                var wbuf: [8192]u8 = undefined;
+                var w = f.writer(util.io, &wbuf);
+                try w.seekTo(try f.length(util.io));
+                for (messages[loaded..]) |m| {
+                    const line = try webMessageLine(alloc, m);
+                    defer alloc.free(line);
+                    try w.interface.writeAll(line);
+                }
+                try w.interface.flush();
+            }
+            const on_disk = if (window.file_count > 0) window.file_count else count0;
+            try writeWebMirror(alloc, mp, model, auto, title orelse "", updated_ns, on_disk + (messages.len - loaded));
+            return;
+        }
+        const keep = if (window.file_count > 0) window.file_count else count0;
+        try writeWebMirror(alloc, mp, model, auto, title orelse "", updated_ns, keep);
+        return;
+    }
+
     if (count0 == messages.len and st0 != null) {
         // 消息数正好不变:只更新镜像(updated/title/auto 可能过了)
         try writeWebMirror(alloc, mp, model, auto, title orelse "", updated_ns, messages.len);
         return;
     }
+
     // 消息变短(undo/compact):落到下方整体原子重写 —— 只更镜像会留下
     // 比镜像多的旧消息,下次追加从错位的 count0 起写,历史即错乱。
 
@@ -369,7 +416,7 @@ fn writeWebMirror(alloc: std.mem.Allocator, mp: []const u8, model: []const u8, a
 }
 
 /// 加载 web 会话:返回 (meta_auto, messages) 或 null(不存在/损坏)。
-pub fn loadWeb(alloc: std.mem.Allocator, cwd: []const u8, name: []const u8) !?struct { auto: bool, title: ?[]const u8, model: ?[]const u8, updated: i128, msgs: []ai.Message } {
+pub fn loadWeb(alloc: std.mem.Allocator, cwd: []const u8, name: []const u8) !?struct { auto: bool, title: ?[]const u8, model: ?[]const u8, updated: i128, msgs: []ai.Message, folded: bool, file_count: usize } {
     if (!webNameOk(name)) return null;
     const dir = try webDir(alloc, cwd);
     defer alloc.free(dir);
@@ -377,6 +424,24 @@ pub fn loadWeb(alloc: std.mem.Allocator, cwd: []const u8, name: []const u8) !?st
     defer alloc.free(fname);
     const path = try util.joinPath(alloc, dir, fname);
     defer alloc.free(path);
+    var file_count: usize = 0;
+    {
+        const mp = mirrorPathFor(alloc, path) catch null;
+        if (mp) |p| {
+            defer alloc.free(p);
+            if (std.Io.Dir.cwd().readFileAlloc(util.io, p, alloc, .limited(64 * 1024))) |mraw| {
+                defer alloc.free(mraw);
+                const m = std.json.parseFromSliceLeaky(std.json.Value, alloc, mraw, .{}) catch null;
+                if (m) |mv| {
+                    if (mv == .object) {
+                        if (mv.object.get("count")) |v| {
+                            if (v == .integer) file_count = @intCast(@max(v.integer, 0));
+                        }
+                    }
+                }
+            } else |_| {}
+        }
+    }
     const w = loadSessionWindow(alloc, path, SESSION_FULL_LIMIT, SESSION_TAIL_BYTES) catch |err| switch (err) {
         error.FileNotFound => return null,
         else => return err,
@@ -423,7 +488,7 @@ pub fn loadWeb(alloc: std.mem.Allocator, cwd: []const u8, name: []const u8) !?st
     if (w.folded) {
         try list.append(.{
             .role = try alloc.dupe(u8, "system"),
-            .content = try std.fmt.allocPrint(alloc, "[会话历史折叠] 当前上下文仅含本会话近尾内容(前文未载入,完整历史在会话文件中)。如需完整历史重新载入,请直接引用旧会话。", .{}),
+            .content = try alloc.dupe(u8, WEB_FOLD_NOTICE),
         });
     }
     var lines = std.mem.splitScalar(u8, w.body, '\n');
@@ -474,7 +539,9 @@ pub fn loadWeb(alloc: std.mem.Allocator, cwd: []const u8, name: []const u8) !?st
         applyImageFields(alloc, v, &m);
         list.append(m) catch continue;
     }
-    return .{ .auto = auto, .title = title, .model = model, .updated = updated, .msgs = list.toOwnedSlice() catch return null };
+    const msgs = list.toOwnedSlice() catch return null;
+    if (!w.folded) file_count = msgs.len;
+    return .{ .auto = auto, .title = title, .model = model, .updated = updated, .msgs = msgs, .folded = w.folded, .file_count = file_count };
 }
 
 /// 归档会话:移到 <dir>/archive/<name>.jsonl。

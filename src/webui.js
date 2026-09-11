@@ -1726,6 +1726,8 @@ function parseRawHistoryMessages(rawList) {
 
  async function switchSession(name) {
   if (exports.activeSession.call(void 0, ) === name) return;
+  exports.isStreaming.set(false);
+  exports.streamingTurnId.set(null);
   exports.activeSession.set(name);
   const newUrl = `${window.location.pathname}?session=${encodeURIComponent(name)}${exports.currentWs.call(void 0, ) ? `&ws=${encodeURIComponent(exports.currentWs.call(void 0, ))}` : ""}`;
   window.history.pushState(null, "", newUrl);
@@ -2468,8 +2470,9 @@ function parseRawHistoryMessages(rawList) {
  function handleSseEvent(evt) {
   if (!evt || !evt.type) return;
 
-  // 会话隔离检查
+  // 会话隔离检查(同名会话可跨工作区,再比 ws)
   if (evt.session && evt.session !== exports.activeSession.call(void 0, )) return;
+  if (evt.ws && evt.ws !== exports.currentWs.call(void 0, )) return;
 
   function ensureAssistantTurn() {
     const cur = exports.streamingTurnId.call(void 0, );

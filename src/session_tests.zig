@@ -608,10 +608,10 @@ test "web save appends; undo rewrites" {
     const tmp_path = try std.fmt.allocPrint(a, "{s}/.zig-cache/tmp/{s}", .{ cwd_abs, tmp.sub_path });
     try util.environ_map.?.put("PIZ_DIR", tmp_path);
     var msgs = [_]ai.Message{ mkMsg(a, "user", "a"), mkMsg(a, "assistant", "b"), mkMsg(a, "user", "c") };
-    try sess.saveWebTs(a, "/work", "s1", "m1", false, "t", &msgs, 100);
+    try sess.saveWebTs(a, "/work", "s1", "m1", false, "t", &msgs, 100, .{});
     // 追加 2 条(消息变多 → append)
     var msgs2 = [_]ai.Message{ mkMsg(a, "user", "a"), mkMsg(a, "assistant", "b"), mkMsg(a, "user", "c"), mkMsg(a, "assistant", "d"), mkMsg(a, "user", "e") };
-    try sess.saveWebTs(a, "/work", "s1", "m1", false, "t", &msgs2, 200);
+    try sess.saveWebTs(a, "/work", "s1", "m1", false, "t", &msgs2, 200, .{});
     const dir = try sess.webDir(a, "/work");
     defer a.free(dir);
     const path = try std.fmt.allocPrint(a, "{s}/s1.jsonl", .{dir});
@@ -627,7 +627,7 @@ test "web save appends; undo rewrites" {
     }
     // undo:回到 2 条(消息变短 → 重写)
     var msgs3 = [_]ai.Message{ mkMsg(a, "user", "a"), mkMsg(a, "assistant", "b") };
-    try sess.saveWebTs(a, "/work", "s1", "m1", false, "t", &msgs3, 300);
+    try sess.saveWebTs(a, "/work", "s1", "m1", false, "t", &msgs3, 300, .{});
     {
         var n: usize = 0;
         const content = try std.Io.Dir.cwd().readFileAlloc(util.io, path, a, .limited(10 * 1024 * 1024));
@@ -637,4 +637,62 @@ test "web save appends; undo rewrites" {
         }
         try t.expectEqual(@as(usize, 3), n);
     }
+}
+
+test "folded web window save appends and never truncates" {
+    const t = std.testing;
+    var arena = util.Arena.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cwd_abs = try std.process.currentPathAlloc(util.io, a);
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try std.fmt.allocPrint(a, "{s}/.zig-cache/tmp/{s}", .{ cwd_abs, tmp.sub_path });
+    try util.environ_map.?.put("PIZ_DIR", tmp_path);
+    var full = [_]ai.Message{
+        mkMsg(a, "user", "one"),
+        mkMsg(a, "assistant", "two"),
+        mkMsg(a, "user", "three"),
+        mkMsg(a, "assistant", "four"),
+    };
+    try sess.saveWebTs(a, "/work", "big", "m1", false, "t", &full, 100, .{});
+    const dir = try sess.webDir(a, "/work");
+    defer a.free(dir);
+    const path = try std.fmt.allocPrint(a, "{s}/big.jsonl", .{dir});
+    const before = try std.Io.Dir.cwd().readFileAlloc(util.io, path, a, .limited(10 * 1024 * 1024));
+    var n_before: usize = 0;
+    {
+        var lines = std.mem.splitScalar(u8, before, '\n');
+        while (lines.next()) |l| {
+            if (l.len > 0) n_before += 1;
+        }
+    }
+    try t.expectEqual(@as(usize, 5), n_before); // meta + 4
+    var window = [_]ai.Message{
+        mkMsg(a, "system", sess.WEB_FOLD_NOTICE),
+        mkMsg(a, "user", "three"),
+        mkMsg(a, "assistant", "four"),
+        mkMsg(a, "user", "five"),
+    };
+    try sess.saveWebTs(a, "/work", "big", "m1", false, "t", &window, 200, .{
+        .folded = true,
+        .file_count = 4,
+        .loaded_count = 3,
+    });
+    const after = try std.Io.Dir.cwd().readFileAlloc(util.io, path, a, .limited(10 * 1024 * 1024));
+    try t.expect(std.mem.indexOf(u8, after, "one") != null);
+    try t.expect(std.mem.indexOf(u8, after, "five") != null);
+    var n_after: usize = 0;
+    {
+        var lines = std.mem.splitScalar(u8, after, '\n');
+        while (lines.next()) |l| {
+            if (l.len > 0) n_after += 1;
+        }
+    }
+    try t.expectEqual(@as(usize, 6), n_after); // meta + 4 original + 1 new
+    // safety net: folded notice without window still must not rewrite
+    var short = [_]ai.Message{ mkMsg(a, "system", sess.WEB_FOLD_NOTICE), mkMsg(a, "assistant", "four") };
+    try sess.saveWebTs(a, "/work", "big", "m1", false, "t", &short, 300, .{});
+    const kept = try std.Io.Dir.cwd().readFileAlloc(util.io, path, a, .limited(10 * 1024 * 1024));
+    try t.expect(std.mem.indexOf(u8, kept, "one") != null);
 }

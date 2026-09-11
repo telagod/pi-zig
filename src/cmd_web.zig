@@ -205,7 +205,30 @@ pub const WebSession = struct {
     snap_pct: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     snap_used: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     snap_window: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+    /// loadWeb 尾窗:禁止 saveWebTs 把短列表当 undo 覆盖整文件。
+    hist_folded: bool = false,
+    hist_file_count: usize = 0,
+    hist_loaded: usize = 0,
 };
+
+fn webSaveWindow(ses: *WebSession) sessionmod.SaveWebWindow {
+    return .{
+        .folded = ses.hist_folded,
+        .file_count = ses.hist_file_count,
+        .loaded_count = ses.hist_loaded,
+    };
+}
+
+fn webSaveCommit(ses: *WebSession) void {
+    if (!ses.hist_folded) return;
+    const n = ses.agent.messages.items.len;
+    if (n >= ses.hist_loaded) {
+        ses.hist_file_count += n - ses.hist_loaded;
+        ses.hist_loaded = n;
+    } else {
+        ses.hist_loaded = n;
+    }
+}
 
 fn writeLaunchJson(cfg: *cfgmod.Config, port: u16, token: ?[]const u8, cwd: []const u8) !void {
     const alloc = cfg.allocator();
@@ -306,7 +329,11 @@ pub const SessionPool = struct {
         @import("core").plugins.injectMemory(agent);
         var restored_approval: cfgmod.ApprovalMode = self.cfg.default_approval;
         var restored_updated: i128 = 0;
+        var hist_folded = false;
+        var hist_file_count: usize = 0;
         if (sessionmod.loadWeb(a, abs_cwd, name) catch null) |web_ses| {
+            hist_folded = web_ses.folded;
+            hist_file_count = web_ses.file_count;
             for (web_ses.msgs) |m| {
                 agent.messages.append(m) catch |err| util.debugCatch("loadWeb.append", err);
             }
@@ -332,6 +359,9 @@ pub const SessionPool = struct {
             .worker = undefined,
             .approval = std.atomic.Value(u8).init(@intFromEnum(restored_approval)),
             .arena = ses_arena,
+            .hist_folded = hist_folded,
+            .hist_file_count = hist_file_count,
+            .hist_loaded = agent.messages.items.len,
         };
         agent.cbs = .{
             .ctx = ses,
@@ -712,11 +742,13 @@ fn webWorker(ses: *WebSession) void {
                 });
             }
         }
-        sessionmod.saveWebTs(ses.agent.alloc, ses.cwd, ses.name, ses.agent.model, sessionIsYolo(ses), ses.agent.title, ses.agent.messages.items, ses.updated_ns) catch |err| {
+        if (sessionmod.saveWebTs(ses.agent.alloc, ses.cwd, ses.name, ses.agent.model, sessionIsYolo(ses), ses.agent.title, ses.agent.messages.items, ses.updated_ns, webSaveWindow(ses))) |_| {
+            webSaveCommit(ses);
+        } else |err| {
             const msg = std.fmt.allocPrint(ses.agent.alloc, "会话保存失败({s}):本轮内容在重启后会丢失", .{@errorName(err)}) catch "session save failed";
             util.errLog(ses.agent.alloc, "web-save", ses.name, msg);
             ses.hub.push("{{\"type\":\"notice\",\"session\":{s},\"text\":{s}}}", .{ util.jsonString(ses.agent.alloc, ses.name) catch "\"\"", util.jsonString(ses.agent.alloc, msg) catch "\"\"" });
-        };
+        }
         rebuildSnap(ses);
         ses.hub.push("{{\"type\":\"turn_end\",\"session\":{s}}}", .{util.jsonString(ses.agent.alloc, ses.name) catch "\"\""});
     }
@@ -1414,7 +1446,7 @@ pub fn poolActionHook(ctx: ?*anyopaque, cwd: []const u8, session: []const u8, ac
         const trimmed = std.mem.trim(u8, t, " \t");
         ses.agent.title = if (trimmed.len > 0) (std.heap.page_allocator.dupe(u8, trimmed) catch null) else null;
         ses.updated_ns = std.Io.Clock.now(.real, util.io).nanoseconds;
-        sessionmod.saveWebTs(alloc, cwd2, session, ses.agent.model, sessionIsYolo(ses), ses.agent.title, ses.agent.messages.items, ses.updated_ns) catch |err| {
+        sessionmod.saveWebTs(alloc, cwd2, session, ses.agent.model, sessionIsYolo(ses), ses.agent.title, ses.agent.messages.items, ses.updated_ns, webSaveWindow(ses)) catch |err| {
             util.debugCatch("saveWebTs", err);
             return "{\"ok\":false,\"act\":\"rename\"}";
         };
@@ -1431,10 +1463,11 @@ pub fn poolActionHook(ctx: ?*anyopaque, cwd: []const u8, session: []const u8, ac
         const ts = @divTrunc(std.Io.Clock.now(.real, util.io).nanoseconds, std.time.ns_per_ms);
         const rand_name = std.fmt.bufPrint(&buf, "{s}-f{d}", .{ session, ts }) catch session;
         const target = if (new_name.len > 0) new_name else rand_name;
-        sessionmod.saveWebTs(alloc, cwd2, target, ses.agent.model, sessionIsYolo(ses), ses.agent.title, ses.agent.messages.items, std.Io.Clock.now(.real, util.io).nanoseconds) catch return null;
+        sessionmod.saveWebTs(alloc, cwd2, target, ses.agent.model, sessionIsYolo(ses), ses.agent.title, ses.agent.messages.items, std.Io.Clock.now(.real, util.io).nanoseconds, .{}) catch return null;
         return std.fmt.allocPrint(alloc, "{{\"ok\":true,\"act\":\"fork\",\"name\":{s}}}", .{util.jsonString(alloc, target) catch "\"\""}) catch null;
     }
     if (std.mem.eql(u8, act, "undo")) {
+        if (ses.hist_folded) return "{\"ok\":false,\"act\":\"undo\",\"error\":\"history folded\"}";
         if (ses.busy.cmpxchgWeak(0, 2, .acq_rel, .acquire) != null) return "{\"ok\":false,\"act\":\"undo\",\"error\":\"busy\"}";
         defer ses.busy.store(0, .release);
         const n = if (count == 0) 1 else count;
@@ -1453,7 +1486,7 @@ pub fn poolActionHook(ctx: ?*anyopaque, cwd: []const u8, session: []const u8, ac
         if (msgs.len == 0) return "{\"ok\":false,\"act\":\"undo\"}";
         ses.agent.messages.shrinkRetainingCapacity(msgs.len - cut);
         ses.updated_ns = std.Io.Clock.now(.real, util.io).nanoseconds;
-        sessionmod.saveWebTs(alloc, cwd2, session, ses.agent.model, sessionIsYolo(ses), ses.agent.title, ses.agent.messages.items, ses.updated_ns) catch |err| {
+        sessionmod.saveWebTs(alloc, cwd2, session, ses.agent.model, sessionIsYolo(ses), ses.agent.title, ses.agent.messages.items, ses.updated_ns, .{}) catch |err| {
             util.errLog(alloc, "web-save", session, @errorName(err));
             util.debugCatch("saveWebTs", err);
         };
@@ -1464,6 +1497,7 @@ pub fn poolActionHook(ctx: ?*anyopaque, cwd: []const u8, session: []const u8, ac
         if (ses.busy.cmpxchgWeak(0, 2, .acq_rel, .acquire) != null) return "{\"ok\":false,\"act\":\"compact\",\"error\":\"busy\"}";
         defer ses.busy.store(0, .release);
         _ = ses.agent.compact() catch "";
+        ses.hist_loaded = ses.agent.messages.items.len;
         rebuildSnap(ses);
         return "{\"ok\":true,\"act\":\"compact\"}";
     }
